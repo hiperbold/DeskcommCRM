@@ -1,0 +1,48 @@
+name: Deploy no EasyPanel (Hiperbold)
+
+# Exclusivo do fork hiperbold/DeskcommCRM. Quando as três imagens do main foram
+# publicadas no GHCR, pede ao EasyPanel para baixar e reiniciar app, worker e
+# scheduler. A VPS nunca compila: só puxa a imagem pronta.
+#
+# Configuração no repositório (Settings > Secrets and variables > Actions):
+#   secrets.EASYPANEL_URL, secrets.EASYPANEL_API_KEY
+#   vars.EASYPANEL_PROJETO (hiperbold-crm-1)
+# Sem elas o job falha alto em vez de passar verde sem deployar.
+
+on:
+  workflow_run:
+    workflows: ["Publicar imagem Docker (GHCR)"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: >-
+      github.repository == 'hiperbold/DeskcommCRM' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    steps:
+      - name: Conferir configuração
+        run: |
+          test -n "${{ secrets.EASYPANEL_URL }}"     || { echo "falta o segredo EASYPANEL_URL"; exit 1; }
+          test -n "${{ secrets.EASYPANEL_API_KEY }}" || { echo "falta o segredo EASYPANEL_API_KEY"; exit 1; }
+          test -n "${{ vars.EASYPANEL_PROJETO }}"    || { echo "falta a variavel EASYPANEL_PROJETO"; exit 1; }
+
+      - name: Deploy de app, worker e scheduler
+        run: |
+          set -euo pipefail
+          for servico in app worker scheduler; do
+            echo "deploy: $servico"
+            curl -sS --fail-with-body -X POST "${{ secrets.EASYPANEL_URL }}/api/trpc/services.app.deployService" \
+              -H "Authorization: Bearer ${{ secrets.EASYPANEL_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"json\":{\"projectName\":\"${{ vars.EASYPANEL_PROJETO }}\",\"serviceName\":\"$servico\"}}" \
+              > /dev/null
+          done
+          echo "deploy pedido para os três serviços"
