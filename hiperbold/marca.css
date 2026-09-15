@@ -1,0 +1,72 @@
+/* Marca Hiperbold sobre os tokens do autor (app/globals.css fica intocado).
+   Fonte: F:\github-projects\design-system-hiperbold (colors_and_type.css).
+   Carregado depois do globals.css: mesmos seletores, então a ordem decide.
+   A cor de destaque NÃO entra aqui: vem de platform_branding (#0139B0), que
+   deriva a rampa com contraste garantido nos dois temas. */
+
+:root,
+[data-theme="light"] {
+  --color-bg: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-surface-elevated: #eef2f6;
+  --color-overlay: rgba(15, 23, 42, 0.42);
+
+  --color-text: #0f172a;
+  --color-text-muted: #5a6577;
+  --color-text-subtle: #6b7689;
+
+  --color-border: #d9e0e7;
+  --color-border-strong: #c3ccd6;
+
+  --color-neutral-50: #f5f7fa;
+  --color-neutral-100: #eef2f6;
+  --color-neutral-200: #d9e0e7;
+  --color-neutral-300: #c3ccd6;
+  --color-neutral-400: #9aa5b4;
+  --color-neutral-500: #6b7689;
+  --color-neutral-600: #5a6577;
+  --color-neutral-700: #3b475c;
+  --color-neutral-800: #29354c;
+  --color-neutral-900: #14213d;
+  --color-neutral-950: #0f172a;
+}
+
+[data-theme="dark"] {
+  --color-bg: #0f172a;
+  --color-surface: #14213d;
+  --color-surface-elevated: #1c2b4d;
+
+  --color-text: #ffffff;
+  --color-text-muted: #a9b4c6;
+  --color-text-subtle: #7b88a0;
+
+  --color-border: #2a3754;
+  --color-border-strong: #3a4866;
+
+  --color-neutral-50: #f5f7fa;
+  --color-neutral-100: #d9e0e7;
+  --color-neutral-200: #a9b4c6;
+  --color-neutral-300: #8391a8;
+  --color-neutral-400: #7b88a0;
+  --color-neutral-500: #3a4866;
+  --color-neutral-600: #2a3754;
+  --color-neutral-700: #1c2b4d;
+  --color-neutral-800: #14213d;
+  --color-neutral-900: #0f172a;
+  --color-neutral-950: #0a1020;
+}
+
+/* Tipografia da marca: Inter no corpo (via --font-atkinson, ver app/layout.tsx)
+   e Assistant nos títulos. O ss01 do autor era da Atkinson; na Inter ele troca
+   os algarismos, então sai. */
+body {
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-assistant), var(--font-atkinson), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.01em;
+}

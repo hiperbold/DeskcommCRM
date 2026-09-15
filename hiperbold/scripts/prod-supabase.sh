@@ -33,10 +33,12 @@ else
   echo "4 credenciais gravadas no $F"
 fi
 
-set -a
-# shellcheck disable=SC1090
-. <(grep -E '^[A-Z0-9_]+=' "$F")
-set +a
+# Sem `source`: valores com espaço (APP_NAME=Hiperbold CRM) viram comando no bash.
+while IFS='=' read -r k v; do
+  [[ "$k" =~ ^[A-Z0-9_]+$ ]] || continue
+  v="${v%$'\r'}"; v="${v#\'}"; v="${v%\'}"
+  export "$k=$v"
+done < "$F"
 
 PSQL=(docker run --rm -i postgres:17-alpine psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -q)
 
