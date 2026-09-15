@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LoginForm } from "@/components/auth/LoginForm";
+import { modoDeCadastro } from "@/lib/auth/politica-de-cadastro";
 import { branding } from "@/lib/branding";
 import { createClient } from "@/lib/supabase/server";
 import { normalizarIdioma } from "@/lib/i18n/idiomas";
@@ -26,6 +27,8 @@ export default async function LoginPage({
     (user?.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);
+  // Em `so_convite` o `/signup` sem convite só recusa: oferecer o link seria mandar a pessoa para um beco.
+  const cadastroAberto = (await modoDeCadastro()) === "aberto";
 
   return (
     <div className="space-y-6">
@@ -108,15 +111,17 @@ export default async function LoginPage({
             {t("Esqueci minha senha")}
           </Link>
         </p>
-        <p className="text-muted-foreground">
-          {t("Não tem conta?")}{" "}
-          <Link
-            href="/signup"
-            className="font-medium text-foreground underline underline-offset-4"
-          >
-            {t("Criar conta")}
-          </Link>
-        </p>
+        {cadastroAberto && (
+          <p className="text-muted-foreground">
+            {t("Não tem conta?")}{" "}
+            <Link
+              href="/signup"
+              className="font-medium text-foreground underline underline-offset-4"
+            >
+              {t("Criar conta")}
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

@@ -70,3 +70,18 @@ h4 {
   font-family: var(--font-assistant), var(--font-atkinson), ui-sans-serif, system-ui, sans-serif;
   letter-spacing: -0.01em;
 }
+
+/* Logo no tema escuro: o logo da instalação (ícone azul, texto preto) serve ao
+   tema claro; no escuro entra a versão branca oficial (hiperbold-full-white.svg)
+   e sai a moldura branca que o autor põe atrás de todo logo enviado (Sidebar.tsx
+   e app/(public)/layout.tsx). Navegador sem `content` em <img> mantém o logo
+   claro com moldura: continua legível. */
+[data-theme="dark"] img[src*="/brand-logos/"] {
+  content: url("/hiperbold/logo-tema-escuro.png");
+}
+
+[data-theme="dark"] div:has(> img[src*="/brand-logos/"]) {
+  background-color: transparent;
+  box-shadow: none;
+  padding: 0;
+}
