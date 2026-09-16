@@ -13,16 +13,17 @@
  *
  * O contrato publicado do servidor diz, com estas palavras, que o corpo do
  * webhook "varia conforme o tipo do evento" e "segue o que o backend envia"
- * — ou seja, não há esquema para este evento. E ele nunca apareceu na captura
- * que guiou os outros dois parsers, porque a instância não caiu enquanto se
- * media.
+ * — ou seja, não há esquema para este evento.
  *
  * Então aqui não se CHUTA um campo só: procura-se o estado nos lugares em que
  * o servidor descreve uma instância no resto da API (`instance.status`, que é
  * o que `/instance/status` devolve), com as formas vizinhas atrás. E o que não
  * for encontrado NÃO vira "tudo bem": vira uma recusa nomeada, que aparece no
- * arquivo do webhook para alguém ler e ajustar quando o primeiro evento real
- * chegar.
+ * arquivo do webhook para alguém ler e ajustar.
+ *
+ * Conferido em 16/09/2026 contra eventos REAIS (instância descartável, pedido
+ * de QR e desconexão): o estado vem em `instance.status`, o primeiro lugar
+ * procurado. As formas estão no teste `channel-conexao-evento-uazapi`.
  */
 import { z } from "zod";
 

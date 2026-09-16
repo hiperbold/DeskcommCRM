@@ -64,6 +64,14 @@ describe("MessageBubble — rótulo de origem", () => {
     expect(screen.getByText("Celular")).toBeInTheDocument();
   });
 
+  it("saída que outro sistema mandou pela instância (via_api) mostra 'Automação', não 'Celular'", () => {
+    // Gravada pela ingestão do canal por instância. "Celular" diria ao
+    // atendente que uma pessoa digitou.
+    render(<MessageBubble message={msg({ sent_via: "external_device", metadata: { via_api: true } })} />);
+    expect(screen.getByText("Automação")).toBeInTheDocument();
+    expect(screen.queryByText("Celular")).not.toBeInTheDocument();
+  });
+
   it("automação não inventa rótulo — ninguém grava esse valor", () => {
     render(<MessageBubble message={msg({ sent_via: "automation" })} />);
     expect(screen.queryByText("Automação")).not.toBeInTheDocument();

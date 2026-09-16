@@ -8,12 +8,14 @@ import { saudeDoEstadoUazapi } from "@/lib/channels/uazapi/saude";
  *
  * ─── De onde vem a forma, e o que isso obriga ───────────────────────────────
  *
- * Diferente dos dois irmãos, este evento NÃO foi capturado: a instância não
- * caiu enquanto se media, e o contrato publicado do servidor diz que o corpo
- * "varia conforme o tipo do evento". Então o que se testa aqui não é "o
- * servidor manda assim" — é que CADA forma plausível é lida, que a forma
- * desconhecida é recusada com nome em vez de virar "tudo bem", e que a
- * tradução do estado é a MESMA que a varredura usa.
+ * A primeira versão foi escrita sem captura: o contrato publicado do servidor
+ * diz que o corpo "varia conforme o tipo do evento". Em 16/09/2026 dois eventos
+ * REAIS foram capturados numa instância descartável (pedido de QR e
+ * desconexão pela API), e o estado veio em `instance.status`: o bloco "formas
+ * capturadas" abaixo os reproduz, sem QR, token e dono. O resto do arquivo
+ * continua valendo: cada forma plausível é lida, a desconhecida é recusada
+ * com nome em vez de virar "tudo bem", e a tradução do estado é a MESMA que a
+ * varredura usa.
  *
  * Os números são inventados: nenhum dado de cliente entra no repositório.
  */
@@ -30,6 +32,33 @@ const base = {
   instanceName: "comercial",
   owner: "553599990000",
 };
+
+describe("formas capturadas de um servidor real (16/09/2026)", () => {
+  const real = { BaseUrl: "https://empresa.uazapi.com", EventType: "connection", instanceName: "comercial", token: "x", owner: "" };
+
+  it("pedido de QR: `connecting` vira aguardando QR", () => {
+    const r = parseUazapiConexao(ler({ ...real, event_id: "e1", instance: { name: "comercial", qrcode: "data:image/png;base64,AAAA", status: "connecting" } }));
+    expect(r.ok && r.conexao.estado).toBe("connecting");
+    expect(r.ok && r.conexao.saude).toEqual({ reachable: true, status: "SCAN_QR_CODE", detail: null });
+  });
+
+  it("desconexão: `disconnected`, com o motivo ao lado, vira aguardando QR", () => {
+    const r = parseUazapiConexao(
+      ler({
+        ...real,
+        event_id: "e2",
+        instance: {
+          name: "comercial",
+          status: "disconnected",
+          lastDisconnect: "2026-09-16 16:21:34.349Z",
+          lastDisconnectReason: "connection attempt canceled by API",
+        },
+      }),
+    );
+    expect(r.ok && r.conexao.estado).toBe("disconnected");
+    expect(r.ok && r.conexao.saude.status).toBe("SCAN_QR_CODE");
+  });
+});
 
 describe("evento de conexão da instância", () => {
   it("lê o estado de `instance.status`, que é a forma do resto da API", () => {

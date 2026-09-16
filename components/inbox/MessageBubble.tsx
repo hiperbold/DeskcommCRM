@@ -93,7 +93,12 @@ export function MessageBubble({
   const senderLabel = (() => {
     if (!isOutbound) return null;
     if (message.sent_via === "ai") return "IA";
-    if (message.sent_via === "external_device") return "Celular";
+    if (message.sent_via === "external_device") {
+      // Hiperbold: `via_api` é a saída que OUTRO sistema mandou pela mesma
+      // instância (canal por instância). "Celular" diria ao atendente que uma
+      // pessoa digitou, e foi um robô.
+      return (message.metadata as { via_api?: unknown } | null)?.via_api === true ? "Automação" : "Celular";
+    }
     if (message.sent_via === "user" || message.sent_via === "crm") {
       // "Você" exige as DUAS pontas: saber quem lê e saber quem enviou. Falta
       // qualquer uma, o rótulo cai para "Atendente" — que continua dizendo o
