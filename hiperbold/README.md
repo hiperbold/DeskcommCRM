@@ -42,12 +42,13 @@ Testes unitários no WSL: `bash hiperbold/scripts/test-unit.sh` (roda `pnpm test
 - Banco: Supabase Cloud, região São Paulo. Piloto no plano Free; Pro antes de entrar dado de cliente real.
 - Serviços no EasyPanel com o mesmo nome curto do `docker-compose.prod.yml` do autor, porque o nome curto é o endereço interno: `redis`, `srh`, `waha`, `app`, `worker`, `scheduler`.
 - Schema: o deploy só troca a imagem. Código que depende de coluna nova exige, ANTES do push, `bash hiperbold/scripts/prod-schema.sh` (re-aplica o `baseline.sql` idempotente e garante a chave de cifra).
+- Backup: `hiperbold/scripts/backup-prod.sh`, diário pela tarefa do Windows `HiperboldCRM-BackupBanco`, em `D:\Hiperbold\backups\hiperbold-crm` (30 dias). Restaurar num projeto Supabase novo: `pg_restore --no-owner --no-privileges -d <url> <arquivo>.dump`.
 - Segredos de produção: `.env.production` no WSL (fora do Git, só leitura do usuário). Nunca no chat, nunca em commit.
 
 ## Puxar atualizações do autor
 
 ```bash
-git fetch upstream
+bash hiperbold/scripts/conferir-upstream.sh   # quanto o autor andou, o que é nosso nos arquivos dele, e se o merge conflita
 git merge upstream/main
 ```
 
