@@ -9382,14 +9382,23 @@ alter table public.channel_sessions
   add column if not exists wacalls_jid text,
   add column if not exists wacalls_paired_at timestamptz;
 
+-- uazapi (migration 0261, instância em servidor UAZAPI) — colunas do quinto
+-- provider, precisam existir antes das constraints abaixo referenciá-las.
+-- Comentários e índice único no bloco próprio da 0261, no fim do arquivo.
+alter table public.channel_sessions
+  add column if not exists uazapi_instance_id text,
+  add column if not exists uazapi_base_url text,
+  add column if not exists uazapi_token_encrypted bytea;
+
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_check;
 
 alter table public.channel_sessions
   add constraint channel_sessions_provider_check
-  -- 'wacalls' (migration 0233, chamada de voz) somado aqui — UM bloco só por
-  -- constraint, doutrina de baseline (não duplicar drop+add por migration).
-  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'wacalls'::text]));
+  -- 'wacalls' (migration 0233, chamada de voz) e 'uazapi' (migration 0261)
+  -- somados aqui — UM bloco só por constraint, doutrina de baseline (não
+  -- duplicar drop+add por migration).
+  check (provider = any (array['waha'::text, 'meta_cloud'::text, 'zernio'::text, 'uazapi'::text, 'wacalls'::text]));
 
 alter table public.channel_sessions
   drop constraint if exists channel_sessions_provider_ref_check;
@@ -9399,6 +9408,7 @@ alter table public.channel_sessions
     (provider = 'waha'       and waha_session_name    is not null) or
     (provider = 'meta_cloud' and meta_phone_number_id is not null) or
     (provider = 'zernio'     and zernio_account_id    is not null) or
+    (provider = 'uazapi'     and uazapi_instance_id   is not null and uazapi_base_url is not null) or
     (provider = 'wacalls'    and wacalls_session_id    is not null)
   );
 
@@ -14311,7 +14321,7 @@ alter table public.webhook_events_log
   drop constraint if exists webhook_events_log_provider_check;
 alter table public.webhook_events_log
   add constraint webhook_events_log_provider_check check (provider in (
-    'waha', 'nuvemshop', 'generic', 'meta_cloud', 'zernio'
+    'waha', 'nuvemshop', 'generic', 'meta_cloud', 'zernio', 'uazapi'
   ));
 
 -- ---- a marca da instalação sai do .env e vai para o banco (migration 0155) ----
@@ -25041,3 +25051,25 @@ drop trigger if exists trg_platform_meta_app_updated_at on public.platform_meta_
 create trigger trg_platform_meta_app_updated_at
   before update on public.platform_meta_app
   for each row execute function public.fn_set_updated_at();
+
+-- ---- quinto transporte: instância em servidor UAZAPI (migration 0261) ----
+--
+-- As colunas e os ramos dos dois CHECKs de provider foram somados aos BLOCOS
+-- ÚNICOS dessas constraints, lá em cima (vocabulário do terceiro canal), e
+-- `uazapi` entrou na lista única de `webhook_events_log_provider_check`: canal
+-- novo edita a lista existente, nunca acrescenta um segundo drop+add (issue #159).
+-- Aqui ficam só os comentários e a trava de unicidade. Racional completo no
+-- arquivo da migration.
+--
+-- Nada a deduplicar antes do índice: as colunas nasceram vazias na mesma
+-- migration, então nenhum clone tem duas linhas ativas com a mesma instância.
+comment on column public.channel_sessions.uazapi_instance_id is
+  'Id da instância no servidor UAZAPI (instance.id de /instance/status). É o sessionRef deste canal; espelhado em lib/channels/session-ref.ts.';
+comment on column public.channel_sessions.uazapi_base_url is
+  'Servidor UAZAPI desta conexão (ex.: https://empresa.uazapi.com). Por sessão, não da instalação: cada organização pode usar outro servidor.';
+comment on column public.channel_sessions.uazapi_token_encrypted is
+  'Token da instância UAZAPI, cifrado por fn_encrypt_oauth. Quem tem este valor envia mensagem pelo número.';
+
+create unique index if not exists channel_sessions_uazapi_instancia_ativa_unique
+  on public.channel_sessions (uazapi_base_url, uazapi_instance_id)
+  where archived_at is null and uazapi_instance_id is not null;

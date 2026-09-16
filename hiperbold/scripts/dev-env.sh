@@ -61,4 +61,5 @@ EOF
 chmod 600 "$F"
 
 echo "ok: $(grep -cE '^[A-Z0-9_]+=' "$F") chaves"
+bash hiperbold/scripts/semear-chave-de-cifra.sh local || echo "AVISO: chave de cifra não semeada"
 echo "vazias: $(grep -E '^[A-Z0-9_]+=\s*$' "$F" | cut -d= -f1 | tr '\n' ' ')"

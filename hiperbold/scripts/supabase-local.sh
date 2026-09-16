@@ -48,4 +48,9 @@ for i in $(seq 1 30); do
   sleep 2
 done
 echo "realtime=$s"
+# Sem a chave, toda credencial cifrada responde 422 (D-021). Na primeira vez o
+# .env.local ainda não existe: o dev-env.sh semeia depois de gerá-lo.
+if [ -r .env.local ]; then
+  bash hiperbold/scripts/semear-chave-de-cifra.sh local || echo "AVISO: chave de cifra não semeada"
+fi
 echo "tabelas em public: $(docker exec -i "$DB" psql -U postgres -d postgres -tAc "select count(*) from pg_tables where schemaname='public'")"

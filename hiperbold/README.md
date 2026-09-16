@@ -35,10 +35,13 @@ pnpm dev:crons                             # crons, em outro terminal
 
 Conferir: `curl http://localhost:3300/api/v1/health`.
 
+Testes unitários no WSL: `bash hiperbold/scripts/test-unit.sh` (roda `pnpm test:unit` nas condições do CI; direto, o Redis de dev e a rede espelhada do WSL dão falsos vermelhos).
+
 ## Produção
 
 - Banco: Supabase Cloud, região São Paulo. Piloto no plano Free; Pro antes de entrar dado de cliente real.
 - Serviços no EasyPanel com o mesmo nome curto do `docker-compose.prod.yml` do autor, porque o nome curto é o endereço interno: `redis`, `srh`, `waha`, `app`, `worker`, `scheduler`.
+- Schema: o deploy só troca a imagem. Código que depende de coluna nova exige, ANTES do push, `bash hiperbold/scripts/prod-schema.sh` (re-aplica o `baseline.sql` idempotente e garante a chave de cifra).
 - Segredos de produção: `.env.production` no WSL (fora do Git, só leitura do usuário). Nunca no chat, nunca em commit.
 
 ## Puxar atualizações do autor

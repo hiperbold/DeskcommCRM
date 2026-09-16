@@ -507,6 +507,43 @@ export const DICIONARIO: Traducoes = {
   "Números por QR": { es: "Números por QR" },
   "API Oficial (Meta)": { es: "API Oficial (Meta)" },
   "Provedor parceiro": { es: "Proveedor asociado" },
+
+  // ─── Conexão por instância (quinto transporte) ───
+  // O rótulo da aba é o CONCEITO, não a marca: a marca vem do servidor e
+  // aparece dentro do cartão, já escrita por quem a publicou.
+  "API não oficial": { es: "API no oficial" },
+  "Um número de WhatsApp pareado numa instância do seu servidor. As mensagens entram e saem pelo CRM, e a entrega é ligada automaticamente.":
+    {
+      es: "Un número de WhatsApp vinculado a una instancia de tu servidor. Los mensajes entran y salen por el CRM, y la entrega se activa automáticamente.",
+    },
+  Servidor: { es: "Servidor" },
+  "Token da instância": { es: "Token de la instancia" },
+  "cole o token": { es: "pega el token" },
+  "Guardado cifrado. Depois de gravar ele não é mostrado de novo.": {
+    es: "Se guarda cifrado. Después de grabarlo no se vuelve a mostrar.",
+  },
+  "Apelido (opcional)": { es: "Alias (opcional)" },
+  "ex.: Comercial": { es: "ej.: Comercial" },
+  "O servidor e o token são testados antes de gravar.": {
+    es: "El servidor y el token se prueban antes de grabar.",
+  },
+  "Precisa parear o aparelho": { es: "Hay que vincular el aparato" },
+  "Número conectado. As mensagens já entram no CRM.": {
+    es: "Número conectado. Los mensajes ya entran en el CRM.",
+  },
+  "A volta das mensagens não foi ligada.": { es: "La entrada de mensajes no se activó." },
+  "Conectado, mas as mensagens ainda não entram. Veja o aviso.": {
+    es: "Conectado, pero los mensajes todavía no entran. Mira el aviso.",
+  },
+  "A entrada de mensagens não está ligada. Reconecte com o mesmo token depois de configurar o endereço público do CRM.":
+    {
+      es: "La entrada de mensajes no está activa. Vuelve a conectar con el mismo token después de configurar la dirección pública del CRM.",
+    },
+  "Remover conexão": { es: "Quitar conexión" },
+  "Clique de novo para remover": { es: "Haz clic de nuevo para quitar" },
+  "Conexão removida.": { es: "Conexión eliminada." },
+  "Não foi possível remover.": { es: "No se pudo eliminar." },
+
   Conexão: { es: "Conexión" },
   "Modelos do parceiro": { es: "Plantillas del asociado" },
   "Templates da Meta": { es: "Plantillas de Meta" },

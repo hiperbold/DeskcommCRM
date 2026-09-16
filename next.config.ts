@@ -54,6 +54,11 @@ const nextConfig: NextConfig = {
     ],
   },
   reactStrictMode: true,
+  // Hiperbold: só vale no `next dev`. O desenvolvimento no WSL expõe o app por
+  // um túnel rápido do Cloudflare (o webhook do canal precisa de endereço
+  // público), e sem isto o dev server recusa os recursos pedidos pelo domínio
+  // do túnel: o login responde 200 mas a tela não sai de /login.
+  allowedDevOrigins: ["*.trycloudflare.com"],
   poweredByHeader: false,
   // typedRoutes moved out of experimental in Next 15.5+
   typedRoutes: true,

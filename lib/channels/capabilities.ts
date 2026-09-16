@@ -76,6 +76,24 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     groups: "limited",
     costPerMessage: true,
   },
+  // A mesma física do canal por QR, por outro transporte: a instância é um
+  // aparelho pareado ao WhatsApp comum, sem WABA por trás. Não existe janela de
+  // 24h nem definição aprovada, e o risco é o banimento por volume ou padrão,
+  // então throttle, warm-up e cap armam.
+  //
+  // `voiceNote: "server-convert"`: o envio de mídia do tipo mensagem de voz
+  // aceita mp3/ogg e o servidor entrega como bolha de voz, sem precisarmos
+  // transcodificar para opus antes.
+  uazapi: {
+    freeformOutsideWindow: true,
+    requiresTemplates: false,
+    canManageTemplates: false,
+    banRisk: true,
+    minIntervalMs: null,
+    voiceNote: "server-convert",
+    groups: "full",
+    costPerMessage: false,
+  },
 };
 
 /**
@@ -97,6 +115,8 @@ export const DEFAULT_CHANNEL_PROVIDER: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_WAHA: ChannelProvider = "waha";
 export const CHANNEL_PROVIDER_META: ChannelProvider = "meta_cloud";
 export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
+/** Instância de WhatsApp num servidor de API não oficial, conectada por token. */
+export const CHANNEL_PROVIDER_UAZAPI: ChannelProvider = "uazapi";
 /** Chamada de voz WhatsApp (spec 18). Não transporta mensagem — ver abaixo. */
 export const CHANNEL_PROVIDER_WACALLS: ChannelProvider = "wacalls";
 
@@ -119,6 +139,7 @@ export const PROVIDERS_DE_MENSAGEM = [
   "waha",
   "meta_cloud",
   "zernio",
+  "uazapi",
 ] as const satisfies readonly ProviderDeMensagem[];
 
 /**

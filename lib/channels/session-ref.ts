@@ -14,7 +14,8 @@
 export type ChannelSessionRef =
   | { provider: "waha"; waha_session_name: string }
   | { provider: "meta_cloud"; meta_phone_number_id: string }
-  | { provider: "zernio"; zernio_account_id: string };
+  | { provider: "zernio"; zernio_account_id: string }
+  | { provider: "uazapi"; uazapi_instance_id: string };
 
 /**
  * Colunas que um `select` do PostgREST precisa trazer para `resolveSessionRef`
@@ -22,7 +23,7 @@ export type ChannelSessionRef =
  * nomeia coluna de provider, e ela some da feature junto com a decisão.
  */
 export const CHANNEL_SESSION_REF_COLUMNS =
-  "provider, waha_session_name, meta_phone_number_id, zernio_account_id";
+  "provider, waha_session_name, meta_phone_number_id, zernio_account_id, uazapi_instance_id";
 
 export function resolveSessionRef(session: ChannelSessionRef): string {
   switch (session.provider) {
@@ -35,5 +36,10 @@ export function resolveSessionRef(session: ChannelSessionRef): string {
     // endereça pelo id dele. Mandar o id da Meta aqui responde 404.
     case "zernio":
       return session.zernio_account_id;
+    // O `instance.id` que o servidor devolve em `/instance/status`. Não é o
+    // telefone nem o nome da instância: o nome muda pela tela do servidor, o id
+    // não. O token de acesso é outra coluna, cifrada, e nunca vira ref.
+    case "uazapi":
+      return session.uazapi_instance_id;
   }
 }

@@ -43,6 +43,9 @@ const FONTE: Record<ProviderDeMensagem, FonteDeTemplates | null> = {
   waha: null,
   meta_cloud: "oficial",
   zernio: "parceiro",
+  // Mesma física do canal por QR: aparelho pareado ao WhatsApp comum, sem WABA
+  // por trás, então não existe definição aprovada para listar.
+  uazapi: null,
 };
 
 /** `null` quando este canal não trabalha com definições aprovadas. */

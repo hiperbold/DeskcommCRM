@@ -3,6 +3,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { CanalInstanciaClient } from "./CanalInstanciaClient";
 import { CanalOficialClient } from "./CanalOficialClient";
 import { CanalParceiroClient } from "./CanalParceiroClient";
 import { CanalVozClient } from "./CanalVozClient";
@@ -50,9 +51,11 @@ export function ConexoesShell({
       ? "oficial"
       : abaParam === "parceiro"
         ? "parceiro"
-        : abaParam === "voz"
-          ? "voz"
-          : "numeros";
+        : abaParam === "instancia"
+          ? "instancia"
+          : abaParam === "voz"
+            ? "voz"
+            : "numeros";
   const sub = params.get("sub") === "templates" ? "templates" : "conexao";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
@@ -80,6 +83,10 @@ export function ConexoesShell({
             ele reprova igual. */}
         <TabsTrigger value="numeros">{t("Números por QR")}</TabsTrigger>
         <TabsTrigger value="oficial">{t("API Oficial (Meta)")}</TabsTrigger>
+        {/* "API não oficial" e não a marca: a marca vem do servidor
+            (`lib/channels/instancia`) e aparece dentro do cartão. O conceito é o
+            que distingue esta aba da vizinha, e é o que quem instala procura. */}
+        <TabsTrigger value="instancia">{t("API não oficial")}</TabsTrigger>
         {/* "Provedor parceiro" e não a marca: o rótulo da marca vem do servidor
             (`lib/channels/connect`), porque a tela não pode nomear provider — e
             porque no dia em que houver um segundo parceiro esta aba não muda.
@@ -90,6 +97,10 @@ export function ConexoesShell({
 
       <TabsContent value="numeros" className="mt-0">
         <ConnectionsClient wahaConfigured={wahaConfigured} />
+      </TabsContent>
+
+      <TabsContent value="instancia" className="mt-0">
+        <CanalInstanciaClient />
       </TabsContent>
 
       <TabsContent value="voz" className="mt-0">

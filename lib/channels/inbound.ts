@@ -18,8 +18,13 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { CHANNEL_PROVIDER_ZERNIO } from "./capabilities";
+import { CHANNEL_PROVIDER_UAZAPI, CHANNEL_PROVIDER_ZERNIO } from "./capabilities";
 import { sincronizarSaudeDaConexao } from "./health";
+import { lerConexaoUazapi, parseUazapiConexao } from "./uazapi/conexao-evento";
+import { lerEnvelopeUazapi } from "./uazapi/envelope";
+import { ingestUazapiMensagem } from "./uazapi/ingest";
+import { aplicarStatusUazapi, lerAtualizacaoUazapi, parseUazapiAtualizacao } from "./uazapi/status";
+import { parseUazapiMensagem, tokenDoEventoConfere } from "./uazapi/webhook";
 import {
   atualizarEspelhoDoTemplate,
   avisoDoEvento,
@@ -70,7 +75,7 @@ export type InboundWebhookOutcome =
  * trabalho — e respondido sem nomear provider do lado de fora.
  */
 export function acceptsInboundWebhook(provider: string): boolean {
-  return provider === CHANNEL_PROVIDER_ZERNIO;
+  return provider === CHANNEL_PROVIDER_ZERNIO || provider === CHANNEL_PROVIDER_UAZAPI;
 }
 
 export async function handleInboundWebhook(
@@ -82,11 +87,120 @@ export async function handleInboundWebhook(
   switch (provider) {
     case CHANNEL_PROVIDER_ZERNIO:
       return zernioInbound(admin, input);
+    case CHANNEL_PROVIDER_UAZAPI:
+      return uazapiInbound(admin, input);
     default:
       // Token de um canal que não entra por aqui. É configuração trocada, não
       // ataque — mas processar seria ler o payload com o parser errado.
       return { ok: false, code: "provider_mismatch", message: "canal não recebe por esta rota" };
   }
+}
+
+async function uazapiInbound(
+  admin: SupabaseClient,
+  input: InboundWebhookInput,
+): Promise<InboundWebhookOutcome> {
+  // ─── Como esta entrada se autentica ───────────────────────────────────────
+  //
+  // O servidor NÃO assina o corpo. Quem autentica é o token secreto da URL —
+  // sorteado por conexão, e já usado pela rota para achar a sessão: quem não o
+  // tem não chega aqui. A conexão guarda o token da instância cifrado no mesmo
+  // campo de segredo, e isso dá a segunda prova.
+  //
+  // MEDIDO nos eventos reais: o evento de MENSAGEM repete o token da instância
+  // no corpo; o de CONFIRMAÇÃO DE ENTREGA não traz esse campo. Exigir o token do
+  // corpo em tudo faria toda confirmação virar 401 — e o servidor reentregaria
+  // para sempre uma coisa que estava certa. Então: veio token, tem que bater;
+  // não veio, confere-se o número DONO da instância contra o número da conexão.
+  if (!input.secret || input.secret.length < MIN_SECRET_LEN) {
+    return { ok: false, code: "unauthorized", message: "webhook_secret_unavailable" };
+  }
+
+  // O contrato antes de qualquer leitura. Recusar por JSON inválido não revela
+  // nada a quem não tem o token da URL.
+  const leitura = lerEnvelopeUazapi(input.rawBody);
+  if (!leitura.ok) {
+    if (leitura.motivo === "json_invalido") {
+      return { ok: false, code: "invalid_json", message: "invalid_json" };
+    }
+    return {
+      ok: false,
+      code: "contrato_violado",
+      message: `payload fora do contrato do canal: ${leitura.campos.join(", ")}`,
+    };
+  }
+  const envelope = leitura.envelope;
+
+  if (envelope.token) {
+    if (!tokenDoEventoConfere(envelope.token, input.secret)) {
+      return { ok: false, code: "unauthorized", message: "bad_token" };
+    }
+  } else {
+    // Os últimos 8 dígitos bastam e evitam falso negativo: o número da conexão é
+    // guardado em E.164 (`+55…`) e o evento manda só dígitos.
+    const finalDoEvento = (envelope.owner ?? "").replace(/\D/g, "").slice(-8);
+    const finalDaConexao = (input.session.phone_number ?? "").replace(/\D/g, "").slice(-8);
+    if (finalDoEvento && finalDaConexao && finalDoEvento !== finalDaConexao) {
+      return { ok: false, code: "unauthorized", message: "dono_divergente" };
+    }
+  }
+
+  // ─── Desfecho de entrega: move o estado, não cria linha ────────────────────
+  if ((envelope.EventType ?? "") === "messages_update") {
+    const leituraDoStatus = lerAtualizacaoUazapi(input.rawBody);
+    if (!leituraDoStatus.ok) {
+      return { ok: true, body: { status: "ignored", reason: "atualizacao_fora_do_contrato" } };
+    }
+    const desfecho = parseUazapiAtualizacao(leituraDoStatus.envelope);
+    if (!desfecho.ok) return { ok: true, body: { status: "ignored", reason: desfecho.motivo } };
+
+    const aplicado = await aplicarStatusUazapi(admin, {
+      organizationId: input.session.organization_id,
+      externalIds: desfecho.atualizacao.externalIds,
+      status: desfecho.atualizacao.status,
+    });
+    return { ok: true, body: { status: "status", desfecho: desfecho.atualizacao.status, ...aplicado } };
+  }
+
+  // ─── A instância caiu (ou voltou): vigia, não log ─────────────────────────
+  //
+  // Mesmo caminho do canal parceiro, e pelo mesmo motivo: `sincronizarSaude…`
+  // é quem grava o episódio E fecha o aviso na volta. Um insert cru aqui
+  // deixaria o crítico aberto para sempre e abriria um `info` ao lado dele
+  // quando o número voltasse.
+  //
+  // Estado desconhecido chega aqui como `reachable: false` com o nome dele no
+  // detalhe — vira aviso de "não deu para verificar", que é honesto, em vez de
+  // silêncio.
+  if ((envelope.EventType ?? "") === "connection") {
+    const leituraDaConexao = lerConexaoUazapi(input.rawBody);
+    if (!leituraDaConexao.ok) {
+      return { ok: true, body: { status: "ignored", reason: "conexao_fora_do_contrato" } };
+    }
+    const conexao = parseUazapiConexao(leituraDaConexao.envelope);
+    if (!conexao.ok) return { ok: true, body: { status: "ignored", reason: conexao.motivo } };
+
+    const desfecho = await sincronizarSaudeDaConexao(
+      admin,
+      { id: input.session.id, organization_id: input.session.organization_id, status: conexao.conexao.saude.status },
+      conexao.conexao.saude,
+      input.session.display_name ?? input.session.phone_number ?? "sem nome",
+      // Empurrão do servidor: ele é a autoridade sobre o estado do NÚMERO, e a
+      // varredura não fecha o que ele abriu.
+      "empurrao",
+    );
+    return { ok: true, body: { status: "saude", estado: conexao.conexao.estado, desfecho } };
+  }
+
+  const lida = parseUazapiMensagem(envelope);
+  if (!lida.ok) return { ok: true, body: { status: "ignored", reason: lida.motivo } };
+
+  const r = await ingestUazapiMensagem(admin, {
+    organizationId: input.session.organization_id,
+    channelSessionId: input.session.id,
+    msg: lida.msg,
+  });
+  return { ok: true, body: { ...r } };
 }
 
 async function zernioInbound(

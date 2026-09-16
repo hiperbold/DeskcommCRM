@@ -2993,6 +2993,9 @@ export type Database = {
           provider: string
           status: string
           status_reason: string | null
+          uazapi_base_url: string | null
+          uazapi_instance_id: string | null
+          uazapi_token_encrypted: string | null
           updated_at: string
           wacalls_jid: string | null
           wacalls_paired_at: string | null
@@ -3026,6 +3029,9 @@ export type Database = {
           provider?: string
           status?: string
           status_reason?: string | null
+          uazapi_base_url?: string | null
+          uazapi_instance_id?: string | null
+          uazapi_token_encrypted?: string | null
           updated_at?: string
           wacalls_jid?: string | null
           wacalls_paired_at?: string | null
@@ -3059,6 +3065,9 @@ export type Database = {
           provider?: string
           status?: string
           status_reason?: string | null
+          uazapi_base_url?: string | null
+          uazapi_instance_id?: string | null
+          uazapi_token_encrypted?: string | null
           updated_at?: string
           wacalls_jid?: string | null
           wacalls_paired_at?: string | null
