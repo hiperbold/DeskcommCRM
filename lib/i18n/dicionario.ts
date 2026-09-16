@@ -3498,8 +3498,8 @@ export const DICIONARIO: Traducoes = {
     es: "No funcionó. Revisa si la fuente está activa y si el embudo/etapa todavía existen.",
   },
   // ─── Conexões / Integrações ───
-  "Por onde seu negócio fala com o cliente. Conecte números por QR ou o número oficial da Meta, e acompanhe a saúde de cada um.": {
-    es: "Por dónde tu negocio habla con el cliente. Conecta números por QR o el número oficial de Meta, y sigue la salud de cada uno.",
+  "Por onde seu negócio fala com o cliente. Conecte um número pela API não oficial ou o número oficial da Meta, e acompanhe a saúde de cada um.": {
+    es: "Por dónde tu negocio habla con el cliente. Conecta un número por la API no oficial o el número oficial de Meta, y sigue la salud de cada uno.",
   },
   "Redirecionando…": { es: "Redirigiendo…" },
   "Conectar com Nuvemshop": { es: "Conectar con Nuvemshop" },

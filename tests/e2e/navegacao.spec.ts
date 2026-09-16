@@ -181,7 +181,8 @@ test.describe("navegação agrupada", () => {
 
     await sidebar(page).getByRole("link", { name: "Conexões" }).click();
     await page.waitForURL(/\/app\/connections/);
-    await expect(page.getByRole("tab", { name: /oficial/i })).toBeVisible();
+    // `API Oficial` e não só `oficial`: a aba "API não oficial" também casa com a palavra.
+    await expect(page.getByRole("tab", { name: /API Oficial/i })).toBeVisible();
   });
 
   test("o ⌘K acha o canal oficial por nome, mesmo sem tela própria", async ({ page }) => {

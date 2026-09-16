@@ -16,7 +16,7 @@ Este é o fork `hiperbold/DeskcommCRM` do projeto `melgarafael/DeskcommCRM` (MIT
 
 ## Desenvolvimento local (WSL)
 
-Portas: app **3300**, WAHA **3230**, ponte do Redis **8090**, Supabase local **54321** (API), **54322** (banco), **54323** (Studio), **54324** (caixa de e-mails de teste). A 3000 é do site da Unique no WSL, e a 3200 e a 3201 são de programas Node no Windows (o WSL enxerga as portas do Windows).
+Portas: app **3300**, ponte do Redis **8090**, Supabase local **54321** (API), **54322** (banco), **54323** (Studio), **54324** (caixa de e-mails de teste). A 3000 é do site da Unique no WSL, e a 3200 e a 3201 são de programas Node no Windows (o WSL enxerga as portas do Windows).
 
 ```bash
 cd ~/projects/deskcommcrm

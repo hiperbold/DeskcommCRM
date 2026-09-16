@@ -25,6 +25,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { env } from "@/lib/env";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { alvoDe, classificarFalhaDeAlcance, type FalhaDeAlcance } from "@/lib/net/alcance";
 import { validarConfigRedisRest } from "@/lib/redis-config";
 
@@ -39,7 +40,9 @@ type MotivoDeFalha =
   | "credencial_recusada"
   | "resposta_inesperada"
   | "nao_configurado"
-  | "configuracao_invalida";
+  | "configuracao_invalida"
+  /** Não é falha: nenhuma conexão ativa usa este serviço, então ele não foi consultado. */
+  | "sem_conexao_ativa";
 
 type Check = {
   status: CheckStatus;
@@ -168,7 +171,30 @@ async function checkRedis(): Promise<Check> {
   }
 }
 
-async function checkWaha(): Promise<Check> {
+/**
+ * Hiperbold: o serviço do canal por QR só é dependência se alguma conexão ativa
+ * o usa. A Hiperbold não usa esse canal (decisão de 16/09/2026) e o serviço foi
+ * retirado; sem isto o health ficaria "unhealthy" para sempre por um serviço que
+ * nada precisa. Falha na consulta conta como "em uso": na dúvida, a queda vale.
+ */
+async function canalPorQrEmUso(): Promise<boolean> {
+  try {
+    const { count, error } = await withTimeout(
+      Promise.resolve(
+        createAdminClient()
+          .from("channel_sessions")
+          .select("id", { count: "exact", head: true })
+          .eq("provider", "waha")
+          .is("archived_at", null),
+      ),
+    );
+    return error ? true : (count ?? 0) > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function checkWahaNoServico(): Promise<Check> {
   const t0 = Date.now();
   const base = env.WAHA_API_BASE_URL;
   if (!base) {
@@ -202,6 +228,15 @@ async function checkWaha(): Promise<Check> {
       target: alvoDe(base),
     };
   }
+}
+
+async function checkWaha(): Promise<Check> {
+  const check = await checkWahaNoServico();
+  // Só a QUEDA é relativizada. "Não configurado" já sai como degraded e não
+  // derruba o health, e não vale uma ida ao banco.
+  if (check.status !== "down") return check;
+  if (await canalPorQrEmUso()) return check;
+  return { status: "ok", latency_ms: check.latency_ms, reason: "sem_conexao_ativa" };
 }
 
 /**

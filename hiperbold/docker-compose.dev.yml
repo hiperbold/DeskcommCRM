@@ -1,4 +1,4 @@
-# Dependências locais do DeskcommCRM Hiperbold (WSL). App e worker rodam fora do Docker, via pnpm.
+# Dependências locais do DeskcommCRM Hiperbold (WSL). Sem WAHA: a Hiperbold usa só UAZAPI e Cloud API. App e worker rodam fora do Docker, via pnpm.
 # Portas escolhidas para não colidir com o site da Unique (3000) no mesmo WSL.
 #
 #   docker compose -f hiperbold/docker-compose.dev.yml --env-file .env.local up -d
@@ -6,25 +6,6 @@
 name: deskcomm-dev
 
 services:
-  waha:
-    image: devlikeapro/waha:latest-2026.7.2
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3230:3000"
-    environment:
-      WAHA_API_KEY: "sha512:${WAHA_API_KEY_SHA512}"
-      WHATSAPP_HOOK_URL: http://host.docker.internal:3300/api/v1/webhooks/waha
-      WHATSAPP_HOOK_EVENTS: "message.any,message.ack,message.edited,message.revoked,session.status,state.change"
-      WHATSAPP_HOOK_HMAC: ${WAHA_HMAC_SECRET}
-      WHATSAPP_DEFAULT_ENGINE: NOWEB
-      WAHA_DASHBOARD_ENABLED: "true"
-      WHATSAPP_RESTART_ALL_SESSIONS: "True"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    volumes:
-      - waha-data:/app/.sessions
-      - waha-media:/app/.media
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -41,7 +22,3 @@ services:
       SRH_CONNECTION_STRING: "redis://redis:6379"
     depends_on:
       - redis
-
-volumes:
-  waha-data:
-  waha-media:

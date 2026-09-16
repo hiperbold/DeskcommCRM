@@ -7,7 +7,6 @@ import { CanalInstanciaClient } from "./CanalInstanciaClient";
 import { CanalOficialClient } from "./CanalOficialClient";
 import { CanalParceiroClient } from "./CanalParceiroClient";
 import { CanalVozClient } from "./CanalVozClient";
-import { ConnectionsClient } from "./ConnectionsClient";
 import { TemplatesClient } from "./TemplatesClient";
 import { TemplatesParceiroClient } from "./TemplatesParceiroClient";
 import { useT } from "@/hooks/i18n/useT";
@@ -36,9 +35,10 @@ import { useT } from "@/hooks/i18n/useT";
  * existe em `useState` transforma todo link salvo em "abre e procura de novo".
  */
 export function ConexoesShell({
-  wahaConfigured,
+  wahaConfigured: _wahaConfigured,
   wacallsConfigured,
 }: {
+  /** Sem uso na Hiperbold (sem canal por QR); mantido para a página do autor não mudar. */
   wahaConfigured: boolean;
   wacallsConfigured: boolean;
 }) {
@@ -55,12 +55,14 @@ export function ConexoesShell({
           ? "instancia"
           : abaParam === "voz"
             ? "voz"
-            : "numeros";
+            // Hiperbold: sem canal por QR (decisão de 16/09/2026). A aba de
+            // entrada é a da instância, e um link antigo `?aba=numeros` cai nela.
+            : "instancia";
   const sub = params.get("sub") === "templates" ? "templates" : "conexao";
 
   const irPara = (proximaAba: string, proximaSub?: string): void => {
     const q = new URLSearchParams();
-    if (proximaAba !== "numeros") q.set("aba", proximaAba);
+    if (proximaAba !== "instancia") q.set("aba", proximaAba);
     if (proximaSub && proximaSub !== "conexao") q.set("sub", proximaSub);
     const qs = q.toString();
     // `scroll: false`: trocar de aba não é navegar para outra página; jogar o
@@ -81,7 +83,6 @@ export function ConexoesShell({
             a frase custou menos que abrir exceção no gate, e o gate continua
             estrito: o dia em que alguém escrever o nome do provider aqui DE VERDADE,
             ele reprova igual. */}
-        <TabsTrigger value="numeros">{t("Números por QR")}</TabsTrigger>
         <TabsTrigger value="oficial">{t("API Oficial (Meta)")}</TabsTrigger>
         {/* "API não oficial" e não a marca: a marca vem do servidor
             (`lib/channels/instancia`) e aparece dentro do cartão. O conceito é o
@@ -94,10 +95,6 @@ export function ConexoesShell({
         <TabsTrigger value="parceiro">{t("Provedor parceiro")}</TabsTrigger>
         <TabsTrigger value="voz">{t("Chamada de voz")}</TabsTrigger>
       </TabsList>
-
-      <TabsContent value="numeros" className="mt-0">
-        <ConnectionsClient wahaConfigured={wahaConfigured} />
-      </TabsContent>
 
       <TabsContent value="instancia" className="mt-0">
         <CanalInstanciaClient />
