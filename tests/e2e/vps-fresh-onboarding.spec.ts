@@ -4,7 +4,7 @@
  * Pré-condições (ambiente que simula o kit self-host):
  *   - banco zerado do baseline.sql (Supabase local pg17)
  *   - primeiro usuário criado via scripts/bootstrap-owner.ts (como o install.sh)
- *   - WAHA ativo, Redis local, RESEND_API_KEY VAZIO (realidade da VPS fresca)
+ *   - Redis local, RESEND_API_KEY VAZIO (realidade da VPS fresca)
  *   - app em produção (next build + next start) na E2E_PORT
  *
  * Casos: J1.1–J1.13 do docs/testing/user-journey-map.md. Tudo pelo frontend;
@@ -185,30 +185,28 @@ test.describe("J1 — onboarding do dono numa instalação fresca", () => {
     expect((org.onboarding_state as { welcome?: unknown })?.welcome).toBeTruthy();
   });
 
-  test("J1.5 WAHA ativo → QR code aparece de verdade", async ({ page }) => {
+  test("J1.5 o passo do telefone oferece a instância própria e não cria canal nenhum", async ({ page }) => {
     await login(page);
     await page.waitForURL(/\/onboarding\/connect-whatsapp/);
 
-    // O passo agora ABRE PERGUNTANDO como a pessoa já usa o número — o código
-    // deixou de ser suposição. Escolher "leio um código com o celular" é o que
-    // sobe a sessão; antes ela subia sozinha na montagem da tela, e quem tinha
-    // conta oficial entrava pelo caminho errado sem ter sido perguntado.
-    await page.getByTestId("forma-qr").locator("input").click();
+    // O passo ABRE PERGUNTANDO como a pessoa já usa o número. A forma por
+    // código de barras saiu junto com o serviço que a atendia: escolhê-la
+    // gravava a linha de `channel_sessions` antes de falar com o transporte, e
+    // sem transporte ela ficava `FAILED` para sempre — anunciada em toda tela
+    // de /app pela faixa vermelha, sem nada que o operador pudesse fazer.
+    await expect(page.getByTestId("forma-qr")).toHaveCount(0);
+    await page.getByTestId("forma-instancia").locator("input").click();
 
-    // sem banner de "WAHA não está configurado"
-    // O nome do transporte saiu da tela: o aviso agora fala do "WhatsApp desta
-    // instalação", que é como o dono chama a coisa.
-    await expect(page.getByText(/ainda não subiu/i)).toHaveCount(0);
+    // O formulário da instância é o MESMO da tela de Conexões, e ele só grava
+    // depois que o servidor e o token respondem.
+    await expect(page.getByTestId("canal-instancia-root")).toBeVisible({ timeout: 15_000 });
+    await snap(page, "j1.5-instancia");
 
-    // QR do proxy (poll de 3s até SCAN_QR_CODE) — imagem carregada de fato
-    const qr = page.locator('img[src*="/whatsapp/qr"]');
-    await expect(qr).toBeVisible({ timeout: 60_000 });
-    await expect
-      .poll(async () => qr.evaluate((el: HTMLImageElement) => el.naturalWidth), {
-        timeout: 15_000,
-      })
-      .toBeGreaterThan(0);
-    await snap(page, "j1.5-qr-visivel");
+    const { data: canais } = await svc
+      .from("channel_sessions")
+      .select("id")
+      .eq("organization_id", (await orgRow()).id);
+    expect(canais ?? []).toHaveLength(0);
   });
 
   test("J1.11 + J1.6 abandona e volta → retoma no step pendente; pular WhatsApp avança", async ({ page }) => {

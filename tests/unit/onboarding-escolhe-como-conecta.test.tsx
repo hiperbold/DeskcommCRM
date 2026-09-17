@@ -48,6 +48,9 @@ vi.mock("@/app/actions/onboarding/skipWhatsapp", () => ({
  * de verdade traria `useQuery` e as rotas junto, e o teste passaria a falhar
  * por motivo alheio ao que ele afirma.
  */
+vi.mock("@/components/connections/CanalInstanciaClient", () => ({
+  CanalInstanciaClient: () => <div data-testid="dublê-instancia" />,
+}));
 vi.mock("@/components/connections/CanalOficialClient", () => ({
   CanalOficialClient: () => <div data-testid="dublê-oficial" />,
 }));
@@ -82,11 +85,7 @@ afterEach(() => {
 
 function montar(props?: { oficialPodeReceber?: boolean }) {
   return render(
-    <ConnectWhatsappClient
-      wahaConfigured
-      sessionName="org_teste"
-      oficialPodeReceber={props?.oficialPodeReceber ?? true}
-    />,
+    <ConnectWhatsappClient sessionName="org_teste" oficialPodeReceber={props?.oficialPodeReceber ?? true} />,
   );
 }
 
@@ -100,11 +99,13 @@ describe("o passo do telefone pergunta como a pessoa já usa o número", () => {
     montar();
 
     expect(screen.getByText(/como você já usa esse número/i)).toBeTruthy();
-    expect(screen.getByTestId("forma-qr")).toBeTruthy();
+    expect(screen.getByTestId("forma-instancia")).toBeTruthy();
     expect(screen.getByTestId("forma-oficial")).toBeTruthy();
     expect(screen.getByTestId("forma-parceiro")).toBeTruthy();
 
-    // O código não pode estar na tela antes de alguém escolher lê-lo.
+    // A forma do código no celular saiu: o transporte dela não existe mais
+    // nesta instalação, e oferecê-la criava uma conexão morta (ver abaixo).
+    expect(screen.queryByTestId("forma-qr")).toBeNull();
     expect(screen.queryByAltText(/código qr/i)).toBeNull();
   });
 
@@ -115,15 +116,21 @@ describe("o passo do telefone pergunta como a pessoa já usa o número", () => {
     expect(chamadasDeSessao()).toEqual([]);
   });
 
-  it("escolher o código no celular é o que sobe a sessão", async () => {
+  it("NENHUMA forma cria sessão do canal por código — nem a de instância própria", async () => {
+    // O defeito MEDIDO em produção (17/09/2026): a tela oferecia "leio um
+    // código com o celular", e a escolha chamava
+    // `POST /api/v1/onboarding/whatsapp/session`, que grava a linha de
+    // `channel_sessions` ANTES de falar com o transporte. Com o serviço por QR
+    // já retirado da instalação, a linha nascia e ficava `FAILED` para sempre —
+    // e a faixa vermelha do topo passou a anunciar "WhatsApp sem nome está
+    // desconectado" em toda tela de /app, sem nada que o operador pudesse
+    // fazer: o número dele estava conectado.
     montar();
+
+    fireEvent.click(screen.getByTestId("forma-instancia").querySelector("input")!);
+    await waitFor(() => expect(screen.getByTestId("dublê-instancia")).toBeTruthy());
+
     expect(chamadasDeSessao()).toEqual([]);
-
-    fireEvent.click(screen.getByTestId("forma-qr").querySelector("input")!);
-
-    await waitFor(() => {
-      expect(chamadasDeSessao().some((c) => c.startsWith("POST"))).toBe(true);
-    });
   });
 
   it("escolher conta oficial leva ao canal oficial, e NÃO cria sessão de código", async () => {
@@ -159,7 +166,7 @@ describe("o passo do telefone pergunta como a pessoa já usa o número", () => {
     // A pergunta volta inteira. Se a escolha fosse gravada em vez de viver em
     // memória, não haveria como desfazê-la — e o passo já estaria "cumprido".
     await waitFor(() => expect(screen.getByText(/como você já usa esse número/i)).toBeTruthy());
-    expect(screen.getByTestId("forma-qr")).toBeTruthy();
+    expect(screen.getByTestId("forma-instancia")).toBeTruthy();
   });
 
   it("as saídas existem já na pergunta — nenhum estado é beco", () => {

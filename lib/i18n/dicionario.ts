@@ -4904,6 +4904,16 @@ export const DICIONARIO: Traducoes = {
   "Existe mais de um jeito de ter WhatsApp para empresa, e cada um conecta de um jeito. Se você nunca ouviu falar dos outros dois, é o primeiro.": {
     es: "Existe más de una forma de tener WhatsApp para empresa, y cada una se conecta de un modo distinto. Si nunca oíste hablar de las otras dos, es la primera.",
   },
+  "É por este número que ele vai atender seus clientes. Tenha em mãos o endereço do seu servidor de WhatsApp e o token da instância.": {
+    es: "Es por este número que va a atender a tus clientes. Ten a mano la dirección de tu servidor de WhatsApp y el token de la instancia.",
+  },
+  "Tenho o número numa instância minha": { es: "Tengo el número en una instancia mía" },
+  "O número já está pareado num servidor de WhatsApp seu, e você tem o endereço dele e o token da instância em mãos.": {
+    es: "El número ya está vinculado en un servidor de WhatsApp tuyo, y tienes su dirección y el token de la instancia en mano.",
+  },
+  "Dá para conectar e já enviar, mas as respostas do cliente não vão chegar até quem administra a instalação cadastrar o App da Meta, em Admin › API Oficial (Meta). Se você quer atender hoje, conectar pela sua própria instância funciona agora — e dá para trocar depois, sem perder nada.": {
+    es: "Se puede conectar y ya enviar, pero las respuestas del cliente no van a llegar hasta que quien administra la instalación registre la App de Meta, en Admin › API Oficial (Meta). Si quieres atender hoy, conectar por tu propia instancia funciona ahora — y se puede cambiar después, sin perder nada.",
+  },
   "Leio um código com o celular": { es: "Leo un código con el celular" },
   "É assim para quase todo mundo. Você abre o WhatsApp no celular que vai atender e aponta para um código que aparece aqui.": {
     es: "Así es para casi todo el mundo. Abres el WhatsApp en el celular que va a atender y apuntas a un código que aparece aquí.",

@@ -30,6 +30,7 @@
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { avisarConexaoPorEmail } from "./aviso-por-email";
 import { PROVIDERS_DE_MENSAGEM } from "./capabilities";
 
 /** Único estado em que mensagem entra e sai. Contrato do CRM (uppercase). */
@@ -271,6 +272,13 @@ export async function sincronizarSaudeDaConexao(
       .eq("ref_id", sessao.id)
       .eq("status", "open");
     await gravarEpisodio(admin, sessao, null);
+    // Quem foi avisado da queda precisa saber que acabou — senão o e-mail de
+    // queda vira um alarme sem desfecho, e a pessoa fica conferindo a tela.
+    await avisarConexaoPorEmail(admin, {
+      organizationId: sessao.organization_id,
+      apelido,
+      evento: { tipo: "voltou" },
+    });
     return "resolvido";
   }
 
@@ -293,6 +301,16 @@ export async function sincronizarSaudeDaConexao(
     ref_id: sessao.id,
   });
   await gravarEpisodio(admin, sessao, episodio);
+  // Fora do navegador. A Central e a faixa só alcançam quem está com o produto
+  // aberto; a queda que dói é a que acontece com o time fora, e ela só é
+  // descoberta pelo cliente reclamando no dia seguinte. Sai UMA vez por
+  // episódio, pelo mesmo dedup que já governa o item da Central: o `return`
+  // acima em `jaEscalado === episodio` é o que impede o alarme de repetir.
+  await avisarConexaoPorEmail(admin, {
+    organizationId: sessao.organization_id,
+    apelido,
+    evento: { tipo: "caiu", titulo: aviso.title, corpo: aviso.body },
+  });
   return "avisado";
 }
 

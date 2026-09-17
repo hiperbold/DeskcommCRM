@@ -1,6 +1,16 @@
 import { readFileSync } from "node:fs";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * O aviso por e-mail tem casos próprios (`aviso-de-conexao-por-email`). Aqui
+ * ele é dublê: estes casos falam da Central e do dedup do episódio, e montar o
+ * envio de verdade traria GoTrue e marca junto — o teste passaria a falhar por
+ * motivo alheio ao que ele afirma.
+ */
+vi.mock("@/lib/channels/aviso-por-email", () => ({
+  avisarConexaoPorEmail: vi.fn(async () => "enviado"),
+}));
 
 /**
  * A conexão caiu — e alguém precisa SABER.

@@ -97,7 +97,6 @@ const KNOWN_DEBT: { reason: string; files: string[] }[] = [
       // decidir se o transporte está configurado — o nome está no ENV, não
       // numa pergunta de identidade. Sai quando o env virar config de canal.
       "app/app/connections/page.tsx",
-      "app/onboarding/connect-whatsapp/page.tsx",
       "lib/agent-engine/edge/crm/session-reconciler.ts",
       "workers/media-persist-worker.ts",
     ],
@@ -117,7 +116,6 @@ const KNOWN_DEBT: { reason: string; files: string[] }[] = [
       // (#118) Emite `waha_sessions_count` na resposta do admin.
       "app/api/v1/admin/tenants/[id]/route.ts",
       "app/design/sections/SectionPatterns.tsx",
-      "app/onboarding/connect-whatsapp/_client.tsx",
       "components/admin/dashboard/AlertItem.tsx",
       "components/admin/dashboard/KPICards.tsx",
       "components/admin/tenants/HealthGrid.tsx",

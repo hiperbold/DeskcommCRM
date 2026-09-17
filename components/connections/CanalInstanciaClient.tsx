@@ -133,7 +133,7 @@ export function CanalInstanciaClient() {
   const conexoes = estado?.conexoes ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-testid="canal-instancia-root">
       <Card className="flex flex-col gap-4 p-4">
         <div>
           <h3 className="text-sm font-semibold">

@@ -142,9 +142,14 @@ test.describe("o wizard monta um funcionário", () => {
     // As três formas que o produto realmente suporta — as mesmas da tela de
     // Conexões. Antes, o wizard oferecia uma e nem perguntava: a sessão do
     // canal por código subia sozinha na montagem da tela.
-    await expect(page.getByTestId("forma-qr")).toBeVisible();
+    await expect(page.getByTestId("forma-instancia")).toBeVisible();
     await expect(page.getByTestId("forma-oficial")).toBeVisible();
     await expect(page.getByTestId("forma-parceiro")).toBeVisible();
+
+    // A forma por código de barras saiu junto com o serviço que a atendia:
+    // oferecê-la gravava uma conexão que nascia quebrada e ficava anunciada
+    // para sempre na faixa do topo.
+    await expect(page.getByTestId("forma-qr")).toHaveCount(0);
 
     // Nenhuma escolha feita: o código não pode estar na tela ainda.
     await expect(page.locator('img[src*="/whatsapp/qr"]')).toHaveCount(0);
@@ -159,7 +164,7 @@ test.describe("o wizard monta um funcionário", () => {
     await page.getByTestId("forma-oficial").locator("input").click();
     await expect(page.getByTestId("canal-oficial-root")).toBeVisible({ timeout: 15_000 });
     await page.getByTestId("voltar-para-escolha").click();
-    await expect(page.getByTestId("forma-qr")).toBeVisible();
+    await expect(page.getByTestId("forma-instancia")).toBeVisible();
 
     // NÃO avança: a spec é serial e o caso seguinte começa neste mesmo passo.
     // A escolha vive em memória e não é gravada, então voltar aqui não deixa
