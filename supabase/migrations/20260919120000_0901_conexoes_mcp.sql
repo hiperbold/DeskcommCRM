@@ -65,3 +65,24 @@ drop trigger if exists trg_ai_mcp_connections_updated_at on public.ai_mcp_connec
 create trigger trg_ai_mcp_connections_updated_at
   before update on public.ai_mcp_connections
   for each row execute function public.fn_set_updated_at();
+
+-- D4: o apelido prefixa o id `mcp_<slug>__<nome>`, congelado nas versões
+-- PUBLICADAS dos agentes. Trocar o apelido por baixo órfã essas capacidades
+-- sem aviso algum: o agente publicado passa a apontar para um id que não
+-- existe mais. O gate mora no banco, não só na rota de PATCH, porque quem
+-- grava a linha é o mesmo client admin nos dois caminhos e um bug num deles
+-- não pode virar a única defesa.
+create or replace function public.fn_ai_mcp_connections_slug_imutavel() returns trigger
+language plpgsql as $$
+begin
+  if old.slug is distinct from new.slug then
+    raise exception 'ai_mcp_connections_slug_imutavel' using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_ai_mcp_connections_slug_imutavel on public.ai_mcp_connections;
+create trigger trg_ai_mcp_connections_slug_imutavel
+  before update of slug on public.ai_mcp_connections
+  for each row execute function public.fn_ai_mcp_connections_slug_imutavel();

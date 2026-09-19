@@ -234,3 +234,55 @@ describe.each(TABELAS)("o PostgREST não serve `%s`", (tabela) => {
     expect(cascata, "a FK de organization_id não é ON DELETE CASCADE").not.toBe("0");
   });
 });
+
+describe("o cabeçalho de acesso é gravado cifrado", () => {
+  // A propriedade que a tela promete quando diz que o cabeçalho "não volta a
+  // aparecer". Os casos acima medem QUEM alcança a tabela, não O QUE está lá
+  // dentro: gravar em texto puro passaria por todos eles.
+  it("`auth_header_value_encrypted` é bytea, o cabeçalho não cabe em claro", () => {
+    const tipo = sql(`
+      select data_type from information_schema.columns
+       where table_schema = 'public' and table_name = 'ai_mcp_connections'
+         and column_name = 'auth_header_value_encrypted';
+    `).trim();
+    expect(
+      tipo,
+      "ai_mcp_connections.auth_header_value_encrypted não é bytea, o cabeçalho cabe em claro",
+    ).toBe("bytea");
+  });
+});
+
+describe("o apelido (slug) é IMUTÁVEL (D4)", () => {
+  // Ele prefixa o id `mcp_<slug>__<nome>`, congelado nas versões PUBLICADAS
+  // dos agentes. Trocar o apelido por baixo órfã essas capacidades sem aviso:
+  // o agente publicado passa a apontar para um id que não existe mais. O gate
+  // mora no banco, não só na rota de PATCH, porque quem grava é o mesmo client
+  // admin nos dois caminhos e um bug ali não pode virar a única defesa.
+  it("`update ... set slug` é recusado mesmo para quem grava direto na tabela", () => {
+    // Insere organização + conexão e tenta o UPDATE numa transação DESFEITA:
+    // `sql()` roda tudo numa sessão só, e o `rollback` (ou o abort automático
+    // do ON_ERROR_STOP quando o UPDATE falha) garante que nada disto sobra no
+    // banco-molde entre os arquivos da suíte.
+    const org = "0901aaaa-0000-4000-8000-00000000000a";
+    const conexao = "0901bbbb-0000-4000-8000-00000000000b";
+    let erro: string | null = null;
+    try {
+      sql(`
+        begin;
+        insert into public.organizations (id, slug, legal_name, display_name)
+          values ('${org}', 'inv-mcp-slug-imut', 'Invariante MCP Slug LTDA', 'Invariante MCP Slug');
+        insert into public.ai_mcp_connections (id, organization_id, slug, name, url)
+          values ('${conexao}', '${org}', 'antigo', 'Conexao de teste', 'https://exemplo.com');
+        update public.ai_mcp_connections set slug = 'novo' where id = '${conexao}';
+        rollback;
+      `);
+    } catch (err) {
+      erro = motivoDoErro(err);
+    }
+    expect(
+      erro,
+      "o UPDATE de slug passou: o id mcp_<slug>__<nome> congelado nas versões publicadas fica órfão",
+    ).not.toBeNull();
+    expect(erro).toContain("ai_mcp_connections_slug_imutavel");
+  });
+});
