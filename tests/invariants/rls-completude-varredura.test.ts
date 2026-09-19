@@ -212,6 +212,14 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "orçamento, criativo e performance de quem anuncia.",
   },
   {
+    tabela: "ai_mcp_connections",
+    razao:
+      "tests/invariants/credencial-mcp-e-server-side.test.ts — privilégio NENHUM para " +
+      "anon e authenticated, `permission denied` medido sob `set role`, RLS ligada, zero " +
+      "policies. Deny-all porque a linha guarda a chave de acesso ao servidor MCP da " +
+      "organização (fork Hiperbold, 0901).",
+  },
+  {
     tabela: "ad_conversion_dispatches",
     razao:
       "tests/invariants/credencial-de-anuncios-e-server-side.test.ts — mesmo " +
