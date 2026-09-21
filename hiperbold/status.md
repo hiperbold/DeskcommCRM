@@ -1,6 +1,6 @@
 # Status: conexões MCP para os agentes
 
-Atualizado em 19/09/2026. **Implementação PARADA a pedido do Filipe.** Nada roda em segundo plano, nada foi publicado, nada foi enviado ao GitHub.
+Atualizado em 21/09/2026. **Implementação em andamento (retomada em 21/09).** Nada roda em segundo plano, nada foi publicado, nada foi enviado ao GitHub.
 
 ## Onde está
 
@@ -16,9 +16,9 @@ Atualizado em 19/09/2026. **Implementação PARADA a pedido do Filipe.** Nada ro
 | 0 | Preparar o branch | ✅ feita | `087e2cdf` |
 | 1 | Tabela `ai_mcp_connections` (migration 0901) | ✅ feita e aprovada nas duas revisões, com os ajustes pedidos (teste de coluna cifrada, apelido imutável no banco) | `ae46f6a0`, `33398826` |
 | 2 | Ids das ferramentas externas (`mcp_<apelido>__<nome>`) | ✅ feita e aprovada nas duas revisões | `581421ad` |
-| 3 | Id externo passa na validação e conta no teto de 25 | ⏸️ não iniciada | |
-| 4 | Fetch seguro | ⏸️ não iniciada | |
-| 5 | Cliente MCP | ⏸️ não iniciada | |
+| 3 | Id externo passa na validação e conta no teto de 25 | ✅ feita | `2ca5606c` |
+| 4 | Fetch seguro (só https, sem IP interno, sem redirecionamento, teto de 2 MiB) | ✅ feita, auditada e com ajustes | ver commit das Tarefas 4-5 |
+| 5 | Cliente MCP (prazo de 15 s, corte de 8000 caracteres, sessão fechada em toda falha) | ✅ feita, auditada e com ajustes | ver commit das Tarefas 4-5 |
 | 6 | Cadastro das conexões | ⏸️ não iniciada | |
 | 7 | API | ⏸️ não iniciada | |
 | 8 | Publicar/duplicar/reverter aceitam ferramenta externa | ⏸️ não iniciada | |
@@ -39,6 +39,8 @@ A migration 0901 foi aplicada no Supabase local (container `supabase_db_deskcomm
 - Testes unitários novos: `mcp-externo-migration` e `mcp-externo-ids`, verdes. Typecheck limpo, lint sem erros.
 
 ## Para retomar
+
+
 
 Pedir "retomar as conexões MCP a partir da Tarefa 3". O texto de cada tarefa está no plano; os arquivos de trabalho dos subagentes ficaram em `F:\temp\2026-09-19\mcp-tarefas\` (temporários, podem ser regerados do plano).
 

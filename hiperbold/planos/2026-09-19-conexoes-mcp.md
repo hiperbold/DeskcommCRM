@@ -1393,3 +1393,14 @@ Três servidores diferentes de propósito: dois públicos sem chave (Streamable 
 2. **Conflito com o autor**: `ToolPicker.tsx`, `inbound-turn.ts`, `operator-turn.ts`, `validation.ts` e `escopo.ts` são arquivos que o autor mexe muito. A alteração em cada um foi mantida em poucas linhas (um import e uma chamada), e toda a lógica mora em arquivos novos, para o merge da D-028 e dos próximos ser curto.
 3. **Janela de rebinding de DNS**: residual, a mesma já declarada em `lib/automation/outbound-ip.ts`.
 4. **Servidor MCP que muda as ferramentas** depois de publicado o agente: o cache só muda no "Atualizar ferramentas"; até lá o agente usa o esquema antigo e a chamada pode falhar com erro do servidor (tratado, o turno segue).
+
+---
+
+### Achados da auditoria das Tarefas 4-5 que valem para ESTA tarefa (21/09/2026)
+
+- `cliente.ts` exporta `motivoLegivel(err)`: toda mensagem de erro de conexão que vai para `last_error`, para a API ou para a tela passa por ela. Nunca gravar/mostrar `err.message` cru (pode conter texto do servidor).
+- `cliente.ts` exporta `cabecalhoPermitido(nome)`: a API e o cadastro recusam, com frase legível, nome de cabeçalho que não seja `Authorization`, `X-API-Key` ou `X-*`.
+- Risco "só consulta" (`somente_leitura`) vem da declaração do servidor e é só uma SUGESTÃO: o admin pode reclassificar cada ferramenta na tela (Tarefa 11) e o valor confirmado é o que vale para risco e para a prévia. Guardar em `tools_cache` o campo `somente_leitura_confirmado: boolean | null` (null = ainda sem decisão do admin, vale a sugestão como "altera dados" por padrão, ou seja, trata como escrita até o admin confirmar consulta).
+- A descrição e o esquema que o modelo vê são os do cache aprovado; o servidor só consegue mudá-los quando o admin clica "Atualizar ferramentas". Na atualização, ferramenta cuja descrição ou esquema mudou perde a confirmação (`somente_leitura_confirmado` volta a null) e a tela mostra "mudou desde a última aprovação".
+- O resultado da ferramenta vai ao modelo como OBJETO JSON (`{ ok, dados, cortada, aviso }`), nunca concatenado como texto no prompt (o AI SDK serializa o retorno do `execute`).
+- LGPD: a tela de cadastro avisa que os dados que o agente mandar para a ferramenta (mensagens e dados do cliente) saem para o servidor de terceiro configurado.
