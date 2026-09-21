@@ -19,11 +19,10 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { publishSchema, PUBLISH_ERROR_CODES } from "@/lib/ai/agents/validation";
-import { VALID_TOOL_IDS } from "@/lib/mcp/tools";
+import { capacidadesDesconhecidas } from "@/lib/ai/agents/capacidades-conhecidas";
+import { mensagemDoEscopo, validarEscopoDaVersao } from "@/lib/ai/agents/escopo";
 import { publishAgentVersion } from "@/lib/ai/agents/publish";
 import { traduzir } from "@/lib/i18n/dicionario";
-
-const VALID_TOOL_IDS_RUNTIME = new Set<string>(VALID_TOOL_IDS as readonly string[]);
 
 export const dynamic = "force-dynamic";
 
@@ -67,7 +66,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   // (catálogo evolui — validar à hora do publish, fora da transação SQL.)
   const { data: targetV } = await admin
     .from("ai_agent_versions")
-    .select("id, agent_id, organization_id, tool_ids, status")
+    .select("id, agent_id, organization_id, tool_ids, operator_tool_ids, status")
     .eq("id", parsed.data.version_id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
@@ -77,12 +76,23 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
   }
 
   const tools = (targetV.tool_ids ?? []) as string[];
-  const invalid = tools.filter((t) => !VALID_TOOL_IDS_RUNTIME.has(t));
+  const invalid = capacidadesDesconhecidas(tools);
   if (invalid.length > 0) {
     return fail("tool_id_invalid", t("tool_ids contém ids inexistentes no catálogo MCP."), 422, {
       requestId,
       details: { invalid },
     });
+  }
+
+  // A conexão pode ter sido desligada (ou a ferramenta sumido do cache) entre
+  // salvar a versão e publicar agora: confere de novo na hora de virar a
+  // chave, não só quando a versão foi gravada.
+  const escopo = await validarEscopoDaVersao(admin, activeOrg.orgId, {
+    tool_ids: tools,
+    operator_tool_ids: (targetV.operator_tool_ids ?? []) as string[],
+  });
+  if (!escopo.ok) {
+    return fail("validation_failed", mensagemDoEscopo(escopo), 422, { requestId });
   }
 
   const result = await publishAgentVersion(admin, {

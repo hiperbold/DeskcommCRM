@@ -21,7 +21,7 @@ Atualizado em 21/09/2026. **Implementação em andamento (retomada em 21/09).** 
 | 5 | Cliente MCP (prazo de 15 s, corte de 8000 caracteres, sessão fechada em toda falha) | ✅ feita, auditada e com ajustes | ver commit das Tarefas 4-5 |
 | 6 | Cadastro das conexões (só grava depois de conectar, chave cifrada, URL mascarada na tela) | ✅ feita, auditada e com ajustes | ver commit da Tarefa 6 |
 | 7 | API (só admin cadastra e mexe; gerente vê as ferramentas; limite de 10 tentativas a cada 10 min) | ✅ feita, auditada e com ajustes | ver commit da Tarefa 7 |
-| 8 | Publicar/duplicar/reverter aceitam ferramenta externa | ⏸️ não iniciada | |
+| 8 | Publicar/duplicar/reverter aceitam ferramenta externa (e recusam se a conexão foi desligada) | ✅ feita | ver commit da Tarefa 8 |
 | 9 | Ferramentas externas no turno do agente | ⏸️ não iniciada | |
 | 10 | Tela de capacidades | ⏸️ não iniciada | |
 | 11 | Tela "Conexões MCP" | ⏸️ não iniciada | |

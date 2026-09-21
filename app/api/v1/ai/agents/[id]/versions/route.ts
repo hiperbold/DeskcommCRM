@@ -133,6 +133,8 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
     const escopo = await validarEscopoDaVersao(admin, activeOrg.orgId, {
       pipeline_ids: v.pipeline_ids,
       knowledge_source_ids: v.knowledge_source_ids,
+      tool_ids: v.tool_ids,
+      operator_tool_ids: v.operator_tool_ids,
     });
     if (!escopo.ok) {
       return fail("validation_failed", mensagemDoEscopo(escopo), 422, { requestId });

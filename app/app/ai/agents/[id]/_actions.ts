@@ -33,7 +33,7 @@ import {
 } from "@/lib/ai/agents/validation";
 import { publishAgentVersion } from "@/lib/ai/agents/publish";
 import { escolherVersoesDaTela } from "@/lib/ai/agents/versoes-da-tela";
-import { VALID_TOOL_IDS } from "@/lib/mcp/tools";
+import { capacidadesDesconhecidas } from "@/lib/ai/agents/capacidades-conhecidas";
 
 const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -165,6 +165,8 @@ export async function saveAgentDraftAction(
   const escopo = await validarEscopoDaVersao(admin, activeOrg.orgId, {
     pipeline_ids: v.pipeline_ids,
     knowledge_source_ids: v.knowledge_source_ids,
+    tool_ids: v.tool_ids,
+    operator_tool_ids: v.operator_tool_ids,
   });
   if (!escopo.ok) {
     return { ok: false, error: "validation_failed", message: mensagemDoEscopo(escopo) };
@@ -380,10 +382,9 @@ export async function publishAgentAction(
   const admin = createAdminClient();
 
   // Tool ids check (espelha publish/route.ts).
-  const valid = new Set<string>(VALID_TOOL_IDS as readonly string[]);
   const { data: targetV } = await admin
     .from("ai_agent_versions")
-    .select("id, agent_id, tool_ids")
+    .select("id, agent_id, tool_ids, operator_tool_ids")
     .eq("id", versionId)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
@@ -391,9 +392,19 @@ export async function publishAgentAction(
     return { ok: false, error: "version_not_found" };
   }
   const tools = (targetV.tool_ids ?? []) as string[];
-  const invalid = tools.filter((t) => !valid.has(t));
+  const invalid = capacidadesDesconhecidas(tools);
   if (invalid.length > 0) {
     return { ok: false, error: "tool_id_invalid", details: { invalid } };
+  }
+
+  // A conexão pode ter sido desligada (ou a ferramenta sumido do cache) entre
+  // salvar a versão e publicar agora: espelha o mesmo cuidado de publish/route.ts.
+  const escopoPublicacao = await validarEscopoDaVersao(admin, activeOrg.orgId, {
+    tool_ids: tools,
+    operator_tool_ids: (targetV.operator_tool_ids ?? []) as string[],
+  });
+  if (!escopoPublicacao.ok) {
+    return { ok: false, error: "validation_failed", message: mensagemDoEscopo(escopoPublicacao) };
   }
 
   const result = await publishAgentVersion(admin, {
@@ -499,8 +510,7 @@ export async function revertToVersionAction(
 
   // Espelha tool_id check do publish.
   const tools = ((source as { tool_ids: string[] | null }).tool_ids ?? []) as string[];
-  const valid = new Set<string>(VALID_TOOL_IDS as readonly string[]);
-  const invalid = tools.filter((t) => !valid.has(t));
+  const invalid = capacidadesDesconhecidas(tools);
   if (invalid.length > 0) {
     return { ok: false, error: "tool_id_invalid", details: { invalid } };
   }
@@ -596,6 +606,26 @@ export async function revertToVersionAction(
   }
   if (!createdId || createdNumber == null) {
     return { ok: false, error: "internal_error", message: "Conflito de versionamento." };
+  }
+
+  // Reverter não para no rascunho: cria a cópia e publica em seguida. Sem esta
+  // conferência, voltar a uma versão cujo MCP foi desligado entretanto
+  // publicaria uma capacidade que não existe mais (o turno pularia e avisaria,
+  // mas a tela teria deixado publicar algo quebrado).
+  const escopoReversao = await validarEscopoDaVersao(admin, activeOrg.orgId, {
+    tool_ids: src.tool_ids,
+    operator_tool_ids: src.operator_tool_ids,
+  });
+  if (!escopoReversao.ok) {
+    // Rollback: a draft só existe como veículo do publish, sem publish não
+    // tem razão de ser (mesmo cuidado do rollback de publishAgentVersion abaixo).
+    await admin
+      .from("ai_agent_versions")
+      .delete()
+      .eq("id", createdId)
+      .eq("organization_id", activeOrg.orgId)
+      .eq("status", "draft");
+    return { ok: false, error: "validation_failed", message: mensagemDoEscopo(escopoReversao) };
   }
 
   const result = await publishAgentVersion(admin, {
