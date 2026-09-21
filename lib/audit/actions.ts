@@ -553,6 +553,24 @@ export const AUDIT_ACTIONS = [
   // porque toda leitura de `admin/` é auditada neste repo — e porque aqui o
   // operador enxerga o agente publicado na organização de outra pessoa.
   "platform_admin.tenant_agents_viewed",
+
+  // Conexões MCP externas (migration 0901, fork Hiperbold): a organização
+  // cadastra um servidor MCP de terceiro e cada ferramenta dele vira
+  // capacidade de agente. Quatro ações porque cada uma responde a uma
+  // pergunta diferente: quem cadastrou a credencial, quem mudou nome/estado/
+  // cabeçalho, quem mandou reconectar para atualizar o cache de ferramentas,
+  // e quem removeu a conexão (órfã as capacidades que a usavam).
+  "ai_mcp_connection.created",
+  "ai_mcp_connection.updated",
+  "ai_mcp_connection.tools_refreshed",
+  "ai_mcp_connection.removed",
+  // Ajuste da auditoria da Tarefa 7: a tentativa de CONEXÃO (criar ou
+  // reconectar) que o repositório recusou (apelido repetido, servidor não
+  // respondeu, etc.). Ação separada de `.created`/`.tools_refreshed` porque
+  // nada foi gravado — é o rastro de QUEM tentou e QUANTAS vezes, para o
+  // limite de tentativas (10 a cada 10 min) fazer sentido no painel depois. O
+  // metadata carrega só apelido e status; nunca o motivo cru do repositório.
+  "ai_mcp_connection.attempt_rejected",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
