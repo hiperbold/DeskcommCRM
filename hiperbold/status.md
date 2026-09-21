@@ -19,7 +19,7 @@ Atualizado em 21/09/2026. **Implementação em andamento (retomada em 21/09).** 
 | 3 | Id externo passa na validação e conta no teto de 25 | ✅ feita | `2ca5606c` |
 | 4 | Fetch seguro (só https, sem IP interno, sem redirecionamento, teto de 2 MiB) | ✅ feita, auditada e com ajustes | ver commit das Tarefas 4-5 |
 | 5 | Cliente MCP (prazo de 15 s, corte de 8000 caracteres, sessão fechada em toda falha) | ✅ feita, auditada e com ajustes | ver commit das Tarefas 4-5 |
-| 6 | Cadastro das conexões | ⏸️ não iniciada | |
+| 6 | Cadastro das conexões (só grava depois de conectar, chave cifrada, URL mascarada na tela) | ✅ feita, auditada e com ajustes | ver commit da Tarefa 6 |
 | 7 | API | ⏸️ não iniciada | |
 | 8 | Publicar/duplicar/reverter aceitam ferramenta externa | ⏸️ não iniciada | |
 | 9 | Ferramentas externas no turno do agente | ⏸️ não iniciada | |
