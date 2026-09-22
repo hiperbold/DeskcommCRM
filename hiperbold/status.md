@@ -1,6 +1,6 @@
 # Status: conexões MCP para os agentes
 
-Atualizado em 21/09/2026. **Implementação em andamento (retomada em 21/09).** Nada roda em segundo plano, nada foi publicado, nada foi enviado ao GitHub.
+Atualizado em 21/09/2026. **Tarefas 0 a 12 feitas; falta a validação com o Filipe (13) e o fechamento (14).** Nada foi publicado nem enviado ao GitHub.
 
 ## Onde está
 
@@ -25,7 +25,7 @@ Atualizado em 21/09/2026. **Implementação em andamento (retomada em 21/09).** 
 | 9 | Ferramentas externas no turno do agente (só roda o que o admin aprovou; Testar só roda consulta; falha externa não derruba o turno; escrita auditada) | ✅ feita, revisada duas vezes e auditada | ver commit da Tarefa 9 |
 | 10 | Tela de capacidades (seção Conexões MCP, estado de aprovação, conta no teto de 25) | ✅ feita | ver commit da Tarefa 10 |
 | 11 | Tela "Conexões MCP" (só admin; aprovação por ferramenta presa à versão vista; aviso LGPD; "mudou desde a última aprovação" guardado) | ✅ feita e auditada | ver commit da Tarefa 11 |
-| 12 | Portões completos | ⏸️ não iniciada | |
+| 12 | Portões completos | ✅ 21/09: typecheck, lint (0 erros), lint:channels, unitários 919 arquivos / 9519 testes, test:db 207 / 1641, build local | |
 | 13 | Validação com 3 servidores MCP reais (com o Filipe) | ⏸️ não iniciada | |
 | 14 | Fechar (changelog, README, débito) | ⏸️ não iniciada | |
 
