@@ -24885,6 +24885,81 @@ grant  execute on function public.fn_agenda_conexoes_google_do_dono(uuid, uuid) 
 
 notify pgrst, 'reload schema';
 
+-- ---- conexões MCP externas dos agentes (migration 0901, fork Hiperbold) ----
+--
+-- Racional completo no arquivo da migration. Faixa 09xx reservada ao fork.
+
+create table if not exists public.ai_mcp_connections (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  slug text not null,
+  name text not null,
+  url text not null,
+  auth_header_name text,
+  auth_header_value_encrypted bytea,
+  is_active boolean not null default true,
+  tools_cache jsonb not null default '[]'::jsonb,
+  tools_refreshed_at timestamptz,
+  last_error text,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint ai_mcp_connections_slug_formato check (slug ~ '^[a-z0-9]{2,12}$'),
+  constraint ai_mcp_connections_nome_tamanho check (char_length(name) between 2 and 80),
+  constraint ai_mcp_connections_url_https check (url ~ '^https://' and char_length(url) <= 500),
+  constraint ai_mcp_connections_cabecalho_nome check (
+    auth_header_name is null or auth_header_name ~ '^[A-Za-z0-9-]{1,64}$'
+  ),
+  constraint ai_mcp_connections_cabecalho_par check (
+    (auth_header_name is null) = (auth_header_value_encrypted is null)
+  ),
+  constraint ai_mcp_connections_tools_cache_lista check (jsonb_typeof(tools_cache) = 'array'),
+  constraint ai_mcp_connections_org_slug_key unique (organization_id, slug)
+);
+
+create index if not exists ai_mcp_connections_org_ativas_idx
+  on public.ai_mcp_connections (organization_id)
+  where is_active;
+
+comment on table public.ai_mcp_connections is
+  'Servidores MCP externos da organização (fork Hiperbold, 0901). Cada ferramenta em tools_cache vira a capacidade mcp_<slug>__<nome> no agente.';
+comment on column public.ai_mcp_connections.slug is
+  'Apelido IMUTÁVEL que prefixa o id das ferramentas (mcp_<slug>__<nome>). Renomear órfã as capacidades já publicadas nos agentes.';
+comment on column public.ai_mcp_connections.auth_header_value_encrypted is
+  'Valor do cabeçalho de acesso (ex.: "Bearer ..."), cifrado por fn_encrypt_oauth. Nunca devolvido pela API.';
+comment on column public.ai_mcp_connections.tools_cache is
+  'Cópia de tools/list: [{nome, descricao, input_schema, somente_leitura, id, recusada}]. Regravada ao cadastrar e em "Atualizar ferramentas".';
+
+alter table public.ai_mcp_connections enable row level security;
+revoke all on public.ai_mcp_connections from anon, authenticated;
+grant select, insert, update, delete on public.ai_mcp_connections to service_role;
+
+drop trigger if exists trg_ai_mcp_connections_updated_at on public.ai_mcp_connections;
+create trigger trg_ai_mcp_connections_updated_at
+  before update on public.ai_mcp_connections
+  for each row execute function public.fn_set_updated_at();
+
+-- D4: o apelido prefixa o id `mcp_<slug>__<nome>`, congelado nas versões
+-- PUBLICADAS dos agentes. Trocar o apelido por baixo órfã essas capacidades
+-- sem aviso algum: o agente publicado passa a apontar para um id que não
+-- existe mais. O gate mora no banco, não só na rota de PATCH, porque quem
+-- grava a linha é o mesmo client admin nos dois caminhos e um bug num deles
+-- não pode virar a única defesa.
+create or replace function public.fn_ai_mcp_connections_slug_imutavel() returns trigger
+language plpgsql as $$
+begin
+  if old.slug is distinct from new.slug then
+    raise exception 'ai_mcp_connections_slug_imutavel' using errcode = 'P0001';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_ai_mcp_connections_slug_imutavel on public.ai_mcp_connections;
+create trigger trg_ai_mcp_connections_slug_imutavel
+  before update of slug on public.ai_mcp_connections
+  for each row execute function public.fn_ai_mcp_connections_slug_imutavel();
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ ESTE BLOCO É, DE PROPÓSITO, O ÚLTIMO DO ARQUIVO. Apêndice novo entra ANTES
@@ -25073,78 +25148,3 @@ comment on column public.channel_sessions.uazapi_token_encrypted is
 create unique index if not exists channel_sessions_uazapi_instancia_ativa_unique
   on public.channel_sessions (uazapi_base_url, uazapi_instance_id)
   where archived_at is null and uazapi_instance_id is not null;
-
--- ---- conexões MCP externas dos agentes (migration 0901, fork Hiperbold) ----
---
--- Racional completo no arquivo da migration. Faixa 09xx reservada ao fork.
-
-create table if not exists public.ai_mcp_connections (
-  id uuid primary key default gen_random_uuid(),
-  organization_id uuid not null references public.organizations(id) on delete cascade,
-  slug text not null,
-  name text not null,
-  url text not null,
-  auth_header_name text,
-  auth_header_value_encrypted bytea,
-  is_active boolean not null default true,
-  tools_cache jsonb not null default '[]'::jsonb,
-  tools_refreshed_at timestamptz,
-  last_error text,
-  created_by uuid references auth.users(id) on delete set null,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  constraint ai_mcp_connections_slug_formato check (slug ~ '^[a-z0-9]{2,12}$'),
-  constraint ai_mcp_connections_nome_tamanho check (char_length(name) between 2 and 80),
-  constraint ai_mcp_connections_url_https check (url ~ '^https://' and char_length(url) <= 500),
-  constraint ai_mcp_connections_cabecalho_nome check (
-    auth_header_name is null or auth_header_name ~ '^[A-Za-z0-9-]{1,64}$'
-  ),
-  constraint ai_mcp_connections_cabecalho_par check (
-    (auth_header_name is null) = (auth_header_value_encrypted is null)
-  ),
-  constraint ai_mcp_connections_tools_cache_lista check (jsonb_typeof(tools_cache) = 'array'),
-  constraint ai_mcp_connections_org_slug_key unique (organization_id, slug)
-);
-
-create index if not exists ai_mcp_connections_org_ativas_idx
-  on public.ai_mcp_connections (organization_id)
-  where is_active;
-
-comment on table public.ai_mcp_connections is
-  'Servidores MCP externos da organização (fork Hiperbold, 0901). Cada ferramenta em tools_cache vira a capacidade mcp_<slug>__<nome> no agente.';
-comment on column public.ai_mcp_connections.slug is
-  'Apelido IMUTÁVEL que prefixa o id das ferramentas (mcp_<slug>__<nome>). Renomear órfã as capacidades já publicadas nos agentes.';
-comment on column public.ai_mcp_connections.auth_header_value_encrypted is
-  'Valor do cabeçalho de acesso (ex.: "Bearer ..."), cifrado por fn_encrypt_oauth. Nunca devolvido pela API.';
-comment on column public.ai_mcp_connections.tools_cache is
-  'Cópia de tools/list: [{nome, descricao, input_schema, somente_leitura, id, recusada}]. Regravada ao cadastrar e em "Atualizar ferramentas".';
-
-alter table public.ai_mcp_connections enable row level security;
-revoke all on public.ai_mcp_connections from anon, authenticated;
-grant select, insert, update, delete on public.ai_mcp_connections to service_role;
-
-drop trigger if exists trg_ai_mcp_connections_updated_at on public.ai_mcp_connections;
-create trigger trg_ai_mcp_connections_updated_at
-  before update on public.ai_mcp_connections
-  for each row execute function public.fn_set_updated_at();
-
--- D4: o apelido prefixa o id `mcp_<slug>__<nome>`, congelado nas versões
--- PUBLICADAS dos agentes. Trocar o apelido por baixo órfã essas capacidades
--- sem aviso algum: o agente publicado passa a apontar para um id que não
--- existe mais. O gate mora no banco, não só na rota de PATCH, porque quem
--- grava a linha é o mesmo client admin nos dois caminhos e um bug num deles
--- não pode virar a única defesa.
-create or replace function public.fn_ai_mcp_connections_slug_imutavel() returns trigger
-language plpgsql as $$
-begin
-  if old.slug is distinct from new.slug then
-    raise exception 'ai_mcp_connections_slug_imutavel' using errcode = 'P0001';
-  end if;
-  return new;
-end;
-$$;
-
-drop trigger if exists trg_ai_mcp_connections_slug_imutavel on public.ai_mcp_connections;
-create trigger trg_ai_mcp_connections_slug_imutavel
-  before update of slug on public.ai_mcp_connections
-  for each row execute function public.fn_ai_mcp_connections_slug_imutavel();
