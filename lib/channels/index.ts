@@ -5,6 +5,7 @@
 import { metaCloudAdapter } from "./adapters/meta-cloud";
 import { uazapiAdapter } from "./adapters/uazapi";
 import { wahaAdapter } from "./adapters/waha";
+import { socialAdapter } from "./social/adapter";
 import { zernioAdapter } from "./adapters/zernio";
 import type { ChannelAdapter, ChannelProvider, ProviderDeMensagem } from "./types";
 
@@ -17,6 +18,7 @@ const ADAPTERS: Record<ProviderDeMensagem, ChannelAdapter | null> = {
   meta_cloud: metaCloudAdapter,
   zernio: zernioAdapter,
   uazapi: uazapiAdapter,
+  zernio_social: socialAdapter,
 };
 
 /**

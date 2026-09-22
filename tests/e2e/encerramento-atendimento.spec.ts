@@ -163,12 +163,18 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     await page.goto("/login");
     await page.getByLabel(/e-?mail/i).fill(email);
     await page.getByLabel(/senha/i).fill(password);
-    await page.getByRole("button", { name: /entrar/i }).click();
+    await page.getByRole("button", { name: "Entrar", exact: true }).click();
     await page.waitForURL(/\/app(?:\/|$)/);
     await abrirConversa(page, conversation);
     const panel = page.getByTestId("inbox-demandas");
     await expect(panel.getByText("Demanda vigente neste canal")).toBeVisible();
     await expect(page.getByTestId("inbox-memoria")).toContainText("Preferência de horário");
+    // DoD 12 para a issue #908: o rótulo do botão que CRIA o lead provado pela
+    // tela, não só em jsdom. O painel é `flex flex-wrap` e o rótulo ficou mais
+    // longo — se ele quebrar a fileira ou sumir, é aqui que aparece. Cabe nesta
+    // spec, e não numa nova, porque o painel já está montado neste ponto: spec
+    // nova custaria mais um login e mais um seed ao relógio do CI.
+    await expect(page.getByRole("button", { name: "Novo Lead", exact: true })).toBeVisible();
     page.on("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Fechar", exact: true }).click();
     await expect
@@ -253,7 +259,7 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     if (language.error) throw language.error;
     await page.reload();
     await expect(page.getByTestId("inbox-memoria")).toContainText("Historial cerrado — sin tareas pendientes");
-    await expect(page.getByTestId("inbox-memoria")).toContainText("Resuelta");
+    await expect(page.getByTestId("inbox-memoria")).toContainText("Resuelto");
     await page.screenshot({ path: `${evidence}/task4-historico-es.png`, fullPage: true });
     await page.getByRole("button", { name: "Reabrir", exact: true }).click();
     await expect.poll(async () => (await db.from("conversations").select("status").eq("organization_id",org).eq("id",conversation).single()).data?.status).toBe("open");

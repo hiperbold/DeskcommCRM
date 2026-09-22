@@ -7,6 +7,20 @@ export const PUBLIC_PATHS: RegExp[] = [
   /^\/login(\/.*)?$/,
   /^\/signup$/,
   /^\/auth\/confirm$/,
+  // A VOLTA DA ENTRADA COM GOOGLE (issue #1388). Quem chega aqui é o NAVEGADOR
+  // que o Google devolveu, via 302 do GoTrue — navegação vinda de outro site,
+  // onde o cookie de sessão (`sameSite: "strict"`) não viaja por definição.
+  // Sem esta linha o `proxy` responde 307 para `/login` antes de a rota
+  // existir, e o fluxo NUNCA completa: mesma classe medida na v1.8.0, em
+  // produção, com o callback da agenda (`GET /api/v1/agenda/google/callback`
+  // → 401 `unauthenticated`).
+  //
+  // A identidade NÃO vem da sessão: vem do `code` que o GoTrue assinou, trocado
+  // por sessão DENTRO da rota (`exchangeCodeForSession`), que só fecha se o
+  // verificador de PKCE gravado na ida voltar — em cookie `Lax`, ver
+  // `createClientDeEntradaComGoogle`. Âncora `$` de propósito: nenhum sub-path
+  // futuro nasce público de carona.
+  /^\/auth\/callback$/,
   /^\/403$/,
   /^\/admin\/forbidden$/,
   /^\/404$/,
@@ -15,9 +29,20 @@ export const PUBLIC_PATHS: RegExp[] = [
   /^\/api\/v1\/health$/,
   /^\/api\/v1\/webhooks\//,
   /^\/api\/v1\/cron\//,
+  // Landing page de captura de clique do Google Ads (migration 0306). Quem
+  // chega aqui é o NAVEGADOR de quem clicou no anúncio — nunca tem, e não
+  // pode ter, cookie de sessão nossa. Sem esta linha o proxy devolve 401
+  // antes de a rota existir, e todo clique pago vira um erro em vez de um
+  // redirect pro WhatsApp. Âncorado num segmento só (`[^/]+$`): um sub-path
+  // futuro sob `/google/` não nasce público de carona.
+  /^\/api\/v1\/anuncios\/google\/[^/]+$/,
   // Heartbeat do agente do host (bearer INTERNAL_SECRET/INTERNAL_CRON_SECRET,
   // checado dentro da própria rota) — sem cookie de sessão, igual /cron/.
   /^\/api\/v1\/system\/agent$/,
+  // Provisionamento de organização por sistema externo: Bearer do segredo da
+  // instalação (`TENANT_PROVISIONING_SECRET`), checado dentro da rota, que
+  // responde 404 enquanto o segredo não existe. Sem cookie, igual /cron/.
+  /^\/api\/v1\/tenants\/provision$/,
   // Relógio Hobby (GitHub Actions / cron-job.org). Auth é Bearer na própria
   // rota — sem isto o proxy devolve 401 e o follow-up waiting_reply nunca anda.
   /^\/api\/v1\/system\/relogio\/tick$/,
@@ -36,6 +61,11 @@ export const PUBLIC_PATHS: RegExp[] = [
   // Ancorados com `$` de propósito — `/^\/api\/v1\/agenda\/google\// deixaria
   // qualquer sub-path futuro nascer público de carona.
   /^\/api\/v1\/agenda\/google\/callback$/,
+  // Volta do consentimento do Google Ads. Mesma natureza das duas linhas
+  // acima: a identidade vem do `state` assinado
+  // (`lib/plataformas-de-anuncio/google/estado.ts`), não da sessão — quem
+  // volta do Google não tem, e não pode ter, o cookie.
+  /^\/api\/v1\/plataformas-de-anuncio\/google\/callback$/,
   /^\/api\/v1\/integrations\/nuvemshop\/callback$/,
   /^\/api\/internal\//,
   /^\/api\/mcp(\/.*)?$/,

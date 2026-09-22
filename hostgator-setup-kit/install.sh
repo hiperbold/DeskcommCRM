@@ -30,6 +30,10 @@ NONINTERACTIVE=0
 # usar o _common.sh). As duas funções abaixo são gêmeas das de lá — se mexer
 # numa, mexa na outra.
 dc() {
+  if [ "${SINGLE_SERVER:-0}" = "1" ]; then
+    docker compose -f "$COMPOSE" -f docker-compose.single-server.yml "$@"
+    return
+  fi
   case "${REVERSE_PROXY:-caddy}" in
   traefik) docker compose -f "$COMPOSE" -f "$COMPOSE_TRAEFIK" "$@" ;;
   npm)     docker compose -f "$COMPOSE" -f "$COMPOSE_NPM" "$@" ;;
@@ -37,11 +41,23 @@ dc() {
   esac
 }
 dc_files() {
+  if [ "${SINGLE_SERVER:-0}" = "1" ]; then
+    printf -- '-f %s -f %s' "$COMPOSE" docker-compose.single-server.yml
+    return
+  fi
   case "${REVERSE_PROXY:-caddy}" in
   traefik) printf -- '-f %s -f %s' "$COMPOSE" "$COMPOSE_TRAEFIK" ;;
   npm)     printf -- '-f %s -f %s' "$COMPOSE" "$COMPOSE_NPM" ;;
   *)       printf -- '-f %s' "$COMPOSE" ;;
   esac
+}
+
+# psql/pg_dump efêmeros. No modo single-server o Postgres só é alcançável pela
+# bridge privada (supabase-db), nunca por porta pública.
+pg_container() {
+  local -a rede=()
+  [ -n "${PSQL_DOCKER_NETWORK:-}" ] && rede=(--network "$PSQL_DOCKER_NETWORK")
+  docker run --rm ${rede[@]+"${rede[@]}"} "$@"
 }
 
 # ── Aparência ───────────────────────────────────────────────────────────────
@@ -235,10 +251,20 @@ v_supabase_url() {
     *supabase.co*) echo "Cole a URL completa, começando com https:// — ex.: https://abcdefgh.supabase.co"; return 1;;
     *) echo "A URL precisa começar com https://. Na nuvem ela fica em Settings > API > Project URL (termina em .supabase.co); num Supabase próprio, é o endereço do seu servidor."; return 1;;
   esac
+  # No single-server a URL pública é servida pelo Caddy, que só sobe DEPOIS
+  # deste validador. A prova disponível aqui é o gateway local do Supabase,
+  # publicado só em loopback.
+  local health_url="$1"
+  if [ "${SINGLE_SERVER:-0}" = "1" ]; then
+    case "${SUPABASE_INTERNAL_URL:-}" in
+      http://*|https://*) health_url="$SUPABASE_INTERNAL_URL";;
+      *) echo "O modo single-server exige SUPABASE_INTERNAL_URL com http:// ou https:// para validar o Supabase local."; return 1;;
+    esac
+  fi
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "$1/auth/v1/health" 2>/dev/null)" || code=000
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 15 "${health_url%/}/auth/v1/health" 2>/dev/null)" || code=000
   if [ "$code" = "000" ]; then
-    echo "Não consegui alcançar $1 — confira se o projeto existe, está ativo (projeto pausado não responde) e se o VPS tem internet."
+    echo "Não consegui alcançar $health_url — confira se o projeto existe, está ativo (projeto pausado não responde) e se o VPS tem internet."
     return 1
   fi
   return 0
@@ -323,7 +349,7 @@ v_db_url() {
       fi;;
   esac
   local out
-  if out="$(docker run --rm postgres:17-alpine psql "$1" -tAc 'select 1' 2>&1)"; then
+  if out="$(pg_container postgres:17-alpine psql "$1" -tAc 'select 1' 2>&1)"; then
     return 0
   fi
   echo "Não consegui conectar no banco. O Postgres respondeu:"
@@ -1559,6 +1585,10 @@ esac
   envq WORKER_PULL_POLICY "$PULL_POLICY_ALVO"
   envq SCHEDULER_IMAGE "${IMG_SCHEDULER}:${TAG_ALVO}"
   envq SCHEDULER_PULL_POLICY "$PULL_POLICY_ALVO"
+  # A telefonia por SIP (profile `telefonia`, desligado por padrão) também segue
+  # a versão: gravar não liga nada, e no dia em que ligarem ela sobe casada.
+  envq VOICE_AGENT_IMAGE "${IMG_VOICE_AGENT}:${TAG_ALVO}"
+  envq VOICE_AGENT_PULL_POLICY "$PULL_POLICY_ALVO"
   envq DOMAIN "$DOMAIN"
   envq ACME_EMAIL "$ACME_EMAIL"
   printf '# Proxy reverso: "caddy" (o kit sobe o dele nas portas 80/443), "traefik"\n'
@@ -1585,6 +1615,13 @@ esac
   envq NEXT_PUBLIC_SUPABASE_ANON_KEY "$NEXT_PUBLIC_SUPABASE_ANON_KEY"
   envq SUPABASE_SERVICE_ROLE_KEY "$SUPABASE_SERVICE_ROLE_KEY"
   envq SUPABASE_DB_URL "$SUPABASE_DB_URL"
+  # Modo single-server (install-single-server.sh). O .env é reescrito com
+  # truncamento: sem estas linhas, o update seguinte perderia o override do
+  # compose e o Caddy voltaria ao Caddyfile sem o Supabase. Vazio/0 = modo comum.
+  envq SINGLE_SERVER "${SINGLE_SERVER:-0}"
+  envq SINGLE_SERVER_NETWORK "${SINGLE_SERVER_NETWORK:-}"
+  envq PSQL_DOCKER_NETWORK "${PSQL_DOCKER_NETWORK:-}"
+  envq SUPABASE_INTERNAL_URL "${SUPABASE_INTERNAL_URL:-}"
   envq NEXT_PUBLIC_APP_URL "$NEXT_PUBLIC_APP_URL"
   envq NEXT_PUBLIC_ADMIN_URL "$NEXT_PUBLIC_ADMIN_URL"
   printf '# Marca da instalação (white-label). Preencha APP_LOGO_URL com a URL de uma\n'
@@ -1638,6 +1675,21 @@ esac
   printf '# mostra o link de aceite na tela e o export de LGPD fica pendente.\n'
   envq RESEND_API_KEY "${RESEND_API_KEY:-}"
   envq RESEND_FROM_EMAIL "${RESEND_FROM_EMAIL:-}"
+  # SMTP: a alternativa à Resend. Gravado pelo mesmo motivo das duas acima — o
+  # `.env` é truncado, e o SMTP posto à mão sumiria na próxima execução. A tela
+  # /admin/email grava no banco, que prevalece; isto é o piso de rollback.
+  # Host ou remetente vazio mantém o envio desligado sem falhar.
+  printf '# E-mail pelo SEU servidor (SMTP). Preenchido, sai por ele; vazio, segue
+'
+  printf '# pela Resend. Só o hostname. 465 + tls, ou 587 + starttls.
+'
+  envq SMTP_HOST "${SMTP_HOST:-}"
+  envq SMTP_PORT "${SMTP_PORT:-587}"
+  envq SMTP_SECURITY "${SMTP_SECURITY:-starttls}"
+  envq SMTP_USERNAME "${SMTP_USERNAME:-}"
+  envq SMTP_PASSWORD "${SMTP_PASSWORD:-}"
+  envq SMTP_FROM_EMAIL "${SMTP_FROM_EMAIL:-}"
+  envq SMTP_FROM_NAME "${SMTP_FROM_NAME:-}"
   printf '# Qual provedor você escolheu na instalação. É o que faz a 2ª execução do\n'
   printf '# install.sh já vir com a sua escolha como padrão, em vez de re-adivinhar\n'
   printf '# pelas chaves presentes. A app não lê esta variável.\n'
@@ -1664,6 +1716,11 @@ esac
   printf '# e cole as duas chaves aqui (depois: docker compose up -d app).\n'
   envq VAPID_PUBLIC_KEY "${VAPID_PUBLIC_KEY:-}"
   envq VAPID_PRIVATE_KEY "${VAPID_PRIVATE_KEY:-}"
+  printf '# Provisionamento por sistema externo (POST /api/v1/tenants/provision):\n'
+  printf '# um sistema de fora cria empresas nesta instalação. DESLIGADO — vazio, a\n'
+  printf '# rota responde 404. Para ligar: openssl rand -hex 32, cole aqui e entregue\n'
+  printf '# só ao sistema que vai criar empresas (depois: docker compose up -d app).\n'
+  envq TENANT_PROVISIONING_SECRET "${TENANT_PROVISIONING_SECRET:-}"
   printf '# Telemetria de erros (você escolheu isto durante a instalação).\n'
   printf '#   "off"  = não envia nada.\n'
   printf '#   vazio  = só ERRO pro Sentry da comunidade, com CPF/telefone/e-mail\n'
@@ -1784,7 +1841,7 @@ if [ -f supabase/baseline.sql ]; then
   # (pg_trgm) mas NÃO cria as extensões. Supabase não as habilita no schema public por
   # padrão — criamos aqui, senão o schema quebra no meio (ex.: "type public.vector does
   # not exist"). Idempotente (if not exists).
-  docker run --rm postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 -c \
+  pg_container postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 -c \
     "create extension if not exists vector with schema public; create extension if not exists citext with schema public; create extension if not exists pg_trgm with schema public;" \
     >/dev/null 2>&1 \
     && c_grn "✓ extensões (vector, citext, pg_trgm) habilitadas no public" \
@@ -1801,24 +1858,23 @@ if [ -f supabase/baseline.sql ]; then
   # dentro da substituição e, com `set -e` + `pipefail`, derruba o instalador sem
   # imprimir nada (o 2>/dev/null já tinha engolido a causa). Preferimos seguir e
   # deixar o erro aparecer no ponto em que dá para explicá-lo.
-  has_schema="$(docker run --rm postgres:17-alpine psql "$(url_do_schema)" -tAc \
+  has_schema="$(pg_container postgres:17-alpine psql "$(url_do_schema)" -tAc \
     "select 1 from information_schema.tables where table_schema='public' and table_name='organizations' limit 1" 2>/dev/null | tr -d '[:space:]' || true)"
 
   if [ "$has_schema" = "1" ]; then
     c_ylw "• schema já existe — re-aplicando em modo update (erros 'já existe' são esperados e ficam no log)"
-    raw="$(docker run --rm -i -v "$PROJECT_DIR/supabase/baseline.sql:/baseline.sql:ro" \
-          postgres:17-alpine psql "$(url_do_schema)" -q -f /baseline.sql 2>&1 || true)"
-    printf '%s\n' "$raw" > "$SCHEMA_LOG"
-    benign='already exists|multiple primary keys|multiple default values|is already a member|already a partition'
-    unexpected="$(printf '%s\n' "$raw" | grep -iE 'ERROR|FATAL' | grep -viE "$benign" || true)"
-    if [ -n "$unexpected" ]; then
-      c_ylw "⚠ Erros no banco que NÃO são os esperados (log completo: $SCHEMA_LOG):"
-      printf '%s\n' "$unexpected" | head -20
-    else
+    # Mesmo contrato do update.sh, inclusive a nova passada quando o banco está
+    # em disputa: `reaplicar_baseline` em _common.sh.
+    if reaplicar_baseline "$PROJECT_DIR/supabase/baseline.sql" "$SCHEMA_LOG"; then
       c_grn "✓ schema re-aplicado (apêndice de migrations incluído)"
+    else
+      c_ylw "⚠ Erros no banco que NÃO são os esperados (log completo: $SCHEMA_LOG):"
+      # Sem `| head`: com pipefail, o head que fecha cedo mata o printf com SIGPIPE
+      # numa lista grande, e o set -e derrubava o instalador aqui.
+      listar_erros_do_banco "$BASELINE_INESPERADO" 20
     fi
   else
-    if docker run --rm -i -v "$PROJECT_DIR/supabase/baseline.sql:/baseline.sql:ro" \
+    if pg_container -i -v "$PROJECT_DIR/supabase/baseline.sql:/baseline.sql:ro" \
         postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 -f /baseline.sql \
         > "$SCHEMA_LOG" 2>&1; then
       c_grn "✓ schema aplicado (log: $SCHEMA_LOG)"
@@ -1832,7 +1888,7 @@ if [ -f supabase/baseline.sql ]; then
   fi
 
   # Verificação real, não wishful thinking: o app precisa das tabelas core.
-  n_tables="$(docker run --rm postgres:17-alpine psql "$(url_do_schema)" -tAc \
+  n_tables="$(pg_container postgres:17-alpine psql "$(url_do_schema)" -tAc \
     "select count(*) from information_schema.tables where table_schema='public'" 2>/dev/null | tr -d '[:space:]')"
   if [ "${n_tables:-0}" -ge 30 ]; then
     c_grn "✓ verificação: ${n_tables} tabelas no schema public"
@@ -1987,7 +2043,9 @@ PENDENCIA_ARQUIVO="$PENDENCIA_EMAIL" \
 step "Criando o primeiro admin (${OWNER_EMAIL})"
 # 1) Cria o usuário no Supabase Auth. Se já existe, a API responde 422 — ignoramos
 #    (|| true): a re-execução é idempotente, o passo seguinte encontra o usuário.
-curl -fsS -X POST "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users" \
+# No single-server o Caddy pode ainda estar emitindo o certificado: fala com o
+# gateway local, que já respondeu ao validador.
+curl -fsS -X POST "${SUPABASE_INTERNAL_URL:-${NEXT_PUBLIC_SUPABASE_URL}}/auth/v1/admin/users" \
   -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
   -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
   -H "Content-Type: application/json" \
@@ -1997,7 +2055,7 @@ curl -fsS -X POST "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users" \
 # 2) Resolve o id direto do auth.users e cria org + membership + platform_admin.
 #    Resolver o uid DENTRO do SQL evita parsing frágil de JSON e funciona tanto para
 #    usuário recém-criado quanto para um que já existia (re-execução).
-docker run --rm -i postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 <<SQL \
+pg_container -i postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 <<SQL \
   && c_grn "✓ dono criado e promovido a super-admin" \
   || die "Não consegui promover o admin. Confira a service_role key, a URL e a connection string do Supabase.
      Este passo lê auth.users e escreve em public: num Supabase próprio ele precisa do dono do
@@ -2101,8 +2159,24 @@ if ! dc pull; then
   c_ylw "⚠ Não consegui puxar todas as imagens do registro."
   c_ylw "  Sigo assim mesmo: o que faltar é construído aqui (mais lento, mesmo resultado)."
 fi
-dc up -d
+# O "sigo assim mesmo" acima vale para o worker e o scheduler, que têm `build:`
+# ao lado do `image:` — mas NÃO para o app, que não tem: se a imagem dele não
+# veio do registro (arquitetura da VPS diferente da das imagens publicadas, tag
+# ainda publicando, pacote privado), o `up -d` morre e a instalação acabava sem
+# CRM no ar. A promessa da frase acima só se sustenta com esta guarda.
+CONSTRUIU_AQUI=""
+if ! dc up -d; then
+  if construir_aqui_e_subir "$VERSAO_ALVO"; then
+    CONSTRUIU_AQUI=1
+  else
+    die "Não coloquei o CRM no ar: nem as imagens prontas desta versão nem a construção aqui funcionaram. O erro está logo acima; para reproduzir só a construção: docker compose $(dc_files) -f ${COMPOSE_BUILD} build"
+  fi
+fi
 c_grn "✓ containers no ar"
+if [ -n "$CONSTRUIU_AQUI" ]; then
+  c_ylw "  (as três imagens desta versão foram construídas aqui nesta VPS: as prontas"
+  c_ylw "   não servem para a arquitetura dela. É mais lento e não precisa de nada manual.)"
+fi
 
 # ── 10. Healthcheck ─────────────────────────────────────────────────────────
 step "Aguardando o app ficar saudável"
@@ -2122,9 +2196,39 @@ else
   [ -n "$health_body" ] && c_dim "  última resposta: $(printf '%s' "$health_body" | head -c 200 || true)"
 fi
 
+# O catálogo dos provedores diretos vem no baseline, mas a OpenRouter é grande
+# demais para ser congelada nele: seus ~400 modelos chegam pelo cron diário
+# `api/v1/cron/sync-model-catalog`, que o scheduler bate às 04:15 UTC
+# (docker/scheduler/entrypoint.sh). Numa instalação concluída DEPOIS dessa
+# rodada, o seletor de modelos do agente ficava vazio até o dia seguinte —
+# mesmo com uma chave OpenRouter válida já cadastrada. É a primeira tela que
+# quem instalou vai abrir para testar a IA.
+#
+# O segredo NÃO passa pelo argv deste processo: as aspas simples impedem a
+# expansão aqui, e quem expande `$INTERNAL_SECRET` é o sh de dentro do
+# contêiner `scheduler`, que já o recebe pelo ambiente (docker-compose.prod.yml).
+#
+# FALHA ABERTA, de propósito: a origem é externa (openrouter.ai) e pode estar
+# fora do ar no minuto da instalação. Uma instalação saudável não pode ser
+# invalidada por isso — o cron das 04:15 continua sendo a recuperação, e o
+# operador lê aqui que ela existe. Por isso o comando mora na CONDIÇÃO de um
+# `if`, onde o `set -e` não aborta o script.
+if [ "${APP_SAUDAVEL:-0}" = 1 ]; then
+  step "Semeando o catálogo de modelos de IA"
+  if catalogo_body="$(dc exec -T scheduler sh -c 'curl -fsS -m60 -H "Authorization: Bearer $INTERNAL_SECRET" http://app:3000/api/v1/cron/sync-model-catalog' 2>&1)"; then
+    c_grn "✓ catálogo de modelos semeado"
+  else
+    c_ylw "⚠ não consegui semear o catálogo de modelos agora; o agendador tenta de novo às 04:15 UTC."
+    [ -n "$catalogo_body" ] && c_dim "  detalhe: $(printf '%s' "$catalogo_body" | head -c 200 || true)"
+  fi
+fi
+
 # ── 11. Automações (cron do drain de eventos) ───────────────────────────────
 step "Ativando as automações"
 ensure_encryption_key .env
+# A senha desta instalação nasceu agora e vai para um arquivo, nunca para a
+# linha do crontab: não há o que trocar depois (ver trocar_segredo_do_cron_vazado).
+marcar_segredo_do_cron_como_novo
 setup_event_log_drain_cron
 setup_update_agent_cron
 

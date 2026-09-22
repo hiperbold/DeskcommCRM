@@ -26,6 +26,8 @@ import path from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { zoomAte } from "./utils/canvas-do-fluxo";
+
 const CREDS_PATH = ".e2e-creds.json";
 const ARTIFACTS_DIR = "evidence/followup-vivo";
 
@@ -56,7 +58,7 @@ async function login(page: Page, email: string): Promise<void> {
   await page.goto("/login");
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(creds.password);
-  await page.getByRole("button", { name: /entrar/i }).click();
+  await page.getByRole("button", { name: "Entrar", exact: true }).click();
   await page.waitForURL(/\/app\//, { timeout: PRAZO });
 }
 
@@ -155,8 +157,7 @@ test.describe("condição com várias regras — uma bolinha por regra", () => {
 
     // Estabiliza o zoom antes de qualquer conta em pixels: o fitView re-ajusta a
     // cada nó medido pela primeira vez e move o alvo no meio do caminho.
-    const zoomOut = page.locator(".react-flow__controls-zoomout");
-    for (let i = 0; i < 5; i++) await zoomOut.click();
+    await zoomAte(page, 0.85);
     await page.waitForTimeout(300);
 
     const canvas = await page.getByTestId("flow-canvas").boundingBox();

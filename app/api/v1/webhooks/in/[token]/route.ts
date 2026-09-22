@@ -515,7 +515,6 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
       ? respondiLeadTitle(respondiMapped)
       : (mapped.name ?? mapped.phone ?? mapped.email ?? "Lead sem nome"),
     contact_id: contactId,
-    currency: "BRL",
     tags: [],
     source: "webhook",
     custom_fields: mapped.custom_fields,
@@ -672,7 +671,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
   }
 
   // Captação: drena lead.created e inscreve no fluxo neste mesmo request.
-  // Sem isto, em prod (Vercel Hobby sem cron de 1 min) o gatilho fica pending.
+  // Sem isto, numa instalação sem cron de 1 min (relógio HTTP), o gatilho fica pending.
   await kickLocalPipeline(
     admin,
     contactId

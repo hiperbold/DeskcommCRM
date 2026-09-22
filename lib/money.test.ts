@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 
-import { parseReaisToCents, formatCentsBRL, formatCents } from "./money";
+import {
+  parseReaisToCents,
+  formatCentsBRL,
+  formatCents,
+  MOEDAS_SERVIDAS,
+  MOEDA_PADRAO,
+  simboloDaMoeda,
+} from "./money";
 
 describe("parseReaisToCents", () => {
   it("lê ponto como decimal quando o grupo final não é de milhar", () => {
@@ -68,6 +75,28 @@ describe("formatCents", () => {
     expect(semNbsp(formatCents(24990, "BRL"))).toBe("R$ 249,90");
     expect(semNbsp(formatCents(24990, "MXN"))).toBe("$249.90");
     expect(semNbsp(formatCents(24990, "USD"))).toBe("$249.90");
+    // Kwanza: símbolo DEPOIS do número e vírgula decimal, que é a convenção de
+    // Angola — `formatadorDa` maximiza `und-AO` para `pt-AO` e é o ICU que
+    // decide, não uma tabela nossa.
+    expect(semNbsp(formatCents(24990, "AOA"))).toBe("249,90 Kz");
+    // Euro: moeda sem país. A maximização de `und-EU` daria `€249.90`, a
+    // convenção irlandesa; Portugal, Espanha, França, Alemanha e Itália
+    // escrevem assim.
+    expect(semNbsp(formatCents(24990, "EUR"))).toBe("249,90 €");
+    expect(semNbsp(formatCents(149700, "EUR"))).toBe("1497,00 €");
+  });
+
+  /**
+   * Servir uma moeda são TRÊS coisas juntas (ver o bloco de `MOEDAS_SERVIDAS`):
+   * o seletor oferece, o schema aceita e `formatCents` sabe escrevê-la. As duas
+   * primeiras já têm guarda em `tests/unit/moeda-da-organizacao-se-escolhe-na-tela.test.ts`;
+   * a terceira é esta. Sem ela, uma moeda podia entrar na lista e cair no ramo
+   * de degradação (`"AOA 249.90"`) sem nada ficar vermelho.
+   */
+  it("toda moeda servida sai formatada, nenhuma cai no ramo de degradação", () => {
+    for (const moeda of MOEDAS_SERVIDAS) {
+      expect(semNbsp(formatCents(24990, moeda))).not.toBe(`${moeda} 249.90`);
+    }
   });
 
   /**
@@ -107,5 +136,33 @@ describe("formatCents", () => {
 
     // O fallback precisa continuar informativo — o número certo, não "—" nem "".
     expect(formatCents(24990, "")).toContain("249");
+  });
+});
+describe("MOEDAS_SERVIDAS — a lista que a tela oferece", () => {
+  /**
+   * ⚠️ ESTE CASO EXISTE PORQUE O ITEM NÃO TINHA GATE NENHUM.
+   * Acrescentar `AOA` à lista é aditivo e não quebra teste algum: medido
+   * tirando a moeda de volta — `lib/money.test.ts` seguia 11/11 e o
+   * `tsc` saía zerado. Ou seja, nada prendia a oferta na tela, e quem
+   * instalou em Angola voltaria a não ter como escolher a própria moeda
+   * sem ninguém ficar sabendo.
+   *
+   * O que este caso prende é a OFERTA, não o padrão: o padrão continua
+   * sendo o real, e isso é o caso seguinte.
+   */
+  it("serve o kwanza, e continua servindo as três de antes", () => {
+    expect(MOEDAS_SERVIDAS).toContain("AOA");
+    expect(MOEDAS_SERVIDAS).toContain("BRL");
+    expect(MOEDAS_SERVIDAS).toContain("MXN");
+    expect(MOEDAS_SERVIDAS).toContain("USD");
+  });
+
+  it("serve o euro, com o símbolo que o seletor mostra", () => {
+    expect(MOEDAS_SERVIDAS).toContain("EUR");
+    expect(simboloDaMoeda("EUR")).toBe("€");
+  });
+
+  it("e o padrão de quem não escolheu segue sendo o real", () => {
+    expect(MOEDA_PADRAO).toBe("BRL");
   });
 });

@@ -25,6 +25,8 @@ import {
   Lock,
   Megaphone,
   Palette,
+  PaperPlaneTilt,
+  Phone,
   Plug,
   Plugs,
   PlugsConnected,
@@ -35,6 +37,7 @@ import {
   ShieldCheck,
   Signpost,
   Storefront,
+  Tag,
   UserCircle,
   Users,
   UsersThree,
@@ -48,6 +51,8 @@ import {
   type NavGroup,
   type NavGroupId,
 } from "./catalogo";
+import type { ModuloOpcional } from "@/lib/instalacao/modulos";
+
 import { destinosDaInterface, type InterfaceSettings } from "./interface";
 export { NAV_GROUPS, GRUPO_NO_RODAPE } from "./catalogo";
 export type { NavGroup, NavGroupId } from "./catalogo";
@@ -75,6 +80,8 @@ const ICONS = {
   Lock,
   Megaphone,
   Palette,
+  PaperPlaneTilt,
+  Phone,
   Plug,
   Plugs,
   PlugsConnected,
@@ -85,6 +92,7 @@ const ICONS = {
   ShieldCheck,
   Signpost,
   Storefront,
+  Tag,
   UserCircle,
   Users,
   UsersThree,
@@ -111,9 +119,10 @@ export function sidebarGroups(
   isPlatformAdmin: boolean,
   role: Role | null,
   settings?: InterfaceSettings,
+  modulos?: readonly ModuloOpcional[],
 ): Array<{ group: NavGroup; items: NavDestination[] }> {
   const visible = new Set<string>(
-    destinosDaInterface(settings, isPlatformAdmin, role).map((d) => d.href),
+    destinosDaInterface(settings, isPlatformAdmin, role, modulos).map((d) => d.href),
   );
   return NAV_GROUPS.map((group) => ({
     group,
@@ -139,10 +148,11 @@ export function hubSections(
   isPlatformAdmin: boolean,
   role: Role | null,
   settings?: InterfaceSettings,
+  modulos?: readonly ModuloOpcional[],
 ): Array<{ section: string; items: NavDestination[] }> {
   const porSecao = new Map<string, NavDestination[]>();
   const visible = new Set<string>(
-    destinosDaInterface(settings, isPlatformAdmin, role).map((d) => d.href),
+    destinosDaInterface(settings, isPlatformAdmin, role, modulos).map((d) => d.href),
   );
   for (const d of NAV_DESTINATIONS) {
     if (d.group !== group || !visible.has(d.href)) continue;
@@ -159,9 +169,10 @@ export function searchable(
   isPlatformAdmin: boolean,
   role: Role | null,
   settings?: InterfaceSettings,
+  modulos?: readonly ModuloOpcional[],
 ): NavDestination[] {
   const visible = new Set<string>(
-    destinosDaInterface(settings, isPlatformAdmin, role).map((d) => d.href),
+    destinosDaInterface(settings, isPlatformAdmin, role, modulos).map((d) => d.href),
   );
   return NAV_DESTINATIONS.filter((d) => visible.has(d.href));
 }

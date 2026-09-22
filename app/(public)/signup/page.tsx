@@ -1,12 +1,13 @@
 import Link from "next/link";
 
+import { EntrarComGoogle } from "@/components/auth/EntrarComGoogle";
 import { SignupForm } from "@/components/auth/SignupForm";
 import { Button } from "@/components/ui/button";
 import { branding } from "@/lib/branding";
 import { verifyInviteToken } from "@/lib/auth/invite-token";
 import { modoDeCadastro } from "@/lib/auth/politica-de-cadastro";
 import { createClient } from "@/lib/supabase/server";
-import { normalizarIdioma } from "@/lib/i18n/idiomas";
+import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const metadata = { title: "Criar conta" };
@@ -47,7 +48,7 @@ export default async function SignupPage({
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  const idioma = normalizarIdioma(
+  const idioma = await idiomaDoVisitante(
     (user?.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);
@@ -102,6 +103,9 @@ export default async function SignupPage({
       )}
 
       <SignupForm convite={convite} />
+      {/* O convite atravessa o Google na URL de retorno: sem ele, quem foi
+          convidado e cria a conta com Google ganharia uma empresa própria. */}
+      <EntrarComGoogle convite={convite?.token} />
 
       <p className="text-center text-sm text-muted-foreground">
         {t("Já tem conta?")}{" "}

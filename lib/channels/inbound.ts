@@ -1,3 +1,5 @@
+import { ingestSocialInbound, socialPayloadBelongsToSession } from "./social/ingest";
+import { CHANNEL_PROVIDER_SOCIAL } from "./capabilities";
 /**
  * Entrada de webhook, do lado de dentro do seam.
  *
@@ -75,7 +77,34 @@ export type InboundWebhookOutcome =
  * trabalho — e respondido sem nomear provider do lado de fora.
  */
 export function acceptsInboundWebhook(provider: string): boolean {
-  return provider === CHANNEL_PROVIDER_ZERNIO || provider === CHANNEL_PROVIDER_UAZAPI;
+  return (
+    provider === CHANNEL_PROVIDER_ZERNIO ||
+    provider === CHANNEL_PROVIDER_SOCIAL ||
+    provider === CHANNEL_PROVIDER_UAZAPI
+  );
+}
+
+/**
+ * Authenticate before archiving raw payloads. The handler repeats this guard for non-HTTP callers.
+ *
+ * A UAZAPI não assina o corpo: quem autentica é o token secreto da URL e,
+ * quando o evento traz um, o token repetido no envelope (ver `uazapiInbound`
+ * abaixo). Aplicar aqui a assinatura HMAC do canal parceiro recusaria TODO
+ * evento da UAZAPI, que nunca manda o header `x-zernio-signature` — por isso
+ * este canal passa direto, e a conferência real acontece dentro de
+ * `handleInboundWebhook`.
+ */
+export function verifyInboundWebhookSignature(provider: string, raw: string, headers: Headers, secret: string | null): boolean {
+  if (provider === CHANNEL_PROVIDER_UAZAPI) return true;
+  return acceptsInboundWebhook(provider) && !!secret && secret.length >= MIN_SECRET_LEN &&
+    verifyZernioSignature(raw, headers.get("x-zernio-signature"), secret);
+}
+
+export async function inboundPayloadBelongsToSession(admin: SupabaseClient, input: InboundWebhookInput): Promise<boolean> {
+  if (input.session.provider === CHANNEL_PROVIDER_UAZAPI) return true;
+  return input.session.provider !== CHANNEL_PROVIDER_SOCIAL || socialPayloadBelongsToSession(
+    admin, input.session.organization_id, input.session.id, input.rawBody,
+  );
 }
 
 export async function handleInboundWebhook(
@@ -85,6 +114,7 @@ export async function handleInboundWebhook(
   const provider = input.session.provider as ChannelProvider;
 
   switch (provider) {
+    case CHANNEL_PROVIDER_SOCIAL:
     case CHANNEL_PROVIDER_ZERNIO:
       return zernioInbound(admin, input);
     case CHANNEL_PROVIDER_UAZAPI:
@@ -243,6 +273,10 @@ async function zernioInbound(
     };
   }
   const payload = leitura.envelope;
+  if (input.session.provider === CHANNEL_PROVIDER_SOCIAL) {
+    const result = await ingestSocialInbound(admin, input.session.organization_id, input.session.id, payload);
+    return { ok: true, body: { ...result } };
+  }
 
   // ─── O que a plataforma decide sozinha ───────────────────────────────────
   //

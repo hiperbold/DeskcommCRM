@@ -16,6 +16,20 @@ import type { ActiveOrg, AuthUser } from "@/lib/auth/types";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined), isServiceRoleConfigured: vi.fn(() => true) }));
+// O contrato da rota é testado contra as variáveis passadas ao cenário. Sem
+// dublê, uma credencial salva no banco da máquina de quem roda a suíte vence o
+// ambiente e torna os casos "sem chave" dependentes do estado local.
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: null, error: null }),
+        }),
+      }),
+    }),
+  }),
+}));
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const ANA = "11111111-1111-4111-8111-111111111111";
@@ -40,6 +54,12 @@ function pedido(): NextRequest {
   });
 }
 
+function pedidoLocal(): NextRequest {
+  return new NextRequest("http://localhost:3001/api/v1/agenda/google/connect", {
+    headers: { "x-request-id": "req-local", host: "localhost:3001" },
+  });
+}
+
 async function rotaComEnv(vars: Record<string, string>) {
   vi.resetModules();
   for (const [k, v] of Object.entries(vars)) process.env[k] = v;
@@ -59,7 +79,7 @@ beforeEach(() => {
 });
 
 describe("GET /api/v1/agenda/google/connect", () => {
-  it("manda para o consentimento do Google com offline + consent + state", async () => {
+  it("manda para o consentimento do Google com offline + consent + select_account + state", async () => {
     const { GET } = await rotaComEnv(CONFIGURADO);
     const res = await GET(pedido());
 
@@ -67,11 +87,24 @@ describe("GET /api/v1/agenda/google/connect", () => {
     const destino = new URL(res.headers.get("location") ?? "");
     expect(destino.origin + destino.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
     expect(destino.searchParams.get("access_type")).toBe("offline");
-    expect(destino.searchParams.get("prompt")).toBe("consent");
+    // Os dois de uma vez: `consent` garante o refresh_token na reconexão e
+    // `select_account` mantém o seletor de contas de pé — sem ele o Google
+    // autoriza direto a conta do `login_hint`, e quem tem a agenda num e-mail
+    // diferente do login do CRM não tem como conectá-la (issue #929).
+    expect(destino.searchParams.get("prompt")?.split(" ").sort()).toEqual(["consent", "select_account"]);
     expect(destino.searchParams.get("state")).toBeTruthy();
     // Sugerir a conta evita autorizar com a conta pessoal que já estava logada
-    // no navegador e ver a agenda errada aparecer no CRM.
+    // no navegador e ver a agenda errada aparecer no CRM — e sugerir não fecha a
+    // porta: o seletor do Google continua sendo oferecido (assert acima), então
+    // quem tem a agenda noutro e-mail escolhe a dele ali.
     expect(destino.searchParams.get("login_hint")).toBe("ana@clinica.com.br");
+  });
+
+  it("usa localhost como callback quando o navegador abre a instalação local por localhost", async () => {
+    const { GET } = await rotaComEnv({ ...CONFIGURADO, NEXT_PUBLIC_APP_URL: "http://192.168.0.21:3001" });
+    const res = await GET(pedidoLocal());
+    const destino = new URL(res.headers.get("location") ?? "");
+    expect(destino.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/v1/agenda/google/callback");
   });
 
   it("o `state` carrega a PESSOA, não só a organização", async () => {

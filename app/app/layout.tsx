@@ -2,8 +2,10 @@ import { InterfaceRefresh } from "@/hooks/auth/InterfaceRefresh";
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import { isMfaEnrolled, loadAuthUser, requiresMfa, resolveActiveOrg } from "@/lib/auth/server";
-import { DEFAULT_VISIBILITY_MODE, type VisibilityMode } from "@/lib/auth/types";
+import { DEFAULT_VISIBILITY_MODE, roleAtLeast, type VisibilityMode } from "@/lib/auth/types";
+import { clientePelaAgendaLigado } from "@/lib/schemas/settings";
 import { AuthProvider } from "@/hooks/auth/AuthProvider";
+import { ProvedorDeCoresDasEtiquetas } from "@/components/tags/CoresDasEtiquetas";
 import { AppShell } from "./_components/AppShell";
 import { EstiloDaMarcaDaOrganizacao } from "./_components/EstiloDaMarcaDaOrganizacao";
 import { MfaEnrollGate } from "@/components/auth/MfaEnrollGate";
@@ -12,6 +14,7 @@ import { marcaDaInstalacao } from "@/lib/branding/instalacao";
 import { resolverMarcaDaOrganizacao } from "@/lib/branding/organizacao";
 import { env } from "@/lib/env";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { modulosLigados } from "@/lib/instalacao/modulos";
 import {
   ImpersonateBanner,
 } from "@/components/app/ImpersonateBanner";
@@ -19,6 +22,7 @@ import { ConexaoCaidaBanner } from "@/components/app/ConexaoCaidaBanner";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
+import { ProvedorDaOcupacaoDoRodape } from "@/lib/ui/rodape-ocupado";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -61,7 +65,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (activeOrg) {
     const admin = createAdminClient();
     /**
-     * As quatro consultas que TODA página de `/app` paga, disparadas juntas.
+     * As cinco consultas que TODA página de `/app` paga, disparadas juntas.
      *
      * Elas eram sequenciais e independentes: cada uma esperava a anterior sem
      * precisar do resultado dela, e a soma aparecia como a tela que não reage ao
@@ -84,7 +88,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
      *    este layout — a cerca anterior lia o texto-fonte e reprovava esta
      *    refatoração sem que nada tivesse quebrado.
      */
-    const [orgRes, conexoes, isEnrolled, mfaRequired] = await Promise.all([
+    const [orgRes, conexoes, isEnrolled, mfaRequired, modulos] = await Promise.all([
       admin
         .from("organizations")
         .select("onboarded_at, status, settings")
@@ -98,6 +102,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         user.id,
         activeOrg.orgId,
       ),
+      // Da INSTALAÇÃO: decide se a porta de um módulo opcional entra no menu.
+      modulosLigados(admin),
     ]);
 
     const orgRow = orgRes.data;
@@ -111,7 +117,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // Fonte confiável (admin client, org do cookie validado) — nunca do body.
     const mode = (orgRow?.settings as { visibility_mode?: VisibilityMode } | null)
       ?.visibility_mode;
-    activeOrg = { ...activeOrg, visibility_mode: mode ?? DEFAULT_VISIBILITY_MODE };
+    activeOrg = {
+      ...activeOrg,
+      visibility_mode: mode ?? DEFAULT_VISIBILITY_MODE,
+      // Mesma linha de `settings` já lida acima — nenhuma consulta a mais.
+      cliente_pela_agenda: clientePelaAgendaLigado(orgRow?.settings),
+      modulos_ligados: modulos,
+    };
 
     // `marcaDaInstalacao()` é memoizada por TTL no PROCESSO (`lib/branding/
     // instalacao.ts`), e a derivação da cor é cacheada por régua+semente em
@@ -181,10 +193,22 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     expiresAt: user.support.expires_at, accessMode: user.support.access_mode,
   } : null;
 
+  // O CONTRATO DE OCUPAÇÃO DO RODAPÉ (issue #1305) envolve a casca E as peças de
+  // voz. O `VoiceCallProvider` desenha o painel de chamada DEPOIS dos children,
+  // ou seja: o painel é IRMÃO do `AppShell`, não filho dele. Um provedor por
+  // dentro do `VoiceCallProvider` deixaria o painel de fora — ele declararia o
+  // que ocupa e ninguém descontaria, que é exatamente o defeito da #1305.
   const shell = (
-    <VoiceCallProvider>
-      <AppShell sidebarCollapsed={collapsed}>{children}</AppShell>
-    </VoiceCallProvider>
+    <ProvedorDaOcupacaoDoRodape>
+      <VoiceCallProvider>
+        <AppShell
+          sidebarCollapsed={collapsed}
+          podeAtender={Boolean(activeOrg && roleAtLeast(activeOrg.role, "agent"))}
+        >
+          {children}
+        </AppShell>
+      </VoiceCallProvider>
+    </ProvedorDaOcupacaoDoRodape>
   );
 
   return (
@@ -193,6 +217,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     // acoplamento com a autenticação que derrubou 32 casos.
     <IdiomaProvider locale={user.idioma}>
     <AuthProvider user={user} activeOrg={activeOrg}>
+      {/*
+        A COR DA ETIQUETA, uma leitura por tela.
+
+        O chip aparece em LISTA — uma fila de duzentas conversas desenha quatro
+        centenas deles — e todos consultam o mesmo mapa, montado uma vez aqui.
+        Um `useQuery` por chip seria o mesmo cache (o react-query deduplica a
+        rede), mas cada atualização acordaria todas as assinaturas.
+
+        Dentro do `AuthProvider` porque a leitura é da organização ativa, e FORA
+        do `AppShell` porque o gate de MFA substitui a casca: o mapa precisa
+        sobreviver ao portão, e não ser relido quando ele sai.
+      */}
+      <ProvedorDeCoresDasEtiquetas>
       <InterfaceRefresh userId={user.id} org={activeOrg} support={!!user.support} />
       {/*
         O MARCADOR da marca da organização — o elemento cuja existência define o
@@ -222,6 +259,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           shell
         )}
       </div>
+      </ProvedorDeCoresDasEtiquetas>
     </AuthProvider>
     </IdiomaProvider>
   );

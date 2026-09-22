@@ -1,6 +1,6 @@
 "use client";
 import { useT } from "@/hooks/i18n/useT";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MagnifyingGlass } from "@/lib/ui/icons";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -12,19 +12,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ChipDeEtiqueta } from "@/components/tags/ChipDeEtiqueta";
+import { PontoDaEtiqueta } from "@/components/tags/PontoDaEtiqueta";
 import { channelLabel, useChannelSessions } from "@/hooks/channels/useChannelSessions";
 import { useAuth } from "@/hooks/auth/AuthProvider";
+import { useContactTagVocabulary } from "@/hooks/contacts/useContactTagVocabulary";
 import { useConversationTagVocabulary } from "@/hooks/inbox/useConversationTags";
 import { useConversationCounts } from "@/hooks/inbox/useConversationCounts";
 import type { Role, VisibilityMode } from "@/lib/auth/types";
 
-export type InboxTab = "unassigned" | "mine" | "all" | "closed" | "ai";
+export type InboxTab = "unassigned" | "mine" | "all" | "closed" | "archived" | "ai";
 
 const INBOX_TABS: { value: InboxTab; label: string }[] = [
   { value: "unassigned", label: "Fila" },
   { value: "mine", label: "Minhas" },
   { value: "all", label: "Todas" },
   { value: "closed", label: "Fechadas" },
+  // "Arquivadas" fica ao lado de "Fechadas" porque as duas são passado — e
+  // separada dela porque são passados diferentes (#923): fechada é atendimento
+  // encerrado, arquivada é o que saiu da fila de trabalho sem ser destruído.
+  { value: "archived", label: "Arquivadas" },
   // "Automático", não "IA": a palavra deste ator já é contrato em quatro arquivos
   // e no dicionário, e `handoff-por-orcamento.test.ts` usa literalmente "Voltar
   // para a IA" como a sabotagem que deve reprovar. A aba era a última fora do
@@ -88,7 +95,27 @@ export function InboxFilters({ value, onChange }: Props) {
   }, [value.search]);
   const { data: channels } = useChannelSessions({ refetchInterval: 30_000 });
   const { activeOrg } = useAuth();
-  const { data: tagVocabulary } = useConversationTagVocabulary(activeOrg?.orgId ?? null);
+  /**
+   * As opções são a UNIÃO das duas caixas — as mesmas que o filtro consulta
+   * (`conversations.tags` ou `contacts.tags`, no handler da lista).
+   *
+   * Vinham só do vocabulário de CONVERSA: o marcador escrito no contato nem
+   * aparecia para ser escolhido. Quem oferece e quem filtra lendo fontes
+   * diferentes é o defeito espelhado — ou a opção existe e devolve vazio, ou o
+   * marcador que funciona nunca é oferecido.
+   */
+  const orgId = activeOrg?.orgId ?? null;
+  const { data: tagsDeConversa } = useConversationTagVocabulary(orgId);
+  const { data: tagsDeContato } = useContactTagVocabulary(orgId);
+  const tagVocabulary = useMemo(
+    () =>
+      tagsDeConversa == null && tagsDeContato == null
+        ? undefined
+        : [...new Set([...(tagsDeConversa ?? []), ...(tagsDeContato ?? [])])].sort((a, b) =>
+            a.localeCompare(b),
+          ),
+    [tagsDeConversa, tagsDeContato],
+  );
   // Os MESMOS filtros que a lista aplicou. Badge que conta o que a aba não mostra
   // manda o atendente procurar trabalho que não existe — a regra já estava escrita
   // na rota; faltava alcançar os filtros ao lado da aba.
@@ -114,6 +141,7 @@ export function InboxFilters({ value, onChange }: Props) {
     mine: counts?.mine,
     all: counts?.all,
     closed: counts?.closed,
+    archived: counts?.archived,
   };
   // Filtrar por um número que saiu da lista (o operador acabou de excluir o
   // canal) deixa o inbox mostrando um subconjunto — às vezes vazio — sem nada na
@@ -125,15 +153,52 @@ export function InboxFilters({ value, onChange }: Props) {
     !channels.some((c) => c.id === value.channel_session_id);
   // Alternador só aparece com 2+ números — com um só não há o que alternar.
   const showChannelSwitch = (channels?.length ?? 0) >= 2 || filtroForaDaLista;
+  /**
+   * O SELETOR NÃO PODE SUMIR DEBAIXO DO MENU ABERTO.
+   *
+   * A condicional abaixo decide a EXISTÊNCIA do `<Select>`, e ela lê duas
+   * queries em voo — as duas com `orgId` na chave e `enabled: !!orgId`. Um
+   * único render em que o vocabulário volte a indefinido ou vazio (chave nova,
+   * refetch, organização piscando) não escondia só o controle: DESMONTAVA o
+   * Select, e o menu que o operador tinha acabado de abrir fechava sozinho, com
+   * o gatilho de volta em "Todas as tags". Era o filtro fechando na cara de
+   * quem ia escolher, e o `filtro-por-marcador-pela-tela.spec.ts` intermitente.
+   *
+   * Por isso o seletor passa a usar o último vocabulário NÃO-VAZIO que esta
+   * tela conheceu: enquanto o de agora oscila, o de antes segura o controle
+   * montado. O quadro nunca teve o defeito pelo mesmo motivo por outro caminho
+   * — `components/kanban/FilterBar.tsx` mantém o gatilho montado e só o desliga
+   * (`disabled`) sem opções. A lembrança faz o mesmo serviço sem estrear um
+   * controle morto para a organização que ainda não tem etiqueta nenhuma: essa
+   * continua sem o seletor, que é o que a condicional sempre quis dizer.
+   *
+   * Medido em `tests/unit/inbox-filtro-de-tag-nao-desmonta.test.tsx`.
+   */
+  const [ultimoVocabulario, setUltimoVocabulario] = useState<string[]>([]);
+  if (tagVocabulary != null && tagVocabulary.length > 0 && tagVocabulary !== ultimoVocabulario) {
+    // Ajuste de estado DURANTE a renderização (o padrão que a documentação do
+    // React chama de "adjusting state when props change"): o React reinicia o
+    // render deste componente com o valor novo antes de pintar, então o seletor
+    // nunca chega à tela com o vocabulário velho. Efeito aqui não serviria —
+    // ele roda DEPOIS da pintura, e a janela de um frame é exatamente a que
+    // desmonta o Select.
+    setUltimoVocabulario(tagVocabulary);
+  }
+  const vocabularioDoSeletor =
+    tagVocabulary != null && tagVocabulary.length > 0 ? tagVocabulary : ultimoVocabulario;
   // O MESMO tratamento, agora para a etiqueta. Sem ele, o seletor inteiro some
   // com o filtro AINDA APLICADO — a lista fica num subconjunto, às vezes vazio,
   // e nada na tela diz que há filtro nem oferece como tirá-lo.
+  // "Conhecido" e "não-vazio" são coisas diferentes, e é o primeiro que vale
+  // aqui: a organização cuja ÚLTIMA etiqueta acabou de ser apagada responde
+  // vocabulário vazio, e é justamente ela que precisa do seletor de volta para
+  // desfazer o filtro que continua valendo.
+  const vocabularioConhecido = tagVocabulary != null || ultimoVocabulario.length > 0;
   const tagForaDoVocabulario =
     value.tag != null &&
-    tagVocabulary != null &&
-    !tagVocabulary.includes(value.tag);
-  const mostrarSeletorDeTag =
-    (tagVocabulary?.length ?? 0) > 0 || tagForaDoVocabulario;
+    vocabularioConhecido &&
+    !vocabularioDoSeletor.includes(value.tag);
+  const mostrarSeletorDeTag = vocabularioDoSeletor.length > 0 || tagForaDoVocabulario;
 
   // O timer lê o valor MAIS RECENTE, não o do render em que foi agendado.
   //
@@ -259,7 +324,18 @@ export function InboxFilters({ value, onChange }: Props) {
                   )}
                   aria-label={t("Filtrar por tag")}
                 >
-                  <SelectValue placeholder={t("Todas as tags")} />
+                  {/* O gatilho mostra o CHIP da etiqueta filtrada, e não o texto
+                      cru: é a mesma cor que a lista mostra ao lado, e é o que
+                      faz o filtro ativo se reconhecer de relance — mesma razão
+                      do `border-accent` acima. Sem filtro, o texto continua
+                      sendo o de sempre (`Todas as tags`). */}
+                  <SelectValue placeholder={t("Todas as tags")}>
+                    {value.tag ? (
+                      <ChipDeEtiqueta tag={value.tag} className="h-5 px-1.5 text-[11px]" />
+                    ) : (
+                      t("Todas as tags")
+                    )}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t("Todas as tags")}</SelectItem>
@@ -267,11 +343,18 @@ export function InboxFilters({ value, onChange }: Props) {
                       placeholder no lugar do valor JÁ selecionado, e o operador
                       veria "Todas as tags" com um filtro ativo. */}
                   {[
-                    ...(tagVocabulary ?? []),
+                    ...vocabularioDoSeletor,
                     ...(tagForaDoVocabulario && value.tag ? [value.tag] : []),
                   ].map((tag) => (
                     <SelectItem key={tag} value={tag}>
-                      {tag}
+                      {/* Ponto, não chip: a opção é uma linha de 280 px que já
+                          divide espaço com o filtro de número. O nome continua
+                          sendo o que se lê; a cor só acelera o reconhecimento
+                          de quem já conhece o vocabulário da operação. */}
+                      <span className="inline-flex items-center gap-2">
+                        <PontoDaEtiqueta tag={tag} />
+                        {tag}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
