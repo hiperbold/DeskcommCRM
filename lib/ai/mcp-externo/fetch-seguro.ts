@@ -15,8 +15,25 @@
  * Mesmas funções de `lib/automation/outbound-*` (webhooks de automação), com a
  * mesma janela residual de rebinding declarada lá.
  */
+import { getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
+
 import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
 import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
+
+/**
+ * O `fetch` do Node escolhe entre IPv6 e IPv4 com 250 ms por tentativa de
+ * conexão. Num link lento (medido no WSL em 22/09/2026 contra
+ * mcp.deepwiki.com) o TCP passa disso e TODA tentativa morre em
+ * `connect ETIMEDOUT` em menos de 1 s, enquanto o curl conecta em 0,8 s: a
+ * conexão MCP falhava sempre com "O servidor não respondeu a tempo". O
+ * padrão é do processo inteiro (o `fetch` global não aceita outro por
+ * chamada sem o pacote `undici`); subir só afrouxa a espera antes de tentar
+ * a outra família, não abre destino nenhum.
+ */
+export const ESPERA_POR_TENTATIVA_DE_CONEXAO_MS = 2000;
+if (getDefaultAutoSelectFamilyAttemptTimeout() < ESPERA_POR_TENTATIVA_DE_CONEXAO_MS) {
+  setDefaultAutoSelectFamilyAttemptTimeout(ESPERA_POR_TENTATIVA_DE_CONEXAO_MS);
+}
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 

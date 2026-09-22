@@ -118,3 +118,12 @@ describe("fetch do cliente MCP", () => {
     expect(cancelarEspiao).toHaveBeenCalled();
   });
 });
+
+describe("espera por tentativa de conexão", () => {
+  it("carregar o módulo sobe o padrão do Node acima dos 250 ms que derrubavam a conexão em link lento", async () => {
+    const { getDefaultAutoSelectFamilyAttemptTimeout } = await import("node:net");
+    const { ESPERA_POR_TENTATIVA_DE_CONEXAO_MS } = await import("@/lib/ai/mcp-externo/fetch-seguro");
+    expect(ESPERA_POR_TENTATIVA_DE_CONEXAO_MS).toBeGreaterThanOrEqual(2000);
+    expect(getDefaultAutoSelectFamilyAttemptTimeout()).toBeGreaterThanOrEqual(ESPERA_POR_TENTATIVA_DE_CONEXAO_MS);
+  });
+});
