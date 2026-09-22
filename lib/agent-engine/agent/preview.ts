@@ -20,6 +20,7 @@ import { loadPromiseTable } from '../guardrails/promise/table';
 import { loadDisclosureTemplate, countPriorAcceptedSends } from '../guardrails/disclosure/template';
 import { DEFAULT_CHANNEL_PROVIDER } from '@/lib/channels/capabilities';
 import { getToolByName } from '@/lib/mcp/tools';
+import { ehFerramentaExterna } from '@/lib/ai/mcp-externo/ids';
 import type { Logger } from '../obs/logger';
 import type { Citation } from '@/lib/ai/citations/types';
 
@@ -143,6 +144,12 @@ export function applyPreviewPolicy(
   citations: () => Citation[],
   semanticClassifier?: (body: string) => Promise<NonNullable<GateContext['semanticPromise']>>,
   liveContext?: () => Partial<GateContext>,
+  // (H) A prévia NUNCA decide sozinha se um id `mcp_*` é de consulta: só
+  // libera o que a montagem do turno (`buildExternalMcpTools`) já aprovou
+  // com `somente_leitura_confirmado === true`. Default vazio (parâmetro
+  // opcional, para não quebrar quem ainda não repassa o conjunto) é
+  // fail-closed por construção — sem o Set, nenhuma externa passa.
+  externasDeConsulta: ReadonlySet<string> = new Set(),
 ): ToolSet {
   return Object.fromEntries(
     Object.entries(tools).map(([name, definition]) => {
@@ -155,6 +162,10 @@ export function applyPreviewPolicy(
       const catalog = getToolByName(name);
       if (
         nativeRead ||
+        // Ferramenta de conexão MCP que a montagem do turno aprovou como
+        // CONSULTA (id em `externasDeConsulta`) — nunca todo `mcp_*`: o
+        // nome sozinho não prova a decisão do admin.
+        (ehFerramentaExterna(name) && externasDeConsulta.has(name)) ||
         (catalog?.category === 'read' && (p.contactId !== null || SCENARIO_READS.has(name)))
       )
         return [name, definition];

@@ -79,6 +79,7 @@ export async function PATCH(
   const { id } = await ctx.params;
   const idParsed = idSchema.safeParse(id);
   if (!idParsed.success) return fail("invalid_request", t("Id da conexão inválido."), 422, { requestId });
+  const conexaoId = idParsed.data;
 
   const parsed = editarSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -100,7 +101,7 @@ export async function PATCH(
   }
 
   const admin = createAdminClient();
-  const resultado = await editarConexao(admin, authz.org.orgId, idParsed.data, {
+  const resultado = await editarConexao(admin, authz.org.orgId, conexaoId, {
     nome: input.nome,
     ativa: input.ativa,
     cabecalho: cabecalhoResolvido.cabecalho,
@@ -122,7 +123,7 @@ export async function PATCH(
     actorUserId: authz.user.id,
     organizationId: authz.org.orgId,
     resourceType: "ai_mcp_connection",
-    resourceId: idParsed.data,
+    resourceId: conexaoId,
     requestId,
     ...contextoDaRequisicao(req),
     // Nunca a URL nem o cabeçalho: só o apelido, quantas ferramentas em
@@ -152,14 +153,15 @@ export async function DELETE(
   const { id } = await ctx.params;
   const idParsed = idSchema.safeParse(id);
   if (!idParsed.success) return fail("invalid_request", t("Id da conexão inválido."), 422, { requestId });
+  const conexaoId = idParsed.data;
 
   const admin = createAdminClient();
   // Lida ANTES de remover: é a única forma de levar apelido e contagem de
   // ferramentas para o audit sem reabrir `conexoes.ts` (que este briefing
   // proíbe tocar) e sem devolver a URL ou o cabeçalho, que nunca saem daqui.
-  const antes = (await listarConexoes(admin, authz.org.orgId)).find((c) => c.id === idParsed.data) ?? null;
+  const antes = (await listarConexoes(admin, authz.org.orgId)).find((c) => c.id === conexaoId) ?? null;
 
-  const resultado = await removerConexao(admin, authz.org.orgId, idParsed.data);
+  const resultado = await removerConexao(admin, authz.org.orgId, conexaoId);
   if (!resultado.ok) {
     return fail("not_found", t(resultado.motivo), resultado.status, { requestId });
   }
@@ -169,7 +171,7 @@ export async function DELETE(
     actorUserId: authz.user.id,
     organizationId: authz.org.orgId,
     resourceType: "ai_mcp_connection",
-    resourceId: idParsed.data,
+    resourceId: conexaoId,
     requestId,
     ...contextoDaRequisicao(req),
     metadata: antes

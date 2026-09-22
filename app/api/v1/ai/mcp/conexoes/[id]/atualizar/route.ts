@@ -48,6 +48,7 @@ export async function POST(
   const { id } = await ctx.params;
   const idParsed = idSchema.safeParse(id);
   if (!idParsed.success) return fail("invalid_request", t("Id da conexão inválido."), 422, { requestId });
+  const conexaoId = idParsed.data;
 
   // Depois de validar o id (id malformado não gasta orçamento) e antes de
   // reconectar de verdade: mesmo orçamento de `POST /conexoes`.
@@ -60,9 +61,9 @@ export async function POST(
   // linha quando falha, e o apelido não pode vir do corpo (não existe corpo
   // nesta rota). Lido com a mesma função exportada que a listagem usa, sem
   // tocar `conexoes.ts`.
-  const antesDeAtualizar = (await listarConexoes(admin, authz.org.orgId)).find((c) => c.id === idParsed.data) ?? null;
+  const antesDeAtualizar = (await listarConexoes(admin, authz.org.orgId)).find((c) => c.id === conexaoId) ?? null;
 
-  const resultado = await atualizarFerramentas(admin, authz.org.orgId, idParsed.data);
+  const resultado = await atualizarFerramentas(admin, authz.org.orgId, conexaoId);
 
   if (!resultado.ok) {
     // 404 (não encontrada), 409 (corrida perdida contra outra edição) e 422
@@ -74,7 +75,7 @@ export async function POST(
       actorUserId: authz.user.id,
       organizationId: authz.org.orgId,
       resourceType: "ai_mcp_connection",
-      resourceId: idParsed.data,
+      resourceId: conexaoId,
       requestId,
       ...contextoDaRequisicao(req),
       metadata: { apelido: antesDeAtualizar?.apelido ?? null, status: resultado.status },
@@ -89,7 +90,7 @@ export async function POST(
     actorUserId: authz.user.id,
     organizationId: authz.org.orgId,
     resourceType: "ai_mcp_connection",
-    resourceId: idParsed.data,
+    resourceId: conexaoId,
     requestId,
     ...contextoDaRequisicao(req),
     metadata: {

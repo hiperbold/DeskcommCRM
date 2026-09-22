@@ -47,9 +47,9 @@ import { isLeadInHandoff } from './human-handoff';
 import { fusoDaOrganizacao } from './fuso-da-org';
 import { renderAgora } from '@/lib/tempo/agora';
 import { insertInboxItem } from '../db/repository';
-import { buildMcpTurnTools } from '../edge/crm/mcp-tools';
+import { montarFerramentasDoTurno } from '../edge/crm/ferramentas-do-turno';
 import { runModelCall } from '../edge/llm/run-model-call';
-import { avisarCapacidadesAusentes } from './inbound-turn';
+import { avisarCapacidadesAusentes, mensagensDePuladasParaAvisar } from './inbound-turn';
 import { criaRetornoDbPg } from '../../followup/retorno-pg';
 import { emitAgentActivityForContact } from '../../leads/agent-activity';
 import { copyDaPromessaSemDono } from '../../ai/agent-inbox-copy';
@@ -246,6 +246,21 @@ export async function lerDeclaracaoDoTurno(
  * A decisão de RODAR OU NÃO, isolada em função pura para ser testável sem banco,
  * sem modelo e sem fila. É a regra que decide se a chave do self-hoster é gasta.
  */
+/**
+ * (J) Mão MONTADA mas VAZIA é o mesmo que não ter ferramenta nenhuma — o
+ * Operador só existe para agir no sistema, e todas as suas capacidades podem
+ * ter ficado de fora do turno (ex.: só marcou externas, e nenhuma tinha
+ * `somente_leitura_confirmado` decidido — `aguardando_aprovacao`). Chamar o
+ * modelo sem NADA que ele possa executar gasta a chave do self-hoster para
+ * descobrir de novo o que a montagem já sabia. Pura e exportada para o mesmo
+ * motivo de `decidirSeRoda`: testável sem banco, sem modelo, sem fila.
+ */
+export function mcpTemFerramentasParaOperador<T extends { tools: Record<string, unknown> }>(
+  mcp: T | null,
+): mcp is T {
+  return mcp !== null && Object.keys(mcp.tools).length > 0;
+}
+
 export function decidirSeRoda(input: {
   papelLigado: boolean;
   declaracao: DeclaracaoDoTurno | null;
@@ -415,10 +430,10 @@ export function createOperatorTurnHandler(deps: InboundTurnDeps) {
     // Sem ferramenta configurada o papel ainda tem valor e ainda roda: ele
     // registra a promessa em aberto. Chamar o modelo para descobrir que ele não
     // tem mão nenhuma seria gastar a chave do self-hoster para nada.
-    let mcp: Awaited<ReturnType<typeof buildMcpTurnTools>> = null;
+    let mcp: Awaited<ReturnType<typeof montarFerramentasDoTurno>> = null;
     if (agentConfig.operatorToolIds.length > 0) {
       try {
-        mcp = await buildMcpTurnTools(
+        mcp = await montarFerramentasDoTurno(
           deps.crmCfg,
           { organizationId: tenantId, jobId: job.id },
           // A ponte lê `toolIds`; o papel guarda a lista dele em
@@ -428,6 +443,9 @@ export function createOperatorTurnHandler(deps: InboundTurnDeps) {
           { ...agentConfig, toolIds: agentConfig.operatorToolIds },
           log,
         );
+        for (const mensagem of mensagensDePuladasParaAvisar(mcp?.puladas ?? [])) {
+          await avisarCapacidadesAusentes(pool, tenantId, payload.conversation_id, mensagem, log);
+        }
       } catch (err) {
         // Mesma doutrina do turno do Conversador: capacidade que não montou não
         // derruba o job, mas também não morre no log de um contêiner que
@@ -436,7 +454,14 @@ export function createOperatorTurnHandler(deps: InboundTurnDeps) {
         log.error('capacidades do operador não montadas — o papel segue sem elas', {
           error: detalhe,
         });
-        await avisarCapacidadesAusentes(pool, tenantId, payload.conversation_id, detalhe, log);
+        // (I) frase fixa para a Central; `detalhe` (texto de erro) fica só no log.
+        await avisarCapacidadesAusentes(
+          pool,
+          tenantId,
+          payload.conversation_id,
+          'Não foi possível carregar as conexões MCP neste turno.',
+          log,
+        );
       }
     }
 
@@ -446,7 +471,7 @@ export function createOperatorTurnHandler(deps: InboundTurnDeps) {
       declaracao_ausente: declaracao === null,
       houve_checkpoint: houveCheckpoint,
       model: agentConfig.operatorModel ?? agentConfig.model,
-      tools: mcp?.toolIds ?? [],
+      tools: [...(mcp?.toolIds ?? []), ...(mcp?.toolIdsExternos ?? [])],
     });
 
     // O RETORNO É CAPTURADO. Descartá-lo era a raiz de dois defeitos ao mesmo
@@ -455,7 +480,10 @@ export function createOperatorTurnHandler(deps: InboundTurnDeps) {
     // sobre o Conversador, não sobre o Operador.
     let saida: Awaited<ReturnType<typeof runModelCall>> | null = null;
     try {
-      if (mcp !== null) {
+      // (J) mão montada mas vazia (ex.: todas as externas marcadas ficaram
+      // `aguardando_aprovacao`) é o mesmo que não ter ferramenta nenhuma —
+      // ver o comentário de `mcpTemFerramentasParaOperador`.
+      if (mcpTemFerramentasParaOperador(mcp)) {
         saida = await runModelCall(
           pool,
           deps.llmCfg,

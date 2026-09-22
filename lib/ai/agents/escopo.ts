@@ -96,7 +96,12 @@ export async function validarEscopoDaVersao(
       .in("slug", apelidos);
     const disponiveis = new Set(
       ((data ?? []) as Array<{ tools_cache: FerramentaEmCache[] }>).flatMap((c) =>
-        c.tools_cache.map((f) => f.id).filter((id): id is string => id !== null),
+        // `recusada` não é null: o próprio cliente MCP já rejeitou esta
+        // ferramenta ao listar (nome inválido, esquema grande demais). Ela
+        // nunca vira capacidade de verdade (mcp-externo-tools.ts), então
+        // marcá-la no agente e publicar teria de recusar do mesmo jeito que
+        // uma conexão desligada — não como se estivesse disponível.
+        c.tools_cache.filter((f) => f.id !== null && f.recusada === null).map((f) => f.id as string),
       ),
     );
     const ausentes = externas.filter((id) => !disponiveis.has(id));

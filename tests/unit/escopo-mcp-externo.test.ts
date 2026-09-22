@@ -20,7 +20,7 @@ import type { FerramentaEmCache } from "@/lib/ai/mcp-externo/tipos";
 const ORG = "org-1";
 const OUTRA_ORG = "org-2";
 
-function ferramenta(apelido: string, nome: string): FerramentaEmCache {
+function ferramenta(apelido: string, nome: string, over: Partial<FerramentaEmCache> = {}): FerramentaEmCache {
   return {
     nome,
     descricao: "busca no CRM",
@@ -28,6 +28,7 @@ function ferramenta(apelido: string, nome: string): FerramentaEmCache {
     somente_leitura: true,
     id: `mcp_${apelido}__${nome}`,
     recusada: null,
+    ...over,
   };
 }
 
@@ -98,6 +99,23 @@ describe("validarEscopoDaVersao — ferramenta de conexão MCP externa em tool_i
   it("conexão de OUTRA organização com o mesmo apelido: não conta", async () => {
     const admin = adminComConexoes([
       { organization_id: OUTRA_ORG, slug: "n8n", is_active: true, tools_cache: [ferramenta("n8n", "buscar")] },
+    ]);
+    const r = await validarEscopoDaVersao(admin, ORG, { tool_ids: ["mcp_n8n__buscar"] });
+    expect(r).toEqual({ ok: false, campo: "tool_ids", ausentes: ["mcp_n8n__buscar"] });
+  });
+
+  it("(C) conexão ativa mas a ferramenta está `recusada`: não conta como disponível, publicar é recusado", async () => {
+    const admin = adminComConexoes([
+      {
+        organization_id: ORG,
+        slug: "n8n",
+        is_active: true,
+        tools_cache: [
+          ferramenta("n8n", "buscar", {
+            recusada: "O esquema desta ferramenta é grande demais.",
+          }),
+        ],
+      },
     ]);
     const r = await validarEscopoDaVersao(admin, ORG, { tool_ids: ["mcp_n8n__buscar"] });
     expect(r).toEqual({ ok: false, campo: "tool_ids", ausentes: ["mcp_n8n__buscar"] });

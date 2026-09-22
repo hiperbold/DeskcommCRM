@@ -137,7 +137,7 @@ import {
   openHumanCaseInputSchema,
   provideCaseUpdateInputSchema,
 } from './human-cases';
-import { buildMcpTurnTools } from '../edge/crm/mcp-tools';
+import { montarFerramentasDoTurno } from '../edge/crm/ferramentas-do-turno';
 import { cancelPendingCronsForLead } from '../cron/scheduler';
 import {
   latestInboundSignal,
@@ -1493,6 +1493,50 @@ export async function avisarCapacidadesAusentes(
       error: (err instanceof Error ? err.message : String(err)).slice(0, 120),
     });
   }
+}
+
+/**
+ * As mensagens fixas que uma leva de `puladas` (montagem de ferramentas MCP
+ * externas) produz para a Central — PURA, sem banco: só decide O QUÊ avisar,
+ * nunca escreve. Testável sem pool falso nem texto-fonte.
+ *
+ * `entregue_ao_operador` NUNCA aparece aqui: é o resultado ESPERADO da regra
+ * de F (a externa de escrita foi para o Operador de propósito), não uma
+ * falha — avisar a Central por isso ensinaria a ignorar o aviso.
+ *
+ * `conexao_indisponivel` é a única com texto DINÂMICO (carrega os ids): é a
+ * frase que já existia antes desta tarefa, mantida como estava. As outras
+ * duas são fixas — ver o motivo de cada uma no comentário de cada `if`.
+ */
+export function mensagensDePuladasParaAvisar(
+  puladas: ReadonlyArray<{ id: string; motivo: string }>,
+): string[] {
+  const mensagens: string[] = [];
+
+  const indisponiveis = puladas.filter((p) => p.motivo === 'conexao_indisponivel');
+  if (indisponiveis.length > 0) {
+    mensagens.push('conexão MCP indisponível: ' + indisponiveis.map((p) => p.id).join(', '));
+  }
+
+  // Ferramenta nova, ou cujo esquema/descrição mudou desde a última aprovação
+  // (achado da auditoria das Tarefas 4-5): quem resolve é o admin, na tela de
+  // Conexões MCP — o aviso manda direto para lá.
+  if (puladas.some((p) => p.motivo === 'aguardando_aprovacao')) {
+    mensagens.push(
+      'Há ferramentas de conexão MCP marcadas no agente aguardando aprovação do admin em IA › Conexões MCP. Elas não rodam até serem aprovadas.',
+    );
+  }
+
+  // O cliente MCP já recusou a ferramenta ao listar (nome inválido, esquema
+  // grande demais) ou o esquema não sobreviveu a `normalizarEsquema`: as duas
+  // são "esta ferramenta nunca vai funcionar assim", e compartilham a frase.
+  if (puladas.some((p) => p.motivo === 'recusada' || p.motivo === 'esquema_invalido')) {
+    mensagens.push(
+      'Uma ferramenta de conexão MCP marcada no agente foi recusada (esquema grande ou inválido) e não roda.',
+    );
+  }
+
+  return mensagens;
 }
 
 /**
@@ -3341,6 +3385,10 @@ async function executarTurnoDoAgente(
   // role/scope da ponte nativa; envio e handoff do catálogo são bloqueados —
   // ver edge/crm/mcp-tools.ts). As 8 tools do engine têm precedência de nome.
   let mcpCleanup: (() => Promise<void>) | null = null;
+  // (H) ids externos que a montagem aprovou como CONSULTA
+  // (`somente_leitura_confirmado === true`) — é o único conjunto que a
+  // prévia pode liberar; ela nunca decide sozinha (ver preview.ts).
+  let mcpExternasDeConsulta: Set<string> = new Set();
   try {
     if (agentConfig !== null && agentConfig.toolIds.length > 0) {
       try {
@@ -3364,15 +3412,22 @@ async function executarTurnoDoAgente(
             entregues: catalogoEntregue,
           });
         }
-        const mcp = await buildMcpTurnTools(
+        const mcp = await montarFerramentasDoTurno(
           deps.crmCfg,
           { organizationId: tenantId, jobId: preview?.runId ?? liveJob().id },
           configDoTurno,
           runLog,
           preview ? { readOnly: true } : undefined,
+          {},
+          // (F) a mesma regra do catálogo (`catalogoEntregueAoOperador`), para as
+          // externas: quando o Operador está ligado e também tem o id marcado, só
+          // a externa CONFIRMADA como consulta continua com o Conversador — o
+          // resto (escrita) é entregue ao Operador, que é quem deve executá-la.
+          { operadorLigado: agentConfig.operatorEnabled, ferramentasDoOperador: agentConfig.operatorToolIds },
         );
         if (mcp !== null) {
           mcpCleanup = mcp.cleanup;
+          mcpExternasDeConsulta = mcp.externasDeConsulta;
           for (const [name, mcpTool] of Object.entries(mcp.tools)) {
             if (name in rawTools) continue;
             // Marca a EXECUÇÃO (não só a decisão de chamar) — é isso que o agendaStallGate
@@ -3390,8 +3445,29 @@ async function executarTurnoDoAgente(
               rawTools[name] = mcpTool;
             }
           }
+          // Só os ids do catálogo (D16) — ver o comentário em ferramentas-do-turno.ts.
           mcpToolIdsDoTurno.push(...mcp.toolIds);
-          runLog.info('tools MCP da tela montadas no turno', { mcp_tool_ids: mcp.toolIds });
+          runLog.info('tools MCP da tela montadas no turno', {
+            mcp_tool_ids: mcp.toolIds,
+            mcp_externas: mcp.toolIdsExternos,
+          });
+          if (mcp.puladas.length > 0) {
+            // (A) `puladas` é POLÍTICA (esquema inválido, sem decisão do admin,
+            // entregue ao Operador, só-leitura fora da prévia...), nunca um erro
+            // do turno. Empurrar um impediment aqui preenche `impediments[0]`
+            // mesmo quando o rascunho terminou com corpo — e
+            // `reply-drafts.ts` grava `error_code = impediments[0]?.code` na
+            // MESMA linha que marca o rascunho como sucesso (`status='pending'`).
+            // Um `capabilities_unavailable` ali corrompe esse contrato: o
+            // rascunho aparentaria erro sem ter um. Só log; quem decide o
+            // `error_code` de verdade é o gate de envio.
+            runLog.info('ferramentas MCP externas puladas no turno', { puladas: mcp.puladas });
+            if (!preview) {
+              for (const mensagem of mensagensDePuladasParaAvisar(mcp.puladas)) {
+                await avisarCapacidadesAusentes(pool, tenantId, input.conversationId, mensagem, runLog);
+              }
+            }
+          }
         }
       } catch (err) {
         // Tool extra é privilégio, não invariante: falha no mint/montagem NÃO
@@ -3411,7 +3487,18 @@ async function executarTurnoDoAgente(
             code: 'capabilities_unavailable',
             message: 'Não foi possível carregar as capacidades configuradas.',
           });
-        else await avisarCapacidadesAusentes(pool, tenantId, input.conversationId, detalhe, runLog);
+        // (I) `detalhe` (texto de `err.message`) fica só no log: a Central é
+        // superfície de operador, não de depuração, e o erro técnico pode
+        // ecoar o que um servidor de terceiro respondeu. A frase fixa é o que
+        // vai para quem lê o aviso.
+        else
+          await avisarCapacidadesAusentes(
+            pool,
+            tenantId,
+            input.conversationId,
+            'Não foi possível carregar as conexões MCP neste turno.',
+            runLog,
+          );
       }
     }
 
@@ -3466,6 +3553,8 @@ async function executarTurnoDoAgente(
                 toolCalledThisTurn: agendaToolCalledThisTurn,
               },
             }),
+            // (H) só os ids externos que a montagem aprovou como consulta.
+            mcpExternasDeConsulta,
           )
         : rawTools;
     const tools = wrapToolsWithBreaker(previewTools, {
