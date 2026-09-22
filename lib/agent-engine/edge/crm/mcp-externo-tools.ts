@@ -287,7 +287,7 @@ export async function buildExternalMcpTools(
         try {
           const sessao = await sessaoDe(partes!.apelido);
           const resultado = await chamarFerramenta(sessao, ferramenta.nome, (args ?? {}) as Record<string, unknown>);
-          log.info("ferramenta MCP externa chamada", { tool: id, ok: resultado.ok, cortada: resultado.cortada });
+          log.info("ferramenta MCP externa chamada", { tool: id, ok: resultado.ok, cortada: resultado.cortada, motivo: resultado.motivo ?? null });
           if (ferramenta.somente_leitura_confirmado === false) {
             await auditarChamadaDeEscrita({
               organizationId,

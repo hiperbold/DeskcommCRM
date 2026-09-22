@@ -239,6 +239,13 @@ export interface ResultadoDaChamada {
   dados: string;
   cortada: boolean;
   aviso: string;
+  /**
+   * Só quando `ok` é false: código FIXO da falha, para o log. Sem ele o log do
+   * turno dizia só `ok:false` e não dava para separar prazo estourado de
+   * recusa do servidor (validação com o DeepWiki, 22/09/2026). Nunca carrega
+   * texto do servidor.
+   */
+  motivo?: "servidor_recusou" | "sem_resposta" | "falha";
 }
 
 export async function chamarFerramenta(
@@ -270,12 +277,14 @@ export async function chamarFerramenta(
       dados: cortada ? `${texto.slice(0, CORTE_DA_RESPOSTA)}\n[resposta cortada]` : texto,
       cortada,
       aviso: AVISO,
+      ...(r.isError === true ? { motivo: "servidor_recusou" as const } : {}),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const dados = /sem_resposta|timed out|timeout/i.test(msg)
+    const semResposta = /sem_resposta|timed out|timeout/i.test(msg);
+    const dados = semResposta
       ? "O sistema externo não respondeu a tempo. Diga ao cliente que vai confirmar a informação."
       : "O sistema externo recusou ou falhou. Diga ao cliente que vai confirmar a informação.";
-    return { ok: false, dados, cortada: false, aviso: AVISO };
+    return { ok: false, dados, cortada: false, aviso: AVISO, motivo: semResposta ? "sem_resposta" : "falha" };
   }
 }
