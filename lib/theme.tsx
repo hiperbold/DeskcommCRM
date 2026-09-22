@@ -21,15 +21,20 @@ type ThemeContextValue = {
 
 const ThemeContext = React.createContext<ThemeContextValue | null>(null);
 
+// Padrão do fork Hiperbold: claro. O autor seguia o tema do sistema, e num
+// Windows escuro o CRM abria escuro sem ninguém ter escolhido. "system" e
+// "dark" continuam disponíveis no seletor; só o padrão mudou.
+const TEMA_PADRAO: Theme = "light";
+
 function readStoredTheme(): Theme {
-  if (typeof window === "undefined") return "system";
+  if (typeof window === "undefined") return TEMA_PADRAO;
   try {
     const v = window.localStorage.getItem(STORAGE_KEY);
     if (v === "light" || v === "dark" || v === "system") return v;
   } catch {
     // localStorage indisponível (modo privado, sandbox) — segue com default.
   }
-  return "system";
+  return TEMA_PADRAO;
 }
 
 function getSystemTheme(): ResolvedTheme {
@@ -78,7 +83,7 @@ function getTemaSnapshot(): Theme {
   return temaEmCache;
 }
 function getTemaSnapshotDoServidor(): Theme {
-  return "system";
+  return TEMA_PADRAO;
 }
 function inscreverEmTema(ouvinte: Ouvinte): () => void {
   ouvintesDeTema.add(ouvinte);
