@@ -16,6 +16,7 @@
  * renderiza. Regra dentro de `onChange` é regra que nunca é exercitada.
  */
 import * as React from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +42,14 @@ import {
   type CapacidadeSelecionavel,
 } from "@/lib/mcp/tools/selecao-por-pacote";
 
-/** O que a rota `/api/v1/mcp/tools` serve (snake_case no wire). */
+/**
+ * O que a rota `/api/v1/mcp/tools` serve (snake_case no wire).
+ *
+ * `conexao` e `somente_leitura_confirmado` só existem na ferramenta que vem de
+ * `/api/v1/ai/mcp/ferramentas` (conexão MCP externa) — é a presença de
+ * `conexao` que a ficha usa para saber que precisa mostrar o selo de
+ * aprovação; uma capacidade do catálogo nunca tem esse campo.
+ */
 export interface McpToolMeta extends CapacidadeSelecionavel {
   id: string;
   description: string;
@@ -53,6 +61,8 @@ export interface McpToolMeta extends CapacidadeSelecionavel {
   o_que_toca: string;
   risco: ToolRisk;
   pacotes: ReadonlyArray<ToolBundle>;
+  conexao?: { apelido: string; nome: string };
+  somente_leitura_confirmado?: boolean | null;
 }
 
 interface Props {
@@ -79,6 +89,35 @@ function BadgeRisco({ risco }: { risco: ToolRisk }) {
   return (
     <Badge variant="outline" className={`text-[11px] ${CLASSE_RISCO[risco]}`} title={t(meta.explicacao)}>
       {t(meta.rotulo)}
+    </Badge>
+  );
+}
+
+/**
+ * O estado de aprovação de uma ferramenta de conexão MCP — nada a ver com
+ * `risco` (que é o que ela FAZ). `true`/`false` são a decisão do admin
+ * (Tarefa 11); `null` é "o servidor sugeriu, ninguém confirmou ainda", e por
+ * isso pode ser marcada no agente, mas não roda sem essa confirmação.
+ */
+function BadgeAprovacao({ aprovacao }: { aprovacao: boolean | null | undefined }) {
+  const t = useT();
+  if (aprovacao === true) {
+    return (
+      <Badge variant="outline" className="text-[11px] border-border/60 text-muted-foreground">
+        {t("Só consulta")}
+      </Badge>
+    );
+  }
+  if (aprovacao === false) {
+    return (
+      <Badge variant="outline" className="text-[11px] border-amber-500/40 text-amber-700 dark:text-amber-400">
+        {t("Altera dados")}
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="outline" className="text-[11px] border-amber-500/40 text-amber-700 dark:text-amber-400">
+      {t("Aguardando aprovação")}
     </Badge>
   );
 }
@@ -121,9 +160,30 @@ function FichaCapacidade({
         <span className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-medium">{t(capacidade.rotulo)}</span>
           <BadgeRisco risco={capacidade.risco} />
+          {/*
+            `risco` de uma ferramenta externa É a confirmação: a rota
+            calcula "seguro" só quando `somente_leitura_confirmado === true`
+            (ver `app/api/v1/ai/mcp/ferramentas/route.ts`). Nesse caso o selo
+            de risco já diz "Só consulta" — repetir aqui seria o MESMO texto
+            duas vezes na mesma ficha. O selo de aprovação só soma
+            informação quando distingue "Altera dados" (confirmado) de
+            "Aguardando aprovação" (ninguém decidiu ainda), coisa que o selo
+            de risco sozinho não separa.
+          */}
+          {capacidade.conexao && capacidade.somente_leitura_confirmado !== true ? (
+            <BadgeAprovacao aprovacao={capacidade.somente_leitura_confirmado} />
+          ) : null}
           <span className="text-xs text-muted-foreground">· {t(capacidade.o_que_toca)}</span>
         </span>
         <span className="block text-xs text-muted-foreground">{t(capacidade.explicacao)}</span>
+        {capacidade.conexao && capacidade.somente_leitura_confirmado == null ? (
+          <span
+            data-testid={`aviso-aprovacao-${capacidade.name}`}
+            className="block text-xs text-amber-700 dark:text-amber-400"
+          >
+            {t("Não roda até o admin aprovar em IA › Conexões MCP.")}
+          </span>
+        ) : null}
         {mostrarNomeTecnico ? (
           <code className="block font-mono text-[11px] text-muted-foreground">
             {capacidade.name}
@@ -149,11 +209,60 @@ export function ToolPicker({ value, onChange, disabled }: Props) {
     staleTime: 60_000,
   });
 
-  const catalogo = React.useMemo<McpToolMeta[]>(() => query.data ?? [], [query.data]);
+  /**
+   * As ferramentas das conexões MCP da organização, numa consulta SEPARADA:
+   * quem falha aqui não pode derrubar o catálogo interno, que é o essencial da
+   * tela. `staleTime` igual ao do catálogo — as duas envelhecem juntas.
+   */
+  const queryExternas = useQuery({
+    queryKey: ["mcp", "externas"],
+    queryFn: async () => {
+      const res = await apiClient.get<ApiResponse>("/api/v1/ai/mcp/ferramentas");
+      return res.data.tools.map((t) => ({ ...t, name: t.id })) as McpToolMeta[];
+    },
+    staleTime: 60_000,
+  });
+
+  const doCatalogo = React.useMemo<McpToolMeta[]>(() => query.data ?? [], [query.data]);
+  const externas = React.useMemo<McpToolMeta[]>(() => queryExternas.data ?? [], [queryExternas.data]);
+
+  /**
+   * Contagem, órfãs, `alternarCapacidade` e as funções de pacote precisam da
+   * lista JUNTA: uma capacidade MCP marcada é uma capacidade que ocupa vaga do
+   * mesmo teto, e um id `mcp_*` só deixa de ser órfão se aparecer aqui. O modo
+   * avançado continua olhando só `doCatalogo` — a externa já tem casa própria,
+   * a seção "Conexões MCP", e duplicá-la lá seria mostrar a mesma ficha duas
+   * vezes.
+   */
+  const catalogo = React.useMemo<McpToolMeta[]>(
+    () => [...doCatalogo, ...externas],
+    [doCatalogo, externas],
+  );
   const porNome = React.useMemo(
     () => new Map(catalogo.map((c) => [c.name, c])),
     [catalogo],
   );
+
+  /**
+   * Enquanto a primeira carga das externas não termina, `catalogo` ainda não
+   * tem os ids `mcp_*` que já estavam marcados — ligar um pacote agora
+   * apagaria essas marcas em silêncio (`ligarPacote` só preserva o que está na
+   * lista que recebe). Trava o toggle até a lista estar completa.
+   */
+  const externasCarregando = queryExternas.isLoading;
+
+  /** Ferramentas externas agrupadas por conexão, na ordem em que chegaram. */
+  const porConexao = React.useMemo(() => {
+    const grupos = new Map<string, { nome: string; ferramentas: McpToolMeta[] }>();
+    for (const ferramenta of externas) {
+      const chave = ferramenta.conexao?.apelido ?? ferramenta.o_que_toca;
+      const nome = ferramenta.conexao?.nome ?? ferramenta.o_que_toca;
+      const grupo = grupos.get(chave) ?? { nome, ferramentas: [] };
+      grupo.ferramentas.push(ferramenta);
+      grupos.set(chave, grupo);
+    }
+    return [...grupos.values()];
+  }, [externas]);
 
   const vagas = vagasRestantes(value);
   const cheio = vagas <= 0;
@@ -280,7 +389,7 @@ export function ToolPicker({ value, onChange, disabled }: Props) {
                   data-testid={`switch-pacote-${pacote.id}`}
                   checked={estado === "ligado"}
                   onCheckedChange={(v) => alternarPacote(pacote.id, v)}
-                  disabled={disabled || vazio}
+                  disabled={disabled || vazio || externasCarregando}
                   aria-label={pacote.rotulo}
                 />
                 <div className="flex-1 space-y-1">
@@ -335,6 +444,55 @@ export function ToolPicker({ value, onChange, disabled }: Props) {
         })}
       </div>
 
+      {/*
+        Ferramentas de conexões MCP — cada uma é uma capacidade própria, uma a
+        uma, nunca por pacote (elas nascem com `pacotes: []`). Falha na
+        consulta não pode levar a tela de catálogo junto: mostra o aviso aqui
+        dentro, sem barrar mais nada.
+      */}
+      <div className="space-y-3 rounded-md border border-border/60 p-4" data-testid="secao-mcp-externo">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">{t("Conexões MCP")}</h3>
+          <Link
+            href="/app/ai/mcp"
+            className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+          >
+            {t("Gerenciar conexões MCP")}
+          </Link>
+        </div>
+
+        {queryExternas.isError ? (
+          <p className="text-xs text-muted-foreground" data-testid="mcp-externo-erro">
+            {t("Não foi possível carregar as ferramentas das conexões MCP.")}
+          </p>
+        ) : porConexao.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "Nenhuma conexão MCP. Conecte um servidor em IA › Conexões MCP para dar ferramentas de outros sistemas ao agente.",
+            )}
+          </p>
+        ) : (
+          porConexao.map((grupo) => (
+            <div key={grupo.nome} className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">{grupo.nome}</p>
+              {grupo.ferramentas.map((ferramenta) => {
+                const marcada = value.includes(ferramenta.name);
+                return (
+                  <FichaCapacidade
+                    key={ferramenta.name}
+                    capacidade={ferramenta}
+                    marcada={marcada}
+                    bloqueada={!marcada && cheio}
+                    onToggle={() => alternarCapacidade(ferramenta.name)}
+                    disabled={disabled}
+                  />
+                );
+              })}
+            </div>
+          ))
+        )}
+      </div>
+
       {/* Modo avançado: a lista inteira, capacidade por capacidade. */}
       <div className="space-y-2">
         <button
@@ -357,7 +515,7 @@ export function ToolPicker({ value, onChange, disabled }: Props) {
                 "Cada linha é uma capacidade. O nome em cinza é como ela aparece para quem integra o sistema por fora.",
               )}
             </p>
-            {catalogo.map((capacidade) => {
+            {doCatalogo.map((capacidade) => {
               const marcada = value.includes(capacidade.name);
               return (
                 <FichaCapacidade

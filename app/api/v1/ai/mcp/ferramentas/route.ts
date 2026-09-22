@@ -56,6 +56,12 @@ function ferramentasDaConexao(conexao: ConexaoPublica) {
         risco: leitura ? "seguro" : "critico",
         pacotes: [] as string[],
         conexao: { apelido: conexao.apelido, nome: conexao.nome },
+        // Campo lido pelo ToolPicker (Tarefa 10) para mostrar os três estados de
+        // aprovação. `risco`/`leitura` acima já colapsam `false` e `null` no
+        // mesmo "crítico" (fail-closed: sem confirmação, trata como escrita);
+        // este campo preserva a distinção entre "admin confirmou que altera
+        // dados" e "ninguém decidiu ainda", que a tela precisa mostrar.
+        somente_leitura_confirmado: f.somente_leitura_confirmado ?? null,
       };
     });
 }

@@ -8177,6 +8177,20 @@ export const DICIONARIO: Traducoes = {
     es: "El agente hace algo que sale del sistema o no tiene vuelta atrás — como hablar con el cliente de verdad. Tiene que ser activado por ti, una por una.",
   },
 
+  // ─── ToolPicker (seção "Conexões MCP" — Tarefa 10) ───
+  "Aguardando aprovação": { es: "Esperando aprobación" },
+  "Não roda até o admin aprovar em IA › Conexões MCP.": {
+    es: "No se ejecuta hasta que el admin lo apruebe en IA › Conexiones MCP.",
+  },
+  "Conexões MCP": { es: "Conexiones MCP" },
+  "Gerenciar conexões MCP": { es: "Gestionar conexiones MCP" },
+  "Não foi possível carregar as ferramentas das conexões MCP.": {
+    es: "No se pudieron cargar las herramientas de las conexiones MCP.",
+  },
+  "Nenhuma conexão MCP. Conecte um servidor em IA › Conexões MCP para dar ferramentas de outros sistemas ao agente.": {
+    es: "Ninguna conexión MCP. Conecta un servidor en IA › Conexiones MCP para darle al agente herramientas de otros sistemas.",
+  },
+
   // ─── lib/mcp/tools/catalogo/*.ts (capacidades do agente — rotulo/explicacao/oQueToca) ───
   "Abre a ficha completa de um cliente: dados de contato, histórico e por onde ele chegou até a empresa.": {
     es: "Abre la ficha completa de un cliente: datos de contacto, historial y por dónde llegó hasta la empresa.",

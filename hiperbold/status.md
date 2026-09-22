@@ -23,7 +23,7 @@ Atualizado em 21/09/2026. **Implementação em andamento (retomada em 21/09).** 
 | 7 | API (só admin cadastra e mexe; gerente vê as ferramentas; limite de 10 tentativas a cada 10 min) | ✅ feita, auditada e com ajustes | ver commit da Tarefa 7 |
 | 8 | Publicar/duplicar/reverter aceitam ferramenta externa (e recusam se a conexão foi desligada) | ✅ feita | ver commit da Tarefa 8 |
 | 9 | Ferramentas externas no turno do agente (só roda o que o admin aprovou; Testar só roda consulta; falha externa não derruba o turno; escrita auditada) | ✅ feita, revisada duas vezes e auditada | ver commit da Tarefa 9 |
-| 10 | Tela de capacidades | ⏸️ não iniciada | |
+| 10 | Tela de capacidades (seção Conexões MCP, estado de aprovação, conta no teto de 25) | ✅ feita | ver commit da Tarefa 10 |
 | 11 | Tela "Conexões MCP" | ⏸️ não iniciada | |
 | 12 | Portões completos | ⏸️ não iniciada | |
 | 13 | Validação com 3 servidores MCP reais (com o Filipe) | ⏸️ não iniciada | |
