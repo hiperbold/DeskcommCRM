@@ -571,6 +571,13 @@ export const AUDIT_ACTIONS = [
   // limite de tentativas (10 a cada 10 min) fazer sentido no painel depois. O
   // metadata carrega só apelido e status; nunca o motivo cru do repositório.
   "ai_mcp_connection.attempt_rejected",
+  // Aprovação por ferramenta (Tarefa 11): o admin decide, ferramenta a
+  // ferramenta, se ela "só consulta", "altera dados" ou volta a "aguardando
+  // aprovação". Ação própria porque não é editar a conexão (nome, estado,
+  // cabeçalho) nem reconectar (atualizar o cache inteiro) — é uma decisão de
+  // risco sobre UMA linha de `tools_cache`, e o painel precisa achar quem
+  // decidiu o quê sem vasculhar o metadata de `.updated`.
+  "ai_mcp_connection.tool_approval_updated",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

@@ -55,6 +55,11 @@ const MOTIVO_URL_COM_CREDENCIAL = "Não coloque usuário e senha no endereço. U
 const MOTIVO_CHAVE_ILEGIVEL = "A chave de acesso salva não pôde ser lida. Cadastre a chave de novo.";
 const MOTIVO_NAO_ENCONTRADA = "Conexão não encontrada";
 const MOTIVO_CONFLITO_DE_ESCRITA = "A conexão foi alterada por outra pessoa enquanto atualizava. Tente de novo.";
+const MOTIVO_FERRAMENTA_NAO_ENCONTRADA = "Ferramenta não encontrada nesta conexão";
+const MOTIVO_FERRAMENTA_RECUSADA = "Esta ferramenta foi recusada e não pode ser aprovada";
+const MOTIVO_FERRAMENTA_DUPLICADA = "O servidor lista duas ferramentas com o mesmo nome; corrija no servidor MCP.";
+const MOTIVO_VERSAO_DESATUALIZADA =
+  "A lista de ferramentas mudou desde que você abriu a tela. Recarregue e aprove de novo.";
 /** Código Postgres de violação de unicidade (`ai_mcp_connections_org_slug_key`). */
 const CODIGO_UNIQUE_VIOLATION = "23505";
 /** Código PostgREST quando `.single()` não encontra nenhuma linha (0 casaram). */
@@ -131,6 +136,7 @@ export function paraPublica(linha: LinhaDaConexao): ConexaoPublica {
     ferramentas: linha.tools_cache,
     ferramentas_atualizadas_em: linha.tools_refreshed_at,
     ultimo_erro: linha.last_error,
+    atualizada_em: linha.updated_at,
   };
 }
 
@@ -198,6 +204,13 @@ function urlTemCredencial(url: string): boolean {
  * `null` (sem decisão) para ferramenta nova ou que mudou. `anteriores: []`
  * (conexão nova) já cai no caso "mudou" para todas, então serve tanto para
  * `criarConexao` quanto para `atualizarFerramentas`.
+ *
+ * Também mantém `mudou_desde_aprovacao` (auditoria, Tarefa 11): fica `true`
+ * quando a ferramenta TINHA uma decisão real (`true`/`false`, não `null`) e a
+ * perdeu porque descrição ou esquema mudaram aqui — é o único lugar em que dá
+ * pra saber isso, porque depois deste map o cache só guarda o valor NOVO de
+ * `somente_leitura_confirmado`, que já é `null` tanto pra "nunca decidida"
+ * quanto pra "decidida e mudou por baixo".
  */
 function combinarComConfirmacaoAnterior(
   anteriores: readonly FerramentaEmCache[],
@@ -206,11 +219,33 @@ function combinarComConfirmacaoAnterior(
   const porNome = new Map(anteriores.map((f) => [f.nome, f] as const));
   return novas.map((f) => {
     const antiga = porNome.get(f.nome);
-    const mudou =
-      !antiga ||
-      antiga.descricao !== f.descricao ||
-      JSON.stringify(antiga.input_schema) !== JSON.stringify(f.input_schema);
-    return { ...f, somente_leitura_confirmado: mudou ? null : (antiga.somente_leitura_confirmado ?? null) };
+
+    // Ferramenta nova (sem `antiga`): nunca foi decidida, então nunca "mudou
+    // desde a última aprovação" — não existe aprovação anterior pra perder.
+    if (!antiga) return { ...f, somente_leitura_confirmado: null, mudou_desde_aprovacao: false };
+
+    const conteudoMudou =
+      antiga.descricao !== f.descricao || JSON.stringify(antiga.input_schema) !== JSON.stringify(f.input_schema);
+
+    // Conteúdo igual: nada aconteceu aqui, mantém decisão E bandeira como
+    // estavam — não é este `f` que decide se a bandeira liga ou desliga.
+    if (!conteudoMudou) {
+      return {
+        ...f,
+        somente_leitura_confirmado: antiga.somente_leitura_confirmado ?? null,
+        mudou_desde_aprovacao: antiga.mudou_desde_aprovacao ?? false,
+      };
+    }
+
+    // Conteúdo mudou: a confirmação anterior não vale mais. A bandeira só
+    // liga se havia uma decisão REAL pra perder — uma ferramenta que já
+    // estava "aguardando aprovação" não tinha nada que o admin viu e mudou.
+    const tinhaDecisaoReal = antiga.somente_leitura_confirmado === true || antiga.somente_leitura_confirmado === false;
+    return {
+      ...f,
+      somente_leitura_confirmado: null,
+      mudou_desde_aprovacao: tinhaDecisaoReal ? true : (antiga.mudou_desde_aprovacao ?? false),
+    };
   });
 }
 
@@ -402,6 +437,89 @@ export async function atualizarFerramentas(
     throw new Error(`ai_mcp_connections_atualizar_falhou: ${erroAtualizacao.message}`);
   }
   if (!atualizada) throw new Error("ai_mcp_connections_atualizar_falhou: sem linha devolvida");
+  return { ok: true, conexao: paraPublica(atualizada as unknown as LinhaDaConexao) };
+}
+
+export type ResultadoDaAprovacao =
+  | { ok: true; conexao: ConexaoPublica }
+  | { ok: false; status: 404 | 409 | 422; motivo: string };
+
+/**
+ * Grava a decisão do admin sobre o risco de UMA ferramenta (Tarefa 11):
+ * `true` ("Só consulta", roda no turno real e no Testar), `false` ("Altera
+ * dados", só no turno real) ou `null` (volta a "Aguardando aprovação" — não
+ * roda em lugar nenhum; serve pra desfazer uma aprovação sem reconectar no
+ * servidor).
+ *
+ * Ferramenta inexistente no cache ou `recusada` (esquema grande ou inválido,
+ * ou nome que não vira id) recusa com 422: a primeira porque não há o que
+ * aprovar, a segunda porque `recusada` já é a palavra final sobre ela — uma
+ * ferramenta que o servidor nem consegue expor como capacidade não tem risco
+ * pra decidir. Mais de uma linha do cache com o MESMO `nome` (o servidor de
+ * terceiro declarou a ferramenta duas vezes) também recusa com 422: não há
+ * como saber qual das duas o admin está decidindo.
+ *
+ * ─── `versao`: a aprovação é sobre o que o admin VIU, não o que está agora ──
+ *
+ * `versao` é o `atualizada_em` (`updated_at`) que a TELA tinha quando o admin
+ * clicou — acompanha o `tools_cache` que ele leu e decidiu em cima. Se a
+ * linha já mudou (outra aprovação, um "Atualizar ferramentas", uma edição)
+ * entre a tela carregar e este clique, `versao` não bate com `linha.updated_at`
+ * e a chamada recusa com 409 ANTES de tocar em qualquer ferramenta — aprovar
+ * "às cegas" sobre um cache que o admin nunca viu seria pior que não aprovar.
+ *
+ * Isso é INDEPENDENTE da trava otimista abaixo (M1, como em
+ * `atualizarFerramentas`): aquela pega a corrida entre ESTA leitura e ESTA
+ * escrita (a janela é pequena, mas existe); esta aqui pega a corrida entre a
+ * tela ter carregado e o clique, que pode ser minutos. As duas checam o
+ * MESMO `updated_at`, mas em momentos diferentes, e as duas ficam.
+ */
+export async function aprovarFerramenta(
+  admin: SupabaseClient,
+  organizationId: string,
+  id: string,
+  nomeDaFerramenta: string,
+  somenteLeituraConfirmado: boolean | null,
+  versao: string,
+): Promise<ResultadoDaAprovacao> {
+  const linha = await buscarLinha(admin, organizationId, id);
+  if (!linha) return { ok: false, status: 404, motivo: MOTIVO_NAO_ENCONTRADA };
+  if (versao !== linha.updated_at) return { ok: false, status: 409, motivo: MOTIVO_VERSAO_DESATUALIZADA };
+
+  const candidatas = linha.tools_cache.filter((f) => f.nome === nomeDaFerramenta);
+  if (candidatas.length === 0) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_NAO_ENCONTRADA };
+  if (candidatas.length > 1) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_DUPLICADA };
+  const ferramenta = candidatas[0]!;
+  if (ferramenta.recusada) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_RECUSADA };
+
+  const novoCache = linha.tools_cache.map((f) =>
+    f.nome === nomeDaFerramenta
+      ? {
+          ...f,
+          somente_leitura_confirmado: somenteLeituraConfirmado,
+          // Uma decisão REAL (não o "desfazer" `null`) apaga o aviso de
+          // "mudou desde a última aprovação": o admin acabou de ver o texto
+          // atual e decidir sobre ele, então não há mais nada pendente.
+          ...(somenteLeituraConfirmado !== null ? { mudou_desde_aprovacao: false } : {}),
+        }
+      : f,
+  );
+
+  const { data: atualizada, error } = await admin
+    .from("ai_mcp_connections")
+    .update({ tools_cache: novoCache })
+    .eq("id", id)
+    .eq("organization_id", organizationId)
+    .eq("updated_at", linha.updated_at)
+    .select(COLUNAS)
+    .single();
+  if (error) {
+    if ((error as { code?: string }).code === CODIGO_SEM_LINHAS) {
+      return { ok: false, status: 409, motivo: MOTIVO_CONFLITO_DE_ESCRITA };
+    }
+    throw new Error(`ai_mcp_connections_aprovar_falhou: ${error.message}`);
+  }
+  if (!atualizada) throw new Error("ai_mcp_connections_aprovar_falhou: sem linha devolvida");
   return { ok: true, conexao: paraPublica(atualizada as unknown as LinhaDaConexao) };
 }
 

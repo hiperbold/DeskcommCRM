@@ -359,6 +359,24 @@ export const NAV_CATALOG = [
     minRole: "manager",
   },
   {
+    // ⚠️ ERA "manager" no plano original. A GET desta conexão (Tarefa 6/7,
+    // `app/api/v1/ai/mcp/conexoes/route.ts`) já exige `admin` mesmo pra
+    // LISTAR — achado da própria auditoria: a conexão expõe endereço, nome
+    // das ferramentas do servidor de terceiro e se há credencial configurada,
+    // dado que quem só edita agente não deveria ver. Deixar a porta em
+    // "manager" mandaria um manager pra uma tela cuja primeira chamada de
+    // rede devolve 403. `minRole: "admin"` alinha a porta ao que a rota já
+    // faz — ver e marcar ferramenta NO AGENTE continua "manager", por
+    // `/api/v1/ai/mcp/ferramentas`, usado pelo ToolPicker.
+    href: "/app/ai/mcp",
+    label: "Conexões MCP",
+    description: "Ferramentas de outros sistemas que o agente consulta ou aciona durante o atendimento.",
+    icon: "Plug",
+    group: "ia",
+    section: "Ensinar o agente",
+    minRole: "admin",
+  },
+  {
     href: "/app/ai/cases",
     label: "Casos",
     description: "Os atendimentos que o agente conduziu, do início ao desfecho.",

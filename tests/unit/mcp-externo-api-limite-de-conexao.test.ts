@@ -62,6 +62,7 @@ function conexaoBase(): ConexaoPublica {
     ferramentas: [],
     ferramentas_atualizadas_em: null,
     ultimo_erro: null,
+    atualizada_em: "2026-01-01T00:00:00.000Z",
   };
 }
 

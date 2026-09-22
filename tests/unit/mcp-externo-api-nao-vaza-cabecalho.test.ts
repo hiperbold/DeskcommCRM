@@ -58,6 +58,7 @@ const CONEXAO_COM_CABECALHO: ConexaoPublica = {
   ],
   ferramentas_atualizadas_em: "2026-09-21T12:00:00Z",
   ultimo_erro: null,
+  atualizada_em: "2026-09-21T12:00:00Z",
 };
 
 beforeEach(() => {

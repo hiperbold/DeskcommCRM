@@ -13,6 +13,7 @@ import { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { loadAuthUser } from "@/lib/auth/server";
 import {
+  aprovarFerramenta,
   atualizarFerramentas,
   criarConexao,
   editarConexao,
@@ -30,6 +31,7 @@ vi.mock("@/lib/ai/mcp-externo/conexoes", () => ({
   editarConexao: vi.fn(),
   removerConexao: vi.fn(),
   atualizarFerramentas: vi.fn(),
+  aprovarFerramenta: vi.fn(),
 }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn(() => ({})) }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn().mockResolvedValue(undefined) }));
@@ -112,6 +114,7 @@ const CONEXAO: ConexaoPublica = {
   ferramentas: [],
   ferramentas_atualizadas_em: null,
   ultimo_erro: null,
+  atualizada_em: "2026-01-01T00:00:00.000Z",
 };
 
 function reqJson(url: string, method: string, body?: unknown): NextRequest {
@@ -669,5 +672,230 @@ describe("GET /api/v1/ai/mcp/ferramentas", () => {
     expect(body.data.tools[0]?.description).toHaveLength(500);
     expect(body.data.tools[0]?.description).toBe("x".repeat(500));
     expect(body.data.tools[0]?.explicacao).toHaveLength(500);
+  });
+});
+
+// ── PATCH /api/v1/ai/mcp/conexoes/[id]/ferramentas ─────────────────────
+
+describe("PATCH /api/v1/ai/mcp/conexoes/[id]/ferramentas", () => {
+  const ctx = { params: Promise.resolve({ id: CONEXAO_ID }) };
+  const VERSAO = "2026-01-01T00:00:00.000Z";
+  const corpoValido = { nome: "listar_leads", aprovacao: true, versao: VERSAO, organizationId: OUTRA_ORG_ID };
+
+  it("não autenticado dá 401", async () => {
+    sessaoNaoAutenticada();
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(401);
+    expect(aprovarFerramenta).not.toHaveBeenCalled();
+  });
+
+  it("manager (não admin) dá 403", async () => {
+    sessao("manager");
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    expect(aprovarFerramenta).not.toHaveBeenCalled();
+  });
+
+  it("sessão de suporte somente leitura dá 403, antes de checar papel", async () => {
+    sessaoSuporteSomenteLeitura();
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(403);
+    expect(aprovarFerramenta).not.toHaveBeenCalled();
+  });
+
+  it("id que não é UUID dá 422, sem chamar o repositório", async () => {
+    sessao("admin");
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson("http://localhost/api/v1/ai/mcp/conexoes/nao-e-um-uuid/ferramentas", "PATCH", corpoValido),
+      { params: Promise.resolve({ id: "nao-e-um-uuid" }) },
+    );
+    expect(res.status).toBe(422);
+    expect(aprovarFerramenta).not.toHaveBeenCalled();
+  });
+
+  it("corpo sem 'nome' dá 422 (Zod), sem chamar o repositório", async () => {
+    sessao("admin");
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", {
+        aprovacao: true,
+        versao: VERSAO,
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(422);
+    expect(aprovarFerramenta).not.toHaveBeenCalled();
+  });
+
+  it("corpo sem 'versao' dá 422 (Zod), sem chamar o repositório", async () => {
+    sessao("admin");
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", {
+        nome: "listar_leads",
+        aprovacao: true,
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(422);
+    expect(aprovarFerramenta).not.toHaveBeenCalled();
+  });
+
+  it("admin aprova com sucesso (true), usando o organizationId da sessão — o do corpo é ignorado", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({ ok: true, conexao: CONEXAO });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(aprovarFerramenta).toHaveBeenCalledWith(
+      expect.anything(),
+      ORG_ID, // não OUTRA_ORG_ID, mesmo enviado no corpo
+      CONEXAO_ID,
+      "listar_leads",
+      true,
+      VERSAO,
+    );
+  });
+
+  it("aceita aprovacao: false ('altera dados')", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({ ok: true, conexao: CONEXAO });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", {
+        nome: "listar_leads",
+        aprovacao: false,
+        versao: VERSAO,
+      }),
+      ctx,
+    );
+    expect(aprovarFerramenta).toHaveBeenCalledWith(
+      expect.anything(),
+      ORG_ID,
+      CONEXAO_ID,
+      "listar_leads",
+      false,
+      VERSAO,
+    );
+  });
+
+  it("aceita aprovacao: null ('aguardando aprovação', desfaz uma decisão anterior)", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({ ok: true, conexao: CONEXAO });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", {
+        nome: "listar_leads",
+        aprovacao: null,
+        versao: VERSAO,
+      }),
+      ctx,
+    );
+    expect(aprovarFerramenta).toHaveBeenCalledWith(
+      expect.anything(),
+      ORG_ID,
+      CONEXAO_ID,
+      "listar_leads",
+      null,
+      VERSAO,
+    );
+  });
+
+  it("404 do repositório é repassado com o motivo", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({ ok: false, status: 404, motivo: "Conexão não encontrada" });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toBe("Conexão não encontrada");
+  });
+
+  it("409 do repositório (corrida perdida) é repassado com o motivo", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({
+      ok: false,
+      status: 409,
+      motivo: "A conexão foi alterada por outra pessoa enquanto atualizava. Tente de novo.",
+    });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toBe("A conexão foi alterada por outra pessoa enquanto atualizava. Tente de novo.");
+  });
+
+  it("409 do repositório (versão desatualizada, M1) é repassado com o motivo", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({
+      ok: false,
+      status: 409,
+      motivo: "A lista de ferramentas mudou desde que você abriu a tela. Recarregue e aprove de novo.",
+    });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toBe("A lista de ferramentas mudou desde que você abriu a tela. Recarregue e aprove de novo.");
+  });
+
+  it("422 do repositório (ferramenta recusada ou inexistente) é repassado com o motivo", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({
+      ok: false,
+      status: 422,
+      motivo: "Esta ferramenta foi recusada e não pode ser aprovada",
+    });
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    const res = await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toBe("Esta ferramenta foi recusada e não pode ser aprovada");
+  });
+
+  it("registra o audit com apelido, ferramenta e a decisão", async () => {
+    sessao("admin");
+    vi.mocked(aprovarFerramenta).mockResolvedValue({ ok: true, conexao: CONEXAO });
+    const { audit } = await import("@/lib/audit");
+    const { PATCH } = await import("@/app/api/v1/ai/mcp/conexoes/[id]/ferramentas/route");
+    await PATCH(
+      reqJson(`http://localhost/api/v1/ai/mcp/conexoes/${CONEXAO_ID}/ferramentas`, "PATCH", corpoValido),
+      ctx,
+    );
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "ai_mcp_connection.tool_approval_updated",
+        resourceId: CONEXAO_ID,
+        metadata: { apelido: "n8n", ferramenta: "listar_leads", aprovacao: true },
+      }),
+    );
   });
 });

@@ -630,6 +630,51 @@ export const DICIONARIO: Traducoes = {
   "As ações que o agente pode executar sozinho durante o atendimento.": {
     es: "Las acciones que el agente puede ejecutar por sí solo durante la atención.",
   },
+  "Ferramentas de outros sistemas que o agente consulta ou aciona durante o atendimento.": {
+    es: "Herramientas de otros sistemas que el agente consulta o acciona durante la atención.",
+  },
+  "Cada ferramenta marcada num agente ocupa uma das 25 vagas de capacidade dele.": {
+    es: "Cada herramienta marcada en un agente ocupa una de las 25 vacantes de capacidad de él.",
+  },
+  "Conectar servidor MCP": { es: "Conectar servidor MCP" },
+  "Nenhuma conexão MCP cadastrada ainda": { es: "Ninguna conexión MCP registrada todavía" },
+  "Cadastre um servidor MCP (n8n, DeepWiki, Context7, sistema de cliente) e as ferramentas dele viram capacidades que você libera agente a agente.": {
+    es: "Registra un servidor MCP (n8n, DeepWiki, Context7, sistema de un cliente) y sus herramientas se vuelven capacidades que liberas agente por agente.",
+  },
+  "aguardando aprovação": { es: "esperando aprobación" },
+  "com chave": { es: "con clave" },
+  "sem chave": { es: "sin clave" },
+  ferramentas: { es: "herramientas" },
+  "Ferramentas atualizadas em": { es: "Herramientas actualizadas el" },
+  "Atualizar ferramentas": { es: "Actualizar herramientas" },
+  "Trocar chave": { es: "Cambiar clave" },
+  "Nenhuma ferramenta neste servidor.": { es: "Ninguna herramienta en este servidor." },
+  recusada: { es: "rechazada" },
+  "mudou desde a última aprovação": { es: "cambió desde la última aprobación" },
+  "Sugestão do servidor:": { es: "Sugerencia del servidor:" },
+  "só consulta": { es: "solo consulta" },
+  "altera dados": { es: "modifica datos" },
+  "Desfazer aprovação": { es: "Deshacer aprobación" },
+  "Servidor conectado. As ferramentas dele já entraram na lista, aguardando aprovação.": {
+    es: "Servidor conectado. Sus herramientas ya entraron en la lista, esperando aprobación.",
+  },
+  "Chave atualizada.": { es: "Clave actualizada." },
+  "Ferramentas atualizadas.": { es: "Herramientas actualizadas." },
+  "Conexão desligada.": { es: "Conexión desactivada." },
+  "Conexão ligada.": { es: "Conexión activada." },
+  "Remover esta conexão?": { es: "¿Eliminar esta conexión?" },
+  "Os agentes que usam ferramentas dela vão mostrá-las como indisponíveis. Esta ação não pode ser desfeita.": {
+    es: "Los agentes que usan herramientas de ella las mostrarán como no disponibles. Esta acción no se puede deshacer.",
+  },
+  "LGPD: os dados que o agente enviar para esta ferramenta (mensagens e dados do cliente) saem para o servidor de terceiro configurado aqui.": {
+    es: "LGPD: los datos que el agente envíe a esta herramienta (mensajes y datos del cliente) salen hacia el servidor de terceros configurado aquí.",
+  },
+  Apelido: { es: "Apodo" },
+  "Vira o começo do nome das ferramentas; não muda depois.": {
+    es: "Se vuelve el comienzo del nombre de las herramientas; no cambia después.",
+  },
+  "Nome do cabeçalho": { es: "Nombre del encabezado" },
+  "Conectar e listar ferramentas": { es: "Conectar y listar herramientas" },
   "Os atendimentos que o agente conduziu, do início ao desfecho.": {
     es: "Las atenciones que el agente condujo, desde el inicio hasta el desenlace.",
   },

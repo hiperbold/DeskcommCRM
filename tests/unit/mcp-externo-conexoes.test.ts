@@ -26,6 +26,7 @@ import { decryptWebhookSecret, encryptWebhookSecret } from "@/lib/webhooks/secre
 import { listarFerramentas, type Sessao } from "@/lib/ai/mcp-externo/cliente";
 import {
   MAXIMO_DE_CONEXOES,
+  aprovarFerramenta,
   atualizarFerramentas,
   carregarParaOTurno,
   criarConexao,
@@ -573,9 +574,14 @@ describe("atualizarFerramentas", () => {
     if (!r.ok) return;
     const busca = r.conexao.ferramentas.find((f) => f.nome === "buscar_imoveis");
     expect(busca?.somente_leitura_confirmado).toBeNull();
-    // as ferramentas que NÃO mudaram continuam com a confirmação anterior.
+    // achado da auditoria: a ferramenta TINHA decisão (true) e a perdeu porque
+    // a descrição mudou — a tela precisa avisar "mudou desde a última aprovação".
+    expect(busca?.mudou_desde_aprovacao).toBe(true);
+    // as ferramentas que NÃO mudaram continuam com a confirmação anterior, e
+    // sem a bandeira (nada mudou nelas).
     const visita = r.conexao.ferramentas.find((f) => f.nome === "cadastrar_visita");
     expect(visita?.somente_leitura_confirmado).toBe(true);
+    expect(visita?.mudou_desde_aprovacao).toBe(false);
   });
 
   it("achado: ferramenta nova (ausente do cache anterior) entra com somente_leitura_confirmado null", async () => {
@@ -593,6 +599,9 @@ describe("atualizarFerramentas", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.conexao.ferramentas.every((f) => f.somente_leitura_confirmado === null)).toBe(true);
+    // achado da auditoria: ferramenta nova nunca foi aprovada, então nunca
+    // "mudou desde a última aprovação" — não havia aprovação pra perder.
+    expect(r.conexao.ferramentas.every((f) => f.mudou_desde_aprovacao === false)).toBe(true);
   });
 
   it("falha do servidor grava last_error legível e MANTÉM o cache anterior", async () => {
@@ -820,6 +829,297 @@ describe("editarConexao", () => {
     const r = await editarConexao(admin, ORG, "conexao-1", { nome: "  Novo Nome  " });
     expect(r.ok).toBe(true);
     expect(linhas[0]?.name).toBe("Novo Nome");
+  });
+});
+
+// ─── `aprovarFerramenta` ────────────────────────────────────────────────────
+
+describe("aprovarFerramenta", () => {
+  // Índice 0 no `criarAdminFalso`: `linhaCompleta` grava `updated_at` como
+  // `2026-01-01T00:00:00.000Z` quando o seed não declara o campo — é a
+  // "versão que a tela viu" nos testes que não mexem na trava.
+  const VERSAO_PADRAO = "2026-01-01T00:00:00.000Z";
+
+  function ferramenta(extra: Partial<FerramentaEmCache> = {}): FerramentaEmCache {
+    return {
+      nome: "buscar_imoveis",
+      descricao: "Busca imóveis por bairro",
+      input_schema: { type: "object" },
+      somente_leitura: true,
+      id: "mcp_imoveis__buscar_imoveis",
+      recusada: null,
+      somente_leitura_confirmado: null,
+      ...extra,
+    };
+  }
+
+  it("escopo por organização: 404 quando a conexão é de outra organização", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: OUTRA_ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta()],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r).toEqual({ ok: false, status: 404, motivo: "Conexão não encontrada" });
+  });
+
+  it("grava true (só consulta)", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta()],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.conexao.ferramentas.find((f) => f.nome === "buscar_imoveis")?.somente_leitura_confirmado).toBe(true);
+  });
+
+  it("grava false (altera dados)", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta({ somente_leitura_confirmado: true })],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", false, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.conexao.ferramentas.find((f) => f.nome === "buscar_imoveis")?.somente_leitura_confirmado).toBe(false);
+  });
+
+  it("grava null (desfaz a aprovação, volta a 'aguardando aprovação')", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta({ somente_leitura_confirmado: true })],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", null, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.conexao.ferramentas.find((f) => f.nome === "buscar_imoveis")?.somente_leitura_confirmado).toBeNull();
+  });
+
+  it("não mexe nas OUTRAS ferramentas do cache", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta(), ferramenta({ nome: "cadastrar_visita", id: "mcp_imoveis__cadastrar_visita" })],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.conexao.ferramentas.find((f) => f.nome === "cadastrar_visita")?.somente_leitura_confirmado).toBeNull();
+  });
+
+  it("422 quando a ferramenta não existe no cache desta conexão", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta()],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "nao_existe", true, VERSAO_PADRAO);
+    expect(r).toEqual({ ok: false, status: 422, motivo: "Ferramenta não encontrada nesta conexão" });
+  });
+
+  it("422 quando a ferramenta está recusada, sem gravar", async () => {
+    const { admin, escritas } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta({ id: null, recusada: "O esquema desta ferramenta é grande demais." })],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r).toEqual({ ok: false, status: 422, motivo: "Esta ferramenta foi recusada e não pode ser aprovada" });
+    expect(escritas.filter((e) => e.tipo === "update")).toHaveLength(0);
+  });
+
+  it("B1: mais de uma ferramenta com o MESMO nome no cache recusa com 422, sem gravar", async () => {
+    const { admin, escritas } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta(), ferramenta({ descricao: "Uma segunda declaração da mesma ferramenta" })],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r).toEqual({
+      ok: false,
+      status: 422,
+      motivo: "O servidor lista duas ferramentas com o mesmo nome; corrija no servidor MCP.",
+    });
+    expect(escritas.filter((e) => e.tipo === "update")).toHaveLength(0);
+  });
+
+  it("M1: escrita concorrente entre a leitura e a gravação recusa com 409", async () => {
+    const { admin, linhas } = criarAdminFalso(
+      [
+        {
+          id: "conexao-1",
+          organization_id: ORG,
+          slug: "imoveis",
+          name: "Imóveis",
+          url: "https://mcp.exemplo.com",
+          tools_cache: [ferramenta()],
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      {
+        antesDoUpdate: (linhas) => {
+          const linha = linhas.find((l) => l.id === "conexao-1")!;
+          linha.updated_at = "2026-01-01T00:05:00.000Z"; // outra escrita venceu no meio-tempo
+        },
+      },
+    );
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, "2026-01-01T00:00:00.000Z");
+    expect(r).toEqual({
+      ok: false,
+      status: 409,
+      motivo: "A conexão foi alterada por outra pessoa enquanto atualizava. Tente de novo.",
+    });
+    const linha = linhas.find((l) => l.id === "conexao-1");
+    // nada foi sobrescrito: a ferramenta continua como a outra escrita a deixou.
+    expect(linha?.tools_cache).toEqual([ferramenta()]);
+  });
+
+  it("M1: versão (updated_at) diferente da que a tela viu recusa com 409, sem gravar", async () => {
+    const { admin, escritas } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta()],
+        updated_at: VERSAO_PADRAO,
+      },
+    ]);
+    const r = await aprovarFerramenta(
+      admin,
+      ORG,
+      "conexao-1",
+      "buscar_imoveis",
+      true,
+      "2025-01-01T00:00:00.000Z", // versão velha: a tela mostrou isto antes de outra escrita acontecer
+    );
+    expect(r).toEqual({
+      ok: false,
+      status: 409,
+      motivo: "A lista de ferramentas mudou desde que você abriu a tela. Recarregue e aprove de novo.",
+    });
+    expect(escritas.filter((e) => e.tipo === "update")).toHaveLength(0);
+  });
+
+  it("M1: versão (updated_at) igual à que a tela viu funciona normalmente", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [ferramenta()],
+        updated_at: VERSAO_PADRAO,
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+  });
+});
+
+describe("aprovarFerramenta — 'mudou desde a última aprovação'", () => {
+  const VERSAO_PADRAO = "2026-01-01T00:00:00.000Z";
+
+  it("aprovar com true zera a bandeira mudou_desde_aprovacao", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [
+          {
+            nome: "buscar_imoveis",
+            descricao: "Busca imóveis por bairro",
+            input_schema: { type: "object" },
+            somente_leitura: true,
+            id: "mcp_imoveis__buscar_imoveis",
+            recusada: null,
+            somente_leitura_confirmado: null,
+            mudou_desde_aprovacao: true,
+          },
+        ],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.conexao.ferramentas.find((f) => f.nome === "buscar_imoveis")?.mudou_desde_aprovacao).toBe(false);
+  });
+
+  it("desfazer (null) NÃO mexe na bandeira", async () => {
+    const { admin } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [
+          {
+            nome: "buscar_imoveis",
+            descricao: "Busca imóveis por bairro",
+            input_schema: { type: "object" },
+            somente_leitura: true,
+            id: "mcp_imoveis__buscar_imoveis",
+            recusada: null,
+            somente_leitura_confirmado: true,
+            mudou_desde_aprovacao: true,
+          },
+        ],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", null, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.conexao.ferramentas.find((f) => f.nome === "buscar_imoveis")?.mudou_desde_aprovacao).toBe(true);
   });
 });
 
