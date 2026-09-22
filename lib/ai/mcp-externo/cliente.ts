@@ -40,7 +40,11 @@ import { criarFetchSeguro } from "./fetch-seguro";
 import { montarIdDaFerramenta } from "./ids";
 import type { FerramentaEmCache } from "./tipos";
 
-export const PRAZO_DA_CHAMADA_MS = 15_000;
+// 30 s, não os 15 do plano: na validação com servidor real (22/09/2026), o
+// `ask_wiki_question` do DeepWiki gera a resposta com IA e leva de 12 a 20 s;
+// com 15 s estourava sempre e o agente caía em outra ferramenta. O cliente no
+// WhatsApp já espera o turno inteiro (o Testar mediu 20 a 45 s).
+export const PRAZO_DA_CHAMADA_MS = 30_000;
 export const PRAZO_DA_CONEXAO_MS = 10_000;
 export const CORTE_DA_RESPOSTA = 8_000;
 export const MAXIMO_DE_FERRAMENTAS = 50;
