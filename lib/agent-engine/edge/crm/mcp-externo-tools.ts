@@ -328,7 +328,7 @@ export async function buildExternalMcpTools(
     if (ferramenta.somente_leitura_confirmado === true) externasDeConsulta.add(id);
   }
 
-  if (puladas.length > 0) log.warn("ferramentas MCP externas puladas no turno", { puladas });
+  if (puladas.length > 0) log.warn("montagem: ferramentas MCP externas puladas", { puladas });
 
   return {
     tools,

@@ -1,6 +1,6 @@
 # Status: conexões MCP para os agentes
 
-Atualizado em 22/09/2026. **Tarefas 0 a 13 feitas; falta o fechamento (14).** Nada foi publicado nem enviado ao GitHub.
+Atualizado em 22/09/2026. **Todas as 14 tarefas feitas.** Publicação em produção autorizada pelo Filipe em 22/09.
 
 ## Onde está
 
@@ -27,7 +27,7 @@ Atualizado em 22/09/2026. **Tarefas 0 a 13 feitas; falta o fechamento (14).** Na
 | 11 | Tela "Conexões MCP" (só admin; aprovação por ferramenta presa à versão vista; aviso LGPD; "mudou desde a última aprovação" guardado) | ✅ feita e auditada | ver commit da Tarefa 11 |
 | 12 | Portões completos | ✅ 21/09: typecheck, lint (0 erros), lint:channels, unitários 919 arquivos / 9519 testes, test:db 207 / 1641, build local | |
 | 13 | Validação com 3 servidores MCP reais (com o Filipe) | ✅ 22/09, pelo Testar no CRM local: imóveis no n8n (resposta com a IM-102, chamada vista no n8n); ferramenta aguardando aprovação fica fora do turno; Context7 desligado é pulado e o agente responde; DeepWiki falhava por prazo (15 s), corrigido para 30 s. Achados corrigidos: conexão morria em 250 ms por tentativa no WSL (`53907008`), log sem motivo da falha (`d57d0fc5`), prazo curto (`65089c84`) | |
-| 14 | Fechar (changelog, README, débito) | ⏸️ não iniciada | |
+| 14 | Fechar (changelog, README, débito) | ✅ 22/09 | ver commit da Tarefa 14 |
 
 ## Fluxo de teste no n8n
 

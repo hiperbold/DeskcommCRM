@@ -45,6 +45,10 @@ Testes unitários no WSL: `bash hiperbold/scripts/test-unit.sh` (roda `pnpm test
 - Backup: `hiperbold/scripts/backup-prod.sh`, diário pela tarefa do Windows `HiperboldCRM-BackupBanco`, em `D:\Hiperbold\backups\hiperbold-crm` (30 dias). Restaurar num projeto Supabase novo: `pg_restore --no-owner --no-privileges -d <url> <arquivo>.dump`.
 - Segredos de produção: `.env.production` no WSL (fora do Git, só leitura do usuário). Nunca no chat, nunca em commit.
 
+## O que é só do fork
+
+- Conexões MCP dos agentes (IA › Ensinar o agente › Conexões MCP): código em `lib/ai/mcp-externo/` e `lib/agent-engine/edge/crm/mcp-externo-tools.ts`, tabela `ai_mcp_connections` (migration 0901, faixa 09xx reservada ao fork). Plano e decisões em `planos/2026-09-19-conexoes-mcp.md`. Fluxo de teste no n8n registrado em `status.md`.
+
 ## Puxar atualizações do autor
 
 ```bash
