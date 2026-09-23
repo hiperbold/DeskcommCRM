@@ -16,7 +16,7 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 | Fase | Estado | Commit | Data |
 |---|---|---|---|
 | F1 | **feita**: 6 tarefas, revisão e auditoria sem achado alto, todos os portões verdes | 8fa4893 | 23/09/2026 09:44 |
-| F2 | pendente | | |
+| F2 | **feita**: 8 tarefas, revisão e auditoria sem achado alto (médios corrigidos em duas levas), todos os portões verdes | 28d21a3 | 23/09/2026 15:20 |
 | F2-B | pendente | | |
 | F3 | pendente | | |
 
@@ -88,4 +88,15 @@ Fechamento da F1, 23/09/2026 08:20 a 09:44, no commit 8fa4893:
 | test:db | 256 arquivos e 2254 testes verdes |
 | build | verde, 38 s de compilação |
 
-O servidor de desenvolvimento na porta 3300 sobreviveu ao build. A rota da aba Plano sem sessão manda para o login e volta para a aba depois.
+O servidor de desenvolvimento na porta 3300 sobreviveu ao build.
+
+Fechamento da F2, 23/09/2026 13:40 a 15:20, no commit 28d21a3, numa cópia separada (`~/projects/deskcommcrm-portoes`):
+
+| Portão | Resultado |
+|---|---|
+| typecheck | limpo |
+| lint | 0 erros |
+| lint:channels | ok |
+| unitários | 1307 arquivos, 13.379 testes verdes; 1 vermelho, o de ambiente conhecido (`e2e-parte-4`, espera pelo Redis) |
+| test:db | 257 arquivos, 2.323 testes verdes |
+| build | verde na segunda tentativa; a primeira caiu por falta de memória no passo de TypeScript (o WSL tem 7 GB e o build rodou junto de outro typecheck). Agora todo typecheck e build passam por `flock /tmp/deskcomm-typecheck.lock` com `NODE_OPTIONS=--max-old-space-size=6144` | A rota da aba Plano sem sessão manda para o login e volta para a aba depois.
