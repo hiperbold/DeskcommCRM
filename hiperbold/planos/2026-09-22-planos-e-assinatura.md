@@ -364,32 +364,43 @@ Enquanto o gateway não existe, o cliente compra pacote adicional falando com vo
 
 ## 12. Perguntas abertas, que são suas e não minhas
 
-1. **Suspensão por falta de pagamento:** o que exatamente para? Minha proposta é: para IA, automação e campanha; continuam recebimento, resposta humana e leitura de tudo.
-2. **Período de avaliação:** existe? De quantos dias? Pede cartão na entrada?
-3. **Contatos:** teto que bloqueia ou teto que avisa?
-4. **Usuário adicional:** vende avulso por fora do plano, ou só subindo de plano?
-5. **Preço:** os três níveis saem por quanto? Tem desconto anual?
-6. **O que fica no básico:** a matriz acima deixa o básico sem IA com Operador, sem MCP e sem campanha. Isso ainda é vendável para o seu mercado?
-7. **As organizações internas da Hiperbold** entram como plano Ilimitado permanente, certo?
+São 18, agrupadas pelo assunto e ordenadas pelo que trava mais coisa. Cada uma diz qual fase ela segura e o que eu faço se você não responder. **Nenhuma delas trava a F1.**
 
-Sobre o crédito de IA, que virou a seção 6:
+Se você só tiver tempo para três, responda a 9, a 10 e a 18: são as que decidem se o produto dá lucro e o quanto de trabalho a cobrança vai dar.
 
-8. **A unidade de venda:** fecha em crédito em reais, como recomendo, ou você quer mesmo anunciar em tokens? Se for token, preciso saber como você quer lidar com a diferença de preço entre modelos.
-9. **Quanto de crédito em cada plano**, e por quanto sai o pacote adicional. Isso depende do seu custo real por atendimento, que dá para medir nas organizações que já rodam.
-10. **Qual a sua remarcação** sobre o custo. Precisa cobrir o dólar, o imposto e a sua margem.
-11. **Acumula ou não acumula** o crédito não usado do mês. Minha recomendação é não acumular o do plano e deixar o pacote avulso durar.
-12. **Quando zera:** para a IA e cai para atendimento humano (minha proposta), ou você prefere que continue rodando e vire cobrança no mês seguinte? A segunda é mais cara de errar.
-13. **Recarga automática:** quer oferecer? Ela vende mais e é o caminho mais curto para uma fatura absurda por defeito. Se quiser, entra na F5 com limite de recargas por dia.
+### A. Preço e empacotamento (trava a F4, a fase de colocar os planos à venda)
 
-Sobre o Asaas, que o manual comum levanta e eu não tinha perguntado:
+1. **Preço:** os três níveis saem por quanto, e tem desconto no anual?
+2. **O que fica no básico:** a matriz da seção 5 deixa o básico sem Operador, sem conexões MCP e sem campanhas. Isso ainda é vendável no seu mercado, ou o básico fica capenga demais para alguém comprar?
+3. **Usuário adicional:** vende avulso por fora do plano, ou só subindo de plano? Vender avulso é mais receita e mais trabalho de cobrança.
+4. **Período de avaliação:** existe? De quantos dias? Pede cartão na entrada? *Sem resposta, eu faço: não existe, e a organização nova nasce no plano que você atribuir na mão.*
 
-14. **O plano anual no cartão renova sozinho** depois de um ano, ou termina e pede pagamento novo?
-15. **Parcelamento do anual no cartão:** existe? Em quantas vezes, e quem assume o custo? (No Asaas isso é venda parcelada, não assinatura: é uma oferta separada.)
-16. **Tolerância antes de suspender** por falta de pagamento, e o que acontece no cancelamento: preserva o acesso até o fim do período já pago?
-17. **Política de estorno** e regra de subir ou descer de plano no meio do período.
-18. **Onde o cliente digita o cartão:** página hospedada do Asaas, como recomendo, ou dentro do CRM assumindo o escopo de PCI DSS?
+### B. Limites (trava a F2, a fase da contagem e dos avisos)
 
-Até você responder de 14 a 17, o manual manda usar o padrão dele: mensal e anual no cartão renovando sozinhos, anual no Pix renovando na mão, e nada de parcelamento nem de cobrança proporcional.
+5. **Contatos:** teto que bloqueia ou teto que avisa? *Sem resposta, eu faço: avisa, não bloqueia. É o limite que mais cresce sozinho e o que mais gera ligação brava no meio de uma campanha.*
+6. **As organizações internas da Hiperbold** entram como plano Ilimitado permanente? *Sem resposta, eu faço: sim.*
+7. **Suspensão por falta de pagamento:** o que exatamente para de funcionar? *Sem resposta, eu faço: param IA, automação e campanha; continuam receber mensagem, responder à mão e ler tudo. Derrubar o recebimento faz o cliente final do seu cliente ficar sem resposta, e a reclamação chega aqui.*
+
+### C. Crédito de IA (trava a F2-B, e é onde está a sua margem)
+
+8. **A unidade de venda:** crédito em reais, como recomendo, ou anunciado em tokens? Se for token, preciso saber como você quer lidar com a diferença de preço entre modelos, porque ela muda sua margem sozinha a cada troca de modelo.
+9. **Quanto de crédito entra em cada plano**, e por quanto sai o pacote adicional. Dá para medir o custo real por atendimento nas organizações que já rodam antes de você cravar o número.
+10. **Qual a sua remarcação** sobre o custo. Precisa cobrir o dólar, o imposto e a sua margem, com folga para o câmbio subir.
+11. **Acumula ou não acumula** o crédito não usado do mês? *Sem resposta, eu faço: o do plano não acumula, o pacote avulso dura.*
+12. **Quando zera:** para a IA e cai para atendimento humano, ou continua rodando e vira cobrança no mês seguinte? *Sem resposta, eu faço: para a IA e avisa. A segunda opção é a mais cara de errar, porque o defeito só aparece na fatura.*
+13. **Recarga automática:** quer oferecer? Vende mais e é o caminho mais curto para uma fatura absurda por defeito de madrugada. *Sem resposta, eu faço: não oferece na primeira versão.*
+
+### D. Cobrança pelo Asaas (trava a F5)
+
+14. **Onde o cliente digita o cartão:** página hospedada do Asaas, como recomendo, ou dentro do CRM? Dentro do CRM põe a Hiperbold no escopo de PCI DSS, e isso é trabalho contínuo, não uma tarefa. *Sem resposta, eu faço: página hospedada do Asaas para cartão, Pix com QR dentro do app.*
+15. **O anual no cartão renova sozinho** depois de um ano, ou termina e pede pagamento novo? *Sem resposta, vale o padrão do manual comum: renova sozinho.*
+16. **Parcelamento do anual no cartão:** existe? Em quantas vezes, e quem assume o custo? No Asaas isso é venda parcelada, não assinatura, então é uma oferta separada. *Sem resposta, vale o padrão do manual: não tem parcelamento.*
+17. **Tolerância antes de suspender** por falta de pagamento, e o que acontece no cancelamento: preserva o acesso até o fim do período já pago? *Sem resposta, eu faço: 7 dias de tolerância, e cancelamento preserva o período pago.*
+18. **Política de estorno** e regra de subir ou descer de plano no meio do período. *Sem resposta, vale o padrão do manual: sem cobrança proporcional, e estorno caso a caso por sua decisão.*
+
+### O que isso significa na prática
+
+Eu consigo tocar F1, F2, F2-B e F3 com os padrões acima, e você corrige depois: mudar teto, preço e crédito é cadastro, não obra. **O que não dá para fazer sem você é a F4 em diante**, porque ali o número entra em contrato com o cliente e mudar depois custa conversa.
 
 ---
 

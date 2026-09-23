@@ -49,6 +49,21 @@ Os 8 novos vieram da junção, e a maioria é colisão com escolhas nossas, não
 
 **Por que isso importa**: CI permanentemente vermelho é CI que ninguém lê, e o próximo defeito de verdade entra sem alarme.
 
+## Planos e assinatura: planejado, nada implementado
+
+Pedido do Filipe em 22/09/2026: transformar o CRM em produto com planos, começando com tudo liberado e já com as regras de limite prontas. O plano está em `hiperbold/planos/2026-09-22-planos-e-assinatura.md`. **Nenhuma linha de código foi escrita, por instrução dele.**
+
+O que já está decidido:
+
+- **O plano é da organização**, não da instalação. Um lugar só decide se algo pode ser criado, com trava no banco por baixo.
+- **Cliente que cai de plano nunca perde dado**: o que existe continua, o que trava é criar mais.
+- **A chave de IA é da Hiperbold** e o consumo é vendido: cada plano inclui crédito, e o cliente pode comprar pacote adicional. O cliente não traz chave própria.
+- **Gateway: Asaas**, escolhido em 22/09/2026, com contrato de integração comum aos três produtos da Hiperbold em `F:\github-projects\hiper-track\docs\manual-api-asaas-saas.md`. Esse manual manda em nomes de tabela, eventos e prefixo de referência (o CRM é `HC:`).
+
+O que falta para começar: **18 decisões de produto do Filipe**, na seção 12 do plano. Elas não travam a primeira fase, e 12 delas têm um padrão meu declarado caso ele não responda. As que travam de verdade são as três que decidem margem e trabalho de cobrança: quanto de crédito entra em cada plano, qual a remarcação sobre o custo, e onde o cliente digita o cartão.
+
+**O aviso que vale repetir**: colocar campo de cartão dentro do CRM põe a Hiperbold no escopo de PCI DSS, e a certificação do Asaas não cobre a gente. A recomendação é usar a página hospedada do Asaas para cartão e manter o Pix com QR dentro do app.
+
 ## Para retomar
 
 Ver `hiperbold/HANDOFF.md`, que tem a ordem sugerida e o contexto de cada item.

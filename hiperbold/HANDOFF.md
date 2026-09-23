@@ -18,9 +18,17 @@ Se algo estiver errado, o caminho de volta é publicar de novo o commit `9da397d
 
 Ela tem quatro correções prontas e conferidas, sem push. Publicar é: `git switch main`, `git merge --ff-only fix/debitos-pequenos-2026-09-22`, `git push origin main`. O push dispara imagem e deploy sozinho. Nenhuma dessas quatro mexe em banco, então não precisa de `prod-schema.sh`.
 
-### 1.3 Responder as 18 perguntas do plano de assinatura
+### 1.3 Responder as 18 perguntas do plano de assinatura (D-045)
 
-Estão em `hiperbold/planos/2026-09-22-planos-e-assinatura.md`, seção 12. As que travam mais coisa: quanto de crédito de IA entra em cada plano, qual a remarcação sobre o custo, e onde o cliente digita o cartão (página do Asaas ou dentro do CRM, o que joga a Hiperbold no escopo de PCI DSS).
+Estão em `hiperbold/planos/2026-09-22-planos-e-assinatura.md`, seção 12, agrupadas por assunto e com a fase que cada uma trava. Doze têm padrão declarado para o caso de não haver resposta, então elas atrasam pouco.
+
+As três que travam de verdade, porque decidem margem e trabalho de cobrança:
+
+1. Quanto de crédito de IA entra em cada plano, e por quanto sai o pacote adicional
+2. Qual a remarcação sobre o custo (custo em dólar, preço em real, com folga de câmbio)
+3. Onde o cliente digita o cartão: página hospedada do Asaas, ou dentro do CRM assumindo o escopo de PCI DSS
+
+Nenhuma delas trava a primeira fase, que é catálogo e assinatura no banco com tudo liberado.
 
 ---
 
