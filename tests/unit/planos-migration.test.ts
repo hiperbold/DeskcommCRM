@@ -74,17 +74,20 @@ const PLANOS_SEMEADOS = [
 ];
 
 /**
- * Extrai o bloco 0904 do baseline, do começo da linha do marcador de início
- * até (sem incluir) a VARREDURA anon, que vem logo depois na ordem da
- * migração de 0116 (o bloco de 0904 é o último antes da varredura).
+ * Extrai o bloco 0904 do baseline: do começo da linha do marcador de início
+ * até (sem incluir) o cabeçalho do PRÓXIMO bloco (`-- ---- `), qualquer que
+ * seja ele. A primeira versão cortava na VARREDURA anon, supondo que o bloco
+ * da 0904 seria sempre o último antes dela; a 0905 entrou no meio (tem de
+ * entrar, porque função nova não pode nascer depois da varredura) e a
+ * comparação quebrou. Achar o próximo cabeçalho não depende de qual bloco vem
+ * depois.
  */
 function extraiBlocoBaseline(): string {
   const marcadorInicio = "catálogo de planos e contrato da organização (migration 0904";
-  const marcadorFim = "-- ---- VARREDURA anon:";
   const posicaoMarcador = BASELINE.indexOf(marcadorInicio);
   const inicioLinha = BASELINE.lastIndexOf("\n", posicaoMarcador) + 1;
-  const fim = BASELINE.indexOf(marcadorFim, posicaoMarcador);
-  return BASELINE.slice(inicioLinha, fim);
+  const fim = BASELINE.indexOf("\n-- ---- ", posicaoMarcador);
+  return BASELINE.slice(inicioLinha, fim + 1);
 }
 
 /** Remove linhas de comentário (--) e linhas em branco, para comparar só o SQL. */
