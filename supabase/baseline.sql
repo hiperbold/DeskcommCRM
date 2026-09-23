@@ -38804,12 +38804,24 @@ begin
           updated_at = now();
   end if;
 
+  -- Tarefa 2b (decisões 14 e 15): avisos de limiar (50/80/100%) e travas de
+  -- segurança por organização e por conversa, só quando ALGUMA linha de
+  -- consumo entrou de fato E o ciclo DA CHAMADA é o ciclo ATUAL: débito
+  -- tardio de um ciclo já fechado (o conferidor da Tarefa 8) nunca avisa.
+  -- Já dentro da MESMA advisory lock da organização que este débito segura
+  -- (item 10, acima); fn_billing_avisar_carteira (Parte 3, fim deste
+  -- arquivo) nunca lança (captura o próprio erro), então uma falha ali nunca
+  -- derruba este débito.
+  if v_entrou and v_ciclo = public.fn_billing_ciclo_de(now()) then
+    perform public.fn_billing_avisar_carteira(v_chamada.organization_id, v_ciclo, v_dia, v_chamada.contact_id);
+  end if;
+
   return v_entrou;
 end;
 $$;
 
 comment on function public.fn_billing_debitar_chamada(uuid) is
-  '0906, decisão 10: peça ÚNICA de débito, usada pelo gatilho (abaixo) e pelo conferidor (Tarefa 8). Devolve true só quando debitou AGORA (pelo menos uma linha nova no livro-caixa); reenviar a MESMA chamada devolve false sem mudar livro-caixa, carteira nem agregado (todas as chaves de consumo colidem pelo conflict). Sai sem nada quando legacy_invocation_id não é nulo, origem_da_chave não é chave_da_instalacao, created_at é anterior a carteira_desde, ou o ponderado é zero. Ciclo e dia SEMPRE de created_at da chamada. pg_try_advisory_xact_lock (NUNCA pg_advisory_xact_lock) por organização, sem espera; ocupada = sai, o conferidor pega depois. Garante a concessão do ciclo da chamada já sob a trava, divide o ponderado por plano/adicional/avulso pelo saldo de cada uma, e soma o que sobra na linha de plano (decisão 6, o caso que atravessa o saldo).';
+  '0906, decisão 10: peça ÚNICA de débito, usada pelo gatilho (abaixo) e pelo conferidor (Tarefa 8). Devolve true só quando debitou AGORA (pelo menos uma linha nova no livro-caixa); reenviar a MESMA chamada devolve false sem mudar livro-caixa, carteira nem agregado (todas as chaves de consumo colidem pelo conflict). Sai sem nada quando legacy_invocation_id não é nulo, origem_da_chave não é chave_da_instalacao, created_at é anterior a carteira_desde, ou o ponderado é zero. Ciclo e dia SEMPRE de created_at da chamada. pg_try_advisory_xact_lock (NUNCA pg_advisory_xact_lock) por organização, sem espera; ocupada = sai, o conferidor pega depois. Garante a concessão do ciclo da chamada já sob a trava, divide o ponderado por plano/adicional/avulso pelo saldo de cada uma, e soma o que sobra na linha de plano (decisão 6, o caso que atravessa o saldo). Tarefa 2b: chama fn_billing_avisar_carteira quando debitou de fato E o ciclo da chamada é o ATUAL (débito tardio de ciclo fechado não avisa).';
 
 revoke execute on function public.fn_billing_debitar_chamada(uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_debitar_chamada(uuid) to service_role;
@@ -38855,6 +38867,233 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke execute on function public.fn_billing_garantir_concessoes(uuid, date), public.fn_billing_debitar_chamada(uuid), public.fn_billing_trg_debitar_chamada() from agent_worker';
+  end if;
+end
+$$;
+
+-- ── Parte 3 (Tarefa 2b): avisos de limiar e travas de segurança ──
+--
+-- As partes 1 e 2 (acima) trouxeram configuração, tabelas, concessão, débito
+-- e o agregado diário. Esta parte 3 traz o que FALTAVA em
+-- fn_billing_debitar_chamada (decisão 10): os avisos de 50/80/100% do total
+-- disponível no ciclo (decisão 14) e as duas travas de segurança que avisam
+-- sem bloquear (decisão 15, N14). fn_billing_debitar_chamada (Parte 2,
+-- acima) já foi alterada NO LUGAR para chamar fn_billing_avisar_carteira,
+-- abaixo, só quando debitou de fato e o ciclo da chamada é o ciclo ATUAL.
+--
+-- Dedup que sobrevive ao encerramento (decisão 14: "um aviso por limiar por
+-- ciclo", nunca "enquanto aberto", diferente do padrão de
+-- fn_billing_conferir_teto, 0905, que reabriria o mesmo limiar a cada
+-- chamada depois que o membro encerra o aviso). Em vez de embutir a marca no
+-- TÍTULO (frágil: exigiria formatar o mês em português só para RE-LER o
+-- próprio título depois, e acoplaria o texto do aviso à lógica de dedup),
+-- esta parte cria uma tabela pequena e só de acréscimo,
+-- billing_token_avisos_emitidos, no MESMO molde do livro-caixa
+-- (decisão 6/7): "insert ... on conflict do nothing" por (organização,
+-- chave), e o aviso na Central só nasce quando o insert entrou de fato (get
+-- diagnostics row_count). chave por caso: 'limiar:<ciclo>:<limiar>' (um por
+-- limiar por ciclo, decisão 14), 'teto_org_dia:<dia>' (um por dia, decisão
+-- 15) e 'teto_conversa_dia:<dia>:<contact_id>' (um por contato por dia,
+-- decisão 15). Nenhuma dessas chaves olha status: resolver o item na Central
+-- NÃO libera a chave, e por isso o mesmo limiar/teto nunca reabre sozinho no
+-- mesmo ciclo/dia.
+--
+-- fn_billing_avisar_carteira nunca lança (mesmo molde de
+-- fn_billing_conferir_teto, 0905): corpo inteiro sob "exception when others
+-- then raise warning", para nunca derrubar o débito que a chama.
+--
+-- Idempotente: create table if not exists, create or replace, bloco final de
+-- agent_worker igual ao das partes 1 e 2.
+
+-- ============================================================================
+-- 14. billing_token_avisos_emitidos: dedup dos avisos de carteira que
+-- sobrevive ao encerramento (decisões 14 e 15).
+-- ============================================================================
+create table if not exists public.billing_token_avisos_emitidos (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  -- 'limiar:<ciclo>:<limiar>', 'teto_org_dia:<dia>' ou
+  -- 'teto_conversa_dia:<dia>:<contact_id>' (convenção de quem escreve,
+  -- fn_billing_avisar_carteira, abaixo; o banco só garante a unicidade, que
+  -- é o que faz o "insert ... on conflict do nothing" nunca duplicar).
+  chave text not null,
+  created_at timestamptz not null default now(),
+  constraint billing_token_avisos_emitidos_org_chave_unique unique (organization_id, chave)
+);
+
+comment on table public.billing_token_avisos_emitidos is
+  '0906, Tarefa 2b (decisões 14 e 15): marca de dedup dos avisos de carteira (limiar do ciclo, teto por organização por dia, teto por conversa por dia) que SOBREVIVE ao encerramento do item na Central, diferente da dedup "enquanto status = open" de fn_billing_conferir_teto (0905), que reabriria o mesmo limiar a cada chamada depois que o membro resolve o aviso. Só de acréscimo, sem update nem delete, mesmo racional do livro-caixa (decisão 7).';
+
+alter table public.billing_token_avisos_emitidos enable row level security;
+
+revoke all on public.billing_token_avisos_emitidos from anon, authenticated;
+grant select, insert on public.billing_token_avisos_emitidos to service_role;
+revoke update, delete, truncate on public.billing_token_avisos_emitidos from service_role;
+
+-- ============================================================================
+-- 15. fn_billing_avisar_carteira: avisos de 50/80/100% e travas de segurança
+-- (decisões 14 e 15).
+-- ============================================================================
+create or replace function public.fn_billing_avisar_carteira(
+  p_org uuid,
+  p_ciclo date,
+  p_dia date,
+  p_contact_id uuid
+)
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_teto_org_dia bigint;
+  v_teto_conversa_dia bigint;
+  v_teto_total bigint;
+  v_consumido_ciclo bigint;
+  v_mes_ano text;
+  v_limiar int;
+  v_titulo text;
+  v_linhas int;
+  v_tokens_org_dia bigint;
+  v_tokens_conversa_dia bigint;
+begin
+  select teto_org_tokens_dia, teto_conversa_tokens_dia
+    into v_teto_org_dia, v_teto_conversa_dia
+    from public.billing_settings
+    where id = 1;
+
+  -- Decisão 14: total DISPONÍVEL no ciclo é plano + adicional DESTE ciclo
+  -- mais avulso (fonte sem ciclo, decisão 6), contra o consumido das mesmas
+  -- três fontes. Sem teto (Ilimitado: nenhuma concessão, total creditado
+  -- zero) não avisa nada.
+  select
+    coalesce(sum(creditado), 0),
+    coalesce(sum(consumido), 0)
+    into v_teto_total, v_consumido_ciclo
+    from public.billing_token_wallets
+    where organization_id = p_org
+      and ((fonte in ('plano', 'adicional') and ciclo = p_ciclo) or (fonte = 'avulso' and ciclo is null));
+
+  if v_teto_total > 0 then
+    -- Nome do mês em português, sem depender do locale do servidor (to_char
+    -- com 'Month' segue o locale do cluster, que pode não ser pt_BR): array
+    -- fixo, indexado por extract(month from ...).
+    v_mes_ano := (array['janeiro','fevereiro','março','abril','maio','junho','julho',
+                         'agosto','setembro','outubro','novembro','dezembro'])[extract(month from p_ciclo)::int]
+      || ' de ' || extract(year from p_ciclo)::text;
+
+    foreach v_limiar in array array[50, 80, 100] loop
+      -- v_consumido_ciclo/v_teto_total >= v_limiar/100, em bigint, sem ponto
+      -- flutuante.
+      if v_consumido_ciclo * 100 >= v_teto_total * v_limiar then
+        insert into public.billing_token_avisos_emitidos (organization_id, chave)
+        values (p_org, 'limiar:' || p_ciclo::text || ':' || v_limiar::text)
+        on conflict (organization_id, chave) do nothing;
+
+        get diagnostics v_linhas = row_count;
+        if v_linhas > 0 then
+          v_titulo := 'Tokens de IA: ' || v_limiar::text || '% do mês usado (' || v_mes_ano || ')';
+          insert into public.agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+          values (
+            p_org,
+            'other',
+            case when v_limiar = 100 then 'critical' else 'warn' end,
+            v_titulo,
+            case
+              when v_limiar = 100 then
+                'A organização usou 100% dos tokens de IA disponíveis neste ciclo. Nesta fase o assistente continua respondendo normalmente; veja Configurações › Plano e uso.'
+              else
+                'A organização já usou ' || v_limiar::text || '% dos tokens de IA disponíveis neste ciclo. Veja Configurações › Plano e uso.'
+            end,
+            'billing_limite',
+            p_org
+          );
+        end if;
+      end if;
+    end loop;
+  end if;
+
+  -- Decisão 15 (N14): teto por organização por dia, soma de
+  -- tokens_ponderados do agregado do dia inteiro. Nulo = desligado.
+  if v_teto_org_dia is not null then
+    select coalesce(sum(tokens_ponderados), 0) into v_tokens_org_dia
+      from public.billing_token_consumo_diario
+      where organization_id = p_org and dia = p_dia;
+
+    if v_tokens_org_dia > v_teto_org_dia then
+      insert into public.billing_token_avisos_emitidos (organization_id, chave)
+      values (p_org, 'teto_org_dia:' || p_dia::text)
+      on conflict (organization_id, chave) do nothing;
+
+      get diagnostics v_linhas = row_count;
+      if v_linhas > 0 then
+        insert into public.agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+        values (
+          p_org,
+          'other',
+          'warn',
+          'Tokens de IA: teto de segurança da organização passou do previsto hoje',
+          'O consumo de tokens de IA da organização passou do teto de segurança configurado para hoje. Nesta fase nada é bloqueado; veja Configurações › Plano e uso.',
+          'billing_limite',
+          p_org
+        );
+      end if;
+    end if;
+  end if;
+
+  -- Decisão 15 (N14): teto por conversa por dia, só quando a chamada tem
+  -- contact_id. teto_instalacao_tokens_dia NÃO entra aqui de propósito: é
+  -- conferido só pelo conferidor de cron (Tarefa 8), nunca dentro do
+  -- gatilho, que serializaria todas as organizações da instalação.
+  if v_teto_conversa_dia is not null and p_contact_id is not null then
+    select coalesce(sum(tokens_ponderados), 0) into v_tokens_conversa_dia
+      from public.billing_token_consumo_diario
+      where organization_id = p_org and dia = p_dia and contact_id = p_contact_id;
+
+    if v_tokens_conversa_dia > v_teto_conversa_dia then
+      insert into public.billing_token_avisos_emitidos (organization_id, chave)
+      values (p_org, 'teto_conversa_dia:' || p_dia::text || ':' || p_contact_id::text)
+      on conflict (organization_id, chave) do nothing;
+
+      get diagnostics v_linhas = row_count;
+      if v_linhas > 0 then
+        insert into public.agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+        values (
+          p_org,
+          'other',
+          'warn',
+          'Tokens de IA: teto de segurança de uma conversa passou do previsto hoje',
+          'O consumo de tokens de IA de uma conversa passou do teto de segurança configurado para hoje. Nesta fase nada é bloqueado; veja Configurações › Plano e uso.',
+          'billing_limite',
+          p_org
+        );
+      end if;
+    end if;
+  end if;
+exception
+  when others then
+    raise warning 'billing_avisar_carteira_falhou: organizacao=%, sqlerrm=%', p_org, sqlerrm;
+end;
+$$;
+
+comment on function public.fn_billing_avisar_carteira(uuid, date, date, uuid) is
+  '0906, Tarefa 2b (decisões 14 e 15): avisos de 50/80/100% do total disponível no ciclo (plano + adicional do ciclo + avulso sem ciclo) e as duas travas de segurança que só avisam nesta fase (teto por organização por dia, teto por conversa por dia, quando p_contact_id não é nulo). Chamada por fn_billing_debitar_chamada (Parte 2) só quando debitou de fato E o ciclo da CHAMADA é o ciclo ATUAL: débito tardio de um ciclo já fechado (o conferidor da Tarefa 8) nunca avisa. Já roda sob a MESMA advisory lock da organização que o débito segura. Dedup por billing_token_avisos_emitidos (acima), que sobrevive ao encerramento do item na Central. Sem teto (Ilimitado, total creditado zero e nenhuma concessão) não avisa nada. Nunca lança: qualquer erro vira raise warning, nunca derruba o débito que a chama.';
+
+revoke execute on function public.fn_billing_avisar_carteira(uuid, date, date, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_avisar_carteira(uuid, date, date, uuid) to service_role;
+
+-- ============================================================================
+-- 16. agent_worker não emite aviso de carteira nem escreve na tabela nova
+-- desta parte 3 (mesmo racional dos blocos 9 e 13, acima): por alter default
+-- privileges ela ganharia escrita na tabela nova e execute na função nova do
+-- schema public, e tem bypassrls.
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke insert, update, delete, truncate on public.billing_token_avisos_emitidos from agent_worker';
+    execute 'revoke execute on function public.fn_billing_avisar_carteira(uuid, date, date, uuid) from agent_worker';
   end if;
 end
 $$;

@@ -524,3 +524,135 @@ describe("0906 carteira de tokens de IA (parte 2, Tarefa 2a)", () => {
     }
   });
 });
+
+describe("0906 carteira de tokens de IA (parte 3, Tarefa 2b)", () => {
+  it("a parte 3 está no MESMO arquivo, depois da parte 2, e o bloco do baseline continua idêntico ao arquivo inteiro da migração", () => {
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION);
+    const sqlBloco = removeComentariosEBrancas(extraiBlocoBaseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+    const fimParte2 = MIGRATION.indexOf(
+      "13. agent_worker não concede nem debita pelas peças novas desta parte 2",
+    );
+    const inicioParte3 = MIGRATION.indexOf("14. billing_token_avisos_emitidos: dedup dos avisos de carteira");
+    expect(fimParte2).toBeGreaterThan(-1);
+    expect(inicioParte3).toBeGreaterThan(fimParte2);
+  });
+
+  it("billing_token_avisos_emitidos: chave única por organização, sem update/delete/truncate para ninguém", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create table if not exists public.billing_token_avisos_emitidos (");
+      expect(inicio, "tabela não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, sql.indexOf("\n);", inicio));
+      expect(trecho).toMatch(
+        /organization_id uuid not null references public\.organizations\(id\) on delete cascade,/,
+      );
+      expect(trecho).toMatch(
+        /constraint billing_token_avisos_emitidos_org_chave_unique unique \(organization_id, chave\)/,
+      );
+      expect(sql).toMatch(/alter table public\.billing_token_avisos_emitidos enable row level security;/);
+      expect(sql).toMatch(/revoke all on public\.billing_token_avisos_emitidos from anon, authenticated;/);
+      expect(sql).toMatch(/grant select, insert on public\.billing_token_avisos_emitidos to service_role;/);
+      expect(sql).toMatch(
+        /revoke update, delete, truncate on public\.billing_token_avisos_emitidos from service_role;/,
+      );
+      // Ninguém (nem authenticated, nem service_role) ganha update/delete/truncate.
+      expect(sql).not.toMatch(/grant update[^;]*public\.billing_token_avisos_emitidos/);
+      expect(sql).not.toMatch(/grant delete[^;]*public\.billing_token_avisos_emitidos/);
+      expect(sql).not.toMatch(/create policy[^;]*on public\.billing_token_avisos_emitidos/);
+      expect(sql).not.toMatch(/create trigger[^;]*billing_token_avisos_emitidos/);
+    }
+  });
+
+  it("fn_billing_avisar_carteira é security definer, com search_path fixo em public, pg_temp", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_carteira(");
+      expect(inicio, "função não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, inicio + 400);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/set search_path = public, pg_temp/);
+    }
+  });
+
+  it("fn_billing_avisar_carteira: revoke de public/anon/authenticated e grant só para service_role", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_avisar_carteira\(uuid, date, date, uuid\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_avisar_carteira\(uuid, date, date, uuid\) to service_role;/,
+      );
+    }
+  });
+
+  it("fn_billing_debitar_chamada chama fn_billing_avisar_carteira só quando entrou E o ciclo da chamada é o ciclo ATUAL", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /if v_entrou and v_ciclo = public\.fn_billing_ciclo_de\(now\(\)\) then\s*\n\s*perform public\.fn_billing_avisar_carteira\(v_chamada\.organization_id, v_ciclo, v_dia, v_chamada\.contact_id\);\s*\n\s*end if;/,
+      );
+      // A chamada do aviso vem DEPOIS do bloco que atualiza o agregado
+      // (só faz sentido avisar depois de o consumo ter sido contabilizado).
+      const posAgregado = corpo.indexOf("insert into public.billing_token_consumo_diario");
+      const posAviso = corpo.indexOf("perform public.fn_billing_avisar_carteira(");
+      expect(posAgregado).toBeGreaterThan(-1);
+      expect(posAviso).toBeGreaterThan(posAgregado);
+    }
+  });
+
+  it("fn_billing_avisar_carteira nunca lança: corpo inteiro sob exception when others / raise warning", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/exception\s*\n\s*when others then/);
+      expect(corpo).toMatch(/raise warning 'billing_avisar_carteira_falhou/);
+    }
+  });
+
+  it("fn_billing_avisar_carteira: limiares 50/80/100, dedup por billing_token_avisos_emitidos, sem teto (creditado zero) não avisa", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/if v_teto_total > 0 then/);
+      expect(corpo).toMatch(/foreach v_limiar in array array\[50, 80, 100\] loop/);
+      expect(corpo).toMatch(/v_consumido_ciclo \* 100 >= v_teto_total \* v_limiar/);
+      expect(corpo).toMatch(/'limiar:' \|\| p_ciclo::text \|\| ':' \|\| v_limiar::text/);
+      expect(corpo).toMatch(/on conflict \(organization_id, chave\) do nothing;/);
+      expect(corpo).toMatch(/get diagnostics v_linhas = row_count;/);
+      // Texto fixo: só o número do limiar e o mês, nenhum outro dado do banco.
+      expect(corpo).toMatch(
+        /'Tokens de IA: ' \|\| v_limiar::text \|\| '% do mês usado \(' \|\| v_mes_ano \|\| '\)'/,
+      );
+    }
+  });
+
+  it("fn_billing_avisar_carteira: travas por organização e por conversa lidas de billing_settings, nulo desliga", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /select teto_org_tokens_dia, teto_conversa_tokens_dia\s*\n\s*into v_teto_org_dia, v_teto_conversa_dia\s*\n\s*from public\.billing_settings/,
+      );
+      expect(corpo).toMatch(/if v_teto_org_dia is not null then/);
+      expect(corpo).toMatch(/if v_teto_conversa_dia is not null and p_contact_id is not null then/);
+      expect(corpo).toMatch(/'teto_org_dia:' \|\| p_dia::text/);
+      expect(corpo).toMatch(/'teto_conversa_dia:' \|\| p_dia::text \|\| ':' \|\| p_contact_id::text/);
+      // teto_instalacao_tokens_dia NÃO é LIDO nem SOMADO aqui (decisão 15: é
+      // do conferidor, Tarefa 8); só o comentário explicando o porquê pode
+      // citar o nome da coluna, nunca um "select"/variável funcional.
+      expect(corpo).not.toMatch(/select[^;]*teto_instalacao_tokens_dia/is);
+      expect(corpo).not.toMatch(/v_teto_instalacao/);
+    }
+  });
+
+  it("o bloco da role agent_worker da parte 3 revoga escrita na tabela nova e execute da função nova", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).toMatch(
+        /revoke insert, update, delete, truncate on public\.billing_token_avisos_emitidos from agent_worker/,
+      );
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_avisar_carteira\(uuid, date, date, uuid\) from agent_worker/,
+      );
+    }
+  });
+});

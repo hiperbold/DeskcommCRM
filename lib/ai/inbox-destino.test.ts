@@ -93,6 +93,28 @@ describe("destinos da Central", () => {
     const items = await resolverDestinosDosAvisos(leitor().client, ORG, "admin", [aviso(kind, ref, ORG), aviso(kind, ref, ID)]);
     expect(items[0]?.destination.estado).toBe("disponivel"); expect(items[1]?.destination.estado).toBe("indisponivel");
   });
+  // Tarefa 2b (fase F2-B, fork Hiperbold): o aviso de carteira de tokens
+  // (kind "other", ref_kind "billing_limite") nasce SEMPRE com
+  // ref_id = organization_id (fn_billing_conferir_teto, 0905, e
+  // fn_billing_avisar_carteira, 0906), mesma régua de "ai_budget", gerente
+  // para cima. Sem o registro em REFERENCIAS_DE_AVISO/POLITICAS_DE_AVISO
+  // este item caía em "indisponivel" mesmo para quem tem acesso (defeito já
+  // presente desde a F2, relatado no handoff da tarefa).
+  it("billing_limite abre Plano e uso só para org ativa e gerente para cima", async () => {
+    const l = leitor();
+    const items = await resolverDestinosDosAvisos(l.client, ORG, "manager", [
+      aviso("other", "billing_limite", ORG),
+      aviso("other", "billing_limite", ID),
+    ]);
+    expect(items[0]?.destination).toMatchObject({ estado: "disponivel", href: "/app/settings/plano", rotulo: "Abrir Plano e uso" });
+    expect(items[1]?.destination.estado).toBe("indisponivel");
+    expect(l.queries).toHaveLength(0);
+  });
+  it.each(["agent", "viewer"] as const)("billing_limite: %s não recebe (abaixo de gerente)", async role => {
+    const [item] = await resolverDestinosDosAvisos(leitor().client, ORG, role, [aviso("other", "billing_limite", ORG)]);
+    expect(item?.destination.estado).toBe("sem_permissao");
+    expect(item?.destination).not.toHaveProperty("href");
+  });
   it("kind/ref desconhecidos, pares inválidos e URLs arbitrárias falham fechados", async () => {
     const l = leitor(); const items = await resolverDestinosDosAvisos(l.client, ORG, "admin", [aviso("novo"), aviso("handoff", "https://evil.test"), aviso("handoff", "channel_session"), aviso("__proto__"), aviso("other", "__proto__")]);
     expect(items.every(i => !("href" in i.destination))).toBe(true); expect(l.queries).toHaveLength(0);

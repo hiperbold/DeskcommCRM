@@ -29,7 +29,7 @@ export const REFERENCIAS_DE_AVISO = {
   followup_flow: { tabela: "followup_flow_pointers", papel: "manager", rotulo: "Abrir o fluxo", href: (id: string) => `/app/ai/followups/${id}` },
 } satisfies Record<string, Alvo>;
 
-export type InboxRefKind = keyof typeof REFERENCIAS_DE_AVISO | "organization" | "ai_budget" | "job_queue" | "cron_jobs";
+export type InboxRefKind = keyof typeof REFERENCIAS_DE_AVISO | "organization" | "ai_budget" | "job_queue" | "cron_jobs" | "billing_limite";
 type ContextoGeral = { papel: Role; href: string; rotulo: string };
 interface Politica { refs: readonly InboxRefKind[]; orientacao: string; geral?: ContextoGeral }
 const EVOLUCAO: ContextoGeral = { papel: "manager", href: "/app/ai/evolution", rotulo: "Abrir evolução do assistente" };
@@ -96,7 +96,12 @@ export const POLITICAS_DE_AVISO = {
   // está pendente é o ATENDIMENTO, e quem abre o aviso precisa cair nele. A
   // conferência da conexão é o segundo passo, e vai na orientação.
   aviso_de_caso_nao_entregue: { refs: ["agent_case"], orientacao: "O aviso deste atendimento não saiu no WhatsApp. Abra o atendimento — ele continua esperando — e confira a conexão de avisos em Configurações." },
-  other: { refs: ["lead", "channel_session", "appointment", "ai_agent"], orientacao: "Confira a situação descrita neste aviso com a pessoa responsável." },
+  // `billing_limite` entra aqui (não ganha entrada própria em
+  // REFERENCIAS_DE_AVISO): o aviso de carteira de tokens (0905/0906, fork
+  // Hiperbold) não aponta para uma entidade com tabela própria, sempre para
+  // a PRÓPRIA organização (`ref_id = organization_id`), resolvido no mesmo
+  // ramo especial de `ai_budget`/`organization`, abaixo.
+  other: { refs: ["lead", "channel_session", "appointment", "ai_agent", "billing_limite"], orientacao: "Confira a situação descrita neste aviso com a pessoa responsável." },
 } satisfies Record<InboxKind, Politica>;
 
 /**
@@ -190,11 +195,21 @@ export async function resolverDestinosDosAvisos<T extends ReferenciaDoAviso>(
             : visiveis.get(item.ref_kind!)?.has(item.ref_id!)
               ? { estado: "disponivel", rotulo: ROTULO_POR_KIND[item.kind] ?? a.rotulo, href: a.href(item.ref_id!, funilPorLead.get(item.ref_id!)) }
               : INDISPONIVEL;
-        } else if (item.ref_kind === "ai_budget" || item.ref_kind === "organization") {
+        } else if (item.ref_kind === "ai_budget" || item.ref_kind === "organization" || item.ref_kind === "billing_limite") {
+          // `billing_limite` (F2/F2-B, fork Hiperbold) usa a MESMA régua de
+          // `ai_budget`, gerente para cima, sem tabela própria: o aviso da
+          // carteira de tokens sempre nasce com `ref_id = organization_id`
+          // (fn_billing_conferir_teto, 0905, e fn_billing_avisar_carteira,
+          // 0906). Sem este ramo o item caía no `INDISPONIVEL` genérico logo
+          // acima (defeito já presente desde a F2: o `ref_kind` nunca esteve
+          // registrado aqui, então o aviso de teto do plano nunca abria a
+          // tela "Plano e uso", sempre "Este contexto não está disponível").
+          const href = item.ref_kind === "ai_budget" ? "/app/ai/usage" : item.ref_kind === "billing_limite" ? "/app/settings/plano" : "/app/radar";
+          const rotulo = item.ref_kind === "ai_budget" ? "Abrir uso de IA" : item.ref_kind === "billing_limite" ? "Abrir Plano e uso" : "Abrir Radar";
           destination = item.ref_id !== organizationId ? INDISPONIVEL
             : item.kind === "contact_proposal_expired" ? { estado: "sem_destino", orientacao: p.orientacao }
-            : !permite(papel, item.ref_kind === "ai_budget" ? "manager" : "agent") ? semPermissao("manager")
-            : { estado: "disponivel", href: item.ref_kind === "ai_budget" ? "/app/ai/usage" : "/app/radar", rotulo: item.ref_kind === "ai_budget" ? "Abrir uso de IA" : "Abrir Radar" };
+            : !permite(papel, item.ref_kind === "ai_budget" || item.ref_kind === "billing_limite" ? "manager" : "agent") ? semPermissao("manager")
+            : { estado: "disponivel", href, rotulo };
         } else destination = { estado: "sem_destino", orientacao: p.orientacao };
       }
     }
