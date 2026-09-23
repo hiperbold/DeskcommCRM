@@ -6429,6 +6429,7 @@ export type Database = {
           legacy_invocation_id: string | null
           model: string
           organization_id: string
+          origem_da_chave: string | null
           origem_da_escolha: string | null
           output_tokens: number
           provider: string
@@ -6453,6 +6454,7 @@ export type Database = {
           legacy_invocation_id?: string | null
           model: string
           organization_id: string
+          origem_da_chave?: string | null
           origem_da_escolha?: string | null
           output_tokens?: number
           provider: string
@@ -6477,6 +6479,7 @@ export type Database = {
           legacy_invocation_id?: string | null
           model?: string
           organization_id?: string
+          origem_da_chave?: string | null
           origem_da_escolha?: string | null
           output_tokens?: number
           provider?: string

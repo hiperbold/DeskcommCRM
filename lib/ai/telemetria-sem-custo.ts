@@ -61,6 +61,13 @@ export interface TelemetriaSemCustoInput {
   outputTokens?: number;
   /** Só quando o ponto roda dentro de um job da fila; a maioria não tem. */
   jobId?: string | null;
+  /**
+   * 0906 (carteira de tokens de IA, fase F2-B): de quem é a chave desta
+   * chamada, quando o chamador souber sem reestruturar a resolução de
+   * credencial. Ausente/nulo = a coluna fica nula (não debita a carteira,
+   * decisão 3 da fase).
+   */
+  origemDaChave?: "chave_da_instalacao" | "credencial_da_organizacao" | null;
 }
 
 /**
@@ -87,6 +94,9 @@ export async function registrarTelemetriaSemCusto(input: TelemetriaSemCustoInput
       output_tokens: input.outputTokens ?? 0,
       // SEMPRE nulo, ver o comentário do arquivo (D-050).
       cost_cents: null,
+      // 0906: nula quando o chamador não sabe (embedding hoje não sabe sem
+      // reestruturar a resolução de credencial; ver hiperbold/planos).
+      origem_da_chave: input.origemDaChave ?? null,
     });
     if (error) {
       logger.warn("[telemetria-sem-custo] o banco recusou a gravação", {

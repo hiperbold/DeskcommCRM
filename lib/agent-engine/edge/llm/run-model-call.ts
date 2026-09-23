@@ -25,7 +25,7 @@ import { scrubMessage } from '@/lib/sentry/scrub';
 
 import type { Logger } from '../../obs/logger';
 import { decidirParaOSeam } from './binding-do-ponto';
-import { resolveOrgLlmConfig, type LlmEdgeConfig, type OrcamentoDaOrg } from './credentials';
+import { resolveOrgLlmConfig, type LlmEdgeConfig, type OrcamentoDaOrg, type OrigemDaChaveLlm } from './credentials';
 import {
   AVISO_CORPO,
   AVISO_TITULO,
@@ -294,6 +294,8 @@ async function aplicarOrcamento(d: {
   provider: string;
   model: string;
   origem: string;
+  /** 0906 (carteira de tokens): de quem é a chave, repassado à linha de falha. */
+  origemDaChave: OrigemDaChaveLlm;
   input: RunModelCallInput;
   log?: Logger;
 }): Promise<void> {
@@ -388,6 +390,7 @@ async function aplicarOrcamento(d: {
     provider: d.provider,
     model: d.model,
     origem: d.origem,
+    origemDaChave: d.origemDaChave,
     latencyMs: Date.now() - inicio,
     erro,
   }).catch(() => {
@@ -433,6 +436,8 @@ async function registrarRecusaDeEnderecoSemChave(d: {
   provider: string;
   model: string;
   origem: string;
+  /** 0906 (carteira de tokens): sempre 'chave_da_instalacao' neste caminho (é a condição que leva a esta recusa), repassado à linha de falha. */
+  origemDaChave: OrigemDaChaveLlm;
   baseUrl: string;
   /** `avisa` antes do prazo (a chamada segue), `recusa` depois dele. */
   degrau: 'avisa' | 'recusa';
@@ -489,6 +494,7 @@ async function registrarRecusaDeEnderecoSemChave(d: {
     provider: d.provider,
     model: d.model,
     origem: d.origem,
+    origemDaChave: d.origemDaChave,
     latencyMs: 0,
     erro,
   }).catch(() => {
@@ -602,6 +608,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       provider: config.provider,
       model,
       origem: decisao.origem,
+      origemDaChave: config.origemDaChave,
       baseUrl: decisao.baseUrl,
       degrau: degrauDoEnderecoProprio(deps.agora ?? new Date()),
       ...(deps.log ? { log: deps.log } : {}),
@@ -633,6 +640,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     provider: config.provider,
     model,
     origem: decisao.origem,
+    origemDaChave: config.origemDaChave,
     input,
     ...(deps.log ? { log: deps.log } : {}),
   });
@@ -689,6 +697,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       provider: config.provider,
       model,
       origem: decisao.origem,
+      origemDaChave: config.origemDaChave,
       latencyMs: Date.now() - startedAt,
       erro: err,
     }).catch(() => {
@@ -722,8 +731,8 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     `insert into llm_calls
        (organization_id, contact_id, job_id, variant_id, purpose, provider, model,
         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents, latency_ms,
-        status, origem_da_escolha, agent_id)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'ok', $14, $15)
+        status, origem_da_escolha, agent_id, origem_da_chave)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'ok', $14, $15, $16)
      returning id`,
     [
       input.tenantId,
@@ -741,6 +750,8 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       latencyMs,
       decisao.origem,
       input.agentId ?? null,
+      // 0906 (carteira de tokens): de quem é a chave desta chamada bem-sucedida.
+      config.origemDaChave,
     ],
   );
 
@@ -894,6 +905,8 @@ async function registrarFalha(
     provider: string;
     model: string;
     origem: string;
+    /** 0906 (carteira de tokens): de quem é a chave desta chamada que falhou. */
+    origemDaChave: OrigemDaChaveLlm;
     latencyMs: number;
     erro: unknown;
   },
@@ -903,8 +916,8 @@ async function registrarFalha(
     `insert into llm_calls
        (organization_id, contact_id, job_id, variant_id, purpose, provider, model,
         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents, latency_ms,
-        status, error_code, error_message, http_status, origem_da_escolha, agent_id)
-     values ($1, $2, $3, $4, $5, $6, $7, 0, 0, 0, 0, null, $8, 'erro', $9, $10, $11, $12, $13)`,
+        status, error_code, error_message, http_status, origem_da_escolha, agent_id, origem_da_chave)
+     values ($1, $2, $3, $4, $5, $6, $7, 0, 0, 0, 0, null, $8, 'erro', $9, $10, $11, $12, $13, $14)`,
     [
       d.input.tenantId,
       d.input.leadId ?? null,
@@ -919,6 +932,7 @@ async function registrarFalha(
       http_status,
       d.origem,
       d.input.agentId ?? null,
+      d.origemDaChave,
     ],
   );
 }

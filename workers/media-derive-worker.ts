@@ -180,14 +180,20 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
     // (visto nesta VPS: media.derive_requested preso com transcription_401,
     // e o cliente ouvindo "não consigo ouvir áudio" com a chave certa no .env).
     let openaiKey: string | null = null;
+    // 0906 (carteira de tokens): a origem da chave de fato usada para
+    // transcrever, capturada aqui porque é o único ponto que resolve a
+    // credencial OpenAI da transcrição sem reestruturar nada.
+    let openaiKeyOrigem: "chave_da_instalacao" | "credencial_da_organizacao" | null = null;
     if (llm.provider === "openai") {
       openaiKey = llm.apiKey;
+      openaiKeyOrigem = llm.origemDaChave;
     } else {
       try {
         const oa = await resolveOrgLlmConfig(derivePool(), llmCfg, row.organization_id, {
           provider: "openai",
         });
         openaiKey = oa.apiKey;
+        openaiKeyOrigem = oa.origemDaChave;
       } catch {
         openaiKey = null; // sem credencial e sem OPENAI_API_KEY: áudio fica sem transcrição
       }
@@ -219,7 +225,7 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
 
     // O 5º argumento é a `base_url` do binding: o factory precisa dela para não
     // cair no endpoint padrão do provedor (ver o comentário lá em cima).
-    const deps = buildDeriveDeps(llm, openaiKey, row.organization_id, admin, baseUrlDaVisao, chaveEhDaInstalacao);
+    const deps = buildDeriveDeps(llm, openaiKey, row.organization_id, admin, baseUrlDaVisao, chaveEhDaInstalacao, openaiKeyOrigem);
 
     const text = await deriveMediaText(msg.type, buffer, msg.media_mime ?? "application/octet-stream", deps);
     await admin.from("messages")
@@ -318,7 +324,13 @@ async function lerBindingDoPonto(
 }
 
 function buildDeriveDeps(
-  llm: { provider: string; apiKey: string; defaultModel: string | null },
+  llm: {
+    provider: string;
+    apiKey: string;
+    defaultModel: string | null;
+    /** 0906 (carteira de tokens): repassada pela visão, que já tem `llm` resolvido aqui. */
+    origemDaChave: "chave_da_instalacao" | "credencial_da_organizacao";
+  },
   openaiKey: string | null,
   orgId: string,
   admin: ReturnType<typeof createAdminClient>,
@@ -326,6 +338,8 @@ function buildDeriveDeps(
   // do provedor, que é o comportamento do turno do agente sem `baseUrl`.
   baseUrlDaVisao: string | null = null,
   chaveEhDaInstalacao = false,
+  /** 0906: origem da chave usada para transcrever (openai padrão); nula quando não resolvida. */
+  openaiKeyOrigem: "chave_da_instalacao" | "credencial_da_organizacao" | null = null,
 ): DeriveDeps {
   const registry = createDefaultRegistry();
   // Thunk, não consulta: nada vai ao banco até a visão ser de fato perguntada,
@@ -445,6 +459,8 @@ function buildDeriveDeps(
       // a produção sempre devolve o objeto, mas nada aqui depende disso.
       inputTokens: res.usage?.inputTokens ?? 0,
       outputTokens: res.usage?.outputTokens ?? 0,
+      // 0906 (carteira de tokens): `llm` já está resolvido aqui em cima.
+      origemDaChave: llm.origemDaChave,
     });
     return res.text;
   };
@@ -458,7 +474,12 @@ function buildDeriveDeps(
   // antes) e nada é gravado, porque não houve transcrição paga.
   const comTelemetriaDeTranscricao = (
     provider: DeriveDeps["transcriber"],
-    meta: { provider: string; model: string },
+    meta: {
+      provider: string;
+      model: string;
+      /** 0906: nula quando a origem não é conhecida neste caminho (serviço próprio via env). */
+      origemDaChave?: "chave_da_instalacao" | "credencial_da_organizacao" | null;
+    },
   ): DeriveDeps["transcriber"] => ({
     transcribe: async (audio, mime) => {
       const texto = await provider.transcribe(audio, mime);
@@ -472,6 +493,7 @@ function buildDeriveDeps(
         // (D-051, `hiperbold/DEBITO.md`).
         inputTokens: 0,
         outputTokens: 0,
+        origemDaChave: meta.origemDaChave ?? null,
       });
       return texto;
     },
@@ -499,6 +521,8 @@ function buildDeriveDeps(
     ? comTelemetriaDeTranscricao(apiTranscriptionProvider({ apiKey: openaiKey }), {
         provider: "openai",
         model: MODELO_PADRAO_DE_TRANSCRICAO,
+        // 0906: origem já resolvida acima (llm.origemDaChave ou oa.origemDaChave).
+        origemDaChave: openaiKeyOrigem,
       })
     : semTranscricao;
   // O endereço do serviço de transcrição vem do .env da instalação e a chamada

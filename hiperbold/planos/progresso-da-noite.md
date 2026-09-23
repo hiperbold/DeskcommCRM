@@ -3,7 +3,11 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F2
-Etapa da fase: revisão e auditoria da fase (em paralelo, diff 8fa4893..HEAD). Todas as 8 tarefas feitas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Depois: corrigir achados, portões completos, fechar.
+Etapa da fase: F2 em portões completos (cópia separada `~/projects/deskcommcrm-portoes`, commit 28d21a3, resumo em F:\temp\2026-09-23\planos-noite\logs\f2-resumo.txt). F2-B já começou em paralelo no repositório principal: plano revisado (f163a7c), tarefa 1 (migração 0906 parte 1) em execução.
+
+F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
+
+F2-B, tarefas (plano em `hiperbold/planos/fase-F2-B-tarefas.md`): 1 em execução; 2a, 2b, 3, 4, 5, 6, 7, 8 pendentes.
 
 ## Fases
 
@@ -41,6 +45,9 @@ F2: ainda não planejadas. Abaixo, as da F1, para registro.
 - **F2: integração webhook é `webhook_sources`** (a entrada automática de leads), e não o webhook que sai das automações, porque automação não é limitada no plano. Onde mudar: o gatilho da F2 nessa tabela.
 - **F2: configuração dos planos numa tabela nossa (`billing_settings`)**, e não em `platform_settings`, que é do autor e daria conflito em toda junção.
 - **F2: aviso na Central com `kind = 'other'`** e deduplicação por título, para não mexer na restrição de tipos do autor.
+- **Portões em cópia separada (worktree)**: a bateria de 70 minutos roda numa cópia do repositório no commit fechado, para a fase seguinte andar em paralelo sem violar a regra de não editar arquivo enquanto a bateria roda. Onde mudar: `F:\temp\2026-09-23\planos-noite\portoes-f2.sh`.
+- **B5 da auditoria da F2: `billing_usage_counters` saiu de `TABLES` do `rls-isolation`** (linha que o próprio fork tinha posto) e entrou na prova própria da varredura, como `team_invites`: a leitura passou a exigir gerente e o usuário semeado lá é agent. A prova de isolamento é o caso 12 de `planos-trava-avisa.test.ts`.
+- **M1 da auditoria da F2: os gatilhos em `user_organizations` ficaram sem lista de colunas**, porque `provisional_until_handover` nasce na 0237, que no baseline vem depois do bloco da 0905: `create trigger ... of` com essa coluna quebraria o install do zero. O corpo só age na transição.
 - **F2: leads por contador materializado**; o resto por contagem na hora. Contar 100 mil leads a cada importação derrubaria a importação.
 - **F2, tarefa 4: teto de conexões MCP com errcode PT422**, convenção do próprio repositório (migração 0363), mapeado no código para o mesmo 422 da checagem prévia. Onde mudar: `fn_billing_trava_ai_mcp_connections` e `CODIGO_LIMITE_MCP` em `lib/ai/mcp-externo/conexoes.ts`.
 - **F2, tarefa 8: telemetria da transcrição só no provedor real**, embrulhado dentro de `buildDeriveDeps` do worker; sem chave ou com endereço recusado, nada é gravado. Rótulo `transcricao_propria` para serviço próprio, nunca a URL. A primeira versão gravava em `derive.ts` e contava transcrição que não aconteceu; refeita na revisão da tarefa.
@@ -48,6 +55,8 @@ F2: ainda não planejadas. Abaixo, as da F1, para registro.
 
 ## Perguntas para o Filipe
 
+- **Respondidas pelo Filipe em 23/09/2026, à tarde**: N10 (só lead aberto conta, confirmado) e N13 a N17 (padrões aprovados). N1 e N12 explicadas de novo a ele; os modelos dos agentes serão baratos e fora da Anthropic (GPT Luna, DeepSeek, GLM), o que torna o D-050 mais importante: hoje o orçamento de IA não enxerga nenhum deles.
+- **N13 a N17 (carteira de tokens, F2-B)**: pacote avulso não vence; tetos de segurança diários desligados e, ligados, só avisam; troca de plano no meio do mês não refaz a concessão; embedding não consome tokens do cliente (peso 0); consumo com a chave da própria organização fica fora da carteira. Detalhe e onde muda em `hiperbold/planos/fase-F2-B-tarefas.md`, "Perguntas novas desta fase".
 - **Preço anual (N8)**: nulo no catálogo até ele responder. Onde muda: `price_yearly_cents` em `billing_plans`.
 - **N10. Lead ganho ou perdido ocupa vaga do plano?** Padrão usado: não, conta só o lead aberto (`status = 'open'`), que é a leitura que menos cobra do cliente. Onde muda: a contagem de leads na F2.
 - **N11. Quem vê a tela "Plano e uso" da organização?** Padrão usado: admin e gerente. Onde muda: a tarefa 7 da F2.
