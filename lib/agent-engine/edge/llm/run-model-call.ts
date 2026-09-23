@@ -37,7 +37,7 @@ import {
   SQL_ORCAMENTO,
   type ChaveDeOrcamento,
 } from './orcamento';
-import { costCents } from './pricing';
+import { custoCentsComCatalogo } from './pricing';
 import { chaveDeOrcamentoDaInstalacao } from '../../../instalacao/comportamento';
 import { createDefaultRegistry, type ProviderRegistry } from './providers';
 import { buildStablePrefix } from './stable-prefix';
@@ -725,7 +725,11 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
   // O TTL é o MESMO que gravou o prefixo estável acima: a gravação de cache custa
   // 1.25× a entrada em 5m e 2× em 1h, e supor a doutrina superfaturaria 60% da
   // parcela de cache write em quem usa o knob.
-  const cost = costCents(model, usage, cfg.cacheTtl ?? '1h');
+  //
+  // D-050: modelo fora da tabela de Anthropic (ex.: `gpt-5.6-luna`) cai para o
+  // catálogo `ai_models` em vez de virar `cost_cents` nulo para sempre, ver o
+  // resolvedor único em `./pricing`.
+  const cost = await custoCentsComCatalogo(config.provider, model, usage, cfg.cacheTtl ?? '1h', deps.log);
 
   const { rows } = await db.query<{ id: string }>(
     `insert into llm_calls

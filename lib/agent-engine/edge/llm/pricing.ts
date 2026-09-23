@@ -31,6 +31,8 @@
  * contrato escrito acima.
  */
 
+import { precoDoCatalogoOuNull } from '@/lib/ai/runtime/cost';
+
 import type { CacheTtl } from './stable-prefix';
 
 interface Preco {
@@ -100,4 +102,75 @@ export function costCents(model: string, usage: TokenUsage, cacheTtl: CacheTtl =
       usage.outputTokens * p.output) /
     1_000_000;
   return usd * 100;
+}
+
+/** Uso de token mínimo para o resolvedor com catálogo, cache é opcional aqui. */
+export interface UsoDeTokensParaCusto {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+/** Só o que o resolvedor precisa de um logger, `Logger` (obs) e o `logger` singleton (lib/logger) batem os dois. */
+interface LoggerMinimo {
+  warn(msg: string, fields?: Record<string, unknown>): void;
+}
+
+/**
+ * O RESOLVEDOR ÚNICO de preço para toda linha de `llm_calls` (D-050,
+ * `hiperbold/DEBITO.md`, decisão do Filipe em 23/09/2026: os agentes passam a
+ * usar modelos baratos fora da Anthropic, e o orçamento de IA precisa
+ * enxergar o custo deles).
+ *
+ * ORDEM: primeiro esta tabela escrita à mão, acima, `costCents` não muda uma
+ * linha aqui, e o comportamento para Anthropic é EXATAMENTE o de hoje (prova:
+ * `pricing.test.ts`). Sem entrada na tabela, cai para o catálogo `ai_models`
+ * (`lib/ai/runtime/cost.ts`, mesma leitura cacheada de 5 min que o runtime
+ * novo usa, não abre uma segunda conexão para a mesma tabela). Não achou em
+ * nenhum dos dois, OU a leitura do catálogo falhou: `null`, NUNCA zero:
+ * preço desconhecido não é "de graça" (mesma doutrina do comentário do topo
+ * deste arquivo e do `baseline.sql`).
+ *
+ * FÓRMULA DO CATÁLOGO: `ai_models` não guarda desconto de cache (nem leitura
+ * nem gravação), só entrada e saída. Por isso TODO token de entrada, cacheado
+ * ou não, é cobrado ao preço de ENTRADA do catálogo, e a saída ao preço de
+ * SAÍDA. Isso SUPERESTIMA um pouco o custo de quem usa cache com desconto real
+ * no provedor (normalmente mais barato que a entrada cheia), e é de propósito:
+ * entre inventar um desconto que o catálogo não documenta e cobrar um pouco a
+ * mais da própria Hiperbold, que paga a conta: o lado seguro é o segundo.
+ * `usage.inputTokens` já é o TOTAL do SDK (inclui a parcela de cache, mesma
+ * convenção do resto deste arquivo), então a fórmula não precisa somar as
+ * partes separadamente.
+ */
+export async function custoCentsComCatalogo(
+  provider: string,
+  model: string,
+  usage: UsoDeTokensParaCusto,
+  cacheTtl: CacheTtl = '1h',
+  log?: LoggerMinimo,
+): Promise<number | null> {
+  const daTabela = costCents(
+    model,
+    {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens ?? 0,
+      cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+    },
+    cacheTtl,
+  );
+  if (daTabela !== null) return daTabela;
+
+  const { preco, falhou } = await precoDoCatalogoOuNull(provider, model);
+  if (falhou) {
+    log?.warn('pricing: leitura do catálogo ai_models falhou, custo gravado como desconhecido (null)', {
+      provider,
+      model,
+    });
+    return null;
+  }
+  if (!preco) return null;
+
+  return (usage.inputTokens * preco.inputCentsPerMillion + usage.outputTokens * preco.outputCentsPerMillion) / 1_000_000;
 }

@@ -47,7 +47,13 @@ export interface LogInvocationInput {
   prompt_tokens: number;
   completion_tokens: number;
   latency_ms: number;
-  cost_cents: number;
+  /**
+   * `null` = preço desconhecido (D-050, `hiperbold/DEBITO.md`): nem a tabela
+   * escrita à mão nem o catálogo `ai_models` sabem o modelo, ou a leitura do
+   * catálogo falhou. `computeCost` (`./cost.ts`) já devolve isto, o tipo aqui
+   * só para de mentir que o valor é sempre um número.
+   */
+  cost_cents: number | null;
   finish_reason?: string | null;
   citations?: Array<Record<string, unknown>>;
   error_payload?: Record<string, unknown> | null;

@@ -1,6 +1,42 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { costCents, precoDoModelo, type TokenUsage } from "./pricing";
+/**
+ * Mock do catálogo `ai_models` para os testes de `custoCentsComCatalogo`
+ * (D-050, decisão do Filipe em 23/09/2026). As linhas são controladas por
+ * `catalogoLinhas`/`catalogoDeveFalhar`; testes que só exercitam `costCents`/
+ * `precoDoModelo` (puros, síncronos) nunca tocam este mock.
+ */
+let catalogoLinhas: Array<{
+  provider: string;
+  model_id: string;
+  input_price_per_million_cents: number | null;
+  output_price_per_million_cents: number | null;
+}> = [];
+let catalogoDeveFalhar = false;
+
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({
+    from: (tabela: string) => {
+      if (tabela !== "ai_models") throw new Error(`tabela inesperada no mock de pricing.test.ts: ${tabela}`);
+      return {
+        select: async () => {
+          if (catalogoDeveFalhar) return { data: null, error: { message: "conexão com o catálogo recusada" } };
+          return { data: catalogoLinhas, error: null };
+        },
+      };
+    },
+  }),
+}));
+
+import { _resetRuntimeCostCacheForTests } from "@/lib/ai/runtime/cost";
+
+import { costCents, custoCentsComCatalogo, precoDoModelo, type TokenUsage } from "./pricing";
+
+beforeEach(() => {
+  catalogoLinhas = [];
+  catalogoDeveFalhar = false;
+  _resetRuntimeCostCacheForTests();
+});
 
 /**
  * O defeito de origem, medido numa VPS real: o agente atende em
@@ -138,5 +174,90 @@ describe("costCents — a conversa real que originou este PR", () => {
     // deste conserto era NULL — zero para o teto mensal.
     expect(costCents("claude-sonnet-5", turnoReal)).toBeGreaterThan(22);
     expect(costCents("claude-sonnet-5", turnoReal)).toBeLessThan(24);
+  });
+});
+
+/**
+ * D-050 (`hiperbold/DEBITO.md`, decisão do Filipe em 23/09/2026): os agentes
+ * passam a usar modelos baratos fora da Anthropic (GPT-5.6 Luna e afins), e o
+ * resolvedor único (`custoCentsComCatalogo`) precisa dar custo a eles em vez
+ * de nulo para sempre.
+ */
+describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
+  it("Anthropic continua igual: resolve pela tabela escrita à mão, sem tocar o catálogo", async () => {
+    const usage: TokenUsage = {
+      inputTokens: 359_369,
+      outputTokens: 4_070,
+      cacheReadTokens: 294_128,
+      cacheWriteTokens: 0,
+    };
+    const esperado = costCents("claude-sonnet-5", usage);
+    const resolvido = await custoCentsComCatalogo("anthropic", "claude-sonnet-5", usage);
+    expect(resolvido).toBeCloseTo(esperado!, 6);
+    // Prova que o catálogo nem foi consultado: com `catalogoLinhas` vazio, se a
+    // busca tivesse acontecido e o mapa não tivesse a entrada, o resultado
+    // ainda seria o mesmo (null cairia para null), o que este teste garante
+    // de verdade é a IGUALDADE com `costCents`, a régua de hoje.
+    expect(resolvido).toBeGreaterThan(0);
+  });
+
+  it("Luna (fora da Anthropic) ganha custo pelo catálogo, 1000 de entrada, 200 de saída, 800 de cache lido", async () => {
+    catalogoLinhas = [
+      {
+        provider: "openai",
+        model_id: "gpt-5.6-luna",
+        input_price_per_million_cents: 20,
+        output_price_per_million_cents: 120,
+      },
+    ];
+    const usage: TokenUsage = {
+      inputTokens: 1000,
+      outputTokens: 200,
+      cacheReadTokens: 800,
+      cacheWriteTokens: 0,
+    };
+    const custo = await custoCentsComCatalogo("openai", "gpt-5.6-luna", usage);
+    // O catálogo não tem desconto de cache: os 1000 de entrada (que já INCLUEM
+    // os 800 de cache lido, mesma convenção de `costCents`) vão inteiros ao
+    // preço de entrada. (1000×20 + 200×120) / 1_000_000 = 0,044 cents.
+    expect(custo).toBeCloseTo(0.044, 6);
+  });
+
+  it("prefixo provider/ colado no id é normalizado antes de bater no catálogo", async () => {
+    catalogoLinhas = [
+      {
+        provider: "openai",
+        model_id: "gpt-5.6-luna",
+        input_price_per_million_cents: 20,
+        output_price_per_million_cents: 120,
+      },
+    ];
+    const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    // Formato que `resolverModeloDoPonto`/`ai_purpose_bindings` gravam em
+    // `llm_calls.model` em alguns caminhos (produção real: 21 linhas de
+    // `openai/gpt-5.6-luna` com `cost_cents` nulo antes deste conserto).
+    const custo = await custoCentsComCatalogo("openai", "openai/gpt-5.6-luna", usage);
+    expect(custo).toBeCloseTo(0.044, 6);
+  });
+
+  it("modelo fora da tabela e fora do catálogo: null, NUNCA zero", async () => {
+    catalogoLinhas = [];
+    const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const custo = await custoCentsComCatalogo("openai", "modelo-que-nao-existe-em-lugar-nenhum", usage);
+    expect(custo).toBeNull();
+  });
+
+  it("falha na leitura do catálogo: null, nunca derruba a chamada, e avisa no log", async () => {
+    catalogoDeveFalhar = true;
+    const avisos: Array<[string, Record<string, unknown> | undefined]> = [];
+    const log = {
+      warn: (msg: string, fields?: Record<string, unknown>) => {
+        avisos.push([msg, fields]);
+      },
+    };
+    const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    await expect(custoCentsComCatalogo("openai", "gpt-5.6-luna", usage, "1h", log)).resolves.toBeNull();
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0]![0]).toMatch(/catálogo/i);
   });
 });

@@ -1,18 +1,29 @@
 /**
- * TELEMETRIA SEM CUSTO: uma linha em `llm_calls` para os pontos que a Tarefa 8
- * (Frente 2, `hiperbold/planos/fase-F2-tarefas.md`) tirou de `registraEm: "nenhum"`:
- * embedding (indexar e consultar), transcrição de áudio e leitura de imagem.
+ * TELEMETRIA (ANTES SEMPRE SEM CUSTO): uma linha em `llm_calls` para os pontos
+ * que a Tarefa 8 (Frente 2, `hiperbold/planos/fase-F2-tarefas.md`) tirou de
+ * `registraEm: "nenhum"`: embedding (indexar e consultar), transcrição de
+ * áudio e leitura de imagem. O nome do arquivo é histórico, este caminho
+ * grava telemetria SEM custo só para transcrição; embedding e visão agora
+ * levam `cost_cents` quando o catálogo tem o preço.
  *
- * ## Por que `cost_cents` é SEMPRE nulo aqui
+ * ## `cost_cents`: por que às vezes tem valor e às vezes não
  *
- * `llm_calls.cost_cents` alimenta o orçamento de IA (`ai_budgets`, gatilho
- * `trg_llm_calls_budget`, função `fn_gasto_de_ia_do_mes`). Preencher um valor
- * aqui ligaria esse teto para consumos que hoje ele não vê, e organizações em
- * produção poderiam ter a IA parada no meio do mês, sem ninguém ter decidido
- * isso de propósito. Ligar é decisão do Filipe, registrada em D-050
- * (`hiperbold/DEBITO.md`). Enquanto essa decisão não vier, `cost_cents` fica
- * nulo aqui sempre, e nulo é o valor que a coluna já trata como "preço
- * desconhecido, nunca inventar zero" (comentário do `baseline.sql`).
+ * D-050 (`hiperbold/DEBITO.md`, decisão do Filipe em 23/09/2026): os agentes
+ * passam a usar modelos baratos fora da Anthropic, e o orçamento de IA
+ * (`ai_budgets`, gatilho `trg_llm_calls_budget`, função
+ * `fn_gasto_de_ia_do_mes`) precisa enxergar esse custo. Este ponto agora chama
+ * o resolvedor único (`custoCentsComCatalogo`, em
+ * `lib/agent-engine/edge/llm/pricing.ts`): embedding e visão ganham
+ * `cost_cents` real quando o catálogo `ai_models` conhece o `provider` +
+ * `model` da chamada; sem entrada no catálogo (ou se a leitura dele falhar),
+ * o valor fica `null`, nulo é "preço desconhecido", nunca "de graça"
+ * (comentário do `baseline.sql`).
+ *
+ * `transcricao_de_audio` é a exceção PERMANENTE: Whisper cobra por MINUTO de
+ * áudio, não por token, e nada neste caminho mede a duração do arquivo antes
+ * de transcrever (D-051, `hiperbold/DEBITO.md`). Sem tokens para multiplicar
+ * pela tarifa do catálogo, `cost_cents` fica sempre nulo para este propósito,
+ * independente do que o catálogo souber sobre o modelo.
  *
  * ## Por que uma falha aqui nunca derruba quem chamou
  *
@@ -24,16 +35,27 @@
  * o próprio client explodir) vira um `logger.warn` e a função retorna
  * normalmente.
  */
+import { custoCentsComCatalogo } from "@/lib/agent-engine/edge/llm/pricing";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
  * Os quatro `purpose` que esta função grava, na única lista canônica: quem
- * precisar saber "isto é telemetria sem custo por decisão (D-050), não preço
- * desconhecido" importa DAQUI, nunca repete a string. O achado 1 da revisão
- * da fase F2 nasceu de `check.ts` repetir esses nomes por fora: o dia em que
- * um quinto ponto entrasse aqui, o aviso de "gasto incompleto" da tela
- * continuaria contando a linha dele como furo de medição para sempre.
+ * precisar saber quais pontos passam por aqui importa DAQUI, nunca repete a
+ * string. O achado 1 da revisão da fase F2 nasceu de `check.ts` repetir esses
+ * nomes por fora: o dia em que um quinto ponto entrasse aqui, o aviso de
+ * "gasto incompleto" da tela continuaria contando a linha dele como furo de
+ * medição para sempre.
+ *
+ * DEPOIS DO D-050 (23/09/2026), o nome não é mais literal: só
+ * `transcricao_de_audio` tem `cost_cents` nulo por uma razão permanente (D-051:
+ * o catálogo não precifica por minuto de áudio). `embedding_indexar`,
+ * `embedding_consultar` e `visao_de_imagem` agora GANHAM custo quando o
+ * catálogo conhece o modelo; ficam nulos só no caso residual de um modelo
+ * ainda não catalogado, ou de a leitura do catálogo falhar. A lista continua
+ * excluída do "gasto incompleto" em `check.ts` mesmo assim, ver o comentário
+ * de lá, porque um nulo residual destes três não é o sinal que aquele aviso
+ * existe para dar (o modelo de conversa do agente sem preço conhecido).
  */
 export const PROPOSITOS_SEM_CUSTO_POR_DECISAO = [
   "embedding_indexar",
@@ -84,6 +106,22 @@ export async function registrarTelemetriaSemCusto(input: TelemetriaSemCustoInput
 
   try {
     const admin = createAdminClient();
+    // Transcrição é a exceção permanente (D-051): sem duração do áudio não há
+    // o que multiplicar pela tarifa do catálogo, então nem tenta, poupa a
+    // consulta e mantém o nulo que já era o resultado certo. Embedding e
+    // visão passam pelo resolvedor único (D-050): custo real quando o
+    // catálogo conhece o modelo, nulo (nunca zero) quando não conhece ou a
+    // leitura falha.
+    const costCents =
+      input.purpose === "transcricao_de_audio"
+        ? null
+        : await custoCentsComCatalogo(
+            input.provider,
+            input.model,
+            { inputTokens: input.inputTokens ?? 0, outputTokens: input.outputTokens ?? 0 },
+            undefined,
+            logger,
+          );
     const { error } = await admin.from("llm_calls").insert({
       organization_id: input.organizationId,
       job_id: input.jobId ?? null,
@@ -92,8 +130,7 @@ export async function registrarTelemetriaSemCusto(input: TelemetriaSemCustoInput
       model: input.model,
       input_tokens: input.inputTokens ?? 0,
       output_tokens: input.outputTokens ?? 0,
-      // SEMPRE nulo, ver o comentário do arquivo (D-050).
-      cost_cents: null,
+      cost_cents: costCents,
       // 0906: nula quando o chamador não sabe (embedding hoje não sabe sem
       // reestruturar a resolução de credencial; ver hiperbold/planos).
       origem_da_chave: input.origemDaChave ?? null,

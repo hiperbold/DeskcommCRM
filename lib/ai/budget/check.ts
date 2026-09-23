@@ -61,26 +61,45 @@ export interface BudgetStatus {
    * (`llm_calls.cost_cents is null`).
    *
    * ⚠️ É O FURO DEBAIXO DA PROTEÇÃO INTEIRA, e por isso ele é um campo do
-   * contrato e não uma nota num doc. `pricing.ts` casa o `model` por PREFIXO
-   * contra três chaves (`claude-sonnet-4`, `claude-haiku-4`, `claude-opus-4`) e
-   * devolve `null` fora delas — id de gateway (`anthropic/claude-sonnet-4-6`) ou
-   * da OpenRouter (`z-ai/glm-4.7`) não casa nenhuma. A régua trata custo nulo
-   * como zero (`coalesce`), então nessas instalações o gasto medido é MENOR que
-   * o real — no limite, zero: o teto nunca dispara e o card mostra "US$ 0,00
-   * gastos" enquanto o dinheiro sai.
+   * contrato e não uma nota num doc. Até 23/09/2026, `pricing.ts` só conhecia
+   * modelos Anthropic e id de gateway/OpenRouter não casava nenhuma linha da
+   * tabela, a régua trata custo nulo como zero (`coalesce`), então o gasto
+   * medido ficava MENOR que o real, no limite zero, com o teto nunca disparando
+   * e o card mostrando "US$ 0,00 gastos" enquanto o dinheiro saía.
    *
-   * O conserto de raiz é o motor consultar `ai_models` (onde o catálogo da
-   * OpenRouter já grava preço real — `lib/ai/cost.ts`), e é item próprio. No
-   * intervalo, a tela não pode PROMETER uma parada que não vai acontecer: este
-   * campo é o que ela usa para dizer a verdade ao lado da opção.
+   * D-050 corrigiu isso em código (decisão do Filipe, 23/09/2026): o
+   * resolvedor de `llm_calls` (`custoCentsComCatalogo`,
+   * `lib/agent-engine/edge/llm/pricing.ts`) cai para o catálogo `ai_models`
+   * quando o modelo não está na tabela escrita à mão, e passou a alimentar os
+   * três pontos que gravam `llm_calls` (`run-model-call.ts`,
+   * `log-invocation.ts`/`lib/ai/cost.ts`, `telemetria-sem-custo.ts`). O que
+   * falta é decisão do Filipe, não código: conferir em produção quanto cada
+   * organização já gastou no mês por esses modelos antes de o teto passar a
+   * contar para elas, ver D-050 em `hiperbold/DEBITO.md`. Este campo
+   * continua existindo para o residual real: modelo que também não está no
+   * catálogo (ex.: D-056, DeepSeek/GLM, que ainda não têm provedor nem preço
+   * cadastrados nesta instalação), ou uma falha pontual na leitura dele.
    *
    * NÃO CONTA os `purpose` de `PROPOSITOS_SEM_CUSTO_POR_DECISAO` (embedding,
-   * transcrição, leitura de imagem, Tarefa 8 da fase F2). Essas linhas têm
-   * `cost_cents` nulo por DECISÃO (D-050: ligar o custo ligaria o orçamento
-   * para consumos que hoje ele não vê), não porque o produto desconhece o
-   * preço do modelo. Contá-las aqui faria toda organização que usa base de
-   * conhecimento ou recebe áudio ver o aviso âmbar para sempre: achado 1 da
-   * revisão da fase F2.
+   * transcrição, leitura de imagem, Tarefa 8 da fase F2).
+   *
+   * Isto já NÃO é mais "nulo por decisão" para os três, D-050 foi resolvido
+   * em código em 23/09/2026 (decisão do Filipe): `embedding_indexar`,
+   * `embedding_consultar` e `visao_de_imagem` passaram a chamar o resolvedor
+   * único (`custoCentsComCatalogo`) e GANHAM `cost_cents` real sempre que o
+   * catálogo `ai_models` conhece o modelo da chamada. Só `transcricao_de_audio`
+   * continua nulo por uma razão permanente e não por decisão: o catálogo não
+   * precifica por MINUTO de áudio (D-051), e sem a duração medida não há o que
+   * multiplicar pela tarifa.
+   *
+   * A exclusão dos quatro continua aqui mesmo assim: um nulo residual em
+   * embedding/visão (modelo ainda não catalogado, ou leitura do catálogo que
+   * falhou naquela chamada) não é o sinal que este aviso existe para dar, o
+   * alvo dele é o modelo de CONVERSA do agente sem preço conhecido, não um
+   * ponto auxiliar que, na imensa maioria das vezes, já tem custo. Contar os
+   * quatro aqui faria toda organização que usa base de conhecimento ou recebe
+   * áudio ver o aviso âmbar de forma desproporcional ao que ele quer dizer:
+   * achado 1 da revisão da fase F2, que segue válido mesmo com D-050 corrigido.
    */
   gasto_incompleto: boolean;
   /**

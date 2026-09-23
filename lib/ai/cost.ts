@@ -6,6 +6,9 @@
  * over-billing rather than free usage).
  */
 
+import { providerDoModelo } from "@/lib/ai/log-invocation";
+import { precoDoCatalogoOuNull } from "@/lib/ai/runtime/cost";
+import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 interface PricingRow {
@@ -71,43 +74,48 @@ export interface ComputeCostInput {
  * custo ia 0 para `bot_respond` e para todo modelo OpenRouter — a tela de Uso
  * e a de Execuções mostrando R$ 0,00 com o dinheiro saindo, que é literalmente
  * o sintoma citado pela 0130 como motivo da unificação.
+ *
+ * D-050 (`hiperbold/DEBITO.md`, decisão do Filipe 23/09/2026): a consulta ao
+ * catálogo deixou de ser feita aqui dentro, agora delega para
+ * `precoDoCatalogoOuNull` (`lib/ai/runtime/cost.ts`), a MESMA leitura com
+ * cache de 5 min que o resolvedor de `run-model-call.ts` usa. Isto tira a
+ * segunda ida ao banco que existia aqui (sem cache, uma consulta por chamada)
+ * e alinha o "não achei" com "a leitura falhou", os dois viram `null` daqui
+ * para fora, com aviso no logger só no segundo caso.
+ *
+ * `providerDoModelo` (a mesma heurística que grava a coluna `provider` de
+ * `llm_calls`, em `./log-invocation.ts`) supre o `provider` que este caminho
+ * legado nunca recebeu como parâmetro, sem ele o catálogo não sabe desempatar
+ * um `model_id` repetido entre provedores.
  */
 async function precoDoCatalogo(
   modelo: string,
 ): Promise<{ prompt: number; completion: number } | null> {
-  const admin = createAdminClient();
-  // Duas formas do mesmo id: como veio, e sem o prefixo de provider. O catálogo
-  // guarda `model_id` como o provedor o nomeia — com prefixo na OpenRouter, sem
-  // ele na Anthropic/OpenAI.
-  const semPrefixo = modelo.includes("/") ? modelo.slice(modelo.indexOf("/") + 1) : modelo;
-  const { data } = await admin
-    .from("ai_models")
-    .select("model_id, input_price_per_million_cents, output_price_per_million_cents")
-    .in("model_id", [modelo, semPrefixo])
-    .is("deprecated_at", null)
-    .limit(2);
-
-  const linhas = (data ?? []) as Array<{
-    model_id: string;
-    input_price_per_million_cents: number | null;
-    output_price_per_million_cents: number | null;
-  }>;
-  // Preferir a correspondência EXATA: `llama-3.3-70b-instruct` pode existir em
-  // mais de um provedor com preços diferentes, e o id completo é quem desempata.
-  const linha = linhas.find((l) => l.model_id === modelo) ?? linhas[0];
-  if (!linha) return null;
-  const prompt = toNumber(linha.input_price_per_million_cents);
-  const completion = toNumber(linha.output_price_per_million_cents);
+  const provider = providerDoModelo(modelo);
+  const { preco, falhou } = await precoDoCatalogoOuNull(provider, modelo);
+  if (falhou) {
+    logger.warn("[ai/cost] leitura do catálogo ai_models falhou, custo gravado como desconhecido (null)", {
+      model: modelo,
+      provider,
+    });
+    return null;
+  }
+  if (!preco) return null;
   // Catálogo que conhece o modelo mas não tem preço não é melhor que ausência:
   // devolver 0 aqui seria inventar "de graça".
-  if (prompt === 0 && completion === 0) return null;
-  return { prompt, completion };
+  if (preco.inputCentsPerMillion === 0 && preco.outputCentsPerMillion === 0) return null;
+  return { prompt: preco.inputCentsPerMillion, completion: preco.outputCentsPerMillion };
 }
 
 /**
- * Returns cost in **cents**, rounded up. Zero when pricing missing.
+ * Returns cost in **cents**, rounded up. `null` quando o preço é desconhecido:
+ * nem `ai_pricing` nem o catálogo `ai_models` sabem o modelo, ou a leitura
+ * do catálogo falhou. D-050 (`hiperbold/DEBITO.md`): antes devolvia 0, que o
+ * orçamento de IA soma como "gasto zero". 0 é uma afirmação (de graça), null
+ * é "não sei", e as duas nunca podem ser a mesma coisa numa tabela de
+ * auditoria de custo.
  */
-export async function computeCost(input: ComputeCostInput): Promise<number> {
+export async function computeCost(input: ComputeCostInput): Promise<number | null> {
   const pricing = await loadPricing();
   const row = pricing.get(input.model);
   if (!row) {
@@ -115,7 +123,7 @@ export async function computeCost(input: ComputeCostInput): Promise<number> {
     // onde a OpenRouter chega. Embedding não passa por aqui — o catálogo não
     // guarda preço de embedding —, e nesse caso o desfecho é o mesmo de antes.
     const doCatalogo = await precoDoCatalogo(input.model);
-    if (!doCatalogo) return 0;
+    if (!doCatalogo) return null;
     const cents =
       ((input.promptTokens ?? 0) * doCatalogo.prompt) / 1_000_000 +
       ((input.completionTokens ?? 0) * doCatalogo.completion) / 1_000_000;
