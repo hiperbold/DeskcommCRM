@@ -889,6 +889,21 @@ export const AUDIT_ACTIONS = [
   // ação; quando `antes` e `depois` já eram iguais (inclusive os dois `null`),
   // a action não audita nada, porque nada mudou.
   "billing.adjustment_removed",
+
+  // A carteira de tokens de IA, mexida pelo admin da plataforma (fase F2-B,
+  // tarefa 4, migration 0906 Parte 4). Três ações porque respondem a
+  // perguntas diferentes: `tokens_credited` é "quanto avulso entrou e por
+  // quanto", `addon_changed` é "que assinatura mensal a mais foi contratada
+  // ou cancelada" (as duas pontas usam o mesmo código, distinguidas pelo
+  // `metadata.acao`), `tokens_adjusted` é "que ajuste manual, de que sinal,
+  // foi lançado e por quê". O `metadata` carrega os números e a chave
+  // idempotente, NUNCA a nota (decisão 16 da fase: a nota do crédito/ajuste
+  // pode ter dado sensível do cliente, e fica só no livro-caixa, lido com a
+  // mesma régua de "gerente para cima" da carteira, não no log de auditoria
+  // que qualquer admin de suporte também lê).
+  "billing.tokens_credited",
+  "billing.addon_changed",
+  "billing.tokens_adjusted",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

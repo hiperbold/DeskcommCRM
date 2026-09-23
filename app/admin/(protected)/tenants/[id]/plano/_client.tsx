@@ -8,6 +8,12 @@ import {
   ajustarLimitesDaOrganizacao,
   trocarPlanoDaOrganizacao,
 } from "@/app/actions/admin/planoDaOrganizacao";
+import {
+  ajustarTokens,
+  cancelarAdicional,
+  contratarAdicional,
+  creditarTokens,
+} from "@/app/actions/admin/carteiraDeTokens";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,7 +49,10 @@ import {
   type ChaveDeLimite,
   type Limites,
 } from "@/lib/billing/planos/limites";
-import { formatCentsBRL } from "@/lib/money";
+import type { LinhaLivroCaixa, ResultadoLivroCaixaDoCiclo, TipoLinhaLivroCaixa } from "@/lib/billing/tokens/livro-caixa-do-ciclo";
+import type { ResultadoPainelDeMargem } from "@/lib/billing/tokens/margem";
+import { FONTES_DA_CARTEIRA, type FonteCarteira, type ResultadoSaldoDaCarteira } from "@/lib/billing/tokens/saldo-da-organizacao";
+import { formatCentsBRL, formatCentsUSD, parseReaisToCents } from "@/lib/money";
 
 // ---------------------------------------------------------------------------
 // Tipos e tabelas de rótulo
@@ -57,6 +66,15 @@ export interface PlanoAtivo {
   for_sale: boolean;
 }
 
+/** Uma linha de `billing_token_adicionais` com `ativo = true` (fase F2-B, tarefa 7). */
+export interface AdicionalAtivo {
+  id: string;
+  tokens_por_ciclo: number;
+  valor_cents: number | null;
+  nota: string | null;
+  created_at: string;
+}
+
 interface TenantPlanoClientProps {
   organizationId: string;
   podeEscrever: boolean;
@@ -68,7 +86,27 @@ interface TenantPlanoClientProps {
   ajusteAtual: AjusteDeLimites;
   notaAtual: string | null;
   planosAtivos: PlanoAtivo[];
+  saldo: ResultadoSaldoDaCarteira;
+  livroCaixa: ResultadoLivroCaixaDoCiclo;
+  margem: ResultadoPainelDeMargem;
+  adicionaisAtivos: AdicionalAtivo[];
+  leituraDosAdicionaisFalhou: boolean;
 }
+
+/** Nome legível de cada fonte da carteira, na mesma ordem de `FONTES_DA_CARTEIRA`. */
+const ROTULO_DA_FONTE: Record<FonteCarteira, string> = {
+  plano: "Do plano contratado",
+  adicional: "Assinatura adicional",
+  avulso: "Pacote avulso",
+};
+
+/** Nome legível de cada tipo de linha do livro-caixa. */
+const ROTULO_DO_TIPO: Record<TipoLinhaLivroCaixa, string> = {
+  concessao: "Concessão",
+  credito: "Crédito",
+  consumo: "Consumo",
+  ajuste: "Ajuste",
+};
 
 /** Nome legível de cada chave de limite, na mesma ordem de `CHAVES_DE_LIMITE`. */
 const ROTULO_DA_CHAVE: Record<ChaveDeLimite, string> = {
@@ -154,6 +192,11 @@ export function TenantPlanoClient({
   ajusteAtual,
   notaAtual,
   planosAtivos,
+  saldo,
+  livroCaixa,
+  margem,
+  adicionaisAtivos,
+  leituraDosAdicionaisFalhou,
 }: TenantPlanoClientProps) {
   const t = useT();
   const router = useRouter();
@@ -257,6 +300,149 @@ export function TenantPlanoClient({
       setEstado(estadoInicialDoAjuste(null));
       setNota("");
       toast.success(t("Ajuste removido."));
+      router.refresh();
+    });
+  }
+
+  // ── Carteira de tokens de IA (fase F2-B, tarefa 7) ──────────────────────
+  //
+  // As três chaves idempotentes (decisão 16) nascem quando o COMPONENTE
+  // monta (`useState(() => crypto.randomUUID())`, calculado uma vez só) e
+  // são trocadas por uma nova depois de CADA envio bem-sucedido: reenviar o
+  // MESMO formulário sem recarregar a página (duplo clique, erro de rede que
+  // o admin tenta de novo) usa a MESMA chave e não credita/contrata/ajusta
+  // duas vezes; um envio novo, de propósito, usa uma chave nova.
+  const [chaveCredito, setChaveCredito] = useState(() => crypto.randomUUID());
+  const [tokensCredito, setTokensCredito] = useState("");
+  const [valorCredito, setValorCredito] = useState("");
+  const [notaCredito, setNotaCredito] = useState("");
+  const [creditando, iniciarCredito] = useTransition();
+
+  function creditar() {
+    const tokens = Number(tokensCredito);
+    if (!Number.isInteger(tokens) || tokens <= 0) {
+      toast.error(t("Informe uma quantidade de tokens válida."));
+      return;
+    }
+    const valorCents = valorCredito.trim().length > 0 ? parseReaisToCents(valorCredito) : undefined;
+    if (valorCredito.trim().length > 0 && valorCents === null) {
+      toast.error(t("Valor recebido inválido."));
+      return;
+    }
+    iniciarCredito(async () => {
+      const r = await creditarTokens({
+        organizationId,
+        tokens,
+        chave: chaveCredito,
+        valorCents: valorCents ?? undefined,
+        nota: notaCredito.trim().length > 0 ? notaCredito.trim() : undefined,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já registrado antes: nada foi creditado de novo.") : t("Tokens creditados."));
+      setTokensCredito("");
+      setValorCredito("");
+      setNotaCredito("");
+      setChaveCredito(crypto.randomUUID());
+      router.refresh();
+    });
+  }
+
+  const [chaveAdicional, setChaveAdicional] = useState(() => crypto.randomUUID());
+  const [tokensAdicional, setTokensAdicional] = useState("");
+  const [valorAdicional, setValorAdicional] = useState("");
+  const [notaAdicional, setNotaAdicional] = useState("");
+  const [contratando, iniciarContratacao] = useTransition();
+
+  function contratar() {
+    const tokensPorCiclo = Number(tokensAdicional);
+    if (!Number.isInteger(tokensPorCiclo) || tokensPorCiclo <= 0) {
+      toast.error(t("Informe uma quantidade de tokens por ciclo válida."));
+      return;
+    }
+    const valorCents = valorAdicional.trim().length > 0 ? parseReaisToCents(valorAdicional) : undefined;
+    if (valorAdicional.trim().length > 0 && valorCents === null) {
+      toast.error(t("Valor recebido inválido."));
+      return;
+    }
+    iniciarContratacao(async () => {
+      const r = await contratarAdicional({
+        organizationId,
+        tokensPorCiclo,
+        chave: chaveAdicional,
+        valorCents: valorCents ?? undefined,
+        nota: notaAdicional.trim().length > 0 ? notaAdicional.trim() : undefined,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já registrado antes: nada foi contratado de novo.") : t("Adicional contratado."));
+      setTokensAdicional("");
+      setValorAdicional("");
+      setNotaAdicional("");
+      setChaveAdicional(crypto.randomUUID());
+      router.refresh();
+    });
+  }
+
+  const [cancelandoId, setCancelandoId] = useState<string | null>(null);
+  const [cancelando, iniciarCancelamento] = useTransition();
+
+  function cancelar(adicionalId: string) {
+    setCancelandoId(adicionalId);
+    iniciarCancelamento(async () => {
+      const r = await cancelarAdicional({ organizationId, adicionalId });
+      if (!r.ok) {
+        toast.error(r.error);
+        setCancelandoId(null);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já estava cancelado.") : t("Adicional cancelado."));
+      setCancelandoId(null);
+      router.refresh();
+    });
+  }
+
+  const [chaveAjuste, setChaveAjuste] = useState(() => crypto.randomUUID());
+  const [fonteAjuste, setFonteAjuste] = useState<FonteCarteira>("plano");
+  const [sinalAjuste, setSinalAjuste] = useState<"creditar" | "debitar">("creditar");
+  const [tokensAjuste, setTokensAjuste] = useState("");
+  const [compensaAjuste, setCompensaAjuste] = useState("");
+  const [notaAjuste, setNotaAjuste] = useState("");
+  const [ajustandoTokens, iniciarAjusteDeTokens] = useTransition();
+
+  function ajustar() {
+    const magnitude = Number(tokensAjuste);
+    if (!Number.isInteger(magnitude) || magnitude <= 0) {
+      toast.error(t("Informe uma quantidade de tokens válida."));
+      return;
+    }
+    if (notaAjuste.trim().length === 0) {
+      toast.error(t("O ajuste precisa de uma nota."));
+      return;
+    }
+    const tokensComSinal = sinalAjuste === "debitar" ? -magnitude : magnitude;
+    iniciarAjusteDeTokens(async () => {
+      const r = await ajustarTokens({
+        organizationId,
+        fonte: fonteAjuste,
+        tokens: tokensComSinal,
+        chave: chaveAjuste,
+        compensaId: compensaAjuste.trim().length > 0 ? compensaAjuste.trim() : undefined,
+        nota: notaAjuste.trim(),
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já registrado antes: nada foi ajustado de novo.") : t("Ajuste lançado."));
+      setTokensAjuste("");
+      setCompensaAjuste("");
+      setNotaAjuste("");
+      setChaveAjuste(crypto.randomUUID());
       router.refresh();
     });
   }
@@ -485,6 +671,350 @@ export function TenantPlanoClient({
           )}
         </CardContent>
       </Card>
+
+      {/* ── Tokens de IA (fase F2-B, tarefa 7) ──────────────────────────── */}
+      <h2 className="text-lg font-semibold tracking-tight">{t("Tokens de IA")}</h2>
+
+      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+        {t(
+          "Nesta fase, embedding (base de conhecimento) e transcrição não debitam tokens da carteira: só chamadas de resposta do agente, pela credencial da instalação, consomem.",
+        )}
+      </div>
+
+      {/* Saldo por fonte */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Saldo da carteira")}</CardTitle>
+          <CardDescription>{t("Do ciclo atual, por fonte, na ordem em que o consumo desconta.")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {saldo.status === "leitura_falhou" ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler o saldo da carteira agora.")}</p>
+          ) : (
+            <div className="space-y-3">
+              {saldo.status === "sem_limite" && <Badge variant="neutral">{t("Plano sem limite (Ilimitado)")}</Badge>}
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("Fonte")}</TableHead>
+                    <TableHead>{t("Creditado")}</TableHead>
+                    <TableHead>{t("Consumido")}</TableHead>
+                    <TableHead>{t("Saldo")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {FONTES_DA_CARTEIRA.map((fonte) => {
+                    const linha = saldo.porFonte[fonte];
+                    return (
+                      <TableRow key={fonte}>
+                        <TableCell className="font-medium">{t(ROTULO_DA_FONTE[fonte])}</TableCell>
+                        <TableCell className="tabular-nums">{linha.creditado.toLocaleString(tagDoIdioma)}</TableCell>
+                        <TableCell className="tabular-nums">{linha.consumido.toLocaleString(tagDoIdioma)}</TableCell>
+                        <TableCell className="tabular-nums">{linha.saldo.toLocaleString(tagDoIdioma)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Painel de margem (decisão 17): só a plataforma vê */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Painel de margem")}</CardTitle>
+          <CardDescription>
+            {t(
+              "Receita em reais e custo em dólar, lado a lado, sem conversão de câmbio: câmbio não se inventa.",
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {margem.status === "leitura_falhou" ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler o painel de margem agora.")}</p>
+          ) : (
+            <div className="space-y-2 text-sm">
+              <p>
+                {t("Receita do ciclo")}: <span className="font-medium">{formatCentsBRL(margem.margem.receitaTotalCents)}</span>{" "}
+                <span className="text-text-muted">
+                  ({t("plano")} {formatCentsBRL(margem.margem.receitaPlanoCents)} · {t("adicionais")}{" "}
+                  {formatCentsBRL(margem.margem.receitaAdicionaisCents)} · {t("créditos avulsos")}{" "}
+                  {formatCentsBRL(margem.margem.receitaCreditosCents)})
+                </span>
+              </p>
+              <p>
+                {t("Custo conhecido do ciclo (dólar)")}:{" "}
+                <span className="font-medium">{formatCentsUSD(margem.margem.custoConhecidoCentsUsd)}</span>
+              </p>
+              {margem.margem.custoIncompleto && (
+                <Badge variant="warning">
+                  {t("Custo incompleto")}: {margem.margem.chamadasCustoNulo}{" "}
+                  {t("chamada(s) do ciclo sem preço conhecido")}
+                </Badge>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Adicionais ativos, com cancelar */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Adicionais ativos")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {leituraDosAdicionaisFalhou ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler os adicionais agora.")}</p>
+          ) : adicionaisAtivos.length === 0 ? (
+            <p className="text-sm text-text-muted">{t("Nenhum adicional ativo.")}</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("Tokens por ciclo")}</TableHead>
+                  <TableHead>{t("Valor")}</TableHead>
+                  <TableHead>{t("Nota")}</TableHead>
+                  <TableHead>{t("Contratado em")}</TableHead>
+                  {podeEscrever && <TableHead />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {adicionaisAtivos.map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell className="tabular-nums">{a.tokens_por_ciclo.toLocaleString(tagDoIdioma)}</TableCell>
+                    <TableCell>{a.valor_cents !== null ? formatCentsBRL(a.valor_cents) : "-"}</TableCell>
+                    <TableCell className="max-w-xs truncate">{a.nota ?? "-"}</TableCell>
+                    <TableCell>{new Date(a.created_at).toLocaleDateString(tagDoIdioma)}</TableCell>
+                    {podeEscrever && (
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={cancelando && cancelandoId === a.id}
+                          onClick={() => cancelar(a.id)}
+                        >
+                          {t("Cancelar")}
+                        </Button>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Livro-caixa do ciclo, com nota e autor */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Livro-caixa do ciclo")}</CardTitle>
+          <CardDescription>{t("Consumo agrupado por dia; concessão, crédito e ajuste um a um.")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {livroCaixa.status === "leitura_falhou" ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler o livro-caixa agora.")}</p>
+          ) : livroCaixa.livroCaixa.linhas.length === 0 ? (
+            <p className="text-sm text-text-muted">{t("Nenhum lançamento neste ciclo ainda.")}</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("Dia")}</TableHead>
+                  <TableHead>{t("Fonte")}</TableHead>
+                  <TableHead>{t("Tipo")}</TableHead>
+                  <TableHead>{t("Tokens")}</TableHead>
+                  <TableHead>{t("Valor")}</TableHead>
+                  <TableHead>{t("Nota")}</TableHead>
+                  <TableHead>{t("Autor")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {livroCaixa.livroCaixa.linhas.map((linha: LinhaLivroCaixa, i: number) => (
+                  <TableRow key={`${linha.dia}-${linha.fonte}-${linha.tipo}-${i}`}>
+                    <TableCell>{linha.dia}</TableCell>
+                    <TableCell>{t(ROTULO_DA_FONTE[linha.fonte])}</TableCell>
+                    <TableCell>
+                      {t(ROTULO_DO_TIPO[linha.tipo])}
+                      {linha.linhas > 1 && <span className="text-text-muted"> ({linha.linhas})</span>}
+                    </TableCell>
+                    <TableCell className="tabular-nums">{linha.tokens.toLocaleString(tagDoIdioma)}</TableCell>
+                    <TableCell>{linha.valorCents !== null ? formatCentsBRL(linha.valorCents) : "-"}</TableCell>
+                    <TableCell className="max-w-xs truncate">{linha.nota ?? "-"}</TableCell>
+                    <TableCell>{linha.autorNome ?? linha.autorEmail ?? "-"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {podeEscrever && (
+        <>
+          {/* Creditar pacote avulso */}
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("Creditar pacote avulso")}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="credito-tokens">{t("Tokens")}</Label>
+                  <Input
+                    id="credito-tokens"
+                    className="w-40"
+                    inputMode="numeric"
+                    value={tokensCredito}
+                    onChange={(e) => setTokensCredito(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="credito-valor">{t("Valor recebido (opcional)")}</Label>
+                  <Input
+                    id="credito-valor"
+                    className="w-40"
+                    placeholder="R$"
+                    value={valorCredito}
+                    onChange={(e) => setValorCredito(e.target.value)}
+                  />
+                </div>
+                <Button data-testid="creditar-tokens" onClick={creditar} disabled={creditando}>
+                  {t("Creditar")}
+                </Button>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="credito-nota">{t("Nota (opcional)")}</Label>
+                <Textarea
+                  id="credito-nota"
+                  value={notaCredito}
+                  onChange={(e) => setNotaCredito(e.target.value)}
+                  maxLength={500}
+                  placeholder={t("Não coloque dado pessoal aqui: a nota fica registrada e nunca é apagada.")}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Contratar adicional */}
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("Contratar adicional")}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="adicional-tokens">{t("Tokens por ciclo")}</Label>
+                  <Input
+                    id="adicional-tokens"
+                    className="w-40"
+                    inputMode="numeric"
+                    value={tokensAdicional}
+                    onChange={(e) => setTokensAdicional(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="adicional-valor">{t("Valor mensal (opcional)")}</Label>
+                  <Input
+                    id="adicional-valor"
+                    className="w-40"
+                    placeholder="R$"
+                    value={valorAdicional}
+                    onChange={(e) => setValorAdicional(e.target.value)}
+                  />
+                </div>
+                <Button data-testid="contratar-adicional" onClick={contratar} disabled={contratando}>
+                  {t("Contratar")}
+                </Button>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="adicional-nota">{t("Nota (opcional)")}</Label>
+                <Textarea
+                  id="adicional-nota"
+                  value={notaAdicional}
+                  onChange={(e) => setNotaAdicional(e.target.value)}
+                  maxLength={500}
+                  placeholder={t("Não coloque dado pessoal aqui: a nota fica registrada e nunca é apagada.")}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Ajustar tokens (sinal livre) */}
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("Ajustar tokens")}</CardTitle>
+              <CardDescription>{t("Para estornar um débito errado ou corrigir na mão. A nota é obrigatória.")}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="ajuste-fonte">{t("Fonte")}</Label>
+                  <Select value={fonteAjuste} onValueChange={(v) => setFonteAjuste(v as FonteCarteira)}>
+                    <SelectTrigger id="ajuste-fonte" className="w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {FONTES_DA_CARTEIRA.map((fonte) => (
+                        <SelectItem key={fonte} value={fonte}>
+                          {t(ROTULO_DA_FONTE[fonte])}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ajuste-sinal">{t("Sinal")}</Label>
+                  <Select value={sinalAjuste} onValueChange={(v) => setSinalAjuste(v as "creditar" | "debitar")}>
+                    <SelectTrigger id="ajuste-sinal" className="w-36">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="creditar">{t("Creditar (+)")}</SelectItem>
+                      <SelectItem value="debitar">{t("Debitar (-)")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ajuste-tokens">{t("Tokens")}</Label>
+                  <Input
+                    id="ajuste-tokens"
+                    className="w-40"
+                    inputMode="numeric"
+                    value={tokensAjuste}
+                    onChange={(e) => setTokensAjuste(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ajuste-compensa">{t("Linha que compensa (opcional)")}</Label>
+                  <Input
+                    id="ajuste-compensa"
+                    className="w-64"
+                    placeholder={t("id da linha do livro-caixa")}
+                    value={compensaAjuste}
+                    onChange={(e) => setCompensaAjuste(e.target.value)}
+                  />
+                </div>
+                <Button data-testid="ajustar-tokens" onClick={ajustar} disabled={ajustandoTokens}>
+                  {t("Ajustar")}
+                </Button>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="ajuste-nota">{t("Nota (obrigatória)")}</Label>
+                <Textarea
+                  id="ajuste-nota"
+                  value={notaAjuste}
+                  onChange={(e) => setNotaAjuste(e.target.value)}
+                  maxLength={500}
+                  placeholder={t("Por que este ajuste existe. Não coloque dado pessoal: fica registrado e nunca é apagado.")}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   );
 }

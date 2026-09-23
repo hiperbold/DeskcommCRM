@@ -9,9 +9,12 @@ import {
 } from "@/lib/billing/planos/limites";
 import { planoDaOrganizacao } from "@/lib/billing/planos/plano-da-organizacao";
 import { algumaLeituraFalhou, podeEscreverNaAba } from "@/lib/billing/planos/pode-escrever-na-aba";
+import { livroCaixaDoCiclo } from "@/lib/billing/tokens/livro-caixa-do-ciclo";
+import { painelDeMargem } from "@/lib/billing/tokens/margem";
+import { saldoDaOrganizacao } from "@/lib/billing/tokens/saldo-da-organizacao";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-import { TenantPlanoClient, type PlanoAtivo } from "./_client";
+import { TenantPlanoClient, type AdicionalAtivo, type PlanoAtivo } from "./_client";
 
 interface TenantPlanoPageProps {
   params: Promise<{ id: string }>;
@@ -38,6 +41,20 @@ interface TenantPlanoPageProps {
  * escrever por cima de um estado que a própria tela não conseguiu ler
  * apagaria, no upsert de `fn_billing_ajustar_limites`, exatamente a chave que
  * ninguém leu direito.
+ *
+ * ─── A seção "Tokens de IA" (fase F2-B, tarefa 7) ───────────────────────────
+ *
+ * Saldo, livro-caixa (com nota e autor, por isso é uma leitura PRÓPRIA desta
+ * aba: `extratoDoCiclo`, tarefa 6, é para a tela do CLIENTE e nunca lê nota
+ * nem autor) e o painel de margem, só para a plataforma. `saldoDaOrganizacao`
+ * roda sozinha primeiro porque ela CONCEDE o ciclo atual (decisão 9) e
+ * devolve o ciclo que `livroCaixaDoCiclo` e `painelDeMargem` reaproveitam, o
+ * mesmo racional de `app/app/settings/plano/page.tsx`. Cada leitura tem seu
+ * PRÓPRIO estado de falha na tela (não entra no `podeEscrever` do plano
+ * acima): os quatro formulários da carteira são só ADITIVOS (creditar,
+ * contratar, ajustar nunca sobrescrevem um estado não lido, ao contrário do
+ * upsert de limites) e continuam liberados quando o escopo é `full`, mesmo
+ * que o painel de margem, por exemplo, não tenha carregado.
  */
 export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) {
   const { id } = await params;
@@ -45,7 +62,7 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
   const admin = createAdminClient();
   const log = createLogger();
 
-  const [resultado, contratoCruRes, ajusteRes, planosRes] = await Promise.all([
+  const [resultado, contratoCruRes, ajusteRes, planosRes, saldoResultadoRaw] = await Promise.all([
     planoDaOrganizacao(admin, id, log),
     // Os limites CRUS do plano CONTRATADO (coluna "do plano" da tabela),
     // separados dos limites EM VIGOR (que já aplicam o ajuste) que
@@ -67,7 +84,39 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
       .select("code, name, version, price_monthly_cents, for_sale")
       .eq("active", true)
       .order("price_monthly_cents", { ascending: true }),
+    // A carteira de tokens de IA (fase F2-B, tarefa 7): saldo primeiro,
+    // sozinha, porque ela é quem CONCEDE o ciclo atual (decisão 9 da fase) e
+    // devolve o ciclo que as duas leituras seguintes reaproveitam. Mesmo
+    // racional de `app/app/settings/plano/page.tsx` (tarefa 6): as três
+    // nunca podem discordar sobre "que mês é este".
+    saldoDaOrganizacao(admin, id, log),
   ]);
+
+  const cicloDoSaldo =
+    saldoResultadoRaw.status === "leitura_falhou" ? undefined : saldoResultadoRaw.ciclo;
+
+  const [livroCaixaResultado, margemResultado, adicionaisAtivosRes] = await Promise.all([
+    livroCaixaDoCiclo(admin, id, cicloDoSaldo, log),
+    painelDeMargem(admin, id, cicloDoSaldo, log),
+    admin
+      .from("billing_token_adicionais")
+      .select("id, tokens_por_ciclo, valor_cents, nota, created_at")
+      .eq("organization_id", id)
+      .eq("ativo", true)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  if (adicionaisAtivosRes.error) {
+    log.error("alarme_planos_leitura", {
+      organization_id: id,
+      etapa: "adicionais_ativos_da_carteira",
+      error: adicionaisAtivosRes.error.message.slice(0, 300),
+    });
+  }
+  const leituraDosAdicionaisFalhou = Boolean(adicionaisAtivosRes.error);
+  const adicionaisAtivos: AdicionalAtivo[] = leituraDosAdicionaisFalhou
+    ? []
+    : ((adicionaisAtivosRes.data ?? []) as AdicionalAtivo[]);
 
   const limitesTodosSemLimite = Object.fromEntries(
     CHAVES_DE_LIMITE.map((chave) => [chave, null]),
@@ -138,6 +187,11 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
       ajusteAtual={ajusteAtual}
       notaAtual={ajusteRow?.note ?? null}
       planosAtivos={planosAtivos}
+      saldo={saldoResultadoRaw}
+      livroCaixa={livroCaixaResultado}
+      margem={margemResultado}
+      adicionaisAtivos={adicionaisAtivos}
+      leituraDosAdicionaisFalhou={leituraDosAdicionaisFalhou}
     />
   );
 }

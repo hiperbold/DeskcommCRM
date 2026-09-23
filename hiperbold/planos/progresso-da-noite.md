@@ -19,6 +19,7 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 | F2 | **feita**: 8 tarefas, revisão e auditoria sem achado alto (médios corrigidos em duas levas), todos os portões verdes | 28d21a3 | 23/09/2026 15:20 |
 | F2-B | pendente | | |
 | F3 | pendente | | |
+| F6 | registrada (pedido do Filipe, 23/09 à tarde): site de vendas, `/precos`, Termos e Privacidade. Fica depois das fases do loop; não começa sem confirmação | ff34e69 | |
 
 ## Tarefas da fase atual
 
