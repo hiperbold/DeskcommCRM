@@ -189,6 +189,16 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "usuário semeado em rls-isolation.test.ts é `agent`, e `team_invites_select` " +
       "exige `manager` — o controle positivo falharia por ACERTO ali.",
   },
+  {
+    tabela: "billing_usage_counters",
+    razao:
+      "tests/invariants/planos-trava-avisa.test.ts, caso 12 (fork Hiperbold, 0905): " +
+      "gerente de A lê a própria linha e não a de B, agente da mesma organização " +
+      "lê 0. Fora de TABLES pelo mesmo motivo de team_invites: a leitura exige " +
+      "gerente (achado B5 da auditoria da F2, o total de leads abertos da empresa " +
+      "não é para quem só vê os próprios leads) e o usuário semeado em " +
+      "rls-isolation.test.ts é agent, então o controle positivo falharia por ACERTO.",
+  },
   // ─── As três do eixo de anúncios (migrations 0213/0214) ───
   //
   // ⚠️ PROVA DE OUTRO TIPO, e a diferença está escrita de propósito: as demais

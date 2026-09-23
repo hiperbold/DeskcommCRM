@@ -499,17 +499,6 @@ beforeAll(() => {
           insert into public.billing_plan_adjustments (organization_id, limits)
             values (v_org, '{"leads": 100}'::jsonb);
         end if;
-
-        -- migration 0905 (fork Hiperbold, Tarefa 3): o contador de leads. O
-        -- gatilho trg_billing_trava_crm_leads já deve ter criado esta linha
-        -- ao inserir o lead aberto acima (bloco crm_leads); o if not exists é
-        -- rede de segurança, não o produtor esperado, para o TABLES exigir
-        -- controle positivo (uma linha própria lida) por organização mesmo
-        -- que a ordem de escrita mude.
-        if not exists (select 1 from public.billing_usage_counters where organization_id = v_org and item = 'leads') then
-          insert into public.billing_usage_counters (organization_id, item, valor)
-            values (v_org, 'leads', 1);
-        end if;
       end loop;
     end
     $seed$;
@@ -532,9 +521,6 @@ export const TABLES = [
   // migration 0904 (fork Hiperbold): planos de assinatura.
   "billing_contracts",
   "billing_plan_adjustments",
-  // migration 0905 (fork Hiperbold, Tarefa 3): contador materializado de uso
-  // por organização e item (só leads nesta fase).
-  "billing_usage_counters",
   "conversations",
   "messages",
   "contacts",

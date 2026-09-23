@@ -100,6 +100,18 @@ const USER_ISO_A = "09050001-1111-4000-8000-00000000000d";
 const USER_RBAC = "09050001-1111-4000-8000-00000000000e";
 const USER_AVISO_MEMBROS = "09050001-1111-4000-8000-000000000012";
 const USER_MEMBRO_TETO = "09050001-1111-4000-8000-000000000013";
+const USER_ISO_A_AGENTE = "09050001-1111-4000-8000-000000000014";
+const USER_PROVISORIO_ADMIN = "09050001-1111-4000-8000-000000000015";
+const USER_PROVISORIO_ALVO = "09050001-1111-4000-8000-000000000016";
+const USER_AVISO_FORJA = "09050001-1111-4000-8000-000000000017";
+const USER_PROVISORIO_NOVO = "09050001-1111-4000-8000-000000000018";
+const USER_REENVIO_CONVITE = "09050001-1111-4000-8000-000000000019";
+
+const ORG_PROVISORIO = "09050001-0000-4000-8000-00000000001a";
+const ORG_AVISO_FORJA = "09050001-0000-4000-8000-00000000001b";
+const ORG_REENVIO_CONVITE = "09050001-0000-4000-8000-00000000001c";
+const ORG_DESARQUIVAR_ETAPAS = "09050001-0000-4000-8000-00000000001d";
+const ORG_MOVER_ETAPA = "09050001-0000-4000-8000-00000000001e";
 
 /** Marcador das linhas de resultado, o psql também imprime SET, INSERT 0 1 etc. */
 const MARCA = "SONDA|";
@@ -653,18 +665,25 @@ describe("11. fn_billing_uso: convite vencido não conta; admin provisório não
   });
 });
 
-describe("12. billing_usage_counters isolado por RLS entre organizações", () => {
+describe("12. billing_usage_counters isolado por RLS entre organizações (leitura exige gerente, achado B5)", () => {
   beforeAll(() => {
     comoServico(`
-      insert into auth.users (id, email) values ('${USER_ISO_A}', 'trava-iso-a@invariant.test')
-        on conflict (id) do nothing;
+      insert into auth.users (id, email) values
+        ('${USER_ISO_A}', 'trava-iso-a@invariant.test'),
+        ('${USER_ISO_A_AGENTE}', 'trava-iso-a-agente@invariant.test')
+      on conflict (id) do nothing;
       insert into public.organizations (id, slug, legal_name, display_name) values
         ('${ORG_ISO_A}', 'trava-iso-a', 'Trava Iso A LTDA', 'Trava Iso A'),
         ('${ORG_ISO_B}', 'trava-iso-b', 'Trava Iso B LTDA', 'Trava Iso B')
       on conflict (id) do nothing;
-      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
-        values ('${USER_ISO_A}', '${ORG_ISO_A}', 'agent', now())
-        on conflict do nothing;
+      -- Achado B5 (revisão fase F2): a policy passou a exigir fn_role_at_least
+      -- 'manager'. USER_ISO_A é 'manager' (era 'agent' antes do achado);
+      -- USER_ISO_A_AGENTE é 'agent' na MESMA organização, só para provar que
+      -- um cargo abaixo de gerente não lê (caso novo, abaixo).
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at) values
+        ('${USER_ISO_A}', '${ORG_ISO_A}', 'manager', now()),
+        ('${USER_ISO_A_AGENTE}', '${ORG_ISO_A}', 'agent', now())
+      on conflict do nothing;
       insert into public.billing_usage_counters (organization_id, item, valor) values
         ('${ORG_ISO_A}', 'leads', 3),
         ('${ORG_ISO_B}', 'leads', 7)
@@ -672,15 +691,21 @@ describe("12. billing_usage_counters isolado por RLS entre organizações", () =
     `);
   });
 
-  it("membro de A lê a própria linha (controle positivo)", () => {
+  it("gerente de A lê a própria linha (controle positivo)", () => {
     expect(
       membro(USER_ISO_A, `select 'SONDA|' || count(*) from public.billing_usage_counters where organization_id = '${ORG_ISO_A}';`),
     ).toEqual(["1"]);
   });
 
-  it("membro de A NÃO lê a linha de B", () => {
+  it("gerente de A NÃO lê a linha de B (isolamento entre organizações continua valendo)", () => {
     expect(
       membro(USER_ISO_A, `select 'SONDA|' || count(*) from public.billing_usage_counters where organization_id = '${ORG_ISO_B}';`),
+    ).toEqual(["0"]);
+  });
+
+  it("achado B5: agente da PRÓPRIA organização A não lê o contador (cargo abaixo de gerente)", () => {
+    expect(
+      membro(USER_ISO_A_AGENTE, `select 'SONDA|' || count(*) from public.billing_usage_counters where organization_id = '${ORG_ISO_A}';`),
     ).toEqual(["0"]);
   });
 });
@@ -1092,5 +1117,265 @@ describe("21. Membro comum criando lead numa organização COM teto e acima dele
 
   it("o aviso nasceu", () => {
     expect(avisosDe(ORG_MEMBRO_TETO)).toBe(1);
+  });
+});
+
+/**
+ * Achados M1, M2, B1 e B4 da AUDITORIA DE SEGURANÇA da fase F2 (segunda
+ * leva). B5 entrou dentro do caso 12, acima (a política mudou no lugar).
+ */
+
+describe("22. M1: só o servidor grava user_organizations.provisional_until_handover", () => {
+  beforeAll(() => {
+    comoServico(`
+      insert into auth.users (id, email) values
+        ('${USER_PROVISORIO_ADMIN}', 'm1-admin@invariant.test'),
+        ('${USER_PROVISORIO_ALVO}', 'm1-alvo@invariant.test'),
+        ('${USER_PROVISORIO_NOVO}', 'm1-novo@invariant.test')
+      on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_PROVISORIO}', 'trava-m1-provisorio', 'Trava M1 LTDA', 'Trava M1')
+        on conflict (id) do nothing;
+      -- Sem plano/teto nesta fase de setup: só interessa quem PODE gravar a
+      -- coluna aqui; a conferência do teto vem só no último caso.
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_PROVISORIO_ADMIN}', '${ORG_PROVISORIO}', 'admin', now())
+        on conflict do nothing;
+      -- o alvo já nasce PROVISÓRIO (gravado pelo servidor, como
+      -- fn_create_tenant_with_owner faria): é ele que o admin comum vai tentar
+      -- desmarcar indevidamente.
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at, provisional_until_handover)
+        values ('${USER_PROVISORIO_ALVO}', '${ORG_PROVISORIO}', 'admin', now(), true)
+        on conflict do nothing;
+    `);
+  });
+
+  it("um admin comum NÃO consegue marcar o próprio vínculo como provisório (update recusado)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_PROVISORIO_ADMIN)}
+      update public.user_organizations set provisional_until_handover = true
+        where organization_id = '${ORG_PROVISORIO}' and user_id = '${USER_PROVISORIO_ADMIN}';
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("provisional_until_handover");
+  });
+
+  it("um admin comum NÃO consegue desmarcar o provisório de outra pessoa (update recusado, mesmo a favor do colega)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_PROVISORIO_ADMIN)}
+      update public.user_organizations set provisional_until_handover = false
+        where organization_id = '${ORG_PROVISORIO}' and user_id = '${USER_PROVISORIO_ALVO}';
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("provisional_until_handover");
+  });
+
+  it("um admin comum NÃO consegue inserir um vínculo já provisório (insert recusado)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_PROVISORIO_ADMIN)}
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at, provisional_until_handover)
+        values ('${USER_PROVISORIO_NOVO}', '${ORG_PROVISORIO}', 'agent', now(), true);
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("provisional_until_handover");
+  });
+
+  it("o SERVIDOR grava e desmarca um provisório sem ser barrado, e desmarcar confere o teto de membros e avisa", () => {
+    comoServico(`
+      select public.fn_billing_trocar_plano('${ORG_PROVISORIO}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_PROVISORIO}'::uuid, '{"membros": 1}'::jsonb, null, null);
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at, provisional_until_handover)
+        values ('${USER_PROVISORIO_NOVO}', '${ORG_PROVISORIO}', 'admin', now(), true)
+        on conflict (user_id, organization_id) do update set provisional_until_handover = true, accepted_at = now();
+    `);
+    // Provisório: não conta, sem aviso (o admin sozinho já preenche o teto 1,
+    // mas nada NOVO transicionou para ativo ainda).
+    expect(avisosDe(ORG_PROVISORIO)).toBe(0);
+
+    comoServico(`
+      update public.user_organizations set provisional_until_handover = false
+        where organization_id = '${ORG_PROVISORIO}' and user_id = '${USER_PROVISORIO_NOVO}';
+    `);
+    // Desmarcar como postgres passa (current_user exempto) e a transição
+    // provisório->ativo agora está na lista de colunas do gatilho de trava: o
+    // admin já ocupava a única vaga (teto 1), o NOVO ficando ativo avisa.
+    expect(avisosDe(ORG_PROVISORIO)).toBe(1);
+  });
+});
+
+describe("23. M2: ninguém além do servidor forja, apaga ou reescreve o aviso de plano", () => {
+  let avisoRealId = "";
+
+  beforeAll(() => {
+    comoServico(`
+      insert into auth.users (id, email) values ('${USER_AVISO_FORJA}', 'm2-viewer@invariant.test')
+        on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_AVISO_FORJA}', 'trava-m2-forja', 'Trava M2 LTDA', 'Trava M2')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_AVISO_FORJA}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_AVISO_FORJA}'::uuid, '{"funis": 1}'::jsonb, null, null);
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_AVISO_FORJA}', '${ORG_AVISO_FORJA}', 'viewer', now())
+        on conflict do nothing;
+      -- o seed "Pedidos" já ocupa o teto 1; este segundo funil estoura e nasce
+      -- o aviso REAL que os casos abaixo tentam forjar, apagar e reescrever.
+      insert into public.crm_pipelines (organization_id, name, slug)
+        values ('${ORG_AVISO_FORJA}', 'Funil M2', 'funil-m2');
+    `);
+    const linhas = comoServico(
+      `select 'SONDA|' || id from public.agent_inbox_items where organization_id = '${ORG_AVISO_FORJA}' and ref_kind = 'billing_limite' and status = 'open';`,
+    );
+    avisoRealId = linhas[0] ?? "";
+  });
+
+  it("o aviso real nasceu (controle)", () => {
+    expect(avisosDe(ORG_AVISO_FORJA)).toBe(1);
+    expect(avisoRealId).not.toBe("");
+  });
+
+  it("um viewer NÃO insere um aviso billing_limite forjado (policy restrictive de insert)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_FORJA)}
+      insert into public.agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+        values ('${ORG_AVISO_FORJA}', 'other', 'warn', 'Limite de funis do plano atingido', 'forjado', 'billing_limite', '${ORG_AVISO_FORJA}');
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("row-level security");
+  });
+
+  it("um viewer NÃO apaga o aviso real (policy restrictive de delete: filtra a linha, sem erro, sem apagar)", () => {
+    membro(USER_AVISO_FORJA, `delete from public.agent_inbox_items where id = '${avisoRealId}';`);
+    expect(avisosDe(ORG_AVISO_FORJA)).toBe(1);
+  });
+
+  it("um viewer NÃO reescreve o título do aviso real (gatilho de update)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_FORJA)}
+      update public.agent_inbox_items set title = 'hackeado' where id = '${avisoRealId}';
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("só status e resolved_at podem mudar");
+  });
+
+  it("um viewer CONSEGUE encerrar o aviso real (status é coluna de estado permitida)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_FORJA)}
+      update public.agent_inbox_items set status = 'resolved' where id = '${avisoRealId}';
+    `);
+    expect(erro).toBeNull();
+    const linhas = comoServico(`select 'SONDA|' || status from public.agent_inbox_items where id = '${avisoRealId}';`);
+    expect(linhas).toEqual(["resolved"]);
+  });
+
+  it("itens de OUTRO tipo (não billing_limite) continuam graváveis pelo membro como antes", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_FORJA)}
+      insert into public.agent_inbox_items (organization_id, kind, severity, title, ref_kind)
+        values ('${ORG_AVISO_FORJA}', 'other', 'info', 'Aviso comum do membro', null);
+    `);
+    expect(erro).toBeNull();
+  });
+});
+
+describe("24. B1: reenviar um convite vencido, com a organização no teto, avisa", () => {
+  beforeAll(() => {
+    comoServico(`
+      insert into auth.users (id, email) values ('${USER_REENVIO_CONVITE}', 'b1-membro@invariant.test')
+        on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_REENVIO_CONVITE}', 'trava-b1-reenvio', 'Trava B1 LTDA', 'Trava B1')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_REENVIO_CONVITE}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_REENVIO_CONVITE}'::uuid, '{"membros": 1}'::jsonb, null, null);
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_REENVIO_CONVITE}', '${ORG_REENVIO_CONVITE}', 'agent', now())
+        on conflict do nothing;
+      -- convite JÁ VENCIDO: não conta como pendente, não avisa ao nascer.
+      insert into public.team_invites (organization_id, email, role, expires_at)
+        values ('${ORG_REENVIO_CONVITE}', 'b1-convidado@invariant.test', 'agent', now() - interval '1 day');
+    `);
+  });
+
+  it("o convite vencido nasceu sem aviso (não conta como pendente)", () => {
+    expect(avisosDe(ORG_REENVIO_CONVITE)).toBe(0);
+  });
+
+  it("reenviar (update de expires_at/last_sent_at/resend_count, como emitirConvite/reenviarConvite) volta a pendente e avisa, org já no teto", () => {
+    comoServico(`
+      update public.team_invites
+        set expires_at = now() + interval '7 days', last_sent_at = now(), resend_count = resend_count + 1
+        where organization_id = '${ORG_REENVIO_CONVITE}' and email = 'b1-convidado@invariant.test';
+    `);
+    expect(avisosDe(ORG_REENVIO_CONVITE)).toBe(1);
+  });
+});
+
+describe("25. B4: transições que mudam a contagem de etapas sem aviso", () => {
+  it("B4.1: desarquivar um funil com etapas acima do teto avisa etapas_por_funil (não só funis)", () => {
+    comoServico(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_DESARQUIVAR_ETAPAS}', 'trava-b4-desarquivar-etapas', 'Trava B4 Desarquivar LTDA', 'Trava B4 Desarquivar')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_DESARQUIVAR_ETAPAS}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_DESARQUIVAR_ETAPAS}'::uuid, '{"funis": 5, "etapas_por_funil": 5}'::jsonb, null, null);
+      insert into public.crm_pipelines (organization_id, name, slug)
+        values ('${ORG_DESARQUIVAR_ETAPAS}', 'Funil B4', 'funil-b4-etapas');
+      -- 1 etapa ativa, folgado (teto 5 nesta hora).
+      insert into public.crm_stages (organization_id, pipeline_id, name, slug, position)
+        values ('${ORG_DESARQUIVAR_ETAPAS}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_DESARQUIVAR_ETAPAS}' and slug = 'funil-b4-etapas'),
+                'Etapa B4', 'etapa-b4', 1000);
+      -- arquivar o funil não confere nada, antes e depois deste achado.
+      update public.crm_pipelines set is_archived = true
+        where organization_id = '${ORG_DESARQUIVAR_ETAPAS}' and slug = 'funil-b4-etapas';
+      -- o teto CAI para 0 enquanto o funil está arquivado (fn_billing_ajustar_limites
+      -- nunca confere retroativamente), a etapa ativa já existente fica "fora do
+      -- radar" até o funil ser desarquivado.
+      select public.fn_billing_ajustar_limites('${ORG_DESARQUIVAR_ETAPAS}'::uuid, '{"etapas_por_funil": 0}'::jsonb, null, null);
+    `);
+    expect(avisosDe(ORG_DESARQUIVAR_ETAPAS)).toBe(0);
+
+    comoServico(`
+      update public.crm_pipelines set is_archived = false
+        where organization_id = '${ORG_DESARQUIVAR_ETAPAS}' and slug = 'funil-b4-etapas';
+    `);
+    // Achado B4.1: antes, desarquivar só conferia 'funis' (folgado, teto 5).
+    // Agora também confere etapas_por_funil DESTE funil (teto 0, com 1 etapa
+    // ativa já dentro dele) e avisa.
+    expect(avisosDe(ORG_DESARQUIVAR_ETAPAS)).toBe(1);
+  });
+
+  it("B4.2: mover uma etapa ATIVA para o funil de destino no teto avisa etapas_por_funil do destino", () => {
+    comoServico(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_MOVER_ETAPA}', 'trava-b4-mover-etapa', 'Trava B4 Mover LTDA', 'Trava B4 Mover')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_MOVER_ETAPA}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_MOVER_ETAPA}'::uuid, '{"funis": 5, "etapas_por_funil": 1}'::jsonb, null, null);
+      insert into public.crm_pipelines (organization_id, name, slug) values
+        ('${ORG_MOVER_ETAPA}', 'Funil Origem B4', 'funil-origem-b4'),
+        ('${ORG_MOVER_ETAPA}', 'Funil Destino B4', 'funil-destino-b4');
+      -- cada funil com 1 etapa ativa, exatamente no teto (1), sem aviso.
+      insert into public.crm_stages (organization_id, pipeline_id, name, slug, position)
+        values ('${ORG_MOVER_ETAPA}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_MOVER_ETAPA}' and slug = 'funil-origem-b4'),
+                'Etapa Origem', 'etapa-origem-b4', 1000);
+      insert into public.crm_stages (organization_id, pipeline_id, name, slug, position)
+        values ('${ORG_MOVER_ETAPA}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_MOVER_ETAPA}' and slug = 'funil-destino-b4'),
+                'Etapa Destino', 'etapa-destino-b4', 1000);
+    `);
+    expect(avisosDe(ORG_MOVER_ETAPA)).toBe(0);
+
+    comoServico(`
+      update public.crm_stages
+        set pipeline_id = (select id from public.crm_pipelines where organization_id = '${ORG_MOVER_ETAPA}' and slug = 'funil-destino-b4')
+        where organization_id = '${ORG_MOVER_ETAPA}' and slug = 'etapa-origem-b4';
+    `);
+    // Achado B4.2: antes, mudar pipeline_id de uma etapa ativa não disparava
+    // nada (não estava na lista de colunas do gatilho). Agora confere
+    // etapas_por_funil do funil de DESTINO (2 etapas ativas ali, teto 1) e avisa.
+    expect(avisosDe(ORG_MOVER_ETAPA)).toBe(1);
   });
 });

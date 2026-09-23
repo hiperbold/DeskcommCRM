@@ -126,11 +126,18 @@ describe("0905 uso dos planos e trava (parte 1, Tarefa 2)", () => {
     }
   });
 
-  it("a policy de leitura de billing_usage_counters é só select, por organização ou admin da plataforma", () => {
+  it("a policy de leitura de billing_usage_counters é só select, por gerente da organização ou admin da plataforma (achado B5)", () => {
+    // Achado B5 (revisão fase F2): a policy exigia só ser MEMBRO
+    // (fn_user_org_ids), e um agente com visibilidade "só os meus leads"
+    // descobria o total aberto da empresa. Passou a exigir
+    // fn_role_at_least(organization_id, 'manager'), que já confere
+    // pertencimento (fn_user_role_in_org devolve null para quem não é
+    // membro, e a comparação de nível cai no coalesce false).
     for (const sql of [MIGRATION, BASELINE]) {
       expect(sql).toMatch(/create policy billing_usage_counters_select on public\.billing_usage_counters/);
       expect(sql).toMatch(/for select using/);
-      expect(sql).toMatch(/organization_id in \(select public\.fn_user_org_ids\(\)\) or public\.fn_is_platform_admin\(\)/);
+      expect(sql).toMatch(/public\.fn_role_at_least\(organization_id, 'manager'\) or public\.fn_is_platform_admin\(\)/);
+      expect(sql).not.toMatch(/organization_id in \(select public\.fn_user_org_ids\(\)\) or public\.fn_is_platform_admin\(\)\)\s*;\s*\n\s*\n?\s*revoke all on public\.billing_settings/);
     }
 
     // billing_settings não ganha policy nenhuma nesta migração (sem grant, a
@@ -356,14 +363,9 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
   it("os seis gatilhos de transição são 'before insert or update of <coluna>', sem exceção de crm_leads", () => {
     const ESPERADOS = [
       { tabela: "crm_pipelines", coluna: "is_archived", nome: "trg_billing_trava_crm_pipelines" },
-      { tabela: "crm_stages", coluna: "is_archived", nome: "trg_billing_trava_crm_stages" },
+      // crm_stages ganhou pipeline_id (achado B4.2), conferido à parte, abaixo.
       { tabela: "channel_sessions", coluna: "archived_at", nome: "trg_billing_trava_channel_sessions" },
       { tabela: "webhook_sources", coluna: "is_active", nome: "trg_billing_trava_webhook_sources" },
-      {
-        tabela: "user_organizations",
-        coluna: "accepted_at, revoked_at",
-        nome: "trg_billing_trava_user_organizations",
-      },
     ] as const;
     for (const sql of [MIGRATION, BASELINE]) {
       for (const { tabela, coluna, nome } of ESPERADOS) {
@@ -373,9 +375,34 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
         );
         expect(sql, `${nome} não bate com "before insert or update of ${coluna}"`).toMatch(regex);
       }
-      // team_invites: só before insert (o convite nunca volta a ficar pendente por update).
+      // Achado B1 (revisão fase F2): team_invites ganhou "or update of
+      // expires_at, revoked_at, accepted_at", reenviar (emitirConvite /
+      // reenviarConvite) faz UPDATE na mesma linha, inclusive vencida, e o
+      // convite volta a pendente sem passar por nenhum insert.
       expect(sql).toMatch(
-        /create trigger\s+trg_billing_trava_team_invites\s+before insert on public\.team_invites/,
+        /create trigger\s+trg_billing_trava_team_invites\s+before insert or update of expires_at, revoked_at, accepted_at on public\.team_invites/,
+      );
+      // crm_stages ganhou pipeline_id na lista (achado B4.2: mover uma etapa
+      // ATIVA de funil não disparava nada).
+      expect(sql).toMatch(
+        /create trigger\s+trg_billing_trava_crm_stages\s+before insert or update of is_archived, pipeline_id on public\.crm_stages/,
+      );
+    }
+  });
+
+  it("achado M1 (revisão fase F2): trg_billing_trava_user_organizations perdeu a lista 'of' (roda em qualquer update, de propósito)", () => {
+    // provisional_until_handover só existe a partir da migration 0237, que no
+    // baseline.sql aplica DEPOIS do bloco 0905 (faixa 09xx é numeração
+    // reservada ao fork, não ordem real de aplicação): um "of <coluna
+    // inexistente neste ponto do arquivo>" quebraria um install do zero. Por
+    // isso a lista de colunas foi REMOVIDA (não ampliada), ver o comentário
+    // acima da CREATE TRIGGER nos dois arquivos.
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /create trigger trg_billing_trava_user_organizations\n(?:\s*--[^\n]*\n)*\s*before insert or update on public\.user_organizations/,
+      );
+      expect(sql).not.toMatch(
+        /create trigger trg_billing_trava_user_organizations\n(?:\s*--[^\n]*\n)*\s*before insert or update of/,
       );
     }
   });
@@ -461,11 +488,13 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
 
   it("o segundo bloco da role agent_worker revoga execute das nove funções novas da parte 2", () => {
     for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
-      // 3, não 2: um bloco por parte (1, 2 e 3; a Tarefa 4 acrescentou o
+      // 4, não 2: um bloco por parte (1, 2 e 3; a Tarefa 4 acrescentou o
       // terceiro, próprio da função fn_billing_trava_ai_mcp_connections,
-      // conferido à parte no describe do teto técnico de conexões MCP).
+      // conferido à parte no describe do teto técnico de conexões MCP). A
+      // revisão fase F2 acrescentou a parte 4 (M1 e M2), com o quarto bloco,
+      // conferido à parte no describe da parte 4.
       const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
-      expect(ocorrencias.length).toBe(3);
+      expect(ocorrencias.length).toBe(4);
       for (const assinatura of FUNCOES_DE_TRAVA_SEGURANCA_DEFINER) {
         const nome = assinatura.slice(0, assinatura.indexOf("("));
         expect(sql).toMatch(new RegExp(`revoke execute on function[^;]*public\\.${nome}\\([^;]*from agent_worker`));
@@ -524,6 +553,130 @@ describe("0905 teto técnico de conexões MCP (parte 3, Tarefa 4, D-034)", () =>
     for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
       expect(sql).toMatch(
         /revoke execute on function public\.fn_billing_trava_ai_mcp_connections\(\) from agent_worker/,
+      );
+    }
+  });
+});
+
+describe("0905 parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segurança)", () => {
+  const FUNCOES_PARTE4 = [
+    "fn_billing_trava_user_organizations_provisorio()",
+    "fn_billing_trava_agent_inbox_items_update()",
+  ] as const;
+
+  it("as duas funções novas da parte 4 são security INVOKER (não definer) com search_path fixo", () => {
+    // M1 e M2 precisam enxergar a role REAL de quem está gravando
+    // (current_user) para decidir se recusa; security definer sempre veria o
+    // dono da função (postgres) e nunca recusaria ninguém.
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE4) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
+        const trecho = sql.slice(inicio, inicio + 300);
+        expect(trecho).toMatch(/security invoker/);
+        expect(trecho).not.toMatch(/security definer/);
+        expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      }
+    }
+  });
+
+  it("as duas funções novas revogam execute de public/anon/authenticated e concedem só a service_role (mesmo padrão das outras)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE4) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const regexRevoke = new RegExp(`revoke execute on function public\\.${nome}\\(\\) from public, anon, authenticated`);
+        const regexGrant = new RegExp(`grant execute on function public\\.${nome}\\(\\) to service_role`);
+        expect(sql, `${nome}: revoke ausente`).toMatch(regexRevoke);
+        expect(sql, `${nome}: grant ausente`).toMatch(regexGrant);
+      }
+    }
+  });
+
+  it("as duas funções testam current_user contra postgres, service_role e supabase_admin (o servidor passa, ninguém mais)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE4) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        const trecho = sql.slice(inicio, inicio + 1200);
+        expect(trecho, nome).toMatch(
+          /current_user not in \('postgres', 'service_role', 'supabase_admin'\)/,
+        );
+      }
+    }
+  });
+
+  it("M1: os dois gatilhos em user_organizations não usam 'of provisional_until_handover' (quebraria um install do zero)", () => {
+    // A coluna só existe a partir da migration 0237, que no baseline.sql
+    // aplica DEPOIS do bloco 0905 inteiro (faixa 09xx é numeração reservada
+    // ao fork, não ordem real de aplicação). Um "of <coluna inexistente
+    // neste ponto do arquivo>" falha a CRIAÇÃO do gatilho num install do
+    // zero, achado só provado rodando pnpm test:db (INSTALL mode) contra o
+    // baseline inteiro, não contra um banco já migrado.
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).not.toMatch(/before insert or update of[^;]*provisional_until_handover/);
+      expect(sql).toMatch(
+        /create trigger\s+trg_billing_trava_user_organizations_provisorio\s+before insert or update on public\.user_organizations/,
+      );
+    }
+  });
+
+  it("M2: duas policies RESTRICTIVE em agent_inbox_items (insert e delete), prefixo billing_, vetando ref_kind = 'billing_limite'", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /create policy billing_agent_inbox_items_insert on public\.agent_inbox_items\s+as restrictive for insert\s+to authenticated\s+with check \(ref_kind is distinct from 'billing_limite'\);/,
+      );
+      expect(sql).toMatch(
+        /create policy billing_agent_inbox_items_delete on public\.agent_inbox_items\s+as restrictive for delete\s+to authenticated\s+using \(ref_kind is distinct from 'billing_limite'\);/,
+      );
+    }
+  });
+
+  it("M2: o gatilho de update em agent_inbox_items é before update, sem lista de colunas (compara to_jsonb menos status/resolved_at)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /create trigger\s+trg_billing_trava_agent_inbox_items_update\s+before update on public\.agent_inbox_items/,
+      );
+      expect(sql).toMatch(
+        /\(to_jsonb\(old\) - array\['status', 'resolved_at'\]\) is distinct from \(to_jsonb\(new\) - array\['status', 'resolved_at'\]\)/,
+      );
+    }
+  });
+
+  it("B4.1: desarquivar um funil também confere etapas_por_funil dele (não só funis)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_crm_pipelines(");
+      const trecho = sql.slice(inicio, inicio + 1200);
+      expect(trecho).toMatch(
+        /elsif old\.is_archived = true and new\.is_archived = false then[\s\S]*?fn_billing_conferir_teto\(new\.organization_id, 'funis', null\);[\s\S]*?fn_billing_conferir_teto\(new\.organization_id, 'etapas_por_funil', new\.id\);/,
+      );
+    }
+  });
+
+  it("B4.2: mover uma etapa ATIVA de pipeline_id confere etapas_por_funil do funil de DESTINO", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_crm_stages(");
+      const trecho = sql.slice(inicio, inicio + 900);
+      expect(trecho).toMatch(
+        /elsif new\.is_archived = false and new\.pipeline_id is distinct from old\.pipeline_id then/,
+      );
+    }
+  });
+
+  it("B1: fn_billing_trava_team_invites confere na transição de NÃO pendente para pendente, não em toda linha nova", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_team_invites(");
+      const trecho = sql.slice(inicio, inicio + 900);
+      expect(trecho).toMatch(/v_novo_pendente boolean;/);
+      expect(trecho).toMatch(/v_antigo_pendente boolean;/);
+      expect(trecho).toMatch(/if v_novo_pendente and not v_antigo_pendente then/);
+    }
+  });
+
+  it("o bloco da role agent_worker cobre as duas funções novas da parte 4", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_trava_user_organizations_provisorio\(\), public\.fn_billing_trava_agent_inbox_items_update\(\) from agent_worker/,
       );
     }
   });

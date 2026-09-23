@@ -112,7 +112,12 @@ alter table public.billing_usage_counters enable row level security;
 drop policy if exists billing_usage_counters_select on public.billing_usage_counters;
 create policy billing_usage_counters_select on public.billing_usage_counters
   for select using (
-    organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()
+    -- Achado B5 (revisão fase F2): antes bastava ser membro (fn_user_org_ids)
+    -- para ler o contador; um agente com visibilidade "só os meus leads"
+    -- descobria o total aberto da empresa. fn_role_at_least já confere
+    -- pertencimento à organização (fn_user_role_in_org devolve null para
+    -- quem não é membro, e a comparação de nível cai no coalesce false).
+    public.fn_role_at_least(organization_id, 'manager') or public.fn_is_platform_admin()
   );
 
 revoke all on public.billing_settings, public.billing_usage_counters from anon, authenticated;
@@ -473,7 +478,12 @@ begin
       perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
     end if;
   elsif old.is_archived = true and new.is_archived = false then
+    -- Achado B4.1 (revisão fase F2): desarquivar reativa TAMBÉM as etapas
+    -- ativas deste funil, que não passaram por nenhum insert agora (elas já
+    -- existiam, arquivadas junto do funil), sem esta linha etapas_por_funil
+    -- nunca era conferido nesta transição.
     perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
+    perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.id);
   end if;
 
   return new;
@@ -481,7 +491,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_pipelines() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update. Achado B4.1 (revisão fase F2): a transição de desarquivar TAMBÉM confere etapas_por_funil do próprio funil, porque as etapas ativas dele reaparecem sem passar por nenhum insert em crm_stages.';
 
 revoke execute on function public.fn_billing_trava_crm_pipelines() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_pipelines() to service_role;
@@ -506,6 +516,13 @@ begin
     end if;
   elsif old.is_archived = true and new.is_archived = false then
     perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
+  elsif new.is_archived = false and new.pipeline_id is distinct from old.pipeline_id then
+    -- Achado B4.2 (revisão fase F2): mover uma etapa ATIVA para outro funil
+    -- muda a contagem de etapas_por_funil do funil de DESTINO sem passar por
+    -- insert nem por is_archived, sem este ramo a transição não disparava
+    -- conferência nenhuma. Etapa arquivada mudando de funil não conta (não
+    -- está ativa em nenhum dos dois).
+    perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
   end if;
 
   return new;
@@ -513,14 +530,14 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_stages() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) só na transição de is_archived para false, em insert ou update. Um INSERT com várias etapas dispara este gatilho uma vez por linha, e cada chamada conta as etapas já commitadas antes dela no mesmo comando (prova do VOLATILE, decisão 9).';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) na transição de is_archived para false (insert ou update) e, achado B4.2 (revisão fase F2), quando uma etapa ATIVA muda de pipeline_id (confere o funil de DESTINO). Um INSERT com várias etapas dispara este gatilho uma vez por linha, e cada chamada conta as etapas já commitadas antes dela no mesmo comando (prova do VOLATILE, decisão 9).';
 
 revoke execute on function public.fn_billing_trava_crm_stages() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_stages() to service_role;
 
 drop trigger if exists trg_billing_trava_crm_stages on public.crm_stages;
 create trigger trg_billing_trava_crm_stages
-  before insert or update of is_archived on public.crm_stages
+  before insert or update of is_archived, pipeline_id on public.crm_stages
   for each row
   execute function public.fn_billing_trava_crm_stages();
 
@@ -595,8 +612,19 @@ language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
+declare
+  v_novo_pendente boolean;
+  v_antigo_pendente boolean;
 begin
-  if new.accepted_at is null and new.revoked_at is null and new.expires_at > now() then
+  v_novo_pendente := new.accepted_at is null and new.revoked_at is null and new.expires_at > now();
+
+  if tg_op = 'INSERT' then
+    v_antigo_pendente := false;
+  else
+    v_antigo_pendente := old.accepted_at is null and old.revoked_at is null and old.expires_at > now();
+  end if;
+
+  if v_novo_pendente and not v_antigo_pendente then
     perform public.fn_billing_conferir_teto(new.organization_id, 'membros', null);
   end if;
 
@@ -605,14 +633,14 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_team_invites() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) quando o convite nasce pendente e não vencido. team_invites não tem gatilho de UPDATE: um convite pendente só deixa de contar por aceite (vira user_organizations, contado por outro gatilho) ou revogação, nunca volta a ficar pendente depois.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente).';
 
 revoke execute on function public.fn_billing_trava_team_invites() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_team_invites() to service_role;
 
 drop trigger if exists trg_billing_trava_team_invites on public.team_invites;
 create trigger trg_billing_trava_team_invites
-  before insert on public.team_invites
+  before insert or update of expires_at, revoked_at, accepted_at on public.team_invites
   for each row
   execute function public.fn_billing_trava_team_invites();
 
@@ -653,7 +681,19 @@ grant execute on function public.fn_billing_trava_user_organizations() to servic
 
 drop trigger if exists trg_billing_trava_user_organizations on public.user_organizations;
 create trigger trg_billing_trava_user_organizations
-  before insert or update of accepted_at, revoked_at on public.user_organizations
+  -- Achado M1 (revisão fase F2): a lista "of accepted_at, revoked_at" foi
+  -- REMOVIDA, não ampliada com provisional_until_handover. Essa coluna só
+  -- nasce bem depois deste ponto do baseline.sql (migration 0237, faixa
+  -- 09xx é numeração RESERVADA ao fork, não ordem real de aplicação, e
+  -- 0237 aplica DEPOIS do bloco 0905): um "of <coluna que ainda não
+  -- existe>" falha na hora de CRIAR o gatilho num install do zero,
+  -- diferente de uma referência dentro do CORPO da função (só resolvida em
+  -- tempo de EXECUÇÃO, quando a coluna já existe de sobra). Sem "of", o
+  -- gatilho passa a rodar em qualquer update da linha; o corpo da função
+  -- (v_novo_ativo/v_antigo_ativo) é barato e não faz nada a mais quando a
+  -- transição não muda (um update de interface_settings, por exemplo, não
+  -- move accepted_at/revoked_at/provisional_until_handover).
+  before insert or update on public.user_organizations
   for each row
   execute function public.fn_billing_trava_user_organizations();
 
@@ -901,6 +941,155 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke execute on function public.fn_billing_trava_ai_mcp_connections() from agent_worker';
+  end if;
+end
+$$;
+
+-- Parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segurança).
+--
+-- As partes 1 a 3 (Tarefas 2 a 4) já estavam escritas quando a auditoria de
+-- segurança achou dois furos que só um gatilho no banco fecha (RLS sozinha
+-- não alcança): M1 (provisional_until_handover gravável por qualquer admin
+-- comum) e M2 (agent_inbox_items.ref_kind = 'billing_limite' forjável,
+-- apagável e reescrevível por qualquer membro). B1, B4 e a lista de colunas
+-- do M1 entraram NO LUGAR das peças da Tarefa 3, acima (achados sobre
+-- gatilho já existente); esta parte 4 só tem as peças NOVAS (M1 e M2).
+--
+-- Idempotente: create or replace, drop trigger/policy if exists antes de
+-- recriar.
+
+-- 14. M1: só o servidor grava user_organizations.provisional_until_handover.
+--
+-- A coluna (comentário dela, migration 0237/baseline) diz que é gravada
+-- "APENAS por fn_create_tenant_with_owner", mas a policy user_orgs_update (do
+-- autor, fn_role_at_least(organization_id, 'admin')) deixa qualquer admin da
+-- organização gravar QUALQUER coluna, inclusive esta. Um admin comum marcando
+-- o vínculo de um colega como provisório (1) tira esse colega da contagem de
+-- membros sem aviso e (2) faz fn_accept_team_invite apagar esse vínculo no
+-- próximo aceite de admin: um jeito de expulsar alguém da própria empresa.
+--
+-- security invoker DE PROPÓSITO (diferente de todo o resto deste arquivo):
+-- este gatilho precisa enxergar a ROLE REAL de quem está gravando.
+-- security definer sempre veria o dono da função (postgres) e nunca
+-- recusaria ninguém. Dentro de uma função security definer do dono postgres
+-- (fn_create_tenant_with_owner, fn_accept_team_invite), current_user já É
+-- postgres durante a execução dela, então o fluxo do autor continua
+-- passando sem precisar de nenhuma exceção explícita para essas duas funções.
+create or replace function public.fn_billing_trava_user_organizations_provisorio()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if current_user not in ('postgres', 'service_role', 'supabase_admin') then
+    if tg_op = 'INSERT' then
+      if new.provisional_until_handover then
+        raise exception 'provisional_until_handover só pode ser gravado pelo servidor' using errcode = '42501';
+      end if;
+    elsif new.provisional_until_handover is distinct from old.provisional_until_handover then
+      raise exception 'provisional_until_handover só pode ser gravado pelo servidor' using errcode = '42501';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_user_organizations_provisorio() is
+  'M1 (revisão fase F2): recusa gravar user_organizations.provisional_until_handover fora do servidor (postgres, service_role, supabase_admin), em insert já true, ou em update quando o valor mudou. security invoker de propósito: precisa ver a role REAL de quem grava (dentro de uma função security definer do dono postgres, current_user já é postgres, o fluxo de fn_create_tenant_with_owner e fn_accept_team_invite continua passando sem exceção nenhuma). errcode 42501 (mesma família de permission denied das policies).';
+
+revoke execute on function public.fn_billing_trava_user_organizations_provisorio() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_user_organizations_provisorio() to service_role;
+
+-- Sem "of provisional_until_handover" DE PROPÓSITO (mesmo achado do gatilho
+-- acima, item 8f da parte 2): a coluna só nasce depois deste ponto do
+-- baseline.sql (migration 0237), e um "of <coluna inexistente>" falha na
+-- hora de CRIAR o gatilho. O corpo da função já só recusa quando a coluna
+-- realmente está envolvida (insert com ela true, ou update em que mudou).
+drop trigger if exists trg_billing_trava_user_organizations_provisorio on public.user_organizations;
+create trigger trg_billing_trava_user_organizations_provisorio
+  before insert or update on public.user_organizations
+  for each row
+  execute function public.fn_billing_trava_user_organizations_provisorio();
+
+-- 15. M2: agent_inbox_items, ninguém além do servidor forja, apaga ou
+-- reescreve um aviso de plano (ref_kind = 'billing_limite').
+--
+-- tenant_isolation_agent_inbox_items_all (do autor, FOR ALL por organização)
+-- deixa qualquer membro inserir, atualizar e apagar QUALQUER linha da própria
+-- organização, inclusive um aviso de plano forjado: um viewer insere
+-- kind='other', ref_kind='billing_limite' e o TÍTULO do aviso real, e a
+-- deduplicação de fn_billing_conferir_teto (que olha organização + ref_kind +
+-- título ENQUANTO status='open') acha essa linha falsa e o aviso verdadeiro
+-- nunca nasce. O mesmo membro também apaga o aviso real, ou reescreve o
+-- título/corpo de um aviso já aberto.
+--
+-- Duas policies RESTRICTIVE (acrescentam-se à FOR ALL do autor, não a
+-- substituem: RESTRICTIVE é E lógico com toda PERMISSIVE que já vale) mais
+-- um gatilho de UPDATE. Nomes com prefixo billing_ para não colidir com o
+-- padrão support_write_* (mesma tabela, mesmo formato, propósito diferente:
+-- aquele é o modo readonly do suporte, este é o dono do dado de plano).
+drop policy if exists billing_agent_inbox_items_insert on public.agent_inbox_items;
+create policy billing_agent_inbox_items_insert on public.agent_inbox_items
+  as restrictive for insert
+  to authenticated
+  with check (ref_kind is distinct from 'billing_limite');
+
+drop policy if exists billing_agent_inbox_items_delete on public.agent_inbox_items;
+create policy billing_agent_inbox_items_delete on public.agent_inbox_items
+  as restrictive for delete
+  to authenticated
+  using (ref_kind is distinct from 'billing_limite');
+
+-- O UPDATE não dá para travar só com RESTRICTIVE (não há coluna para
+-- comparar old x new numa USING/WITH CHECK), por isso é gatilho: recusa
+-- reescrever qualquer coluna de um aviso de plano (old ou new com ref_kind =
+-- 'billing_limite') que não seja status ou resolved_at: as DUAS colunas de
+-- estado/resolução que app/api/v1/ai/inbox/[id]/route.ts (PATCH, um membro
+-- marcando ack/resolved/open) e app/api/v1/ai/inbox/resolve-all/route.ts
+-- (resolver todos de uma vez) gravam ao encerrar um item; nenhuma das duas
+-- rotas toca título, corpo, kind, severity, ref_kind nem ref_id. O membro
+-- pode marcar como resolvido (ou reabrir), não pode transformar outro item
+-- num aviso de plano nem reescrever o texto de um aviso real.
+create or replace function public.fn_billing_trava_agent_inbox_items_update()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if current_user not in ('postgres', 'service_role', 'supabase_admin')
+     and (old.ref_kind = 'billing_limite' or new.ref_kind = 'billing_limite')
+     and (to_jsonb(old) - array['status', 'resolved_at']) is distinct from (to_jsonb(new) - array['status', 'resolved_at'])
+  then
+    raise exception 'aviso de plano: só status e resolved_at podem mudar fora do servidor' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_agent_inbox_items_update() is
+  'M2 (revisão fase F2): quando old.ref_kind ou new.ref_kind é billing_limite, recusa update de QUALQUER coluna fora de status e resolved_at (as duas que o app grava ao encerrar um item, app/api/v1/ai/inbox/[id]/route.ts e .../resolve-all/route.ts), fora do servidor. security invoker de propósito (mesmo racional do M1): precisa ver a role real de quem grava. Compara to_jsonb(old)/to_jsonb(new) menos as duas colunas permitidas, para nenhuma coluna nova do futuro escapar despercebida desta trava.';
+
+revoke execute on function public.fn_billing_trava_agent_inbox_items_update() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_agent_inbox_items_update() to service_role;
+
+drop trigger if exists trg_billing_trava_agent_inbox_items_update on public.agent_inbox_items;
+create trigger trg_billing_trava_agent_inbox_items_update
+  before update on public.agent_inbox_items
+  for each row
+  execute function public.fn_billing_trava_agent_inbox_items_update();
+
+-- 16. agent_worker não trava provisório nem aviso de plano pelas peças novas
+-- desta parte 4 (mesmo racional dos blocos 6, 11 e 13, acima): por alter
+-- default privileges ela ganharia execute em toda função nova do schema
+-- public, e tem bypassrls.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_trava_user_organizations_provisorio(), public.fn_billing_trava_agent_inbox_items_update() from agent_worker';
   end if;
 end
 $$;
