@@ -7,7 +7,7 @@ Etapa da fase: F2 em portões completos (cópia separada `~/projects/deskcommcrm
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
 
-F2-B, tarefas (plano em `hiperbold/planos/fase-F2-B-tarefas.md`): 1 feita (586a7c0); 2a em execução; 2b, 3, 4, 5, 6, 7, 8 pendentes. Em paralelo: correção do D-050 (custo pelo catálogo, decisão do Filipe na N12). N1 aplicada (07af2c8: 3 milhões de tokens nos três planos).
+F2-B, tarefas (plano em `hiperbold/planos/fase-F2-B-tarefas.md`): 1 (586a7c0), 2a (e1fb4ab), 2b (0fe1424, e corrigiu o aviso de plano da F2 que aparecia indisponível na Central) feitas; parte de banco das tarefas 4, 5 e 8 (0906 parte 4: crédito, adicional, ajuste, saldo, conferidores) em execução; depois, em paralelo por arquivos que não se cruzam: 3 (provas de banco), 4+7 (ações e aba do admin), 5+6 (leitura e tela do cliente), 8 (cron). D-050 corrigido no código (222af53; falta conferir produção antes de publicar). N1 aplicada (07af2c8: 3 milhões de tokens nos três planos). D-056 (GLM não existe; DeepSeek existe sem preço no catálogo) e D-057 (conferências antigas sem origem da chave) registrados.
 
 Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e lint:channels verdes; build caiu por falta de memória no passo de TypeScript (sem `NODE_OPTIONS`, ambiente, não código), a refazer com `NODE_OPTIONS=--max-old-space-size=6144` depois da bateria unitária.
 

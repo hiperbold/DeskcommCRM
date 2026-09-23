@@ -39097,6 +39097,576 @@ begin
   end if;
 end
 $$;
+
+-- ── Parte 4 (Tarefas 4, 5, 8): crédito, adicional e ajuste pelo admin da
+-- plataforma; leitura de saldo; os conferidores diários ──
+--
+-- As partes 1 a 3 (acima) trouxeram configuração, tabelas, concessão,
+-- débito, gatilho, agregado, avisos e travas. Esta parte 4 traz as oito
+-- funções que faltavam: as três de escrita do admin da plataforma (decisão
+-- 16, crédito avulso, adicional e ajuste), a leitura de saldo que concede
+-- (decisão 9) e os três conferidores/leituras de apoio da Tarefa 8
+-- (conferidor de carteira, decisão 8; débitos pendentes, decisão 12; soma da
+-- instalação no dia, decisão 15). O TypeScript que chama estas oito funções
+-- é de OUTRAS tarefas, contra as assinaturas exatas abaixo.
+--
+-- Trava: as quatro funções do admin (creditar, contratar, cancelar, ajustar)
+-- e o conferidor de carteira usam pg_advisory_xact_lock (BLOQUEANTE, não a
+-- variante _try_ do débito): são ação humana da plataforma ou rotina de
+-- cron, nenhuma das duas é o caminho quente de uma resposta de agente, então
+-- podem esperar a organização ficar livre em vez de desistir. Mesma chave
+-- 'billing_tokens:<org>' do débito (decisão 8), para as duas pontas nunca
+-- correrem juntas sobre a mesma carteira. fn_billing_saldo_da_carteira é
+-- DIFERENTE de propósito: usa pg_try_advisory_xact_lock, porque o próprio
+-- comentário de fn_billing_garantir_concessoes (Parte 2, acima) já promete
+-- isso ("a RPC de saldo da Tarefa 5 já precisa estar sob
+-- pg_try_advisory_xact_lock"), e é uma leitura que qualquer gerente pode
+-- disparar a qualquer momento: travar a tela do cliente atrás de um débito
+-- concorrente da própria organização não teria propósito nenhum, e se a
+-- trava não vier agora, o próximo consumo (ou a próxima leitura) concede.
+--
+-- Duas peças novas em tabelas da Parte 1, ambas add column if not exists,
+-- sem FK (mesmo racional da decisão 7): billing_token_ledger.ciclo (usada só
+-- por fn_billing_ajustar_tokens, abaixo, para o conferidor de carteira saber
+-- a que ciclo uma linha de ajuste pertence; concessão já carrega o ciclo na
+-- própria chave, crédito é sempre avulso sem ciclo, e consumo é reconciliado
+-- pelo llm_call_id, que já existe) e billing_token_ledger.compensa_id (o id
+-- da linha do livro-caixa que um ajuste estorna, só informativo, sem FK pelo
+-- mesmo motivo de llm_call_id: apagar a linha compensada não pode travar).
+--
+-- A decisão 4 do plano da fase pede que ajuste NEGATIVO deixe
+-- billing_token_wallets.creditado ficar negativo (para não misturar
+-- consumo real com ajuste no extrato de consumido): a constraint
+-- billing_token_wallets_creditado_nao_negativo, criada na Parte 1 antes de
+-- esta decisão existir por escrito, é relaxada abaixo (drop constraint if
+-- exists, idempotente). consumido continua sempre >= 0: só o débito grava
+-- nele, e débito nunca é negativo.
+--
+-- fn_billing_conferir_carteira recomputa cada linha existente de
+-- billing_token_wallets a partir do livro-caixa, sob a mesma trava:
+-- creditado = soma das linhas de concessão (chave carrega o ciclo), crédito
+-- avulso (chave 'credito:%', só a linha de avulso) e ajuste (chave
+-- 'ajuste:%', ciclo lido da coluna nova, positivo e negativo, decisão 4);
+-- consumido = soma (invertida de sinal) das linhas 'consumo:%' desta fonte,
+-- casadas por llm_call_id com o ciclo REAL da chamada (fn_billing_ciclo_de
+-- de llm_calls.created_at, a mesma regra do débito) para plano/adicional, e
+-- sem filtro de ciclo para avulso. Chamada de IA apagada (por exemplo pelo
+-- expurgo de LGPD, 0019) some do recálculo: lacuna conhecida e declarada
+-- aqui, não escondida: o livro-caixa continua tendo a linha de consumo
+-- (não é apagado, decisão 7), só perde a informação de ciclo dela.
+--
+-- Idempotente: add column if not exists, drop constraint if exists, create
+-- or replace, bloco final de agent_worker igual ao das partes 1 a 3.
+
+-- ============================================================================
+-- 17. billing_token_ledger ganha ciclo e compensa_id; billing_token_wallets
+-- deixa de exigir creditado >= 0 (decisão 4 do ajuste com sinal livre).
+-- ============================================================================
+alter table public.billing_token_ledger add column if not exists ciclo date;
+alter table public.billing_token_ledger add column if not exists compensa_id uuid;
+
+comment on column public.billing_token_ledger.ciclo is
+  '0906, Parte 4: ciclo (mês civil) a que esta linha pertence, gravado só por fn_billing_ajustar_tokens (nulo para ajuste de avulso). Concessão não precisa desta coluna (o ciclo já está na chave, ''plano:<ciclo>''/''adicional:<id>:<ciclo>''); crédito é sempre avulso, sem ciclo; consumo é reconciliado por llm_call_id (fn_billing_conferir_carteira, abaixo), não por esta coluna. SEM default: linha antiga de concessão/crédito/consumo fica com ciclo nulo para sempre, e o conferidor de carteira sabe disso e não depende dela para essas três.';
+comment on column public.billing_token_ledger.compensa_id is
+  '0906, Parte 4, decisão 16: id da linha do livro-caixa que este ajuste compensa (estorno de débito errado), só informativo. SEM chave estrangeira, mesmo racional de llm_call_id e criado_por (decisão 7): apagar a linha compensada não pode travar, e o livro-caixa não tem UPDATE para desfazer uma FK com on delete set null.';
+
+alter table public.billing_token_wallets drop constraint if exists billing_token_wallets_creditado_nao_negativo;
+
+comment on table public.billing_token_wallets is
+  '0906, decisão 8, revisado na Parte 4: saldo MATERIALIZADO por organização, fonte e ciclo (avulso com ciclo nulo). creditado e consumido são alterados na MESMA transação da linha do livro-caixa que os explica; o conferidor diário (fn_billing_conferir_carteira, Parte 4) recalcula do livro-caixa e corrige divergência. Saldo disponível (creditado - consumido) pode ficar negativo sem travar nada nesta fase (decisão 15); a partir da Parte 4, creditado TAMBÉM pode ficar negativo (fn_billing_ajustar_tokens, ajuste negativo sem consumo real correspondente, decisão 4 do plano da fase): por isso a constraint billing_token_wallets_creditado_nao_negativo da Parte 1 foi derrubada aqui. consumido continua sempre >= 0 (só o débito escreve nele).';
+
+-- ============================================================================
+-- 18. fn_billing_creditar_tokens: crédito avulso pelo admin da plataforma
+-- (decisão 16, Tarefa 4).
+-- ============================================================================
+create or replace function public.fn_billing_creditar_tokens(
+  p_org uuid,
+  p_tokens bigint,
+  p_chave uuid,
+  p_valor_cents bigint,
+  p_nota text,
+  p_criado_por uuid
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_linhas int;
+  v_creditou boolean := false;
+  v_creditado bigint;
+  v_consumido bigint;
+begin
+  if p_tokens <= 0 then
+    raise exception 'credito_tokens_deve_ser_positivo' using errcode = '22023';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
+
+  -- Fonte avulso, sem ciclo (decisão 6/N13: pacote avulso não vence). Chave
+  -- idempotente nasce no formulário (decisão 16): reenvio da MESMA p_chave
+  -- nunca credita duas vezes, o "on conflict do nothing" garante.
+  insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, nota, valor_cents, criado_por)
+  values (p_org, 'avulso', p_tokens, 'credito:' || p_chave::text, p_nota, p_valor_cents, p_criado_por)
+  on conflict (organization_id, chave) do nothing;
+
+  get diagnostics v_linhas = row_count;
+
+  if v_linhas > 0 then
+    v_creditou := true;
+    insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+    values (p_org, 'avulso', null, p_tokens, 0)
+    on conflict (organization_id, fonte, ciclo) do update
+      set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+          updated_at = now();
+  end if;
+
+  select creditado, consumido into v_creditado, v_consumido
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'avulso' and ciclo is null;
+
+  return jsonb_build_object(
+    'creditado', v_creditou,
+    'saldo_avulso', coalesce(v_creditado, 0) - coalesce(v_consumido, 0)
+  );
+end;
+$$;
+
+comment on function public.fn_billing_creditar_tokens(uuid, bigint, uuid, bigint, text, uuid) is
+  '0906, Parte 4, decisão 16: crédito avulso pelo admin da plataforma. p_tokens tem que ser positivo (senão 22023). Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE (ação humana, pode esperar). Linha ''credito:<p_chave>'' no livro-caixa, on conflict do nothing (reenvio da mesma chave não credita de novo); billing_token_wallets (fonte avulso, ciclo nulo) só soma quando o insert entrou de fato. Devolve {"creditado": bool (false = reenvio da mesma chave), "saldo_avulso": creditado - consumido do avulso inteiro}.';
+
+revoke execute on function public.fn_billing_creditar_tokens(uuid, bigint, uuid, bigint, text, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_creditar_tokens(uuid, bigint, uuid, bigint, text, uuid) to service_role;
+
+-- ============================================================================
+-- 19. fn_billing_contratar_adicional: assinatura mensal a mais pelo admin
+-- (decisão 16, Tarefa 4).
+-- ============================================================================
+create or replace function public.fn_billing_contratar_adicional(
+  p_org uuid,
+  p_tokens_por_ciclo bigint,
+  p_chave uuid,
+  p_valor_cents bigint,
+  p_nota text,
+  p_criado_por uuid
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_linhas int;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
+
+  -- id = p_chave (chave idempotente nascida no formulário, decisão 16):
+  -- reenvio da MESMA p_chave não duplica a contratação, o "on conflict
+  -- (id) do nothing" garante.
+  insert into public.billing_token_adicionais (id, organization_id, tokens_por_ciclo, valor_cents, nota, criado_por)
+  values (p_chave, p_org, p_tokens_por_ciclo, p_valor_cents, p_nota, p_criado_por)
+  on conflict (id) do nothing;
+
+  get diagnostics v_linhas = row_count;
+
+  -- Já concede o ciclo atual (decisão 9 e 16): sem isso, quem acabou de
+  -- contratar um adicional no meio do mês veria saldo zero na tela até a
+  -- próxima chamada de IA gerar débito (que é quem, hoje, dispara a
+  -- concessão preguiçosa). fn_billing_garantir_concessoes não faz nada de
+  -- novo se já tiver concedido este adicional neste ciclo (idempotente,
+  -- Parte 2), inclusive no reenvio desta função.
+  perform public.fn_billing_garantir_concessoes(p_org, public.fn_billing_ciclo_de(now()));
+
+  return jsonb_build_object('id', p_chave, 'criado', v_linhas > 0);
+end;
+$$;
+
+comment on function public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid) is
+  '0906, Parte 4, decisão 16: contrata (ou reaproveita) um adicional ativo. id = p_chave, idempotente: reenvio da MESMA chave devolve a linha existente sem duplicar ("criado": false). Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE. Concede o ciclo atual chamando fn_billing_garantir_concessoes (decisão 9) já sob a mesma trava, sempre (mesmo em reenvio, é idempotente). Devolve {"id": uuid, "criado": bool}.';
+
+revoke execute on function public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid) to service_role;
+
+-- ============================================================================
+-- 20. fn_billing_cancelar_adicional: cancela adicional ativo (decisão 16,
+-- Tarefa 4). Não mexe no que já foi concedido no ciclo corrente: só para de
+-- conceder a PARTIR do próximo ciclo (fn_billing_garantir_concessoes só
+-- olha "ativo" na Parte 2, código já pronto e não tocado aqui).
+-- ============================================================================
+create or replace function public.fn_billing_cancelar_adicional(
+  p_org uuid,
+  p_adicional uuid,
+  p_criado_por uuid
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_org_dono uuid;
+  v_ativo boolean;
+begin
+  select organization_id, ativo into v_org_dono, v_ativo
+    from public.billing_token_adicionais
+    where id = p_adicional;
+
+  if not found then
+    raise exception 'adicional_nao_encontrado' using errcode = 'P0002';
+  end if;
+
+  if v_org_dono <> p_org then
+    raise exception 'adicional_de_outra_organizacao' using errcode = '42501';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
+
+  -- Idempotente: se já estava inativo, não sobrescreve cancelado_em (a
+  -- data do PRIMEIRO cancelamento é a que importa) nem faz UPDATE nenhum.
+  -- p_criado_por não é gravado nesta tabela (mesmo molde de p_actor em
+  -- fn_billing_trocar_plano, migration 0904: quem audita QUEM cancelou é a
+  -- ação do servidor que chama esta função, não esta linha).
+  if v_ativo then
+    update public.billing_token_adicionais
+      set ativo = false, cancelado_em = now()
+      where id = p_adicional;
+  end if;
+
+  return jsonb_build_object('id', p_adicional, 'cancelado', true, 'cancelado_agora', v_ativo);
+end;
+$$;
+
+comment on function public.fn_billing_cancelar_adicional(uuid, uuid, uuid) is
+  '0906, Parte 4, decisão 16: cancela um adicional ativo (ativo = false, cancelado_em = now()). Adicional inexistente: P0002. Adicional de OUTRA organização: 42501 (nunca revela se existe em outra organização além do erro). Idempotente: cancelar de novo não sobrescreve cancelado_em nem falha. Não mexe no que já foi concedido no ciclo corrente (billing_token_ledger não é tocado): fn_billing_garantir_concessoes, Parte 2, só olha "ativo" para o PRÓXIMO ciclo. Devolve {"id", "cancelado": true, "cancelado_agora": bool (false = já estava cancelado)}.';
+
+revoke execute on function public.fn_billing_cancelar_adicional(uuid, uuid, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_cancelar_adicional(uuid, uuid, uuid) to service_role;
+
+-- ============================================================================
+-- 21. fn_billing_ajustar_tokens: ajuste manual com sinal livre pelo admin
+-- (decisão 16, Tarefa 4), para estornar débito errado ou corrigir na mão.
+-- ============================================================================
+create or replace function public.fn_billing_ajustar_tokens(
+  p_org uuid,
+  p_fonte text,
+  p_tokens bigint,
+  p_chave uuid,
+  p_compensa uuid,
+  p_nota text,
+  p_criado_por uuid
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_ciclo date;
+  v_linhas int;
+  v_entrou boolean := false;
+  v_creditado bigint;
+  v_consumido bigint;
+begin
+  if p_tokens = 0 then
+    raise exception 'ajuste_tokens_nao_pode_ser_zero' using errcode = '22023';
+  end if;
+
+  if p_fonte not in ('plano', 'adicional', 'avulso') then
+    raise exception 'ajuste_fonte_invalida' using errcode = '22023';
+  end if;
+
+  if p_nota is null or btrim(p_nota) = '' then
+    raise exception 'ajuste_precisa_de_nota' using errcode = '22023';
+  end if;
+
+  -- p_compensa (opcional) tem que ser uma linha do livro-caixa DA MESMA
+  -- organização; inexistente OU de outra organização cai no mesmo "não".
+  if p_compensa is not null and not exists (
+    select 1 from public.billing_token_ledger where id = p_compensa and organization_id = p_org
+  ) then
+    raise exception 'ajuste_compensa_linha_invalida' using errcode = '42501';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
+
+  -- Ciclo = ATUAL para plano/adicional (o admin ajusta o mês corrente, nunca
+  -- reabre um mês fechado); nulo para avulso (fonte sem ciclo, decisão 6).
+  v_ciclo := case when p_fonte = 'avulso' then null else public.fn_billing_ciclo_de(now()) end;
+
+  -- Decisão do plano da fase (item 4 desta tarefa): para não misturar
+  -- consumo real com ajuste no extrato de consumido, ajuste NEGATIVO
+  -- SUBTRAI de creditado (pode ficar negativo, constraint derrubada no item
+  -- 17 acima) e ajuste POSITIVO soma em creditado. Nunca toca consumido: os
+  -- dois sinais usam a MESMA coluna, porque billing_token_ledger.tokens já
+  -- carrega o sinal e o upsert abaixo só soma "excluded.creditado" (=
+  -- p_tokens) em creditado, positivo ou negativo.
+  insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo, compensa_id, nota, criado_por)
+  values (p_org, p_fonte, p_tokens, 'ajuste:' || p_chave::text, v_ciclo, p_compensa, p_nota, p_criado_por)
+  on conflict (organization_id, chave) do nothing;
+
+  get diagnostics v_linhas = row_count;
+
+  if v_linhas > 0 then
+    v_entrou := true;
+    insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+    values (p_org, p_fonte, v_ciclo, p_tokens, 0)
+    on conflict (organization_id, fonte, ciclo) do update
+      set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+          updated_at = now();
+  end if;
+
+  select creditado, consumido into v_creditado, v_consumido
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = p_fonte and ciclo is not distinct from v_ciclo;
+
+  return jsonb_build_object(
+    'ajustado', v_entrou,
+    'saldo', coalesce(v_creditado, 0) - coalesce(v_consumido, 0)
+  );
+end;
+$$;
+
+comment on function public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid) is
+  '0906, Parte 4: ajuste manual com sinal livre (nunca zero, 22023), fonte em plano/adicional/avulso (senão 22023), nota obrigatória (texto não vazio, senão 22023). p_compensa opcional referencia uma linha do livro-caixa DA MESMA organização (senão 42501): fica gravado em compensa_id (item 17), sem FK. Ciclo = ATUAL para plano/adicional, nulo para avulso. Linha ''ajuste:<p_chave>'', idempotente por chave. Ajuste POSITIVO soma em creditado; NEGATIVO subtrai de creditado (pode ficar negativo, decisão do plano da fase): a diferença entre consumo real e ajuste nunca se mistura no extrato de consumido, que só o débito escreve. Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE. Devolve {"ajustado": bool (false = reenvio da mesma chave), "saldo": creditado - consumido da fonte/ciclo ajustados}.';
+
+revoke execute on function public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid) to service_role;
+
+-- ============================================================================
+-- 22. fn_billing_saldo_da_carteira: leitura que CONCEDE (decisão 9, Tarefa
+-- 5). Devolve o retrato completo do ciclo atual.
+-- ============================================================================
+create or replace function public.fn_billing_saldo_da_carteira(p_org uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_ciclo date := public.fn_billing_ciclo_de(now());
+  v_teto bigint;
+  v_por_fonte jsonb;
+  v_disponivel bigint;
+  v_consumido bigint;
+begin
+  -- pg_try_advisory_xact_lock (NÃO a variante bloqueante do item 18 a 21 e
+  -- do item 23, abaixo): é o que o comentário de fn_billing_garantir_
+  -- concessoes (Parte 2) já promete para "a RPC de saldo da Tarefa 5", e
+  -- esta função pode ser chamada por qualquer gerente a qualquer momento:
+  -- travar a tela de um cliente atrás de um débito concorrente DA MESMA
+  -- organização não teria propósito. Sem a trava agora, só pula a concessão
+  -- preguiçosa desta vez (o próximo consumo ou a próxima leitura concede) e
+  -- devolve o retrato com o que já existe.
+  if pg_try_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0)) then
+    perform public.fn_billing_garantir_concessoes(p_org, v_ciclo);
+  end if;
+
+  v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;
+
+  -- por_fonte sempre com as três chaves (plano, adicional, avulso), mesmo
+  -- quando a fonte não tem linha em billing_token_wallets ainda (Ilimitado
+  -- nunca cria linha de plano, decisão 9): left join contra os três nomes
+  -- fixos, nunca jsonb_object_agg cru sobre o que existir.
+  select jsonb_object_agg(f.fonte, jsonb_build_object(
+      'creditado', coalesce(w.creditado, 0),
+      'consumido', coalesce(w.consumido, 0),
+      'saldo', coalesce(w.creditado, 0) - coalesce(w.consumido, 0)
+    ))
+    into v_por_fonte
+    from (values ('plano'), ('adicional'), ('avulso')) as f(fonte)
+    left join public.billing_token_wallets w
+      on w.organization_id = p_org
+      and w.fonte = f.fonte
+      and ((f.fonte in ('plano', 'adicional') and w.ciclo = v_ciclo) or (f.fonte = 'avulso' and w.ciclo is null));
+
+  -- Total disponível/consumido do ciclo (decisão 14): plano + adicional
+  -- DESTE ciclo, mais avulso inteiro (fonte sem ciclo).
+  select coalesce(sum(creditado), 0), coalesce(sum(consumido), 0)
+    into v_disponivel, v_consumido
+    from public.billing_token_wallets
+    where organization_id = p_org
+      and ((fonte in ('plano', 'adicional') and ciclo = v_ciclo) or (fonte = 'avulso' and ciclo is null));
+
+  return jsonb_build_object(
+    'ciclo', v_ciclo,
+    'por_fonte', coalesce(v_por_fonte, '{}'::jsonb),
+    'sem_limite', v_teto is null,
+    'total_disponivel', v_disponivel,
+    'total_consumido', v_consumido
+  );
+end;
+$$;
+
+comment on function public.fn_billing_saldo_da_carteira(uuid) is
+  '0906, Parte 4, decisão 9 (Tarefa 5): leitura que CONCEDE. pg_try_advisory_xact_lock (não bloqueante, diferente das funções do admin/conferência desta parte): promessa já feita no comentário de fn_billing_garantir_concessoes (Parte 2). Devolve {"ciclo": date, "por_fonte": {"plano"|"adicional"|"avulso": {"creditado","consumido","saldo"}}, "sem_limite": bool (tokens_ia_mes efetivo nulo, Ilimitado), "total_disponivel": creditado(plano+adicional do ciclo+avulso), "total_consumido": consumido dos mesmos}. Concede o plano no primeiro uso do ciclo e devolve o MESMO retrato em usos seguintes (fn_billing_garantir_concessoes é idempotente).';
+
+revoke execute on function public.fn_billing_saldo_da_carteira(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_saldo_da_carteira(uuid) to service_role;
+
+-- ============================================================================
+-- 23. fn_billing_conferir_carteira: o conferidor diário de carteira
+-- (decisão 8, Tarefa 8). Recalcula do livro-caixa e corrige.
+-- ============================================================================
+create or replace function public.fn_billing_conferir_carteira(p_org uuid)
+returns integer
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_divergentes int := 0;
+  v_linha record;
+  v_creditado_real bigint;
+  v_consumido_real bigint;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
+
+  for v_linha in
+    select id, fonte, ciclo, creditado, consumido
+    from public.billing_token_wallets
+    where organization_id = p_org
+    for update
+  loop
+    -- creditado real: concessão (chave carrega o ciclo: 'plano:<ciclo>' ou
+    -- 'adicional:<id>:<ciclo>'), crédito avulso (chave 'credito:%', só a
+    -- linha de avulso) e ajuste (chave 'ajuste:%', ciclo lido da coluna
+    -- ciclo, item 17; positivo E negativo entram aqui, nunca em consumido,
+    -- coerente com fn_billing_ajustar_tokens, item 21).
+    select coalesce(sum(l.tokens), 0)
+      into v_creditado_real
+      from public.billing_token_ledger l
+      where l.organization_id = p_org
+        and l.fonte = v_linha.fonte
+        and (
+          (v_linha.fonte = 'plano' and l.chave = 'plano:' || v_linha.ciclo::text)
+          or (v_linha.fonte = 'adicional' and l.chave like 'adicional:%:' || v_linha.ciclo::text)
+          or (v_linha.fonte = 'avulso' and l.chave like 'credito:%')
+          or (l.chave like 'ajuste:%' and l.ciclo is not distinct from v_linha.ciclo)
+        );
+
+    -- consumido real: linhas 'consumo:<llm_call_id>:<fonte>' desta fonte.
+    -- avulso não tem ciclo, entra inteiro; plano/adicional casam por
+    -- llm_call_id com o ciclo REAL da chamada (fn_billing_ciclo_de de
+    -- llm_calls.created_at, a MESMA regra do débito, Parte 2). Chamada
+    -- apagada (por exemplo LGPD, 0019) some do recálculo: lacuna conhecida,
+    -- declarada aqui de propósito, não escondida (o livro-caixa preserva a
+    -- linha de consumo, decisão 7, só perde a informação de ciclo dela).
+    select coalesce(sum(-l.tokens), 0)
+      into v_consumido_real
+      from public.billing_token_ledger l
+      left join public.llm_calls c on c.id = l.llm_call_id
+      where l.organization_id = p_org
+        and l.fonte = v_linha.fonte
+        and l.chave like 'consumo:%'
+        and (
+          v_linha.fonte = 'avulso'
+          or (c.id is not null and public.fn_billing_ciclo_de(c.created_at) = v_linha.ciclo)
+        );
+
+    if v_linha.creditado <> v_creditado_real or v_linha.consumido <> v_consumido_real then
+      update public.billing_token_wallets
+        set creditado = v_creditado_real,
+            consumido = v_consumido_real,
+            updated_at = now()
+        where id = v_linha.id;
+      v_divergentes := v_divergentes + 1;
+    end if;
+  end loop;
+
+  return v_divergentes;
+end;
+$$;
+
+comment on function public.fn_billing_conferir_carteira(uuid) is
+  '0906, Parte 4, decisão 8 (Tarefa 8): conferidor diário de UMA organização. Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE, trava cada linha existente de billing_token_wallets (for update) e recalcula creditado/consumido do livro-caixa (ver comentários no corpo para a regra exata de cada fonte). Corrige só quando diverge; devolve quantas linhas divergiam (0 = carteira íntegra). Limitação conhecida e declarada: linha de consumo cuja llm_call foi apagada (por exemplo expurgo de LGPD) não entra no consumido recalculado, porque perde a única forma de saber a que ciclo pertencia.';
+
+revoke execute on function public.fn_billing_conferir_carteira(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_conferir_carteira(uuid) to service_role;
+
+-- ============================================================================
+-- 24. fn_billing_debitos_pendentes: o conferidor diário de débito (decisão
+-- 12, Tarefa 8): acha chamada que deveria ter debitado e não debitou.
+-- ============================================================================
+create or replace function public.fn_billing_debitos_pendentes(p_org uuid, p_limite integer default 500)
+returns setof uuid
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select c.id
+  from public.llm_calls c, public.billing_settings s
+  where s.id = 1
+    and c.organization_id = p_org
+    and c.created_at >= greatest(s.carteira_desde, now() - interval '35 days')
+    and c.legacy_invocation_id is null
+    and c.origem_da_chave = 'chave_da_instalacao'
+    and public.fn_billing_tokens_ponderados(
+          c.input_tokens,
+          c.output_tokens,
+          c.cache_read_tokens,
+          s.peso_cache_leitura_pct,
+          coalesce((s.pesos_por_proposito ->> c.purpose)::int, 100)
+        ) > 0
+    and not exists (
+      select 1 from public.billing_token_ledger l where l.llm_call_id = c.id
+    )
+  order by c.created_at
+  limit p_limite
+$$;
+
+comment on function public.fn_billing_debitos_pendentes(uuid, integer) is
+  '0906, Parte 4, decisão 12 (Tarefa 8): ids de llm_calls da organização que DEVERIAM ter debitado (mesmos filtros de fn_billing_debitar_chamada: created_at >= greatest(carteira_desde, hoje - 35 dias), legacy_invocation_id nulo, origem_da_chave = chave_da_instalacao, ponderado calculado com os MESMOS pesos > 0) e ainda não têm nenhuma linha de consumo no livro-caixa (anti-join por llm_call_id, índice billing_token_ledger_llm_call_id_idx já criado na Parte 1, nenhum índice novo foi preciso). Ordem por created_at, até p_limite (default 500). Quem chama debita cada id com fn_billing_debitar_chamada (Parte 2); depois de debitado, a mesma chamada some desta lista (a linha de consumo passa a existir).';
+
+revoke execute on function public.fn_billing_debitos_pendentes(uuid, integer) from public, anon, authenticated;
+grant execute on function public.fn_billing_debitos_pendentes(uuid, integer) to service_role;
+
+-- ============================================================================
+-- 25. fn_billing_consumo_da_instalacao_no_dia: soma de todas as
+-- organizações no dia, para o teto da instalação (decisão 15, Tarefa 8). A
+-- comparação com teto_instalacao_tokens_dia e o alarme são do TypeScript do
+-- conferidor (decisão 15: "o alarme... vai para o log... e para a aba da
+-- plataforma"), nunca desta função.
+-- ============================================================================
+create or replace function public.fn_billing_consumo_da_instalacao_no_dia(p_dia date)
+returns bigint
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select coalesce(sum(tokens_ponderados), 0)
+  from public.billing_token_consumo_diario
+  where dia = p_dia
+$$;
+
+comment on function public.fn_billing_consumo_da_instalacao_no_dia(date) is
+  '0906, Parte 4, decisão 15 (Tarefa 8): soma de tokens_ponderados do agregado de TODAS as organizações no dia informado, para o conferidor comparar com billing_settings.teto_instalacao_tokens_dia. Só a soma; a comparação com o teto e o alarme (log + aba da plataforma) são do TypeScript do conferidor, nunca desta função: o teto da instalação nunca é conferido dentro do gatilho de débito (decisão 15: serializaria todas as organizações).';
+
+revoke execute on function public.fn_billing_consumo_da_instalacao_no_dia(date) from public, anon, authenticated;
+grant execute on function public.fn_billing_consumo_da_instalacao_no_dia(date) to service_role;
+
+-- ============================================================================
+-- 26. agent_worker não escreve nem executa nada das peças novas desta parte
+-- 4 (mesmo racional dos blocos 9, 13 e 16, acima): por alter default
+-- privileges ela ganharia execute em toda função nova do schema public, e
+-- tem bypassrls. Nenhuma tabela NOVA nesta parte (só colunas em tabela já
+-- coberta pelo bloco da Parte 1), então só as oito funções.
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_creditar_tokens(uuid, bigint, uuid, bigint, text, uuid), public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid), public.fn_billing_cancelar_adicional(uuid, uuid, uuid), public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid), public.fn_billing_saldo_da_carteira(uuid), public.fn_billing_conferir_carteira(uuid), public.fn_billing_debitos_pendentes(uuid, integer), public.fn_billing_consumo_da_instalacao_no_dia(date) from agent_worker';
+  end if;
+end
+$$;
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

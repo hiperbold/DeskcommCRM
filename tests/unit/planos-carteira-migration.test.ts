@@ -656,3 +656,279 @@ describe("0906 carteira de tokens de IA (parte 3, Tarefa 2b)", () => {
     }
   });
 });
+
+const FUNCOES_PARTE4 = [
+  "fn_billing_creditar_tokens(uuid, bigint, uuid, bigint, text, uuid)",
+  "fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid)",
+  "fn_billing_cancelar_adicional(uuid, uuid, uuid)",
+  "fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid)",
+  "fn_billing_saldo_da_carteira(uuid)",
+  "fn_billing_conferir_carteira(uuid)",
+  "fn_billing_debitos_pendentes(uuid, integer)",
+  "fn_billing_consumo_da_instalacao_no_dia(date)",
+] as const;
+
+// Admin (decisão 16) e conferidor de carteira (decisão 8, Tarefa 8): travam
+// com pg_advisory_xact_lock BLOQUEANTE, mesma chave do débito. Deliberadamente
+// NÃO inclui fn_billing_saldo_da_carteira (usa a variante _try_, exigida pelo
+// próprio comentário de fn_billing_garantir_concessoes na Parte 2) nem
+// fn_billing_debitos_pendentes/fn_billing_consumo_da_instalacao_no_dia
+// (leituras puras, sem trava nenhuma).
+const FUNCOES_ADMIN_E_CONFERENCIA_TRAVA_BLOQUEANTE = [
+  "fn_billing_creditar_tokens",
+  "fn_billing_contratar_adicional",
+  "fn_billing_cancelar_adicional",
+  "fn_billing_ajustar_tokens",
+  "fn_billing_conferir_carteira",
+] as const;
+
+describe("0906 carteira de tokens de IA (parte 4, Tarefas 4, 5 e 8)", () => {
+  it("a parte 4 está no MESMO arquivo, depois da parte 3, e o bloco do baseline continua idêntico ao arquivo inteiro da migração", () => {
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION);
+    const sqlBloco = removeComentariosEBrancas(extraiBlocoBaseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+    const fimParte3 = MIGRATION.indexOf(
+      "16. agent_worker não emite aviso de carteira nem escreve na tabela nova",
+    );
+    const inicioParte4 = MIGRATION.indexOf(
+      "17. billing_token_ledger ganha ciclo e compensa_id",
+    );
+    expect(fimParte3).toBeGreaterThan(-1);
+    expect(inicioParte4).toBeGreaterThan(fimParte3);
+  });
+
+  it("billing_token_ledger ganha ciclo e compensa_id por add column if not exists, sem FK", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/alter table public\.billing_token_ledger add column if not exists ciclo date;/);
+      expect(sql).toMatch(
+        /alter table public\.billing_token_ledger add column if not exists compensa_id uuid;/,
+      );
+      // Nenhuma das duas colunas novas ganha "references" (sem FK, mesmo
+      // racional de llm_call_id e criado_por, decisão 7).
+      expect(sql).not.toMatch(/compensa_id uuid references/);
+    }
+  });
+
+  it("billing_token_wallets_creditado_nao_negativo é derrubada (ajuste negativo pode deixar creditado negativo)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /alter table public\.billing_token_wallets drop constraint if exists billing_token_wallets_creditado_nao_negativo;/,
+      );
+    }
+  });
+
+  it("as oito funções novas são security definer, com search_path fixo em public, pg_temp", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE4) {
+        const nome = assinatura.split("(")[0];
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
+        const trecho = sql.slice(inicio, inicio + 700);
+        expect(trecho).toMatch(/security definer/);
+        expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      }
+    }
+  });
+
+  it("as oito funções novas: revoke de public/anon/authenticated e grant só para service_role", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE4) {
+        const escapado = assinatura.replace(/[()]/g, (c) => `\\${c}`);
+        expect(sql).toMatch(
+          new RegExp(`revoke execute on function public\\.${escapado} from public, anon, authenticated;`),
+        );
+        expect(sql).toMatch(
+          new RegExp(`grant execute on function public\\.${escapado} to service_role;`),
+        );
+      }
+    }
+  });
+
+  it("o bloco da role agent_worker da parte 4 revoga execute das oito funções novas", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      for (const assinatura of FUNCOES_PARTE4) {
+        const nome = assinatura.split("(")[0];
+        expect(sql).toMatch(new RegExp(`public\\.${nome}\\(`));
+      }
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_creditar_tokens\([^)]*\), public\.fn_billing_contratar_adicional\([^)]*\), public\.fn_billing_cancelar_adicional\([^)]*\), public\.fn_billing_ajustar_tokens\([^)]*\), public\.fn_billing_saldo_da_carteira\(uuid\), public\.fn_billing_conferir_carteira\(uuid\), public\.fn_billing_debitos_pendentes\(uuid, integer\), public\.fn_billing_consumo_da_instalacao_no_dia\(date\) from agent_worker/,
+      );
+    }
+  });
+
+  it("as funções do admin e a do conferidor de carteira travam com pg_advisory_xact_lock BLOQUEANTE, chave billing_tokens:<org>", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const nome of FUNCOES_ADMIN_E_CONFERENCIA_TRAVA_BLOQUEANTE) {
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
+        const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+        expect(corpo, `${nome} sem pg_advisory_xact_lock bloqueante`).toMatch(
+          /pg_advisory_xact_lock\(hashtextextended\('billing_tokens:' \|\| p_org::text, 0\)\)/,
+        );
+        // Garante que NÃO é a variante _try_ (essa é só do débito e da leitura de saldo).
+        expect(corpo).not.toMatch(/pg_try_advisory_xact_lock\(/);
+      }
+    }
+  });
+
+  it("fn_billing_saldo_da_carteira usa pg_try_advisory_xact_lock (não a variante bloqueante), mesma chave billing_tokens:<org>", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_saldo_da_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /pg_try_advisory_xact_lock\(hashtextextended\('billing_tokens:' \|\| p_org::text, 0\)\)/,
+      );
+      expect(corpo).not.toMatch(/[^_]pg_advisory_xact_lock\(/);
+    }
+  });
+
+  it("fn_billing_debitos_pendentes e fn_billing_consumo_da_instalacao_no_dia não travam (leitura pura)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const nome of ["fn_billing_debitos_pendentes", "fn_billing_consumo_da_instalacao_no_dia"]) {
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+        expect(corpo).not.toMatch(/advisory_xact_lock/);
+      }
+    }
+  });
+
+  it("fn_billing_creditar_tokens recusa tokens <= 0 com errcode fixo 22023", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_creditar_tokens(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /if p_tokens <= 0 then\s*\n\s*raise exception 'credito_tokens_deve_ser_positivo' using errcode = '22023';/,
+      );
+    }
+  });
+
+  it("fn_billing_contratar_adicional grava id = p_chave (idempotente) e concede o ciclo atual", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_contratar_adicional(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /insert into public\.billing_token_adicionais \(id, organization_id, tokens_por_ciclo, valor_cents, nota, criado_por\)\s*\n\s*values \(p_chave, p_org,/,
+      );
+      expect(corpo).toMatch(/on conflict \(id\) do nothing;/);
+      expect(corpo).toMatch(
+        /perform public\.fn_billing_garantir_concessoes\(p_org, public\.fn_billing_ciclo_de\(now\(\)\)\);/,
+      );
+    }
+  });
+
+  it("fn_billing_cancelar_adicional: adicional inexistente é P0002, de outra organização é 42501, idempotente", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_cancelar_adicional(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /if not found then\s*\n\s*raise exception 'adicional_nao_encontrado' using errcode = 'P0002';/,
+      );
+      expect(corpo).toMatch(
+        /if v_org_dono <> p_org then\s*\n\s*raise exception 'adicional_de_outra_organizacao' using errcode = '42501';/,
+      );
+      expect(corpo).toMatch(/if v_ativo then/);
+    }
+  });
+
+  it("fn_billing_ajustar_tokens: tokens zero, fonte inválida e nota vazia recusados com 22023; compensa de outra organização com 42501", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ajustar_tokens(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /if p_tokens = 0 then\s*\n\s*raise exception 'ajuste_tokens_nao_pode_ser_zero' using errcode = '22023';/,
+      );
+      expect(corpo).toMatch(
+        /if p_fonte not in \('plano', 'adicional', 'avulso'\) then\s*\n\s*raise exception 'ajuste_fonte_invalida' using errcode = '22023';/,
+      );
+      expect(corpo).toMatch(
+        /if p_nota is null or btrim\(p_nota\) = '' then\s*\n\s*raise exception 'ajuste_precisa_de_nota' using errcode = '22023';/,
+      );
+      expect(corpo).toMatch(
+        /raise exception 'ajuste_compensa_linha_invalida' using errcode = '42501';/,
+      );
+    }
+  });
+
+  it("fn_billing_ajustar_tokens: ciclo atual para plano/adicional, nulo para avulso; upsert soma o sinal em creditado, nunca em consumido", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ajustar_tokens(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /v_ciclo := case when p_fonte = 'avulso' then null else public\.fn_billing_ciclo_de\(now\(\)\) end;/,
+      );
+      expect(corpo).toMatch(/chave, ciclo, compensa_id, nota, criado_por\)/);
+      expect(corpo).toMatch(
+        /set creditado = public\.billing_token_wallets\.creditado \+ excluded\.creditado,\s*\n\s*updated_at = now\(\);/,
+      );
+      expect(corpo).not.toMatch(/consumido = public\.billing_token_wallets\.consumido/);
+    }
+  });
+
+  it("fn_billing_saldo_da_carteira garante concessões, devolve por_fonte com as três fontes, sem_limite e totais do ciclo", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_saldo_da_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/perform public\.fn_billing_garantir_concessoes\(p_org, v_ciclo\);/);
+      expect(corpo).toMatch(/from \(values \('plano'\), \('adicional'\), \('avulso'\)\) as f\(fonte\)/);
+      expect(corpo).toMatch(/'sem_limite', v_teto is null,/);
+      expect(corpo).toMatch(/'total_disponivel', v_disponivel,/);
+      expect(corpo).toMatch(/'total_consumido', v_consumido/);
+    }
+  });
+
+  it("fn_billing_conferir_carteira recalcula creditado (concessão/crédito/ajuste) e consumido (linhas de consumo) e corrige divergência", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/for v_linha in\s*\n\s*select id, fonte, ciclo, creditado, consumido/);
+      expect(corpo).toMatch(/from public\.billing_token_wallets\s*\n\s*where organization_id = p_org\s*\n\s*for update/);
+      expect(corpo).toMatch(/l\.chave = 'plano:' \|\| v_linha\.ciclo::text/);
+      expect(corpo).toMatch(/l\.chave like 'adicional:%:' \|\| v_linha\.ciclo::text/);
+      expect(corpo).toMatch(/l\.chave like 'credito:%'/);
+      expect(corpo).toMatch(/l\.chave like 'ajuste:%' and l\.ciclo is not distinct from v_linha\.ciclo/);
+      expect(corpo).toMatch(/l\.chave like 'consumo:%'/);
+      expect(corpo).toMatch(
+        /if v_linha\.creditado <> v_creditado_real or v_linha\.consumido <> v_consumido_real then/,
+      );
+      expect(corpo).toMatch(/v_divergentes := v_divergentes \+ 1;/);
+      expect(corpo).toMatch(/return v_divergentes;/);
+    }
+  });
+
+  it("fn_billing_debitos_pendentes usa os mesmos filtros do débito (carteira_desde/35 dias, legacy nulo, chave da instalação, ponderado > 0) e anti-join por llm_call_id", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitos_pendentes(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/c\.created_at >= greatest\(s\.carteira_desde, now\(\) - interval '35 days'\)/);
+      expect(corpo).toMatch(/c\.legacy_invocation_id is null/);
+      expect(corpo).toMatch(/c\.origem_da_chave = 'chave_da_instalacao'/);
+      expect(corpo).toMatch(/public\.fn_billing_tokens_ponderados\(/);
+      expect(corpo).toMatch(
+        /not exists \(\s*\n\s*select 1 from public\.billing_token_ledger l where l\.llm_call_id = c\.id\s*\n\s*\)/,
+      );
+      expect(corpo).toMatch(/order by c\.created_at\s*\n\s*limit p_limite/);
+    }
+  });
+
+  it("fn_billing_consumo_da_instalacao_no_dia soma tokens_ponderados de TODAS as organizações no dia, sem filtro de organização", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_consumo_da_instalacao_no_dia(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/select coalesce\(sum\(tokens_ponderados\), 0\)/);
+      expect(corpo).toMatch(/from public\.billing_token_consumo_diario\s*\n\s*where dia = p_dia/);
+      expect(corpo).not.toMatch(/organization_id/);
+    }
+  });
+
+  it("billing_token_ledger_llm_call_id_idx já existe desde a parte 1: nenhum índice novo foi criado na parte 4 para o anti-join", () => {
+    // O índice usado pelo anti-join de fn_billing_debitos_pendentes já nasceu
+    // na Parte 1 (item 3, "3. billing_token_ledger"); a Parte 4 não precisou
+    // criar nenhum "create index" novo.
+    const inicioParte4 = MIGRATION.indexOf("17. billing_token_ledger ganha ciclo e compensa_id");
+    const trechoParte4 = MIGRATION.slice(inicioParte4);
+    expect(trechoParte4).not.toMatch(/create index/);
+    expect(MIGRATION).toMatch(
+      /create index if not exists billing_token_ledger_llm_call_id_idx\s*\n\s*on public\.billing_token_ledger \(llm_call_id\);/,
+    );
+  });
+});
