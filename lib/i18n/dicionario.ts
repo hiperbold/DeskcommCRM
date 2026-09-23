@@ -11645,9 +11645,7 @@ export const DICIONARIO: Traducoes = {
 
   // ─── Item 9 da revisão da fase F2-B (23/09/2026): id copiável do
   // livro-caixa e custo estimado no painel de margem, aba do admin
-  // (app/admin/(protected)/tenants/[id]/plano). As demais chaves desta
-  // aba (tarefa 7 original) já estavam sem tradução em espanhol antes desta
-  // revisão: dívida pré-existente fora do escopo dos itens 9 e 13.
+  // (app/admin/(protected)/tenants/[id]/plano) ───
   "Id": { es: "Id" },
   "Mostrando as 500 linhas mais recentes.": { es: "Mostrando las 500 líneas más recientes." },
   "Custo estimado do ciclo (dólar, pelo catálogo)": {
@@ -11655,6 +11653,101 @@ export const DICIONARIO: Traducoes = {
   },
   "chamada(s) sem custo real, precificadas pelo catálogo": {
     es: "llamada(s) sin costo real, con precio estimado por el catálogo",
+  },
+
+  // ─── Débito da tarefa 7 original pago: as demais chaves da aba "Plano" no
+  // admin da plataforma (app/admin/(protected)/tenants/[id]/plano/_client.tsx)
+  // que ainda não tinham espanhol ───
+  "Informe uma quantidade de tokens válida.": { es: "Indica una cantidad de tokens válida." },
+  "Valor recebido inválido.": { es: "Valor recibido inválido." },
+  "Já registrado antes: nada foi creditado de novo.": {
+    es: "Ya estaba registrado: no se acreditó nada de nuevo.",
+  },
+  "Tokens creditados.": { es: "Tokens acreditados." },
+  "Informe uma quantidade de tokens por ciclo válida.": {
+    es: "Indica una cantidad de tokens por ciclo válida.",
+  },
+  "Já registrado antes: nada foi contratado de novo.": {
+    es: "Ya estaba registrado: no se contrató nada de nuevo.",
+  },
+  "Adicional contratado.": { es: "Adicional contratado." },
+  "Já estava cancelado.": { es: "Ya estaba cancelado." },
+  "Adicional cancelado.": { es: "Adicional cancelado." },
+  "O ajuste precisa de uma nota.": { es: "El ajuste necesita una nota." },
+  "Já registrado antes: nada foi ajustado de novo.": {
+    es: "Ya estaba registrado: no se ajustó nada de nuevo.",
+  },
+  "Ajuste lançado.": { es: "Ajuste registrado." },
+  "Nesta fase, embedding (base de conhecimento) e transcrição não debitam tokens da carteira: só chamadas de resposta do agente, pela credencial da instalação, consomem.": {
+    es: "En esta fase, el embedding (base de conocimiento) y la transcripción no debitan tokens de la cartera: solo las llamadas de respuesta del agente, con la credencial de la instalación, consumen.",
+  },
+  "Saldo da carteira": { es: "Saldo de la cartera" },
+  "Do ciclo atual, por fonte, na ordem em que o consumo desconta.": {
+    es: "Del ciclo actual, por fuente, en el orden en que el consumo descuenta.",
+  },
+  "Não foi possível ler o saldo da carteira agora.": {
+    es: "No se pudo leer el saldo de la cartera ahora.",
+  },
+  "Plano sem limite (Ilimitado)": { es: "Plan sin límite (Ilimitado)" },
+  Creditado: { es: "Acreditado" },
+  "Painel de margem": { es: "Panel de margen" },
+  "Receita em reais e custo em dólar, lado a lado, sem conversão de câmbio: câmbio não se inventa.": {
+    es: "Ingresos en reales y costo en dólares, lado a lado, sin conversión de cambio: el cambio no se inventa.",
+  },
+  "Não foi possível ler o painel de margem agora.": {
+    es: "No se pudo leer el panel de margen ahora.",
+  },
+  "Receita do ciclo": { es: "Ingresos del ciclo" },
+  plano: { es: "plan" },
+  adicionais: { es: "adicionales" },
+  "créditos avulsos": { es: "créditos sueltos" },
+  "Custo conhecido do ciclo (dólar)": { es: "Costo conocido del ciclo (dólar)" },
+  "Custo incompleto": { es: "Costo incompleto" },
+  "chamada(s) do ciclo sem preço conhecido": {
+    es: "llamada(s) del ciclo sin precio conocido",
+  },
+  "Adicionais ativos": { es: "Adicionales activos" },
+  "Não foi possível ler os adicionais agora.": {
+    es: "No se pudieron leer los adicionales ahora.",
+  },
+  "Nenhum adicional ativo.": { es: "No hay ningún adicional activo." },
+  "Tokens por ciclo": { es: "Tokens por ciclo" },
+  "Contratado em": { es: "Contratado el" },
+  "Livro-caixa do ciclo": { es: "Libro de caja del ciclo" },
+  "Consumo agrupado por dia; concessão, crédito e ajuste um a um.": {
+    es: "Consumo agrupado por día; concesión, crédito y ajuste uno a uno.",
+  },
+  "Não foi possível ler o livro-caixa agora.": {
+    es: "No se pudo leer el libro de caja ahora.",
+  },
+  "Nenhum lançamento neste ciclo ainda.": { es: "Todavía no hay ningún registro en este ciclo." },
+  Autor: { es: "Autor" },
+  Concessão: { es: "Concesión" },
+  Crédito: { es: "Crédito" },
+  Consumo: { es: "Consumo" },
+  Ajuste: { es: "Ajuste" },
+  "Creditar pacote avulso": { es: "Acreditar paquete suelto" },
+  "Valor recebido (opcional)": { es: "Valor recibido (opcional)" },
+  Creditar: { es: "Acreditar" },
+  "Não coloque dado pessoal aqui: a nota fica registrada e nunca é apagada.": {
+    es: "No pongas datos personales aquí: la nota queda registrada y nunca se borra.",
+  },
+  "Contratar adicional": { es: "Contratar adicional" },
+  "Valor mensal (opcional)": { es: "Valor mensual (opcional)" },
+  Contratar: { es: "Contratar" },
+  "Ajustar tokens": { es: "Ajustar tokens" },
+  "Para estornar um débito errado ou corrigir na mão. A nota é obrigatória.": {
+    es: "Para revertir un débito equivocado o corregir a mano. La nota es obligatoria.",
+  },
+  Sinal: { es: "Signo" },
+  "Creditar (+)": { es: "Acreditar (+)" },
+  "Debitar (-)": { es: "Debitar (-)" },
+  "Linha que compensa (opcional)": { es: "Línea que compensa (opcional)" },
+  "id da linha do livro-caixa": { es: "id de la línea del libro de caja" },
+  Ajustar: { es: "Ajustar" },
+  "Nota (obrigatória)": { es: "Nota (obligatoria)" },
+  "Por que este ajuste existe. Não coloque dado pessoal: fica registrado e nunca é apagado.": {
+    es: "Por qué existe este ajuste. No pongas datos personales: queda registrado y nunca se borra.",
   },
 };
 
