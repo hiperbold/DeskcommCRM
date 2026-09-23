@@ -690,7 +690,7 @@ declare
   v_ciclo date;
   v_dia date;
   v_restante bigint;
-  v_saldo bigint;
+  v_disponivel_fonte bigint;
   v_teto_efetivo bigint;
   v_debito_plano bigint := 0;
   v_debito_adicional bigint := 0;
@@ -792,23 +792,23 @@ begin
     -- consumido) de cada uma. sum() garante uma linha sempre (mesmo sem
     -- wallet ainda criada, vira 0 pelo coalesce) em vez de "select" simples,
     -- que sobre zero linhas deixaria a variável com o valor da fonte anterior.
-    select coalesce(sum(creditado - consumido), 0) into v_saldo
+    select coalesce(sum(creditado - consumido), 0) into v_disponivel_fonte
       from public.billing_token_wallets
       where organization_id = v_chamada.organization_id and fonte = 'plano' and ciclo = v_ciclo;
     v_restante := v_ponderado;
-    v_debito_plano := least(v_restante, greatest(v_saldo, 0));
+    v_debito_plano := least(v_restante, greatest(v_disponivel_fonte, 0));
     v_restante := v_restante - v_debito_plano;
 
-    select coalesce(sum(creditado - consumido), 0) into v_saldo
+    select coalesce(sum(creditado - consumido), 0) into v_disponivel_fonte
       from public.billing_token_wallets
       where organization_id = v_chamada.organization_id and fonte = 'adicional' and ciclo = v_ciclo;
-    v_debito_adicional := least(v_restante, greatest(v_saldo, 0));
+    v_debito_adicional := least(v_restante, greatest(v_disponivel_fonte, 0));
     v_restante := v_restante - v_debito_adicional;
 
-    select coalesce(sum(creditado - consumido), 0) into v_saldo
+    select coalesce(sum(creditado - consumido), 0) into v_disponivel_fonte
       from public.billing_token_wallets
       where organization_id = v_chamada.organization_id and fonte = 'avulso' and ciclo is null;
-    v_debito_avulso := least(v_restante, greatest(v_saldo, 0));
+    v_debito_avulso := least(v_restante, greatest(v_disponivel_fonte, 0));
     v_restante := v_restante - v_debito_avulso;
 
     -- O que sobra depois de zerar as três vai SOMADO na linha de plano

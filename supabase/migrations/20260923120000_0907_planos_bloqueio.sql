@@ -715,7 +715,7 @@ declare
   v_avulso_consumido_antes bigint;
   v_avulso_consumido_mes bigint;
   v_disponivel bigint;
-  v_saldo bigint;
+  v_restante bigint;
 begin
   select modo into v_modo from public.billing_settings where id = 1;
 
@@ -772,18 +772,18 @@ begin
   v_disponivel := v_creditado_plano + v_creditado_adicional
     + (coalesce(v_avulso_creditado_total, 0) - v_avulso_consumido_antes);
 
-  v_saldo := v_disponivel
+  v_restante := v_disponivel
     - (v_consumido_plano + v_consumido_adicional + v_avulso_consumido_mes);
 
-  if v_saldo <= 0 then
-    return jsonb_build_object('acao', 'bloquear', 'motivo', 'saldo de tokens esgotado', 'saldo', v_saldo, 'ciclo', v_ciclo);
+  if v_restante <= 0 then
+    return jsonb_build_object('acao', 'bloquear', 'motivo', 'saldo de tokens esgotado', 'saldo', v_restante, 'ciclo', v_ciclo);
   end if;
 
-  if v_saldo::numeric <= (v_disponivel::numeric * 0.1) then
-    return jsonb_build_object('acao', 'avisar_e_seguir', 'motivo', 'saldo de tokens abaixo de 10 por cento do mes', 'saldo', v_saldo, 'ciclo', v_ciclo);
+  if v_restante::numeric <= (v_disponivel::numeric * 0.1) then
+    return jsonb_build_object('acao', 'avisar_e_seguir', 'motivo', 'saldo de tokens abaixo de 10 por cento do mes', 'saldo', v_restante, 'ciclo', v_ciclo);
   end if;
 
-  return jsonb_build_object('acao', 'seguir', 'motivo', 'saldo de tokens dentro do normal', 'saldo', v_saldo, 'ciclo', v_ciclo);
+  return jsonb_build_object('acao', 'seguir', 'motivo', 'saldo de tokens dentro do normal', 'saldo', v_restante, 'ciclo', v_ciclo);
 end;
 $$;
 

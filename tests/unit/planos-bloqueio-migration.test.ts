@@ -822,13 +822,13 @@ describe("0907 parte 3 (Tarefa 3): fn_billing_ia_pode_responder, o gate de token
       ];
       expect(saidasAntecipadas.length).toBe(3);
       expect(corpo).toMatch(
-        /jsonb_build_object\('acao', 'bloquear', 'motivo', 'saldo de tokens esgotado', 'saldo', v_saldo, 'ciclo', v_ciclo\)/,
+        /jsonb_build_object\('acao', 'bloquear', 'motivo', 'saldo de tokens esgotado', 'saldo', v_restante, 'ciclo', v_ciclo\)/,
       );
       expect(corpo).toMatch(
-        /jsonb_build_object\('acao', 'avisar_e_seguir', 'motivo', '[^']+', 'saldo', v_saldo, 'ciclo', v_ciclo\)/,
+        /jsonb_build_object\('acao', 'avisar_e_seguir', 'motivo', '[^']+', 'saldo', v_restante, 'ciclo', v_ciclo\)/,
       );
       expect(corpo).toMatch(
-        /jsonb_build_object\('acao', 'seguir', 'motivo', '[^']+', 'saldo', v_saldo, 'ciclo', v_ciclo\)/,
+        /jsonb_build_object\('acao', 'seguir', 'motivo', '[^']+', 'saldo', v_restante, 'ciclo', v_ciclo\)/,
       );
     }
   });
@@ -837,8 +837,8 @@ describe("0907 parte 3 (Tarefa 3): fn_billing_ia_pode_responder, o gate de token
     for (const sql of [MIGRATION_0907, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
-      const posSaldoZero = corpo.indexOf("if v_saldo <= 0 then");
-      const posDezPorCento = corpo.indexOf("if v_saldo::numeric <= (v_disponivel::numeric * 0.1) then");
+      const posSaldoZero = corpo.indexOf("if v_restante <= 0 then");
+      const posDezPorCento = corpo.indexOf("if v_restante::numeric <= (v_disponivel::numeric * 0.1) then");
       expect(posSaldoZero).toBeGreaterThan(-1);
       expect(posDezPorCento).toBeGreaterThan(posSaldoZero);
     }
