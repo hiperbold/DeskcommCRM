@@ -199,6 +199,22 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "não é para quem só vê os próprios leads) e o usuário semeado em " +
       "rls-isolation.test.ts é agent, então o controle positivo falharia por ACERTO.",
   },
+  {
+    tabela: "billing_token_wallets",
+    razao:
+      "tests/invariants/planos-carteira.test.ts, caso 1 (fork Hiperbold, 0906, " +
+      "decisão 19): mesmo molde de billing_usage_counters, acima. Gerente de A lê " +
+      "a própria carteira e 0 linhas da B; agente da MESMA organização A lê 0 " +
+      "(leitura exige gerente). Fora de TABLES pelo mesmo motivo: o usuário " +
+      "semeado lá é agent, e a policy exige fn_role_at_least(...,'manager').",
+  },
+  {
+    tabela: "billing_token_consumo_diario",
+    razao:
+      "tests/invariants/planos-carteira.test.ts, caso 1 (fork Hiperbold, 0906, " +
+      "decisão 19): mesmo caso da linha acima, para o agregado diário que o " +
+      "extrato lê, gerente de A lê o próprio agregado e 0 de B; agente de A lê 0.",
+  },
   // ─── As três do eixo de anúncios (migrations 0213/0214) ───
   //
   // ⚠️ PROVA DE OUTRO TIPO, e a diferença está escrita de propósito: as demais
@@ -288,6 +304,34 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "tests/invariants/captura-de-clique-e-server-side.test.ts — mesmo " +
       "`describe.each`. Guarda as UTMs de cada clique no botão da landing " +
       "page e o ref curto que as liga à mensagem do WhatsApp.",
+  },
+  // ─── As três do livro-caixa de tokens de IA (migration 0906, fork Hiperbold) ───
+  //
+  // Mesmo desenho deny-all das nove linhas acima (molde ad_platform_connections,
+  // 0213): decisão 19 da fase F2-B, livro-caixa e adicionais são privilégio
+  // NENHUM para `authenticated`, só a plataforma pelo servidor com service_role.
+  // `permission denied` medido sob `set role`, não contagem cross-org.
+  {
+    tabela: "billing_token_ledger",
+    razao:
+      "tests/invariants/planos-carteira.test.ts, caso 2 (fork Hiperbold, 0906, " +
+      "decisão 19): privilégio NENHUM para `authenticated`, `permission denied` " +
+      "medido sob `set role`, e um caso à parte prova que nem `service_role` tem " +
+      "update/delete/truncate (o livro-caixa é só de acréscimo, decisão 7).",
+  },
+  {
+    tabela: "billing_token_adicionais",
+    razao:
+      "tests/invariants/planos-carteira.test.ts, caso 2, mesmo desenho da linha " +
+      "acima: catálogo das contratações ativas, escrito só pelas funções do " +
+      "admin da plataforma (decisão 16).",
+  },
+  {
+    tabela: "billing_token_avisos_emitidos",
+    razao:
+      "tests/invariants/planos-carteira.test.ts, caso 2, mesmo desenho: marca de " +
+      "dedup dos avisos de carteira (decisões 14 e 15), só de acréscimo, sem " +
+      "policy nenhuma para `authenticated`.",
   },
 ];
 
