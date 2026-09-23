@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F2
-Etapa da fase: teste de banco da tarefa 3 e tarefa 5 (conferidor diário) em paralelo. Feitas: 1 (registro, D-050), 2 (a977b56), 3 parte SQL (d78572d, provada à mão), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano). Faltam 4 e 8.
+Etapa da fase: revisão e auditoria da fase (em paralelo, diff 8fa4893..HEAD). Todas as 8 tarefas feitas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Depois: corrigir achados, portões completos, fechar.
 
 ## Fases
 
@@ -42,6 +42,9 @@ F2: ainda não planejadas. Abaixo, as da F1, para registro.
 - **F2: configuração dos planos numa tabela nossa (`billing_settings`)**, e não em `platform_settings`, que é do autor e daria conflito em toda junção.
 - **F2: aviso na Central com `kind = 'other'`** e deduplicação por título, para não mexer na restrição de tipos do autor.
 - **F2: leads por contador materializado**; o resto por contagem na hora. Contar 100 mil leads a cada importação derrubaria a importação.
+- **F2, tarefa 4: teto de conexões MCP com errcode PT422**, convenção do próprio repositório (migração 0363), mapeado no código para o mesmo 422 da checagem prévia. Onde mudar: `fn_billing_trava_ai_mcp_connections` e `CODIGO_LIMITE_MCP` em `lib/ai/mcp-externo/conexoes.ts`.
+- **F2, tarefa 8: telemetria da transcrição só no provedor real**, embrulhado dentro de `buildDeriveDeps` do worker; sem chave ou com endereço recusado, nada é gravado. Rótulo `transcricao_propria` para serviço próprio, nunca a URL. A primeira versão gravava em `derive.ts` e contava transcrição que não aconteceu; refeita na revisão da tarefa.
+- **F2, tarefa 8: linha em `llm_calls` sem custo cria linha em `ai_budgets`** para organização que não tinha (o gatilho do autor faz upsert com consumo zero). Conferido: consumo não muda, nada bloqueia.
 
 ## Perguntas para o Filipe
 
