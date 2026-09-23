@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F2
-Etapa da fase: tarefa 3 de 8 (tarefa 2 feita: configuração, contador e funções de contagem, com as contagens batendo com a contagem à mão; tarefa 1 virou registro, D-050)
+Etapa da fase: tarefas 3 (gatilhos) e 7 (tela) em paralelo. Feitas: 1 (registro, D-050), 2 (a977b56), 6 (35f0ebf). Faltam 4, 5 e 8.
 
 ## Fases
 

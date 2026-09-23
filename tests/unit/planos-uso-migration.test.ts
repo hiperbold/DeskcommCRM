@@ -97,9 +97,17 @@ describe("0905 uso dos planos e trava (parte 1, Tarefa 2)", () => {
       expect(sql).toMatch(/group by cl\.organization_id/);
       expect(sql).toMatch(/on conflict \(organization_id, item\) do update/);
       expect(sql).toMatch(/set valor = excluded\.valor/);
-      // Idempotência por resultado, não por no-op: nunca soma ao valor
-      // existente (senão rodar a migration de novo dobraria a contagem).
-      expect(sql).not.toMatch(/valor = (public\.)?billing_usage_counters\.valor \+/);
+      // Idempotência por resultado, não por no-op: o PREENCHIMENTO INICIAL
+      // nunca soma ao valor existente (senão rodar a migration de novo dobraria
+      // a contagem). A busca fica só no primeiro insert do contador, que é o
+      // preenchimento: o gatilho de leads, mais abaixo no arquivo, soma de
+      // propósito, e é assim que ele tem de funcionar.
+      const inicioDoPreenchimento = sql.indexOf("insert into public.billing_usage_counters");
+      const fimDoPreenchimento = sql.indexOf(";", inicioDoPreenchimento);
+      const preenchimento = sql.slice(inicioDoPreenchimento, fimDoPreenchimento);
+      expect(inicioDoPreenchimento).toBeGreaterThan(-1);
+      expect(preenchimento).toMatch(/group by cl\.organization_id/);
+      expect(preenchimento).not.toMatch(/valor = (public\.)?billing_usage_counters\.valor \+/);
     }
   });
 
@@ -219,16 +227,220 @@ describe("0905 uso dos planos e trava (parte 1, Tarefa 2)", () => {
     }
   });
 
-  it("nenhum gatilho de trava (Tarefa 3) nasce nesta parte da migração", () => {
+  it("os dois gatilhos de updated_at da parte 1 nascem antes de qualquer gatilho de trava (Tarefa 3)", () => {
+    // Substitui o caso homônimo anterior: quando só a Tarefa 2 existia, a
+    // migração inteira só tinha os dois gatilhos de updated_at. Agora a
+    // Tarefa 3 (parte 2) vive no MESMO arquivo (mesma exigência do
+    // enunciado: "acrescenta a parte 2 no fim desse arquivo"), então a
+    // migração inteira passa a ter mais gatilhos, o que este caso confere
+    // é que a ORDEM continua certa: os dois de updated_at (parte 1) vêm
+    // antes de qualquer gatilho de trava (parte 2).
     for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
-      expect(sql).not.toMatch(/fn_billing_conferir_teto/);
-      expect(sql).not.toMatch(/fn_billing_conferir_contadores/);
-      // Só os dois gatilhos de updated_at (não são trava) nascem aqui.
       const criasDeTrigger = [...sql.matchAll(/create trigger\s+(\S+)/g)].map((m) => m[1]);
-      expect(criasDeTrigger).toEqual([
+      expect(criasDeTrigger.slice(0, 2)).toEqual([
         "trg_billing_settings_updated_at",
         "trg_billing_usage_counters_updated_at",
       ]);
+      expect(criasDeTrigger.length).toBeGreaterThan(2);
+    }
+  });
+});
+
+describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
+  const FUNCOES_DE_TRAVA_SEGURANCA_DEFINER = [
+    "fn_billing_conferir_teto(uuid, text, uuid)",
+    "fn_billing_trava_crm_pipelines()",
+    "fn_billing_trava_crm_stages()",
+    "fn_billing_trava_channel_sessions()",
+    "fn_billing_trava_webhook_sources()",
+    "fn_billing_trava_team_invites()",
+    "fn_billing_trava_user_organizations()",
+    "fn_billing_trava_crm_leads()",
+    "fn_billing_conferir_contadores()",
+  ] as const;
+
+  it("todas as nove funções novas da parte 2 são security definer com search_path fixo", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_DE_TRAVA_SEGURANCA_DEFINER) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
+        const trecho = sql.slice(inicio, inicio + 300);
+        expect(trecho).toMatch(/security definer/);
+        expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      }
+    }
+  });
+
+  it("todas as nove funções novas revogam execute de public/anon/authenticated e concedem só a service_role", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_DE_TRAVA_SEGURANCA_DEFINER) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const chamada = assinatura.slice(assinatura.indexOf("("));
+        const escapado = chamada.replace(/[().]/g, (c) => `\\${c}`);
+        const regexRevoke = new RegExp(
+          `revoke execute on function public\\.${nome}${escapado} from public, anon, authenticated`,
+        );
+        const regexGrant = new RegExp(`grant execute on function public\\.${nome}${escapado} to service_role`);
+        expect(sql, `${nome}: revoke ausente`).toMatch(regexRevoke);
+        expect(sql, `${nome}: grant ausente`).toMatch(regexGrant);
+      }
+    }
+  });
+
+  it("fn_billing_conferir_teto e fn_billing_conferir_contadores são volatile", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const nome of ["fn_billing_conferir_teto", "fn_billing_conferir_contadores"]) {
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        const trecho = sql.slice(inicio, inicio + 300);
+        expect(trecho).toMatch(/\bvolatile\b/);
+      }
+    }
+  });
+
+  it("fn_billing_conferir_teto lê o modo e sai em 'desligado' antes de ler o teto", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/select modo into v_modo from public\.billing_settings where id = 1;/);
+      expect(sql).toMatch(/if v_modo is null or v_modo = 'desligado' then/);
+    }
+  });
+
+  it("fn_billing_conferir_teto lê o teto ANTES do advisory lock, e sai sem travar quando não há teto", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_teto(");
+      const trecho = sql.slice(inicio, inicio + 1500);
+      const posTeto = trecho.indexOf("v_teto := (public.fn_billing_limites_efetivos(p_org) ->> p_item)::integer;");
+      const posSeTetoNulo = trecho.indexOf("if v_teto is null then");
+      const posLock = trecho.indexOf("perform pg_advisory_xact_lock(");
+      expect(posTeto).toBeGreaterThan(-1);
+      expect(posSeTetoNulo).toBeGreaterThan(posTeto);
+      expect(posLock).toBeGreaterThan(posSeTetoNulo);
+    }
+  });
+
+  it("o advisory lock é pela chave (organização, item)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /pg_advisory_xact_lock\(hashtextextended\('billing:' \|\| p_org::text \|\| ':' \|\| p_item, 0\)\)/,
+      );
+    }
+  });
+
+  it("modo bloquear se comporta como avisar nesta fase, com um raise warning a mais", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/if v_modo = 'bloquear' then/);
+      expect(sql).toMatch(/raise warning 'billing_teto_ultrapassado_bloquearia_na_f3/);
+    }
+  });
+
+  it("o aviso da Central é kind='other', ref_kind='billing_limite', deduplicado por organização + título ENQUANTO status='open'", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/and kind = 'other'/);
+      expect(sql).toMatch(/and ref_kind = 'billing_limite'/);
+      expect(sql).toMatch(/and title = v_titulo/);
+      expect(sql).toMatch(/and status = 'open'/);
+      expect(sql).toMatch(
+        /insert into public\.agent_inbox_items \(organization_id, kind, severity, title, body, ref_kind, ref_id\)/,
+      );
+    }
+  });
+
+  it("fn_billing_conferir_teto captura qualquer erro (nunca derruba a operação)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_teto(");
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(trecho).toMatch(/exception\s*\n\s*when others then/);
+    }
+  });
+
+  it("os seis gatilhos de transição são 'before insert or update of <coluna>', sem exceção de crm_leads", () => {
+    const ESPERADOS = [
+      { tabela: "crm_pipelines", coluna: "is_archived", nome: "trg_billing_trava_crm_pipelines" },
+      { tabela: "crm_stages", coluna: "is_archived", nome: "trg_billing_trava_crm_stages" },
+      { tabela: "channel_sessions", coluna: "archived_at", nome: "trg_billing_trava_channel_sessions" },
+      { tabela: "webhook_sources", coluna: "is_active", nome: "trg_billing_trava_webhook_sources" },
+      {
+        tabela: "user_organizations",
+        coluna: "accepted_at, revoked_at",
+        nome: "trg_billing_trava_user_organizations",
+      },
+    ] as const;
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const { tabela, coluna, nome } of ESPERADOS) {
+        const escapado = coluna.replace(/[(),]/g, (c) => `\\${c}`);
+        const regex = new RegExp(
+          `create trigger\\s+${nome}\\s+before insert or update of ${escapado} on public\\.${tabela}`,
+        );
+        expect(sql, `${nome} não bate com "before insert or update of ${coluna}"`).toMatch(regex);
+      }
+      // team_invites: só before insert (o convite nunca volta a ficar pendente por update).
+      expect(sql).toMatch(
+        /create trigger\s+trg_billing_trava_team_invites\s+before insert on public\.team_invites/,
+      );
+    }
+  });
+
+  it("o gatilho de crm_leads é after insert or update or delete, SEM lista de colunas", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /create trigger\s+trg_billing_trava_crm_leads\s+after insert or update or delete on public\.crm_leads/,
+      );
+      // "of" logo depois do nome da tabela provaria lista de colunas, não pode existir aqui.
+      const inicio = sql.indexOf("create trigger\n  trg_billing_trava_crm_leads");
+      const inicioAlt = sql.indexOf("trg_billing_trava_crm_leads\n  after insert or update or delete on public.crm_leads");
+      expect(inicio > -1 || inicioAlt > -1).toBe(true);
+    }
+  });
+
+  it("o gatilho de crm_leads soma por upsert ao entrar em open e subtrai por update simples (greatest) ao sair", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/if v_status_novo = 'open' then/);
+      expect(sql).toMatch(/on conflict \(organization_id, item\) do update/);
+      expect(sql).toMatch(/set valor = public\.billing_usage_counters\.valor \+ 1,/);
+      expect(sql).toMatch(/elsif v_status_antigo = 'open' then/);
+      expect(sql).toMatch(/set valor = greatest\(valor - 1, 0\),/);
+      // A subtração é só update: não pode existir um segundo "insert into
+      // billing_usage_counters" fora do ramo de soma (senão recriaria a
+      // linha no meio de uma exclusão em cascata de organização).
+      const ocorrenciasDeInsert = [
+        ...sql.matchAll(/insert into public\.billing_usage_counters/g),
+      ].length;
+      // Uma no preenchimento inicial da parte 1, uma no ramo de soma do
+      // gatilho de leads da parte 2. Nenhuma no ramo de subtração.
+      expect(ocorrenciasDeInsert).toBe(2);
+    }
+  });
+
+  it("o gatilho de crm_leads captura qualquer erro", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_crm_leads(");
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(trecho).toMatch(/exception\s*\n\s*when others then/);
+    }
+  });
+
+  it("fn_billing_conferir_contadores trava a linha (for update) e só num comando SEGUINTE conta e corrige", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_contadores(");
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posFor = trecho.indexOf("for update;");
+      const posCount = trecho.indexOf("select count(*) into v_real");
+      const posUpdate = trecho.indexOf("update public.billing_usage_counters");
+      expect(posFor).toBeGreaterThan(-1);
+      expect(posCount).toBeGreaterThan(posFor);
+      expect(posUpdate).toBeGreaterThan(posCount);
+      expect(trecho).toMatch(/return v_divergiam;/);
+    }
+  });
+
+  it("o segundo bloco da role agent_worker revoga execute das nove funções novas da parte 2", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
+      expect(ocorrencias.length).toBe(2);
+      for (const assinatura of FUNCOES_DE_TRAVA_SEGURANCA_DEFINER) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        expect(sql).toMatch(new RegExp(`revoke execute on function[^;]*public\\.${nome}\\([^;]*from agent_worker`));
+      }
     }
   });
 });
