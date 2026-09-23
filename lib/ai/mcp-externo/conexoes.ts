@@ -64,6 +64,17 @@ const MOTIVO_VERSAO_DESATUALIZADA =
 const CODIGO_UNIQUE_VIOLATION = "23505";
 /** Código PostgREST quando `.single()` não encontra nenhuma linha (0 casaram). */
 const CODIGO_SEM_LINHAS = "PGRST116";
+/**
+ * `errcode` do gatilho `trg_billing_trava_ai_mcp_connections` (D-034,
+ * migration 0905, Tarefa 4). A checagem de `MAXIMO_DE_CONEXOES` abaixo conta
+ * ANTES de inserir, com o teste de conexão de alguns segundos no meio: não
+ * fecha a corrida entre dois cadastros simultâneos da mesma organização, só
+ * evita o teste de conexão à toa quando já dá para saber que vai recusar.
+ * Quem trava de verdade é o gatilho no banco (`pg_advisory_xact_lock` por
+ * organização), e este código é o MESMO desfecho da checagem prévia: 422 com
+ * `MOTIVO_LIMITE`, nunca um 500 com o texto cru do Postgres.
+ */
+const CODIGO_LIMITE_MCP = "PT422";
 
 const COLUNAS =
   "id, slug, name, url, auth_header_name, auth_header_value_encrypted, is_active, tools_cache, tools_refreshed_at, last_error, updated_at";
@@ -345,6 +356,13 @@ export async function criarConexao(
     // repetido, nunca um 500 genérico pra uma corrida rara.
     if ((erroInsercao as { code?: string }).code === CODIGO_UNIQUE_VIOLATION) {
       return { ok: false, status: 409, motivo: MOTIVO_APELIDO_REPETIDO };
+    }
+    // D-034: a checagem de MAXIMO_DE_CONEXOES acima não fecha a corrida (dois
+    // cadastros simultâneos passam pela contagem antes de qualquer um
+    // gravar); quem resolve de verdade é o gatilho no banco, e o PT422 dele é
+    // o MESMO desfecho da checagem: 422 de limite, nunca um 500 genérico.
+    if ((erroInsercao as { code?: string }).code === CODIGO_LIMITE_MCP) {
+      return { ok: false, status: 422, motivo: MOTIVO_LIMITE };
     }
     throw new Error(`ai_mcp_connections_inserir_falhou: ${erroInsercao.message}`);
   }

@@ -435,12 +435,70 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
 
   it("o segundo bloco da role agent_worker revoga execute das nove funções novas da parte 2", () => {
     for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      // 3, não 2: um bloco por parte (1, 2 e 3; a Tarefa 4 acrescentou o
+      // terceiro, próprio da função fn_billing_trava_ai_mcp_connections,
+      // conferido à parte no describe do teto técnico de conexões MCP).
       const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
-      expect(ocorrencias.length).toBe(2);
+      expect(ocorrencias.length).toBe(3);
       for (const assinatura of FUNCOES_DE_TRAVA_SEGURANCA_DEFINER) {
         const nome = assinatura.slice(0, assinatura.indexOf("("));
         expect(sql).toMatch(new RegExp(`revoke execute on function[^;]*public\\.${nome}\\([^;]*from agent_worker`));
       }
+    }
+  });
+});
+
+describe("0905 teto técnico de conexões MCP (parte 3, Tarefa 4, D-034)", () => {
+  it("fn_billing_trava_ai_mcp_connections é security definer com search_path fixo", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_ai_mcp_connections(");
+      expect(inicio, "fn_billing_trava_ai_mcp_connections não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, inicio + 300);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/set search_path = public, pg_temp/);
+    }
+  });
+
+  it("revoga execute de public/anon/authenticated e concede só a service_role", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_trava_ai_mcp_connections\(\) from public, anon, authenticated/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_trava_ai_mcp_connections\(\) to service_role/,
+      );
+    }
+  });
+
+  it("o gatilho é before insert (sem update) em ai_mcp_connections", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /create trigger\s+trg_billing_trava_ai_mcp_connections\s+before insert on public\.ai_mcp_connections/,
+      );
+    }
+  });
+
+  it("trava por pg_advisory_xact_lock com chave própria, fora da família 'billing:...'", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /pg_advisory_xact_lock\(hashtextextended\('ai_mcp_connections:' \|\| new\.organization_id::text, 0\)\)/,
+      );
+    }
+  });
+
+  it("conta as conexões da organização e recusa a partir de 10, com mensagem fixa e errcode PT422", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/from public\.ai_mcp_connections\s+where organization_id = new\.organization_id;/);
+      expect(sql).toMatch(/if v_atual >= 10 then/);
+      expect(sql).toMatch(/raise exception 'Limite de 10 conexões por organização' using errcode = 'PT422';/);
+    }
+  });
+
+  it("o bloco da role agent_worker cobre a função nova desta parte 3", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_trava_ai_mcp_connections\(\) from agent_worker/,
+      );
     }
   });
 });

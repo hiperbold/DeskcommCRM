@@ -457,6 +457,19 @@ describe("criarConexao", () => {
     expect(r).toEqual({ ok: false, status: 409, motivo: "Já existe uma conexão com este apelido" });
   });
 
+  it("D-034: PT422 do gatilho no banco (corrida que a checagem prévia não fechou) vira 422 de limite, não 500", async () => {
+    // A checagem de MAXIMO_DE_CONEXOES acima passou (o dublê aqui não simula
+    // 10 linhas pré-existentes), mas o INSERT em si volta com o errcode que o
+    // gatilho `trg_billing_trava_ai_mcp_connections` levanta quando outra
+    // requisição concorrente já ocupou a última vaga entre a checagem e a
+    // gravação: é exatamente a corrida que o D-034 descreve.
+    const { admin } = criarAdminFalso([], {
+      erroDeEscrita: (tipo) => (tipo === "insert" ? { code: "PT422", message: "Limite de 10 conexões por organização" } : null),
+    });
+    const r = await criarConexao(admin, ORG, "user-1", entradaBase, { abrir: servidorEspionado(() => {}) });
+    expect(r).toEqual({ ok: false, status: 422, motivo: "Limite de 10 conexões por organização" });
+  });
+
   it("B3: nome curto demais (depois do trim) recusa com 422, sem gravar", async () => {
     const { admin, escritas } = criarAdminFalso();
     const abrir = vi.fn(servidorEspionado(() => {}));

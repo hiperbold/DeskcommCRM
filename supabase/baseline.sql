@@ -36938,12 +36938,12 @@ $$;
 -- Nesta fase a trava só avisa: quando a organização passa do teto, nasce um
 -- aviso na Central e a operação segue. O bloqueio de verdade é da F3.
 --
--- Esta migration (0905) tem duas partes. ESTA aplicação (Tarefa 2) traz só a
--- parte 1: configuração (billing_settings), contador materializado de leads
+-- Esta migration (0905) tem três partes. Parte 1 (Tarefa 2): configuração
+-- (billing_settings), contador materializado de leads
 -- (billing_usage_counters) e as duas funções de leitura (fn_billing_uso,
--- fn_billing_pode_criar). Os gatilhos que de fato chamam a conferência do
--- teto e criam o aviso na Central são a Tarefa 3, ainda não escrita, e
--- entram depois neste mesmo arquivo.
+-- fn_billing_pode_criar). Parte 2 (Tarefa 3): os gatilhos que chamam a
+-- conferência do teto e criam o aviso na Central. Parte 3 (Tarefa 4): o teto
+-- técnico de 10 conexões MCP por organização (D-034), que não é item de plano.
 --
 -- billing_settings é linha única (id = 1, com check), modo de operação da
 -- trava: desligado, avisar (default desta fase) ou bloquear (só funciona na
@@ -37132,8 +37132,8 @@ revoke execute on function public.fn_billing_uso(uuid) from public, anon, authen
 grant execute on function public.fn_billing_uso(uuid) to service_role;
 
 -- 5. fn_billing_pode_criar: confere se a organização pode criar mais um item,
--- sem gravar nada (quem grava e cria o aviso é a função de conferência da
--- Tarefa 3, ainda não escrita). pode é falso só quando atual >= teto.
+-- sem gravar nada (quem grava e cria o aviso é fn_billing_conferir_teto, da
+-- parte 2). pode é falso só quando atual >= teto.
 create or replace function public.fn_billing_pode_criar(p_org uuid, p_item text, p_pipeline uuid default null)
 returns jsonb
 language plpgsql
@@ -37713,6 +37713,92 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke execute on function public.fn_billing_conferir_teto(uuid, text, uuid), public.fn_billing_trava_crm_pipelines(), public.fn_billing_trava_crm_stages(), public.fn_billing_trava_channel_sessions(), public.fn_billing_trava_webhook_sources(), public.fn_billing_trava_team_invites(), public.fn_billing_trava_user_organizations(), public.fn_billing_trava_crm_leads(), public.fn_billing_conferir_contadores() from agent_worker';
+  end if;
+end
+$$;
+
+-- ── Parte 3 (Tarefa 4): teto técnico de conexões MCP, D-034 ──
+--
+-- D-034 é achado da fase F2, mas o defeito é anterior aos planos (migration
+-- 0901, fork Hiperbold): lib/ai/mcp-externo/conexoes.ts conta as conexões da
+-- organização ANTES de inserir, com um teste de conexão de alguns segundos no
+-- meio (abre sessão MCP, lista ferramentas). Dois cadastros simultâneos da
+-- MESMA organização passam pela contagem antes de qualquer um dos dois
+-- gravar, e os dois podem passar de 10. A checagem em código FICA (evita o
+-- teste de conexão à toa quando já dá para saber que vai recusar), mas quem
+-- trava de verdade é o banco.
+--
+-- É teto TÉCNICO, não de plano: vale para toda organização, inclusive no
+-- plano Ilimitado, e por isso NÃO chama fn_billing_conferir_teto nem lê
+-- billing_settings ou fn_billing_limites_efetivos. Mora nesta migration (faixa
+-- 09xx) só porque a Tarefa 4 da fase F2 pediu que a correção entrasse junto,
+-- não porque é assunto de billing.
+--
+-- pg_advisory_xact_lock por organização, com uma chave de NAMESPACE PRÓPRIA
+-- ('ai_mcp_connections:...'), distinta da família 'billing:...' que
+-- fn_billing_ajustar_limites (migration 0904) e fn_billing_conferir_teto
+-- (acima, parte 2) usam: mesma organização, dois assuntos diferentes, dois
+-- locks que não podem se confundir nem colidir.
+--
+-- Mensagem de erro FIXA, sem nenhum dado do banco (nem contagem, nem
+-- organização, nem slug). errcode 'PT422': convenção já em uso neste
+-- repositório (migration 0363) em que o PostgREST lê os TRÊS ÚLTIMOS DÍGITOS
+-- do errcode como o status HTTP da resposta: chega em conexoes.ts como
+-- error.code = 'PT422' na resposta do insert, mapeado para o MESMO 422 com o
+-- MESMO texto (MOTIVO_LIMITE) que a checagem prévia em código já devolve,
+-- nunca um 500 com o texto cru do Postgres.
+--
+-- before insert (sem "or update"): ao contrário dos itens de plano, uma
+-- conexão MCP não tem estado "inativo que volta a ativo" que mude a
+-- CONTAGEM DE LINHAS. editarConexao só troca is_active, a linha continua
+-- existindo; o que soma ou tira uma linha é sempre insert ou delete, e
+-- delete nunca precisa de trava.
+--
+-- Idempotente: create or replace, drop trigger if exists antes de recriar.
+
+-- 12. fn_billing_trava_ai_mcp_connections: teto técnico de 10 conexões MCP.
+create or replace function public.fn_billing_trava_ai_mcp_connections()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_atual bigint;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('ai_mcp_connections:' || new.organization_id::text, 0));
+
+  select count(*) into v_atual
+  from public.ai_mcp_connections
+  where organization_id = new.organization_id;
+
+  if v_atual >= 10 then
+    raise exception 'Limite de 10 conexões por organização' using errcode = 'PT422';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_ai_mcp_connections() is
+  'Teto TÉCNICO de 10 conexões MCP por organização (D-034, Tarefa 4 da fase F2), não é item de plano: vale inclusive no Ilimitado, não lê billing_settings nem fn_billing_limites_efetivos. before insert, security definer, pg_advisory_xact_lock por organização ANTES de contar (chave própria, fora da família billing:..., para não colidir com o lock de plano da mesma organização). Mensagem de erro fixa, sem dado do banco; errcode PT422 (convenção da migration 0363: os três últimos dígitos viram o status HTTP no PostgREST), tratado em lib/ai/mcp-externo/conexoes.ts como o mesmo 422 de MOTIVO_LIMITE que a checagem prévia em código já devolve.';
+
+revoke execute on function public.fn_billing_trava_ai_mcp_connections() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_ai_mcp_connections() to service_role;
+
+drop trigger if exists trg_billing_trava_ai_mcp_connections on public.ai_mcp_connections;
+create trigger trg_billing_trava_ai_mcp_connections
+  before insert on public.ai_mcp_connections
+  for each row
+  execute function public.fn_billing_trava_ai_mcp_connections();
+
+-- 13. agent_worker não trava conexões MCP pela função nova desta parte 3
+-- (mesmo racional dos blocos 6 e 11, acima): por alter default privileges ela
+-- ganharia execute em toda função nova do schema public, e tem bypassrls.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_trava_ai_mcp_connections() from agent_worker';
   end if;
 end
 $$;

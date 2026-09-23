@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { motivoDoErro, sql } from "./psql-transporte";
@@ -35,6 +36,15 @@ import { motivoDoErro, sql } from "./psql-transporte";
  *      `fn_billing_conferir_teto`, `fn_billing_conferir_contadores`,
  *      `fn_billing_uso` nem `fn_billing_pode_criar`.
  *
+ * Mais duas, da Tarefa 4 (D-034, teto TÉCNICO de conexões MCP, não é item de
+ * plano, por isso mora no mesmo arquivo, mas fora da lista acima):
+ *
+ *  14. a 10ª conexão MCP da organização passa, a 11ª é recusada com a
+ *      mensagem fixa; outra organização já no teto não interfere;
+ *  15. concorrência real (duas sessões psql separadas): a 10ª conexão fica
+ *      presa numa transação aberta enquanto uma 11ª tenta inserir ao mesmo
+ *      tempo, e só uma das duas grava.
+ *
  * Como `planos-de-assinatura.test.ts` (fase F1), fala com o Postgres por
  * `tests/invariants/psql-transporte.ts` (não `gov-helpers.ts`, congelado) e usa
  * `authenticated` + `request.jwt.claims` para os casos que exigem RLS de
@@ -60,6 +70,9 @@ const ORG_MEMBROS = "09050001-0000-4000-8000-00000000000b";
 const ORG_ISO_A = "09050001-0000-4000-8000-00000000000c";
 const ORG_ISO_B = "09050001-0000-4000-8000-00000000000d";
 const ORG_RBAC = "09050001-0000-4000-8000-00000000000e";
+const ORG_MCP_A = "09050001-0000-4000-8000-00000000000f";
+const ORG_MCP_B = "09050001-0000-4000-8000-000000000010";
+const ORG_MCP_CONCORRENCIA = "09050001-0000-4000-8000-000000000011";
 
 const USER_MEMBRO_INS = "09050001-1111-4000-8000-00000000000a";
 const USER_MEMBROS_REAL = "09050001-1111-4000-8000-00000000000b";
@@ -114,6 +127,33 @@ function esperaBarrado(userId: string, dml: string, contexto: string): void {
   const erro = erroDe(`${comoMembro(userId)}\n${dml};`);
   expect(erro, `${contexto}: passou SEM erro, está exposto a "authenticated"`).not.toBeNull();
   expect(erro).toContain("permission denied");
+}
+
+/**
+ * Como `sql` (`psql-transporte.ts`), mas ASSÍNCRONA e numa sessão psql
+ * PRÓPRIA, só para o caso 15 (concorrência real), que precisa de DUAS
+ * conexões vivas ao mesmo tempo (uma presa numa transação aberta enquanto a
+ * outra tenta inserir). `sql()` é síncrona (`execFileSync`), então duas
+ * chamadas dela nunca se sobrepõem; aqui, sem tocar em `psql-transporte.ts`
+ * (fora do escopo desta tarefa), a mesma lógica de transporte (container ou
+ * psql local) é reaberta como processo assíncrono.
+ */
+function sqlAsync(script: string): Promise<{ ok: boolean; erro: string | null }> {
+  const container = process.env.TEST_DB_CONTAINER;
+  const psqlLocal = process.env.TEST_DB_PSQL;
+  const bin = psqlLocal ?? "docker";
+  const args = psqlLocal
+    ? [process.env.TEST_DB_CONN ?? "postgres://postgres@localhost/postgres", "-v", "ON_ERROR_STOP=1", "-tA", "-f", "-"]
+    : ["exec", "-i", container as string, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tA", "-f", "-"];
+
+  return new Promise((resolve) => {
+    const proc = spawn(bin, args);
+    let stderr = "";
+    proc.stderr.on("data", (d) => (stderr += d.toString()));
+    proc.on("close", (code) => resolve({ ok: code === 0, erro: code === 0 ? null : stderr }));
+    proc.stdin.write(script);
+    proc.stdin.end();
+  });
 }
 
 /** Conta os avisos de trava de plano ABERTOS da organização, sem olhar título. */
@@ -632,5 +672,113 @@ describe("13. Membro comum não escreve em billing_usage_counters nem executa as
       `select public.fn_billing_pode_criar('${ORG_RBAC}'::uuid, 'leads', null)`,
       "fn_billing_pode_criar",
     );
+  });
+});
+
+/** Um `insert` de conexão MCP com `slug`, `name` e `url` válidos (checks da migration 0901). */
+function inserirConexaoMcp(org: string, slug: string): string {
+  return `insert into public.ai_mcp_connections (organization_id, slug, name, url)
+    values ('${org}', '${slug}', 'MCP ${slug}', 'https://mcp.invariant.test/${slug}');`;
+}
+
+describe("14. Teto técnico de 10 conexões MCP por organização (D-034, Tarefa 4)", () => {
+  beforeAll(() => {
+    comoServico(`
+      insert into public.organizations (id, slug, legal_name, display_name) values
+        ('${ORG_MCP_A}', 'trava-mcp-a', 'Trava MCP A LTDA', 'Trava MCP A'),
+        ('${ORG_MCP_B}', 'trava-mcp-b', 'Trava MCP B LTDA', 'Trava MCP B')
+      on conflict (id) do nothing;
+      -- A nasce com 9 (uma vaga livre); B já nasce NO teto (10), para provar
+      -- que o teto de B não vaza para A nem para o contrário.
+      insert into public.ai_mcp_connections (organization_id, slug, name, url)
+        select '${ORG_MCP_A}', 'mcpa' || lpad(i::text, 2, '0'), 'MCP A ' || i, 'https://mcp.invariant.test/a' || i
+        from generate_series(1, 9) as i;
+      insert into public.ai_mcp_connections (organization_id, slug, name, url)
+        select '${ORG_MCP_B}', 'mcpb' || lpad(i::text, 2, '0'), 'MCP B ' || i, 'https://mcp.invariant.test/b' || i
+        from generate_series(1, 10) as i;
+    `);
+  });
+
+  it("a organização A tem 9 conexões antes do teste (controle positivo)", () => {
+    const linhas = comoServico(
+      `select 'SONDA|' || count(*) from public.ai_mcp_connections where organization_id = '${ORG_MCP_A}';`,
+    );
+    expect(linhas).toEqual(["9"]);
+  });
+
+  it("a 10ª conexão da organização A passa (9 < 10), mesmo com B já no teto desde o beforeAll", () => {
+    const erro = erroDe(inserirConexaoMcp(ORG_MCP_A, "mcpa10"));
+    expect(erro).toBeNull();
+  });
+
+  it("a 11ª conexão da organização A é recusada com a mensagem fixa (PT422)", () => {
+    const erro = erroDe(inserirConexaoMcp(ORG_MCP_A, "mcpa11"));
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("Limite de 10 conexões por organização");
+  });
+
+  it("a organização A termina com exatamente 10 (a 11ª não gravou)", () => {
+    const linhas = comoServico(
+      `select 'SONDA|' || count(*) from public.ai_mcp_connections where organization_id = '${ORG_MCP_A}';`,
+    );
+    expect(linhas).toEqual(["10"]);
+  });
+
+  it("a organização B, já no teto, também recusa a 11ª (o teto é por organização, não global)", () => {
+    const erro = erroDe(inserirConexaoMcp(ORG_MCP_B, "mcpb11"));
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("Limite de 10 conexões por organização");
+  });
+
+  it("a organização B continua com exatamente 10 (nunca foi afetada pela A)", () => {
+    const linhas = comoServico(
+      `select 'SONDA|' || count(*) from public.ai_mcp_connections where organization_id = '${ORG_MCP_B}';`,
+    );
+    expect(linhas).toEqual(["10"]);
+  });
+});
+
+describe("15. Concorrência real: duas sessões inserindo ao mesmo tempo, só uma grava", () => {
+  // A organização nasce com 9 (uma vaga livre). A sessão A abre uma
+  // transação, insere a 10ª (o gatilho conta 9, passa) e SEGURA a transação
+  // aberta com pg_sleep antes do commit: o pg_advisory_xact_lock que o
+  // gatilho tomou só solta no commit. A sessão B, disparada quase ao mesmo
+  // tempo, tenta inserir a 11ª: fica bloqueada no MESMO advisory lock até A
+  // liberar, e só então conta de novo (a função é VOLATILE, decisão 9 da
+  // fase, mesmo racional de crm_stages, então essa recontagem enxerga o
+  // commit de A, não a foto de antes). Ou A ganha a corrida e B é recusada,
+  // ou o inverso; o que este caso prova é que NUNCA as duas passam.
+  beforeAll(() => {
+    comoServico(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_MCP_CONCORRENCIA}', 'trava-mcp-conc', 'Trava MCP Conc LTDA', 'Trava MCP Conc')
+        on conflict (id) do nothing;
+      insert into public.ai_mcp_connections (organization_id, slug, name, url)
+        select '${ORG_MCP_CONCORRENCIA}', 'mcpc' || lpad(i::text, 2, '0'), 'MCP C ' || i, 'https://mcp.invariant.test/c' || i
+        from generate_series(1, 9) as i;
+    `);
+  });
+
+  it("das duas tentativas simultâneas de 10ª conexão, exatamente uma grava e a organização termina com 10", async () => {
+    const sessaoA = `
+      begin;
+      ${inserirConexaoMcp(ORG_MCP_CONCORRENCIA, "mcpca1")}
+      select pg_sleep(0.5);
+      commit;
+    `;
+    const sessaoB = `
+      select pg_sleep(0.15);
+      ${inserirConexaoMcp(ORG_MCP_CONCORRENCIA, "mcpcb1")}
+    `;
+
+    const [resultadoA, resultadoB] = await Promise.all([sqlAsync(sessaoA), sqlAsync(sessaoB)]);
+
+    const quantasPassaram = [resultadoA.ok, resultadoB.ok].filter(Boolean).length;
+    expect(quantasPassaram, `A: ${resultadoA.erro ?? "ok"} | B: ${resultadoB.erro ?? "ok"}`).toBe(1);
+
+    const linhas = comoServico(
+      `select 'SONDA|' || count(*) from public.ai_mcp_connections where organization_id = '${ORG_MCP_CONCORRENCIA}';`,
+    );
+    expect(linhas).toEqual(["10"]);
   });
 });
