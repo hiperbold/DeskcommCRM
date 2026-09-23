@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F1
-Etapa da fase: tarefas 4 e 6 de 6, em paralelo (1 em 502a4a8, 3 em 684de89, 2 em d335259); a 5 espera a 4
+Etapa da fase: tarefa 5 de 6, a última (1 em 502a4a8, 3 em 684de89, 2 em d335259, 4 em 80510b8, 6 em ffa92d6)
 
 ## Fases
 
@@ -22,7 +22,7 @@ Etapa da fase: tarefas 4 e 6 de 6, em paralelo (1 em 502a4a8, 3 em 684de89, 2 em
 | 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | feita (49 casos novos; com rls-isolation e a varredura de completude, 224 verdes) |
 | 3 | Módulo de leitura de plano | feita (20 testes; embed e RPC provados contra o PostgREST local) |
 | 4 | Ações do admin da plataforma (só escopo full) | feita (17 testes; IP pela régua única do projeto) |
-| 5 | Aba "Plano" no painel do admin da plataforma | pendente |
+| 5 | Aba "Plano" no painel do admin da plataforma | feita (28 testes; o executor levou seis horas porque subiu o servidor de desenvolvimento em primeiro plano e ficou esperando) |
 | 6 | Aposentar o "Plano" antigo da criação de organização | feita (Visão Geral lê o contrato; formulário sem seletor; API ainda aceita o campo legado) |
 
 ## Decisões tomadas sozinho

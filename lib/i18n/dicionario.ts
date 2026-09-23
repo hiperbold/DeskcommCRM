@@ -11538,6 +11538,58 @@ export const DICIONARIO: Traducoes = {
   // ─── Tarefa 6, fase F1 dos planos de assinatura: aposentar o "Plano" antigo
   // da criação de organização (Visão Geral do tenant no admin da plataforma) ───
   "Plano indisponível": { es: "Plan no disponible" },
+
+  // ─── Tarefa 5, fase F1 dos planos de assinatura: a aba "Plano" no admin da
+  // plataforma (app/admin/(protected)/tenants/[id]/plano) ───
+  "Plano contratado": { es: "Plan contratado" },
+  "Sem contrato gravado": { es: "Sin contrato registrado" },
+  "Não foi possível ler o plano desta organização agora. Os limites desta tela não refletem a realidade: recarregue a página antes de decidir qualquer coisa com base neles.": {
+    es: "No se pudo leer el plan de esta organización ahora. Los límites de esta pantalla no reflejan la realidad: recarga la página antes de decidir algo basándote en ellos.",
+  },
+  "Nesta fase nenhum limite bloqueia; eles só passam a valer quando o bloqueio for ligado.": {
+    es: "En esta fase ningún límite bloquea; solo entrarán en vigor cuando se active el bloqueo.",
+  },
+  "Seu acesso de suporte só permite leitura. Para trocar o plano ou ajustar limites, peça a um admin com acesso completo.": {
+    es: "Tu acceso de soporte solo permite lectura. Para cambiar el plan o ajustar límites, pide a un admin con acceso completo.",
+  },
+  "Acesso de suporte: só leitura.": { es: "Acceso de soporte: solo lectura." },
+  "Em avaliação": { es: "En evaluación" },
+  Atrasada: { es: "Atrasada" },
+  Suspensa: { es: "Suspendida" },
+  Mensal: { es: "Mensual" },
+  Anual: { es: "Anual" },
+  Limites: { es: "Límites" },
+  "O que o plano contratado prevê, o que o ajuste desta organização define por cima, e o que vale hoje.": {
+    es: "Lo que prevé el plan contratado, lo que define por encima el ajuste de esta organización, y lo que vale hoy.",
+  },
+  "Do plano": { es: "Del plan" },
+  "Do ajuste": { es: "Del ajuste" },
+  "Em vigor": { es: "Vigente" },
+  "Etapas por funil": { es: "Etapas por embudo" },
+  "Integrações webhook": { es: "Integraciones webhook" },
+  "Tokens de IA por mês": { es: "Tokens de IA por mes" },
+  "sem limite": { es: "sin límite" },
+  "herda do plano": { es: "hereda del plan" },
+  "Trocar plano": { es: "Cambiar plan" },
+  "Novo plano": { es: "Nuevo plan" },
+  "Escolha um plano": { es: "Elige un plan" },
+  "por mês": { es: "por mes" },
+  "não à venda": { es: "no en venta" },
+  "Plano trocado.": { es: "Plan cambiado." },
+  "Ajustar limites": { es: "Ajustar límites" },
+  "Um teto próprio desta organização, por cima do que o plano contratado prevê. Cada chave herda do plano até que você escolha outra coisa.": {
+    es: "Un tope propio de esta organización, por encima de lo que prevé el plan contratado. Cada clave hereda del plan hasta que elijas otra cosa.",
+  },
+  "Herdar do plano": { es: "Heredar del plan" },
+  "Sem limite": { es: "Sin límite" },
+  Nota: { es: "Nota" },
+  "Por que este ajuste existe, para quem olhar depois (visível só para admins da plataforma)": {
+    es: "Por qué existe este ajuste, para quien lo revise después (visible solo para admins de la plataforma)",
+  },
+  "Salvar ajuste": { es: "Guardar ajuste" },
+  "Remover ajuste": { es: "Quitar ajuste" },
+  "Ajuste salvo.": { es: "Ajuste guardado." },
+  "Ajuste removido.": { es: "Ajuste eliminado." },
 };
 
 /**
