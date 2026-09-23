@@ -475,6 +475,18 @@ as $$
 begin
   if tg_op = 'INSERT' then
     if new.is_archived = false then
+      -- Fase F3 (migration 0907, editado NO LUGAR aqui, decisão 3): o
+      -- bloqueio roda ANTES do aviso, na MESMA transição. fn_billing_bloqueia
+      -- só nasce na 0907, depois desta 0905 tanto no baseline quanto na
+      -- ordem real de aplicação: a chamada só é resolvida em tempo de
+      -- EXECUÇÃO (plpgsql não confere a existência de função chamada na hora
+      -- de CRIAR esta função, só na hora de CHAMAR), e nenhum insert/update
+      -- de crm_pipelines acontece durante a aplicação das migrations. No
+      -- modo avisar/desligado, fn_billing_bloqueia sai sem travar (lê o modo
+      -- antes do lock): zero custo a mais enquanto a F3 não for ligada.
+      if public.fn_billing_bloqueia(new.organization_id, 'funis', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'funis';
+      end if;
       perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
     end if;
   elsif old.is_archived = true and new.is_archived = false then
@@ -482,7 +494,14 @@ begin
     -- ativas deste funil, que não passaram por nenhum insert agora (elas já
     -- existiam, arquivadas junto do funil), sem esta linha etapas_por_funil
     -- nunca era conferido nesta transição.
+    if public.fn_billing_bloqueia(new.organization_id, 'funis', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'funis';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
+
+    if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.id) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.id);
   end if;
 
@@ -491,7 +510,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_pipelines() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update. Achado B4.1 (revisão fase F2): a transição de desarquivar TAMBÉM confere etapas_por_funil do próprio funil, porque as etapas ativas dele reaparecem sem passar por nenhum insert em crm_stages.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update. Achado B4.1 (revisão fase F2): a transição de desarquivar TAMBÉM confere etapas_por_funil do próprio funil, porque as etapas ativas dele reaparecem sem passar por nenhum insert em crm_stages. Fase F3 (migration 0907): antes de cada conferência de aviso, fn_billing_bloqueia decide o bloqueio de verdade; PT402 fora de qualquer bloco exception.';
 
 revoke execute on function public.fn_billing_trava_crm_pipelines() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_pipelines() to service_role;
@@ -512,9 +531,16 @@ as $$
 begin
   if tg_op = 'INSERT' then
     if new.is_archived = false then
+      -- Fase F3 (migration 0907): mesmo padrão de fn_billing_trava_crm_pipelines.
+      if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+      end if;
       perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
     end if;
   elsif old.is_archived = true and new.is_archived = false then
+    if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
   elsif new.is_archived = false and new.pipeline_id is distinct from old.pipeline_id then
     -- Achado B4.2 (revisão fase F2): mover uma etapa ATIVA para outro funil
@@ -522,6 +548,9 @@ begin
     -- insert nem por is_archived, sem este ramo a transição não disparava
     -- conferência nenhuma. Etapa arquivada mudando de funil não conta (não
     -- está ativa em nenhum dos dois).
+    if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
   end if;
 
@@ -530,7 +559,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_stages() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) na transição de is_archived para false (insert ou update) e, achado B4.2 (revisão fase F2), quando uma etapa ATIVA muda de pipeline_id (confere o funil de DESTINO). Um INSERT com várias etapas dispara este gatilho uma vez por linha, e cada chamada conta as etapas já commitadas antes dela no mesmo comando (prova do VOLATILE, decisão 9).';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) na transição de is_archived para false (insert ou update) e, achado B4.2 (revisão fase F2), quando uma etapa ATIVA muda de pipeline_id (confere o funil de DESTINO). Um INSERT com várias etapas dispara este gatilho uma vez por linha, e cada chamada conta as etapas já commitadas antes dela no mesmo comando (prova do VOLATILE, decisão 9). Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception.';
 
 revoke execute on function public.fn_billing_trava_crm_stages() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_stages() to service_role;
@@ -551,9 +580,16 @@ as $$
 begin
   if tg_op = 'INSERT' then
     if new.archived_at is null then
+      -- Fase F3 (migration 0907): mesmo padrão de fn_billing_trava_crm_pipelines.
+      if public.fn_billing_bloqueia(new.organization_id, 'conexoes', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'conexoes';
+      end if;
       perform public.fn_billing_conferir_teto(new.organization_id, 'conexoes', null);
     end if;
   elsif old.archived_at is not null and new.archived_at is null then
+    if public.fn_billing_bloqueia(new.organization_id, 'conexoes', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'conexoes';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'conexoes', null);
   end if;
 
@@ -562,7 +598,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_channel_sessions() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(conexoes) só na transição de archived_at para null, em insert ou update.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(conexoes) só na transição de archived_at para null, em insert ou update. Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception.';
 
 revoke execute on function public.fn_billing_trava_channel_sessions() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_channel_sessions() to service_role;
@@ -583,9 +619,16 @@ as $$
 begin
   if tg_op = 'INSERT' then
     if new.is_active = true then
+      -- Fase F3 (migration 0907): mesmo padrão de fn_billing_trava_crm_pipelines.
+      if public.fn_billing_bloqueia(new.organization_id, 'integracoes_webhook', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'integracoes_webhook';
+      end if;
       perform public.fn_billing_conferir_teto(new.organization_id, 'integracoes_webhook', null);
     end if;
   elsif old.is_active = false and new.is_active = true then
+    if public.fn_billing_bloqueia(new.organization_id, 'integracoes_webhook', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'integracoes_webhook';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'integracoes_webhook', null);
   end if;
 
@@ -594,7 +637,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_webhook_sources() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(integracoes_webhook) só na transição de is_active para true, em insert ou update.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(integracoes_webhook) só na transição de is_active para true, em insert ou update. Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception.';
 
 revoke execute on function public.fn_billing_trava_webhook_sources() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_webhook_sources() to service_role;

@@ -644,9 +644,13 @@ describe("0905 parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segura
   });
 
   it("B4.1: desarquivar um funil também confere etapas_por_funil dele (não só funis)", () => {
+    // Corpo inteiro (indexOf "$$;", não um offset fixo): a Fase F3 (migration
+    // 0907) acrescentou a checagem de bloqueio ANTES de cada conferência de
+    // aviso, no mesmo corpo (achado B4.1 em si não mudou), e um comprimento
+    // fixo em caracteres quebraria de novo a cada comentário novo.
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_trava_crm_pipelines(");
-      const trecho = sql.slice(inicio, inicio + 1200);
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
       expect(trecho).toMatch(
         /elsif old\.is_archived = true and new\.is_archived = false then[\s\S]*?fn_billing_conferir_teto\(new\.organization_id, 'funis', null\);[\s\S]*?fn_billing_conferir_teto\(new\.organization_id, 'etapas_por_funil', new\.id\);/,
       );
@@ -656,7 +660,7 @@ describe("0905 parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segura
   it("B4.2: mover uma etapa ATIVA de pipeline_id confere etapas_por_funil do funil de DESTINO", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_trava_crm_stages(");
-      const trecho = sql.slice(inicio, inicio + 900);
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
       expect(trecho).toMatch(
         /elsif new\.is_archived = false and new\.pipeline_id is distinct from old\.pipeline_id then/,
       );
