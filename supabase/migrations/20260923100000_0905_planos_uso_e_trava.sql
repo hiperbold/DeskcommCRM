@@ -173,11 +173,17 @@ begin
     )
     +
     (
+      -- Fase F3 (migration 0907, decisão 4, último parágrafo): sem o filtro
+      -- de fn_billing_convite_ja_tem_vinculo_ativo, o instante do aceite (o
+      -- convite ainda pendente, aplicar-convite.ts só marca accepted_at
+      -- DEPOIS do RPC, mais o vínculo já ativo) contaria o MESMO ocupante
+      -- duas vezes.
       select count(*) from public.team_invites ti
       where ti.organization_id = p_org
         and ti.accepted_at is null
         and ti.revoked_at is null
         and ti.expires_at > now()
+        and not public.fn_billing_convite_ja_tem_vinculo_ativo(ti.id)
     )
   into v_membros;
 
@@ -262,11 +268,16 @@ begin
       )
       +
       (
+        -- Fase F3 (migration 0907, decisão 4, último parágrafo): mesmo filtro
+        -- de fn_billing_uso, acima, para o instante do aceite não contar o
+        -- mesmo ocupante duas vezes (convite ainda pendente + vínculo já
+        -- ativo).
         select count(*) from public.team_invites ti
         where ti.organization_id = p_org
           and ti.accepted_at is null
           and ti.revoked_at is null
           and ti.expires_at > now()
+          and not public.fn_billing_convite_ja_tem_vinculo_ativo(ti.id)
       )
     into v_atual;
   elsif p_item = 'conexoes' then
@@ -668,6 +679,16 @@ begin
   end if;
 
   if v_novo_pendente and not v_antigo_pendente then
+    -- Fase F3 (migration 0907, editado NO LUGAR aqui, decisão 4, item 1):
+    -- mesmo padrão dos quatro gatilhos da decisão 3 (funis, etapas, conexões,
+    -- webhooks). Convite novo pendente, ou renovado que volta a pendente,
+    -- ocupa uma vaga de membro: bloqueia igual, SEM isenção nenhuma (as
+    -- isenções da decisão 4 são só para o ACEITE, em user_organizations,
+    -- abaixo). "Aceite de convite nunca bloqueia" não é "emitir convite nunca
+    -- bloqueia": o convite em si é quem cria a vaga a ocupar.
+    if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'membros', null);
   end if;
 
@@ -676,7 +697,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_team_invites() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente).';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente). Fase F3 (migration 0907, decisão 4, item 1): fn_billing_bloqueia antes da conferência de aviso, sem isenção nenhuma (as isenções são só no ACEITE); PT402 fora de qualquer bloco exception.';
 
 revoke execute on function public.fn_billing_trava_team_invites() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_team_invites() to service_role;
@@ -699,16 +720,46 @@ as $$
 declare
   v_novo_ativo boolean;
   v_antigo_ativo boolean;
+  v_invited_by_antigo uuid;
+  v_invited_at_antigo timestamptz;
 begin
   v_novo_ativo := new.accepted_at is not null and new.revoked_at is null and not new.provisional_until_handover;
 
   if tg_op = 'INSERT' then
     v_antigo_ativo := false;
+    v_invited_by_antigo := null;
+    v_invited_at_antigo := null;
   else
     v_antigo_ativo := old.accepted_at is not null and old.revoked_at is null and not old.provisional_until_handover;
+    v_invited_by_antigo := old.invited_by;
+    v_invited_at_antigo := old.invited_at;
   end if;
 
   if v_novo_ativo and not v_antigo_ativo then
+    -- Fase F3 (migration 0907, editado NO LUGAR aqui, decisão 4, item 2):
+    -- "aceite de convite nunca bloqueia". Três isenções, cada uma numa função
+    -- pequena e testável (racional completo no cabeçalho da migration 0907,
+    -- parte 2): (1) fn_billing_convite_pendente_do_membro, existe convite
+    -- pendente e válido para o e-mail deste usuário nesta organização (cobre
+    -- o aceite comum e a readmissão de revogado com convite pendente); (2)
+    -- fn_billing_veio_de_aceite_de_convite, o vínculo nasceu dentro de
+    -- fn_accept_team_invite mesmo sem linha de convite (token antigo),
+    -- comparando invited_by/invited_at novo x antigo sem editar aquela
+    -- função; (3) fn_billing_dono_do_provisionamento, o dono do signup
+    -- self-service (lib/auth/provision.ts) que criou a própria organização.
+    -- O provisório nem chega aqui: v_novo_ativo já é falso para ele (decisão
+    -- 4, "nunca conta e nunca bloqueia", sem mudança nesta fase).
+    if not (
+      public.fn_billing_convite_pendente_do_membro(new.organization_id, new.user_id)
+      or public.fn_billing_veio_de_aceite_de_convite(
+        new.invited_by, new.invited_at, v_invited_by_antigo, v_invited_at_antigo, tg_op = 'INSERT'
+      )
+      or public.fn_billing_dono_do_provisionamento(new.organization_id, new.user_id, new.role)
+    ) then
+      if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';
+      end if;
+    end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'membros', null);
   end if;
 
@@ -717,7 +768,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_user_organizations() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para ativo (accepted_at preenchido, revoked_at nulo, provisional_until_handover falso), cobrindo aceite direto, readmissão de revogado e insert já ativo. O admin provisório nunca conta.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para ativo (accepted_at preenchido, revoked_at nulo, provisional_until_handover falso), cobrindo aceite direto, readmissão de revogado e insert já ativo. O admin provisório nunca conta. Fase F3 (migration 0907, decisão 4, item 2): antes do bloqueio de verdade, três isenções (convite pendente do e-mail, aceite sem linha de convite, dono do provisionamento) liberam o aceite mesmo no teto; a conferência de aviso continua rodando incondicionalmente, sem mudança.';
 
 revoke execute on function public.fn_billing_trava_user_organizations() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_user_organizations() to service_role;

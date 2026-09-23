@@ -491,3 +491,234 @@ describe("0907: modo continua 'avisar' por padrão, a fase não liga nada sozinh
     expect(MIGRATION_0907).not.toMatch(/values \([^)]*'bloquear'[^)]*\)/);
   });
 });
+
+const FUNCOES_0907_PARTE2 = [
+  "fn_billing_convite_pendente_do_membro(uuid, uuid)",
+  "fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean)",
+  "fn_billing_dono_do_provisionamento(uuid, uuid, text)",
+  "fn_billing_convite_ja_tem_vinculo_ativo(uuid)",
+] as const;
+
+describe("0907 parte 2 (Tarefa 2): padrão de segurança das quatro funções de isenção/contagem de membros", () => {
+  it("todas são security definer com search_path fixo em public, pg_temp", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      for (const assinatura of FUNCOES_0907_PARTE2) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
+        const trecho = sql.slice(inicio, inicio + 400);
+        expect(trecho).toMatch(/security definer/);
+        expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      }
+    }
+  });
+
+  it("todas revogam execute de public/anon/authenticated e concedem só a service_role", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      for (const assinatura of FUNCOES_0907_PARTE2) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        const chamada = assinatura.slice(assinatura.indexOf("("));
+        const escapado = chamada.replace(/[().,]/g, (c) => `\\${c}`).replace(/ /g, "\\s*");
+        const regexRevoke = new RegExp(
+          `revoke execute on function public\\.${nome}${escapado} from public, anon, authenticated`,
+        );
+        const regexGrant = new RegExp(`grant execute on function public\\.${nome}${escapado} to service_role`);
+        expect(sql, `${nome}: revoke ausente`).toMatch(regexRevoke);
+        expect(sql, `${nome}: grant ausente`).toMatch(regexGrant);
+      }
+    }
+  });
+
+  it("o bloco da role agent_worker (parte 2) revoga execute das quatro funções novas", () => {
+    for (const sql of [MIGRATION_0907, extraiBloco0907Baseline()]) {
+      for (const assinatura of FUNCOES_0907_PARTE2) {
+        const nome = assinatura.slice(0, assinatura.indexOf("("));
+        expect(sql).toMatch(new RegExp(`public\\.${nome}\\(`));
+      }
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_convite_pendente_do_membro\(uuid, uuid\), public\.fn_billing_veio_de_aceite_de_convite\(uuid, timestamptz, uuid, timestamptz, boolean\), public\.fn_billing_dono_do_provisionamento\(uuid, uuid, text\), public\.fn_billing_convite_ja_tem_vinculo_ativo\(uuid\) from agent_worker/,
+      );
+      // Dois blocos de agent_worker nesta migração: um da parte 1 (Tarefa 1,
+      // cinco funções), outro da parte 2 (Tarefa 2, quatro funções).
+      const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
+      expect(ocorrencias.length).toBe(2);
+    }
+  });
+});
+
+describe("0907 parte 2: isenção 1, fn_billing_convite_pendente_do_membro", () => {
+  it("compara auth.users.email x team_invites.email sem diferença de maiúsculas, convite pendente e válido", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_convite_pendente_do_membro(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/join auth\.users au on au\.id = p_user/);
+      expect(corpo).toMatch(/lower\(ti\.email\) = lower\(au\.email\)/);
+      expect(corpo).toMatch(/ti\.accepted_at is null/);
+      expect(corpo).toMatch(/ti\.revoked_at is null/);
+      expect(corpo).toMatch(/ti\.expires_at > now\(\)/);
+    }
+  });
+});
+
+describe("0907 parte 2: isenção 2, fn_billing_veio_de_aceite_de_convite", () => {
+  it("em inserção, isento quando invited_by OU invited_at vêm preenchidos", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_veio_de_aceite_de_convite(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /when p_insercao then p_invited_by_novo is not null or p_invited_at_novo is not null/,
+      );
+    }
+  });
+
+  it("em atualização, isento só quando invited_by ou invited_at MUDARAM (novo distinto do antigo)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_veio_de_aceite_de_convite(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /else p_invited_by_novo is distinct from p_invited_by_antigo\s*\n\s*or p_invited_at_novo is distinct from p_invited_at_antigo/,
+      );
+    }
+  });
+});
+
+describe("0907 parte 2: isenção 3, fn_billing_dono_do_provisionamento", () => {
+  it("exige role admin E organizations.created_by = p_user (o dono que criou a própria organização)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_dono_do_provisionamento(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /select p_role = 'admin' and exists \(\s*\n\s*select 1 from public\.organizations o\s*\n\s*where o\.id = p_org and o\.created_by = p_user\s*\n\s*\);/,
+      );
+    }
+  });
+});
+
+describe("0907 parte 2: fn_billing_convite_ja_tem_vinculo_ativo (fecha o dobro da contagem no aceite)", () => {
+  it("um convite só está 'já com vínculo ativo' quando existe membro ativo, não revogado, não provisório, do mesmo e-mail", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_convite_ja_tem_vinculo_ativo(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/uo\.accepted_at is not null/);
+      expect(corpo).toMatch(/uo\.revoked_at is null/);
+      expect(corpo).toMatch(/not uo\.provisional_until_handover/);
+      expect(corpo).toMatch(/lower\(au\.email\) = lower\(ti\.email\)/);
+    }
+  });
+});
+
+describe("0905 (editado NO LUGAR, Tarefa 2): gatilho de team_invites bloqueia sem isenção nenhuma", () => {
+  it("fn_billing_bloqueia(membros) roda ANTES de fn_billing_conferir_teto, dentro da mesma transição de pendente", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_team_invites(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posSe = corpo.indexOf("if v_novo_pendente and not v_antigo_pendente then");
+      const posBloqueia = corpo.indexOf("if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then", posSe);
+      const posConferir = corpo.indexOf("perform public.fn_billing_conferir_teto(new.organization_id, 'membros', null);", posSe);
+      expect(posSe).toBeGreaterThan(-1);
+      expect(posBloqueia).toBeGreaterThan(posSe);
+      expect(posConferir).toBeGreaterThan(posBloqueia);
+    }
+  });
+
+  it("o raise PT402 fica fora de qualquer bloco exception (a função inteira não tem exception when others)", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_team_invites(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).not.toMatch(/exception\s*\n\s*when others/);
+      expect(corpo).toMatch(
+        /if public\.fn_billing_bloqueia\(new\.organization_id, 'membros', null\) then\s*\n\s*raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';\s*\n\s*end if;/,
+      );
+    }
+  });
+});
+
+describe("0905 (editado NO LUGAR, Tarefa 2): gatilho de user_organizations com as três isenções da decisão 4", () => {
+  it("compara invited_by/invited_at novo x antigo antes de chamar a isenção de aceite (guarda contra 'old' em INSERT)", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_user_organizations(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/v_invited_by_antigo uuid;/);
+      expect(corpo).toMatch(/v_invited_at_antigo timestamptz;/);
+      expect(corpo).toMatch(
+        /if tg_op = 'INSERT' then\s*\n\s*v_antigo_ativo := false;\s*\n\s*v_invited_by_antigo := null;\s*\n\s*v_invited_at_antigo := null;/,
+      );
+      expect(corpo).toMatch(/v_invited_by_antigo := old\.invited_by;/);
+      expect(corpo).toMatch(/v_invited_at_antigo := old\.invited_at;/);
+    }
+  });
+
+  it("as três isenções (convite pendente, aceite sem convite, dono do provisionamento) são OR'adas antes do bloqueio", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_user_organizations(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posIf = corpo.indexOf("if not (");
+      const posIsencao1 = corpo.indexOf("public.fn_billing_convite_pendente_do_membro(new.organization_id, new.user_id)", posIf);
+      const posIsencao2 = corpo.indexOf("public.fn_billing_veio_de_aceite_de_convite(", posIf);
+      const posIsencao3 = corpo.indexOf("public.fn_billing_dono_do_provisionamento(new.organization_id, new.user_id, new.role)", posIf);
+      const posBloqueia = corpo.indexOf("if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then", posIf);
+      expect(posIf).toBeGreaterThan(-1);
+      expect(posIsencao1).toBeGreaterThan(posIf);
+      expect(posIsencao2).toBeGreaterThan(posIsencao1);
+      expect(posIsencao3).toBeGreaterThan(posIsencao2);
+      expect(posBloqueia).toBeGreaterThan(posIsencao3);
+    }
+  });
+
+  it("fn_billing_veio_de_aceite_de_convite recebe novo x antigo e o booleano de inserção (tg_op = 'INSERT')", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_user_organizations(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /public\.fn_billing_veio_de_aceite_de_convite\(\s*\n\s*new\.invited_by, new\.invited_at, v_invited_by_antigo, v_invited_at_antigo, tg_op = 'INSERT'\s*\n\s*\)/,
+      );
+    }
+  });
+
+  it("o raise PT402 do bloqueio fica DENTRO do 'if not (isenções)', mas fora de qualquer bloco exception", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_user_organizations(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).not.toMatch(/exception\s*\n\s*when others/);
+      expect(corpo).toMatch(
+        /if public\.fn_billing_bloqueia\(new\.organization_id, 'membros', null\) then\s*\n\s*raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';\s*\n\s*end if;/,
+      );
+    }
+  });
+
+  it("a conferência de AVISO continua rodando incondicionalmente, mesmo quando a isenção libera o bloqueio", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_user_organizations(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      // "perform fn_billing_conferir_teto" tem que estar FORA do "if not
+      // (isenções)" (que só envolve o bloqueio), mas ainda dentro do "if
+      // v_novo_ativo and not v_antigo_ativo".
+      const posFimIsencoes = corpo.indexOf("end if;\n    end if;\n    perform public.fn_billing_conferir_teto");
+      expect(posFimIsencoes).toBeGreaterThan(-1);
+    }
+  });
+});
+
+describe("0905 (editado NO LUGAR, Tarefa 2): fn_billing_uso e fn_billing_pode_criar não dobram a contagem no aceite", () => {
+  it("as duas funções filtram o convite pendente cujo e-mail já tem vínculo ativo", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const ocorrencias = [
+        ...sql.matchAll(/and not public\.fn_billing_convite_ja_tem_vinculo_ativo\(ti\.id\)/g),
+      ];
+      // Uma em fn_billing_uso, outra em fn_billing_pode_criar.
+      expect(ocorrencias.length).toBe(2);
+    }
+  });
+
+  it("o filtro está dentro da subconsulta de team_invites de cada função de leitura", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      for (const nome of ["fn_billing_uso", "fn_billing_pode_criar"]) {
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+        expect(corpo, nome).toMatch(
+          /from public\.team_invites ti\s*\n\s*where ti\.organization_id = p_org\s*\n\s*and ti\.accepted_at is null\s*\n\s*and ti\.revoked_at is null\s*\n\s*and ti\.expires_at > now\(\)\s*\n\s*and not public\.fn_billing_convite_ja_tem_vinculo_ativo\(ti\.id\)/,
+        );
+      }
+    }
+  });
+});

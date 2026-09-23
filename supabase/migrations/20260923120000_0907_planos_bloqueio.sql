@@ -452,3 +452,194 @@ begin
   end if;
 end
 $$;
+
+-- ============================================================================
+-- Parte 2 (Tarefa 2): bloqueio de membros, com as isenções da decisão 4.
+-- ============================================================================
+--
+-- Os dois gatilhos de membros (team_invites, user_organizations) são NOSSOS
+-- (nasceram na 0905) e por isso são editados NO LUGAR lá (migration 0905 e o
+-- bloco dela no baseline.sql), no mesmo padrão da parte 1 acima: a chamada às
+-- quatro funções novas abaixo só é resolvida em tempo de EXECUÇÃO (elas nascem
+-- nesta 0907, aplicada depois da 0905), e nenhum insert/update de team_invites
+-- ou user_organizations acontece durante a aplicação de migrations.
+--
+-- Convite (fn_billing_trava_team_invites, decisão 4, item 1): convite novo
+-- pendente, ou renovado que volta a pendente, bloqueia igual aos quatro
+-- gatilhos da parte 1, sem isenção nenhuma: as isenções abaixo são só para o
+-- ACEITE (o momento em que o vínculo em user_organizations vira ativo).
+--
+-- Vínculo em user_organizations (decisão 4, item 2): a transição para ativo
+-- (insert e update, porque a readmissão de revogado passa pelo ramo update de
+-- fn_accept_team_invite) é isenta quando qualquer uma das três funções abaixo
+-- devolve true. Cada isenção é uma função pequena, testável sozinha:
+--
+--  1. fn_billing_convite_pendente_do_membro(p_org, p_user): existe convite
+--     pendente e válido (accepted_at e revoked_at nulos, expires_at no
+--     futuro) para o e-mail deste usuário (auth.users.email x
+--     team_invites.email, sem diferença de maiúsculas) nesta organização. O
+--     convite já ocupava a vaga: aplicar-convite.ts (lib/auth/aplicar-convite.ts)
+--     só marca accepted_at DEPOIS de chamar fn_accept_team_invite, então no
+--     instante deste gatilho o convite ainda está pendente. Cobre o aceite
+--     comum e a readmissão de um revogado que tinha convite pendente (a rota
+--     app/api/v1/team/[user_id]/reactivate/route.ts só faz update de
+--     revoked_at, sem tocar invited_by/invited_at: sem esta função, aquela
+--     readmissão bloquearia mesmo com convite válido esperando).
+--
+--  2. fn_billing_veio_de_aceite_de_convite(...): o vínculo nasceu dentro de
+--     fn_accept_team_invite mesmo sem linha de convite (token antigo, caso
+--     declarado válido em aplicar-convite.ts), sem editar aquela função
+--     (proibido). Critério escolhido e provado nesta tarefa: aplicarConvite
+--     sempre passa p_invited_at não nulo nas duas chamadas a
+--     fn_accept_team_invite (lib/auth/aplicar-convite.ts:
+--     "new Date((payload.iat ?? payload.exp - 86400) * 1000)"), com ou sem
+--     linha de convite, e é a única escrita de user_organizations.invited_by/
+--     invited_at em todo o repositório (só
+--     supabase/migrations/20260912010000_0237_criador_provisorio_sai_na_entrega.sql,
+--     dentro de fn_accept_team_invite, grava essas duas colunas). Por isso:
+--       - em INSERT, invited_by ou invited_at preenchido já é a marca (nem
+--         lib/auth/provision.ts, nem fn_create_tenant_with_owner com o ator
+--         sendo o próprio dono, gravam qualquer um dos dois: nenhum dos dois
+--         passa por fn_accept_team_invite);
+--       - em UPDATE (readmissão), compara NOVO x ANTIGO: fn_accept_team_invite
+--         reescreve invited_at (e invited_by, por coalesce) a cada aceite, e
+--         nenhum outro caminho toca essas colunas depois de gravadas uma vez
+--         (a rota de reativação só grava revoked_at/updated_at). Por isso
+--         invited_by/invited_at MUDAREM nesta transição é a prova de que ESTA
+--         escrita veio do aceite, diferente de checar só "preenchido", que
+--         ficaria true para sempre depois do primeiro aceite de alguém,
+--         inclusive numa readmissão direta sem convite nenhum anos depois.
+--     Na dúvida, esta isenção vale (decisão 4: bloquear o aceite de quem foi
+--     convidado é o erro mais caro).
+--
+--  3. fn_billing_dono_do_provisionamento(p_org, p_user, p_role): o dono do
+--     signup self-service (lib/auth/provision.ts, ensureTenantForUser) é quem
+--     criou a própria organização (organizations.created_by = user_id) e vira
+--     admin dela, sem invited_by/invited_at (não passa pelo aceite). Isento.
+--
+-- O provisório (provisional_until_handover) nem chega a este ponto do
+-- gatilho: v_novo_ativo já é falso para ele (decisão 4, "nunca conta e nunca
+-- bloqueia", herdado sem mudança da 0905).
+--
+-- Decisão 4, último parágrafo ("a mesma isenção vale na checagem de aviso"):
+-- no instante do aceite, o convite ainda pendente (accepted_at só é marcado
+-- DEPOIS, por aplicar-convite.ts) e o vínculo novo já ativo contam os dois na
+-- MESMA chamada de fn_billing_uso/fn_billing_pode_criar, dobrando a conta de
+-- um ocupante só. fn_billing_convite_ja_tem_vinculo_ativo(p_invite_id) fecha
+-- isso: um convite pendente cujo e-mail já tem vínculo ativo na organização
+-- não entra na soma. Usada dentro das duas funções de leitura (fn_billing_uso
+-- e fn_billing_pode_criar, parte 1 da migration 0905, editadas NO LUGAR), que
+-- continuam contando membro ativo + convite pendente, só que agora sem contar
+-- duas vezes o mesmo ocupante no instante do aceite. Não muda o AVISO em si
+-- (que continua rodando incondicionalmente a cada transição, herdado da
+-- 0905): só a CONTAGEM de que ele depende.
+--
+-- Mesmo padrão de segurança da parte 1: security definer, search_path fixo,
+-- revoke de public/anon/authenticated, grant só para service_role, bloco
+-- próprio revogando de agent_worker.
+
+create or replace function public.fn_billing_convite_pendente_do_membro(p_org uuid, p_user uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1
+    from public.team_invites ti
+    join auth.users au on au.id = p_user
+    where ti.organization_id = p_org
+      and lower(ti.email) = lower(au.email)
+      and ti.accepted_at is null
+      and ti.revoked_at is null
+      and ti.expires_at > now()
+  );
+$$;
+
+comment on function public.fn_billing_convite_pendente_do_membro(uuid, uuid) is
+  '0907, decisão 4, isenção 1: existe convite pendente e válido para o e-mail deste usuário nesta organização (auth.users.email x team_invites.email, sem diferença de maiúsculas; accepted_at e revoked_at nulos, expires_at no futuro). O convite já ocupava a vaga (aplicar-convite.ts só marca accepted_at DEPOIS do aceite). Cobre o aceite comum e a readmissão de um revogado com convite pendente (a rota de reativação não toca invited_by/invited_at).';
+
+revoke execute on function public.fn_billing_convite_pendente_do_membro(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_convite_pendente_do_membro(uuid, uuid) to service_role;
+
+create or replace function public.fn_billing_veio_de_aceite_de_convite(
+  p_invited_by_novo uuid,
+  p_invited_at_novo timestamptz,
+  p_invited_by_antigo uuid,
+  p_invited_at_antigo timestamptz,
+  p_insercao boolean
+)
+returns boolean
+language sql
+immutable
+security definer
+set search_path = public, pg_temp
+as $$
+  select case
+    when p_insercao then p_invited_by_novo is not null or p_invited_at_novo is not null
+    else p_invited_by_novo is distinct from p_invited_by_antigo
+      or p_invited_at_novo is distinct from p_invited_at_antigo
+  end;
+$$;
+
+comment on function public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean) is
+  '0907, decisão 4, isenção 2: o vínculo nasceu dentro de fn_accept_team_invite mesmo sem linha de convite (token antigo). Critério sem editar fn_accept_team_invite (proibido): ela é a única escrita de user_organizations.invited_by/invited_at do repositório, e aplicarConvite (lib/auth/aplicar-convite.ts) sempre passa p_invited_at não nulo. Em INSERT, invited_by ou invited_at preenchido já é a marca. Em UPDATE (readmissão), compara NOVO x ANTIGO: fn_accept_team_invite reescreve as duas colunas a cada aceite, e nenhum outro caminho as toca depois de gravadas (a reativação por admin só grava revoked_at); checar só "preenchido" ficaria true para sempre depois do primeiro aceite de alguém, inclusive numa readmissão direta sem convite. Na dúvida, isenta (decisão 4).';
+
+revoke execute on function public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean) from public, anon, authenticated;
+grant execute on function public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean) to service_role;
+
+create or replace function public.fn_billing_dono_do_provisionamento(p_org uuid, p_user uuid, p_role text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select p_role = 'admin' and exists (
+    select 1 from public.organizations o
+    where o.id = p_org and o.created_by = p_user
+  );
+$$;
+
+comment on function public.fn_billing_dono_do_provisionamento(uuid, uuid, text) is
+  '0907, decisão 4, isenção 3: o dono do signup self-service (lib/auth/provision.ts, ensureTenantForUser) é quem criou a própria organização (organizations.created_by = user_id) e vira admin dela, sem passar por fn_accept_team_invite. Isento.';
+
+revoke execute on function public.fn_billing_dono_do_provisionamento(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.fn_billing_dono_do_provisionamento(uuid, uuid, text) to service_role;
+
+create or replace function public.fn_billing_convite_ja_tem_vinculo_ativo(p_invite_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1
+    from public.team_invites ti
+    join public.user_organizations uo on uo.organization_id = ti.organization_id
+    join auth.users au on au.id = uo.user_id
+    where ti.id = p_invite_id
+      and uo.accepted_at is not null
+      and uo.revoked_at is null
+      and not uo.provisional_until_handover
+      and lower(au.email) = lower(ti.email)
+  );
+$$;
+
+comment on function public.fn_billing_convite_ja_tem_vinculo_ativo(uuid) is
+  '0907, decisão 4, último parágrafo: fecha o dobro da contagem no instante do aceite (item 1 do D-053). Um convite pendente cujo e-mail já tem vínculo ativo (accepted_at preenchido, revoked_at nulo, não provisório) na mesma organização não é mais uma vaga em aberto, já virou o membro. Usada dentro de fn_billing_uso e fn_billing_pode_criar (0905, editadas NO LUGAR) para não somar os dois no mesmo instante.';
+
+revoke execute on function public.fn_billing_convite_ja_tem_vinculo_ativo(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_convite_ja_tem_vinculo_ativo(uuid) to service_role;
+
+-- Parte 2: agent_worker não decide isenção de membro nem fecha a contagem
+-- dobrada pelas peças novas desta seção (mesmo racional do bloco 7 acima).
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_convite_pendente_do_membro(uuid, uuid), public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean), public.fn_billing_dono_do_provisionamento(uuid, uuid, text), public.fn_billing_convite_ja_tem_vinculo_ativo(uuid) from agent_worker';
+  end if;
+end
+$$;
