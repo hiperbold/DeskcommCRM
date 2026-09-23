@@ -41312,6 +41312,152 @@ begin
   end if;
 end
 $$;
+
+-- ============================================================================
+-- Parte 4 (Tarefa 7, banco): o gatilho de bloqueio em crm_leads.
+-- ============================================================================
+--
+-- Decisão 5 da fase ("leads bloqueiam em TODA origem; o chat nunca para"):
+-- toda criação ou reabertura de lead para no teto, venha de onde vier (tela,
+-- API, clone, importação, reabertura à mão, MCP, automação, webhook, IA,
+-- follow-up, prospecção). O chat ao vivo (mensagem, contato, conversa) NUNCA
+-- para: esta parte 4 só mexe em crm_leads; separar a criação do lead da
+-- gravação da mensagem/conversa nos caminhos automáticos é a metade de
+-- servidor da Tarefa 7, fora do escopo desta migration.
+--
+-- Nome do gatilho e ordem alfabética dos BEFORE de crm_leads (conferidos no
+-- catálogo antes de escrever; nenhum outro BEFORE existe hoje nesta tabela):
+--   trg_crm_lead_close_on_stage        (autor, before insert or update of stage_id)
+--   trg_crm_leads_billing_bloqueio     (este, novo)
+--   trg_crm_leads_updated_at           (before UPDATE só, fn_set_updated_at)
+--   trg_stamp_stage_changed_at         (before insert or update, sem coluna)
+--   trg_validate_lost_reason_required  (before insert or update of status, lost_reason)
+--
+-- trg_crm_lead_close_on_stage (fn_crm_lead_close_on_stage, autor, NÃO
+-- editado) é quem decide o status FINAL do lead na troca de etapa
+-- (won/lost/open): este gatilho precisa rodar DEPOIS dele para enxergar
+-- new.status já resolvido. Postgres dispara os triggers BEFORE do mesmo
+-- evento em ordem ALFABÉTICA do nome (não da ordem de criação), e o filtro
+-- "of stage_id" de trg_crm_lead_close_on_stage não muda isso: em INSERT o
+-- filtro de coluna é ignorado (só vale para UPDATE) e aquele gatilho sempre
+-- dispara. Comparando byte a byte "trg_crm_lead_close_on_stage" x
+-- "trg_crm_leads_billing_bloqueio": os doze caracteres "trg_crm_lead" são
+-- iguais, e no 13º caractere "_" (0x5F, do autor, antes de "close") é menor
+-- que "s" (0x73, deste, de "leads"), então o autor sempre vem primeiro. Por
+-- isso o nome NÃO pode começar com "trg_billing_..." (o "b" de billing é
+-- menor que o "c" de crm e faria este gatilho rodar ANTES do autor, vendo o
+-- status desatualizado): tem que ficar na família "trg_crm_lead..." e cair
+-- depois de "trg_crm_lead_close_on_stage" no alfabeto, daí "trg_crm_leadS_"
+-- (o "s" do plural já resolve). A ordem deste gatilho em relação aos outros
+-- três BEFORE não importa para o resultado: nenhum deles muda new.status
+-- (trg_crm_leads_updated_at só toca updated_at; trg_stamp_stage_changed_at
+-- só toca stage_changed_at; trg_validate_lost_reason_required só LÊ
+-- new.status para exigir lost_reason quando é 'lost', nunca grava nele).
+--
+-- Mesmo motivo do gatilho AFTER de leads (fn_billing_trava_crm_leads, 0905,
+-- decisão 6) para não usar "of status" aqui também: o autor muda new.status
+-- por dentro de OUTRO gatilho (new.status := ... no corpo de
+-- fn_crm_lead_close_on_stage), e um filtro de coluna olha a lista SET do
+-- comando SQL original, não o que um gatilho anterior alterou na linha; a
+-- reabertura por mover de etapa nunca lista "status" no SET, só "stage_id".
+-- Por isso este gatilho é "before insert or update" sem lista de colunas,
+-- igual a trg_stamp_stage_changed_at.
+--
+-- Transição vigiada: v_novo_aberto = (new.status = 'open'); v_antigo_aberto
+-- = false em INSERT, (old.status = 'open') em UPDATE. Bloqueia só quando
+-- v_novo_aberto and not v_antigo_aberto (nasceu aberto, ou voltou de
+-- ganho/perdido para aberto). Fechar (aberto -> ganho/perdido) NUNCA
+-- bloqueia (libera vaga, não ocupa). Mover entre etapas abertas sem trocar o
+-- status (aberto continua aberto) não é transição nenhuma (v_antigo_aberto
+-- já era true) e não bloqueia.
+--
+-- fn_billing_bloqueia(org, 'leads', null) é a MESMA função da decisão 3
+-- (parte 1 desta migration): lê modo e carência ANTES de travar (avisar/
+-- desligado saem sem lock nenhum, decisão 3, "zero custo a mais"), pega o
+-- MESMO pg_advisory_xact_lock bloqueante de fn_billing_conferir_teto/
+-- fn_billing_trava_crm_leads (chave 'billing:<org>:leads'), e o veredito
+-- roda dentro do begin/exception dela, que libera em qualquer falha interna
+-- (raise warning primeiro). O CONTADOR (billing_usage_counters) ainda NÃO
+-- somou este lead quando este BEFORE roda: quem soma é o AFTER
+-- (fn_billing_trava_crm_leads, 0905), disparado só depois que a linha é de
+-- fato escrita. Por isso fn_billing_pode_criar enxerga o valor de ANTES
+-- deste lead, e "não pode" quando o contador JÁ ESTÁ no teto é a semântica
+-- certa: o N-ésimo lead (contador em teto-1) passa, o N+1-ésimo (contador já
+-- em teto) não.
+--
+-- raise exception FORA de qualquer bloco exception (decisão 3): esta função
+-- não tem "exception when others" nenhum, então o raise sempre propaga (e a
+-- transação inteira desfaz, inclusive um insert de mensagem/conversa feito
+-- ANTES dele na mesma transação sem savepoint: é isso que a metade de
+-- servidor da Tarefa 7 precisa separar). fn_billing_bloqueia é quem decide o
+-- veredito com segurança (libera em falha interna); este gatilho só levanta
+-- o PT402 quando ela diz true.
+--
+-- Modos avisar/desligado: NADA muda aqui, de propósito nenhuma linha extra
+-- de código cuida disso: fn_billing_bloqueia já lê billing_settings.modo
+-- ANTES de qualquer trabalho e devolve false direto quando o modo é
+-- diferente de 'bloquear' (decisão 3), então o if abaixo nunca levanta
+-- PT402 nesses modos, com o mesmo custo de hoje (uma leitura de
+-- billing_settings, sem lock).
+--
+-- Mesmo padrão de segurança das partes 1 a 3: security definer, search_path
+-- fixo em public, pg_temp, revoke de public/anon/authenticated, grant só
+-- para service_role, bloco final revogando de agent_worker (se existir).
+--
+-- Idempotente: create or replace, drop trigger if exists antes de recriar.
+create or replace function public.fn_billing_bloqueia_crm_leads()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_novo_aberto boolean;
+  v_antigo_aberto boolean;
+begin
+  v_novo_aberto := new.status = 'open';
+
+  if tg_op = 'INSERT' then
+    v_antigo_aberto := false;
+  else
+    v_antigo_aberto := old.status = 'open';
+  end if;
+
+  if v_novo_aberto and not v_antigo_aberto then
+    if public.fn_billing_bloqueia(new.organization_id, 'leads', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_bloqueia_crm_leads() is
+  '0907, Tarefa 7 (decisão 5): gatilho BEFORE de bloqueio de verdade em crm_leads, na transição para aberto (insert com status open, ou reabertura de won/lost para open). Roda DEPOIS de trg_crm_lead_close_on_stage na ordem alfabética dos BEFORE (ver o cabeçalho desta parte 4 para a conta byte a byte), então enxerga new.status já resolvido pelo autor. Chama fn_billing_bloqueia(org, leads, null) e levanta PT402 FORA de qualquer bloco exception quando ela diz true; o contador de billing_usage_counters ainda não somou este lead (quem soma é o AFTER fn_billing_trava_crm_leads, 0905), então "não pode" no teto exato é a semântica certa (o N-ésimo passa, o N+1-ésimo não). Fechar (aberto -> ganho/perdido) nunca bloqueia. Modos avisar/desligado não mudam nada: fn_billing_bloqueia já lê o modo antes de qualquer lock.';
+
+revoke execute on function public.fn_billing_bloqueia_crm_leads() from public, anon, authenticated;
+grant execute on function public.fn_billing_bloqueia_crm_leads() to service_role;
+
+drop trigger if exists trg_crm_leads_billing_bloqueio on public.crm_leads;
+create trigger trg_crm_leads_billing_bloqueio
+  before insert or update on public.crm_leads
+  for each row
+  execute function public.fn_billing_bloqueia_crm_leads();
+
+comment on trigger trg_crm_leads_billing_bloqueio on public.crm_leads is
+  '0907, Tarefa 7, decisão 5: bloqueio de verdade na transição para aberto. Nome escolhido para rodar DEPOIS de trg_crm_lead_close_on_stage na ordem alfabética dos BEFORE (trg_crm_lead_close_on_stage < trg_crm_leadS_... pelo "_" x "s" no 13º caractere), então já vê new.status final. Sem "of status": o autor muda new.status por dentro de OUTRO gatilho (troca de etapa), e um filtro de coluna olharia o SET do comando original, não isso.';
+
+-- agent_worker não decide bloqueio de leads pela peça nova desta parte 4
+-- (mesmo racional dos blocos 7 e 2 acima): por alter default privileges ela
+-- ganharia execute em toda função nova do schema public, e tem bypassrls.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_bloqueia_crm_leads() from agent_worker';
+  end if;
+end
+$$;
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

@@ -538,13 +538,14 @@ describe("0907 parte 2 (Tarefa 2): padrão de segurança das quatro funções de
       expect(sql).toMatch(
         /revoke execute on function public\.fn_billing_convite_pendente_do_membro\(uuid, uuid\), public\.fn_billing_veio_de_aceite_de_convite\(uuid, timestamptz, uuid, timestamptz, boolean\), public\.fn_billing_dono_do_provisionamento\(uuid, uuid, text\), public\.fn_billing_convite_ja_tem_vinculo_ativo\(uuid\) from agent_worker/,
       );
-      // Três blocos de agent_worker nesta migração: um da parte 1 (Tarefa 1,
-      // revoga cinco funções), outro da parte 2 (Tarefa 2, revoga quatro
-      // funções) e um terceiro da parte 3 (Tarefa 3, CONCEDE, não revoga,
-      // a fn_billing_ia_pode_responder, testado à parte no describe da
-      // parte 3, abaixo).
+      // Quatro blocos de agent_worker nesta migração: um da parte 1 (Tarefa
+      // 1, revoga cinco funções), outro da parte 2 (Tarefa 2, revoga quatro
+      // funções), um da parte 3 (Tarefa 3, CONCEDE, não revoga, a
+      // fn_billing_ia_pode_responder, testado à parte no describe da parte
+      // 3, abaixo) e um da parte 4 (Tarefa 7, revoga fn_billing_bloqueia_
+      // crm_leads, testado no describe da parte 4, mais abaixo).
       const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
-      expect(ocorrencias.length).toBe(3);
+      expect(ocorrencias.length).toBe(4);
     }
   });
 });
@@ -864,6 +865,122 @@ describe("0905 (editado NO LUGAR, Tarefa 2): fn_billing_uso e fn_billing_pode_cr
           /from public\.team_invites ti\s*\n\s*where ti\.organization_id = p_org\s*\n\s*and ti\.accepted_at is null\s*\n\s*and ti\.revoked_at is null\s*\n\s*and ti\.expires_at > now\(\)\s*\n\s*and not public\.fn_billing_convite_ja_tem_vinculo_ativo\(ti\.id\)/,
         );
       }
+    }
+  });
+});
+
+describe("0907 parte 4 (Tarefa 7, banco): o gatilho de bloqueio em crm_leads", () => {
+  it("fn_billing_bloqueia_crm_leads existe idêntica nos dois arquivos (nasce só depois do bloco da Tarefa 3)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicioParte3 = sql.indexOf(
+        "create or replace function public.fn_billing_ia_pode_responder(",
+      );
+      const inicioFuncao = sql.indexOf(
+        "create or replace function public.fn_billing_bloqueia_crm_leads()",
+      );
+      expect(inicioParte3, "parte 3 não encontrada").toBeGreaterThan(-1);
+      expect(inicioFuncao, "fn_billing_bloqueia_crm_leads não encontrada").toBeGreaterThan(-1);
+      expect(inicioFuncao).toBeGreaterThan(inicioParte3);
+    }
+  });
+
+  it("é trigger, security definer, search_path fixo em public, pg_temp", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf(
+        "create or replace function public.fn_billing_bloqueia_crm_leads()",
+      );
+      const trecho = sql.slice(inicio, inicio + 200);
+      expect(trecho).toMatch(/returns trigger/);
+      expect(trecho).toMatch(/language plpgsql/);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/set search_path = public, pg_temp/);
+    }
+  });
+
+  it("revoga execute de public/anon/authenticated, concede só a service_role, e agent_worker perde execute também", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_bloqueia_crm_leads\(\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_bloqueia_crm_leads\(\) to service_role;/,
+      );
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_bloqueia_crm_leads\(\) from agent_worker/,
+      );
+    }
+  });
+
+  it("o gatilho é BEFORE INSERT OR UPDATE em crm_leads, sem lista de colunas, executando esta função", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      expect(sql).toMatch(/drop trigger if exists trg_crm_leads_billing_bloqueio on public\.crm_leads;/);
+      expect(sql).toMatch(
+        /create trigger trg_crm_leads_billing_bloqueio\s*\n\s*before insert or update on public\.crm_leads\s*\n\s*for each row\s*\n\s*execute function public\.fn_billing_bloqueia_crm_leads\(\);/,
+      );
+    }
+  });
+
+  it("o nome do gatilho ordena DEPOIS de trg_crm_lead_close_on_stage no alfabeto (mesmo critério do Postgres para BEFORE)", () => {
+    // Prova estática do argumento do cabeçalho: comparação de string pura,
+    // sem depender do banco, do mesmo jeito que o Postgres ordena os
+    // gatilhos BEFORE do mesmo evento (ordem alfabética do nome).
+    expect("trg_crm_lead_close_on_stage" < "trg_crm_leads_billing_bloqueio").toBe(true);
+  });
+
+  it("vigia a transição para aberto (insert com status open, ou old.status distinto de open virando open)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf(
+        "create or replace function public.fn_billing_bloqueia_crm_leads()",
+      );
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/v_novo_aberto := new\.status = 'open';/);
+      expect(corpo).toMatch(
+        /if tg_op = 'INSERT' then\s*\n\s*v_antigo_aberto := false;\s*\n\s*else\s*\n\s*v_antigo_aberto := old\.status = 'open';\s*\n\s*end if;/,
+      );
+      expect(corpo).toMatch(/if v_novo_aberto and not v_antigo_aberto then/);
+    }
+  });
+
+  it("chama fn_billing_bloqueia(org, 'leads', null) e o raise PT402 fica FORA de qualquer bloco exception", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf(
+        "create or replace function public.fn_billing_bloqueia_crm_leads()",
+      );
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      // Esta função inteira não tem "exception when others" nenhum: o raise
+      // sempre propaga (decisão 3 da fase, herdada pela decisão 5).
+      expect(corpo).not.toMatch(/exception\s*\n\s*when others/);
+      expect(corpo).toMatch(
+        /if public\.fn_billing_bloqueia\(new\.organization_id, 'leads', null\) then\s*\n\s*raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';\s*\n\s*end if;/,
+      );
+    }
+  });
+
+  it("fechar (transição para won/lost) nunca aciona o bloqueio: só existe UM if de bloqueio, dentro da transição para aberto", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf(
+        "create or replace function public.fn_billing_bloqueia_crm_leads()",
+      );
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const ocorrenciasBloqueia = [
+        ...corpo.matchAll(/if public\.fn_billing_bloqueia\(new\.organization_id, 'leads', null\) then/g),
+      ];
+      expect(ocorrenciasBloqueia.length).toBe(1);
+      const posTransicao = corpo.indexOf("if v_novo_aberto and not v_antigo_aberto then");
+      const posBloqueia = corpo.indexOf(
+        "if public.fn_billing_bloqueia(new.organization_id, 'leads', null) then",
+      );
+      expect(posBloqueia).toBeGreaterThan(posTransicao);
+    }
+  });
+
+  it("não chama fn_billing_conferir_teto (leads já tem o próprio AFTER, 0905, cuidando do aviso e do contador)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf(
+        "create or replace function public.fn_billing_bloqueia_crm_leads()",
+      );
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).not.toMatch(/fn_billing_conferir_teto/);
     }
   });
 });
