@@ -6,9 +6,21 @@
  * ajuste lançado pela Hiperbold (decisão 19: livro-caixa é "privilégio
  * nenhum para authenticated", só a plataforma pelo servidor).
  *
+ * A leitura, o filtro do ciclo, o limite de 500 linhas não-consumo e o
+ * agrupamento do consumo por dia/fonte são feitos NO BANCO por
+ * `fn_billing_livro_caixa_do_ciclo` (Parte 6, item 1b da revisão de
+ * 23/09/2026): a versão anterior deste módulo trazia linha crua e cortava em
+ * `max_rows = 1000` do PostgREST antes de somar (mesmo defeito do extrato,
+ * `extrato-do-ciclo.ts`), e filtrava `created_at` com um offset `-03:00`
+ * FIXO calculado aqui (`inicioDoCicloEmUtc`), que quebraria em qualquer fuso
+ * que não seja `America/Sao_Paulo` sem horário de verão. A RPC filtra pelo
+ * `ciclo` gravado na linha e, para o que nunca tem `ciclo` (concessão e
+ * crédito/ajuste avulso), converte `created_at` com `fn_billing_ciclo_de` NO
+ * PRÓPRIO POSTGRES.
+ *
  * ─── Os quatro tipos, pela CHAVE (decisão 6/7 da fase) ──────────────────────
  *
- * A chave de cada linha já entrega o tipo, sem precisar de coluna nova:
+ * A RPC já resolve o tipo pela chave, sem precisar de coluna nova:
  * `plano:<ciclo>` e `adicional:<id>:<ciclo>` são CONCESSÃO (a fonte "plano" e
  * "adicional" já aparecem na chave, mas como PREFIXO fixo da convenção, nunca
  * confundido com a coluna `fonte`); `consumo:<llm_call_id>:<fonte>` é
@@ -21,16 +33,16 @@
  * PRÓPRIOS: agrupar destruiria exatamente a informação que esta leitura
  * existe para mostrar. Consumo é uma linha por chamada de IA por fonte (não
  * tem nota nem autor, decisão 7) e pode chegar a milhares por ciclo — por
- * isso, e só ele, é somado por dia e fonte.
+ * isso, e só ele, a RPC devolve já somado por dia e fonte
+ * (`consumo_por_dia_fonte`).
  *
- * ─── Por que a comparação de `created_at` NÃO usa a data crua do ciclo ──────
+ * ─── `id` de cada linha (item 9 da revisão, para o campo "compensa" do ajuste) ──
  *
- * `billing_token_ledger.created_at` é `timestamptz`; `primeiroDiaDoCicloAtual`
- * devolve `"YYYY-MM-01"`. Filtrar `created_at >= "2026-09-01"` faria o
- * Postgres tratar a meia-noite como UTC — três horas ANTES da virada real do
- * ciclo em `America/Sao_Paulo` (UTC-3, fixo desde o fim do horário de verão
- * no Brasil em 2019) — e incluiria as últimas horas da noite de 31/08 em São
- * Paulo como se já fossem de setembro. `inicioDoCicloEmUtc` corrige isso.
+ * As linhas NÃO-consumo (concessão, crédito, ajuste) trazem o `id` da própria
+ * linha do livro-caixa: é o que a aba do admin mostra (curto, copiável) para
+ * preencher `compensaId` de `fn_billing_ajustar_tokens`. Consumo continua sem
+ * `id` (`null`): não é uma linha, é um RESUMO de várias, e não faz sentido
+ * como alvo de compensação de um ajuste único.
  *
  * ─── Autor: enriquecimento, não dado essencial ───────────────────────────────
  *
@@ -55,6 +67,13 @@ import { FONTES_DA_CARTEIRA, type FonteCarteira } from "./saldo-da-organizacao";
 export type TipoLinhaLivroCaixa = "concessao" | "credito" | "consumo" | "ajuste";
 
 export interface LinhaLivroCaixa {
+  /**
+   * `id` da linha do livro-caixa (item 9 da revisão): `null` só em CONSUMO,
+   * que aqui é um RESUMO agrupado por dia/fonte (ver comentário do arquivo),
+   * não uma linha só. É o que a aba do admin mostra para preencher o
+   * "compensa" de um ajuste.
+   */
+  id: string | null;
   /** `YYYY-MM-DD`, fuso `America/Sao_Paulo`. */
   dia: string;
   fonte: FonteCarteira;
@@ -77,41 +96,46 @@ export interface LivroCaixaDoCiclo {
   ciclo: string;
   /** Mais recente primeiro. */
   linhas: LinhaLivroCaixa[];
+  /** Item 1b da revisão: true quando havia mais de 500 linhas não-consumo no ciclo (o corte da RPC). */
+  truncado: boolean;
 }
 
 export type ResultadoLivroCaixaDoCiclo =
   | { status: "ok"; livroCaixa: LivroCaixaDoCiclo }
   | { status: "leitura_falhou" };
 
-const esquemaDaLinhaDoLedger = z
+/** Uma linha NÃO-consumo (concessão, crédito, ajuste), já com `tipo` resolvido pela RPC. */
+const esquemaDaLinhaNaoConsumo = z
   .object({
-    fonte: z.enum(FONTES_DA_CARTEIRA),
-    tokens: z.coerce.number().int(),
-    chave: z.string().min(1),
-    nota: z.string().nullable(),
-    valor_cents: z.coerce.number().int().nullable(),
-    criado_por: z.string().uuid().nullable(),
+    id: z.string().uuid(),
     created_at: z.string().min(1),
+    fonte: z.enum(FONTES_DA_CARTEIRA),
+    tipo: z.enum(["concessao", "credito", "ajuste"]),
+    tokens: z.coerce.number().int(),
+    valor_cents: z.coerce.number().int().nullable(),
+    nota: z.string().nullable(),
+    criado_por: z.string().uuid().nullable(),
+    compensa_id: z.string().uuid().nullable(),
   })
   .strict();
 
-/**
- * O instante UTC real da meia-noite de `America/Sao_Paulo` do primeiro dia do
- * ciclo — ver o comentário do arquivo. Exportada porque `margem.ts` filtra o
- * MESMO livro-caixa pelo mesmo corte (créditos avulsos do ciclo, decisão 17).
- */
-export function inicioDoCicloEmUtc(diaCiclo: string): string {
-  return `${diaCiclo}T00:00:00-03:00`;
-}
+const esquemaDoConsumoPorDiaFonte = z
+  .object({
+    dia: z.string().min(1),
+    fonte: z.enum(FONTES_DA_CARTEIRA),
+    tokens: z.coerce.number().int(),
+    chamadas: z.coerce.number().int(),
+  })
+  .strict();
 
-function tipoDaChave(chave: string): TipoLinhaLivroCaixa {
-  if (chave.startsWith("consumo:")) return "consumo";
-  if (chave.startsWith("credito:")) return "credito";
-  if (chave.startsWith("ajuste:")) return "ajuste";
-  // 'plano:<ciclo>' ou 'adicional:<id>:<ciclo>' (decisão 6/7): a ÚNICA
-  // convenção de chave que sobra depois das três acima.
-  return "concessao";
-}
+/** O formato exato de `fn_billing_livro_caixa_do_ciclo` (Parte 6, item 1b da revisão). */
+const esquemaDoLivroCaixaRpc = z
+  .object({
+    linhas: z.array(esquemaDaLinhaNaoConsumo),
+    consumo_por_dia_fonte: z.array(esquemaDoConsumoPorDiaFonte),
+    truncado: z.boolean(),
+  })
+  .strict();
 
 function diaEmSaoPaulo(createdAt: string): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -132,22 +156,20 @@ export async function livroCaixaDoCiclo(
   const inicioDoCiclo = ciclo ?? primeiroDiaDoCicloAtual();
 
   try {
-    const ledgerRes = await admin
-      .from("billing_token_ledger")
-      .select("fonte, tokens, chave, nota, valor_cents, criado_por, created_at")
-      .eq("organization_id", organizationId)
-      .gte("created_at", inicioDoCicloEmUtc(inicioDoCiclo))
-      .order("created_at", { ascending: false });
+    const { data, error } = await admin.rpc("fn_billing_livro_caixa_do_ciclo", {
+      p_org: organizationId,
+      p_ciclo: inicioDoCiclo,
+    });
 
-    if (ledgerRes.error) {
-      throw new Error(`ler livro-caixa de tokens: ${ledgerRes.error.message}`);
+    if (error) {
+      throw new Error(`ler livro-caixa de tokens: ${error.message}`);
     }
 
-    const linhasParseadas = z.array(esquemaDaLinhaDoLedger).safeParse(ledgerRes.data);
-    if (!linhasParseadas.success) {
-      throw new Error(`livro-caixa de tokens fora do esquema: ${linhasParseadas.error.message}`);
+    const parsed = esquemaDoLivroCaixaRpc.safeParse(data);
+    if (!parsed.success) {
+      throw new Error(`livro-caixa de tokens fora do esquema: ${parsed.error.message}`);
     }
-    const linhasCruas = linhasParseadas.data;
+    const { linhas: linhasCruas, consumo_por_dia_fonte: consumoCru, truncado } = parsed.data;
 
     // Autores: só os ids que aparecem, resolvidos uma vez cada (não por
     // linha). Falha em resolver UM autor não derruba a leitura (ver
@@ -157,11 +179,11 @@ export async function livroCaixaDoCiclo(
     await Promise.all(
       idsDeAutor.map(async (id) => {
         try {
-          const { data, error } = await admin.auth.admin.getUserById(id);
-          if (error || !data?.user) return;
-          const meta = (data.user.user_metadata as Record<string, unknown> | null) ?? null;
+          const { data: dadoDoAutor, error: erroDoAutor } = await admin.auth.admin.getUserById(id);
+          if (erroDoAutor || !dadoDoAutor?.user) return;
+          const meta = (dadoDoAutor.user.user_metadata as Record<string, unknown> | null) ?? null;
           const nome = typeof meta?.full_name === "string" ? meta.full_name : null;
-          autorPorId.set(id, { nome, email: data.user.email ?? null });
+          autorPorId.set(id, { nome, email: dadoDoAutor.user.email ?? null });
         } catch (err) {
           log?.warn("alarme_planos_leitura", {
             organization_id: organizationId,
@@ -178,56 +200,39 @@ export async function livroCaixaDoCiclo(
       return { autorId: criadoPor, autorNome: autor?.nome ?? null, autorEmail: autor?.email ?? null };
     }
 
-    // Consumo agrupado por dia + fonte (ver comentário do arquivo);
-    // concessão, crédito e ajuste passam individuais, com a nota e o autor
-    // PRÓPRIOS de cada linha.
-    const consumoAgrupado = new Map<string, LinhaLivroCaixa>();
-    const outrasLinhas: LinhaLivroCaixa[] = [];
+    // Concessão, crédito e ajuste: individuais, com `id`, nota e autor
+    // PRÓPRIOS de cada linha (a RPC já resolveu o `tipo` pela chave).
+    const outrasLinhas: LinhaLivroCaixa[] = linhasCruas.map((linha) => ({
+      id: linha.id,
+      dia: diaEmSaoPaulo(linha.created_at),
+      fonte: linha.fonte,
+      tipo: linha.tipo,
+      tokens: linha.tokens,
+      linhas: 1,
+      nota: linha.nota,
+      valorCents: linha.valor_cents,
+      ...autorDe(linha.criado_por),
+    }));
 
-    for (const linha of linhasCruas) {
-      const tipo = tipoDaChave(linha.chave);
-      const dia = diaEmSaoPaulo(linha.created_at);
+    // Consumo: a RPC já devolve agrupado por dia e fonte (ver comentário do
+    // arquivo); `id` fica `null` porque cada item aqui resume várias linhas.
+    const linhasDeConsumo: LinhaLivroCaixa[] = consumoCru.map((c) => ({
+      id: null,
+      dia: c.dia,
+      fonte: c.fonte,
+      tipo: "consumo",
+      tokens: c.tokens,
+      linhas: c.chamadas,
+      nota: null,
+      valorCents: null,
+      autorId: null,
+      autorNome: null,
+      autorEmail: null,
+    }));
 
-      if (tipo === "consumo") {
-        const chaveDoGrupo = `${dia}:${linha.fonte}`;
-        const atual = consumoAgrupado.get(chaveDoGrupo);
-        if (atual) {
-          atual.tokens += linha.tokens;
-          atual.linhas += 1;
-        } else {
-          consumoAgrupado.set(chaveDoGrupo, {
-            dia,
-            fonte: linha.fonte,
-            tipo,
-            tokens: linha.tokens,
-            linhas: 1,
-            nota: null,
-            valorCents: null,
-            autorId: null,
-            autorNome: null,
-            autorEmail: null,
-          });
-        }
-        continue;
-      }
+    const todasAsLinhas = [...outrasLinhas, ...linhasDeConsumo].sort((a, b) => b.dia.localeCompare(a.dia));
 
-      outrasLinhas.push({
-        dia,
-        fonte: linha.fonte,
-        tipo,
-        tokens: linha.tokens,
-        linhas: 1,
-        nota: linha.nota,
-        valorCents: linha.valor_cents,
-        ...autorDe(linha.criado_por),
-      });
-    }
-
-    const todasAsLinhas = [...outrasLinhas, ...consumoAgrupado.values()].sort((a, b) =>
-      b.dia.localeCompare(a.dia),
-    );
-
-    return { status: "ok", livroCaixa: { ciclo: inicioDoCiclo, linhas: todasAsLinhas } };
+    return { status: "ok", livroCaixa: { ciclo: inicioDoCiclo, linhas: todasAsLinhas, truncado } };
   } catch (err) {
     log?.error("alarme_planos_leitura", {
       organization_id: organizationId,

@@ -289,6 +289,16 @@ function SecaoTokensDeIA({
           </span>
         </div>
 
+        {/*
+          Item 13 da revisão (23/09/2026): concessão pendente não é "estourou"
+          nem passa em silêncio. A tela avisa que o crédito do mês ainda está
+          sendo liberado, para o número acima (emprestado do teto efetivo) não
+          parecer o retrato final.
+        */}
+        {carteira.concessaoPendente && (
+          <Badge variant="info">{t("Carregando o crédito do mês. Atualize a página em instantes.")}</Badge>
+        )}
+
         {carteira.percentual !== null && (
           <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
             <div

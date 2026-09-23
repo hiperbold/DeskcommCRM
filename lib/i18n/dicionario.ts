@@ -11636,6 +11636,26 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível ler o consumo de tokens de IA agora. Os números desta seção não refletem a realidade: recarregue a página antes de decidir qualquer coisa com base neles.": {
     es: "No se pudo leer el consumo de tokens de IA ahora. Los números de esta sección no reflejan la realidad: recarga la página antes de decidir algo basándote en ellos.",
   },
+
+  // ─── Item 13 da revisão da fase F2-B (23/09/2026): concessão pendente não
+  // é "estourou" na tela do cliente (app/app/settings/plano) ───
+  "Carregando o crédito do mês. Atualize a página em instantes.": {
+    es: "Cargando el crédito del mes. Actualiza la página en unos instantes.",
+  },
+
+  // ─── Item 9 da revisão da fase F2-B (23/09/2026): id copiável do
+  // livro-caixa e custo estimado no painel de margem, aba do admin
+  // (app/admin/(protected)/tenants/[id]/plano). As demais chaves desta
+  // aba (tarefa 7 original) já estavam sem tradução em espanhol antes desta
+  // revisão: dívida pré-existente fora do escopo dos itens 9 e 13.
+  "Id": { es: "Id" },
+  "Mostrando as 500 linhas mais recentes.": { es: "Mostrando las 500 líneas más recientes." },
+  "Custo estimado do ciclo (dólar, pelo catálogo)": {
+    es: "Costo estimado del ciclo (dólar, según el catálogo)",
+  },
+  "chamada(s) sem custo real, precificadas pelo catálogo": {
+    es: "llamada(s) sin costo real, con precio estimado por el catálogo",
+  },
 };
 
 /**

@@ -1,6 +1,17 @@
 /**
- * O extrato do ciclo atual da carteira de tokens de IA (fase F2-B, tarefa 5):
- * `billing_token_consumo_diario` agrupado por dia e por agente.
+ * O extrato do ciclo atual da carteira de tokens de IA (fase F2-B, tarefa 5),
+ * agregado NO BANCO por `fn_billing_extrato_do_ciclo` (Parte 6, item 1a da
+ * revisão de 23/09/2026).
+ *
+ * ─── Por que a agregação foi para o banco (item 1 ALTO da revisão) ──────────
+ *
+ * Este módulo trazia linha CRUA de `billing_token_consumo_diario` e somava no
+ * Node. O PostgREST corta em `max_rows = 1000` (`supabase/config.toml`, igual
+ * ao Supabase Cloud): organização com mais de mil linhas de agregado diário
+ * no ciclo tinha o total do extrato menor que o real, sem erro nenhum
+ * avisando. `fn_billing_extrato_do_ciclo` faz `group by` e `sum` dentro do
+ * Postgres e devolve só o jsonb já somado: nenhum corte de página entra na
+ * conta.
  *
  * ─── Por que não bakear o texto do agrupamento aqui ──────────────────────────
  *
@@ -16,12 +27,12 @@
  *
  * ─── Isolamento ───────────────────────────────────────────────────────────
  *
- * Cliente de SERVIÇO (`fn_billing_saldo_da_carteira`/agregado têm `execute`/
- * `select` fora do alcance de `authenticated` direto pela RLS da tela, mas a
- * leitura do servidor aqui usa o mesmo client admin das irmãs de
- * `lib/billing/planos/`), que ignora RLS: TODA consulta filtra
- * `organization_id` à mão, inclusive a segunda (nomes dos agentes): sem
- * isso um `agent_id` de outra organização vazaria o nome de um agente alheio.
+ * A RPC é `security definer`, `execute` só de `service_role` (fora do alcance
+ * de `authenticated` e de `agent_worker`) e recebe `p_org` explícito: mesmo
+ * assim, a segunda consulta (nomes dos agentes) continua filtrando
+ * `organization_id` à mão, porque o cliente de serviço usado aqui ignora RLS
+ * por desenho. Sem o filtro, um `agent_id` de outra organização vazaria o
+ * nome de um agente alheio.
  *
  * Nunca lança, mesma regra das irmãs desta pasta.
  */
@@ -58,12 +69,27 @@ export type ResultadoExtratoDoCiclo =
   | { status: "ok"; extrato: ExtratoDoCiclo }
   | { status: "leitura_falhou" };
 
-const esquemaDaLinha = z
+const esquemaDaLinhaPorDia = z
   .object({
     dia: z.string().min(1),
+    tokens_ponderados: z.coerce.number().int(),
+    chamadas: z.coerce.number().int(),
+  })
+  .strict();
+
+const esquemaDaLinhaPorAgente = z
+  .object({
     agent_id: z.string().uuid().nullable(),
     tokens_ponderados: z.coerce.number().int(),
     chamadas: z.coerce.number().int(),
+  })
+  .strict();
+
+/** O formato exato de `fn_billing_extrato_do_ciclo` (Parte 6, item 1a da revisão). */
+const esquemaDoExtratoRpc = z
+  .object({
+    por_dia: z.array(esquemaDaLinhaPorDia),
+    por_agente: z.array(esquemaDaLinhaPorAgente),
   })
   .strict();
 
@@ -111,28 +137,28 @@ export async function extratoDoCiclo(
   const inicioDoCiclo = ciclo ?? primeiroDiaDoCicloAtual();
 
   try {
-    const consumoRes = await admin
-      .from("billing_token_consumo_diario")
-      .select("dia, agent_id, tokens_ponderados, chamadas")
-      .eq("organization_id", organizationId)
-      .gte("dia", inicioDoCiclo)
-      .order("dia", { ascending: true });
+    const extratoRes = await admin.rpc("fn_billing_extrato_do_ciclo", {
+      p_org: organizationId,
+      p_ciclo: inicioDoCiclo,
+    });
 
-    if (consumoRes.error) {
-      throw new Error(`ler extrato de tokens: ${consumoRes.error.message}`);
+    if (extratoRes.error) {
+      throw new Error(`ler extrato de tokens: ${extratoRes.error.message}`);
     }
 
-    const linhasParseadas = z.array(esquemaDaLinha).safeParse(consumoRes.data);
-    if (!linhasParseadas.success) {
-      throw new Error(`extrato de tokens fora do esquema: ${linhasParseadas.error.message}`);
+    const extratoParseado = esquemaDoExtratoRpc.safeParse(extratoRes.data);
+    if (!extratoParseado.success) {
+      throw new Error(`extrato de tokens fora do esquema: ${extratoParseado.error.message}`);
     }
-    const linhas = linhasParseadas.data;
+    const { por_dia: porDiaCru, por_agente: porAgenteCru } = extratoParseado.data;
 
     // Nomes dos agentes: só os que aparecem no extrato, e só da MESMA
     // organização (decisão 19/isolamento): um agent_id de outra organização
     // (o que não deveria acontecer, mas o cliente de serviço não filtra
     // sozinho) não resolveria nome nenhum e cairia em "agente_removido".
-    const idsDeAgente = [...new Set(linhas.map((l) => l.agent_id).filter((id): id is string => id !== null))];
+    const idsDeAgente = [
+      ...new Set(porAgenteCru.map((l) => l.agent_id).filter((id): id is string => id !== null)),
+    ];
     const nomePorAgente = new Map<string, string>();
     if (idsDeAgente.length > 0) {
       const agentesRes = await admin
@@ -152,40 +178,26 @@ export async function extratoDoCiclo(
       for (const agente of agentesParseados.data) nomePorAgente.set(agente.id, agente.name);
     }
 
-    // Por dia: soma através de agente/contato/propósito (a chave única do
-    // agregado, decisão 13), mantendo a ordem ascendente que a consulta já
-    // devolveu (linhas do mesmo dia ficam contíguas).
-    const porDiaMapa = new Map<string, { tokensPonderados: number; chamadas: number }>();
-    for (const linha of linhas) {
-      const atual = porDiaMapa.get(linha.dia) ?? { tokensPonderados: 0, chamadas: 0 };
-      atual.tokensPonderados += linha.tokens_ponderados;
-      atual.chamadas += linha.chamadas;
-      porDiaMapa.set(linha.dia, atual);
-    }
-    const porDia: LinhaExtratoPorDia[] = [...porDiaMapa.entries()].map(([dia, v]) => ({ dia, ...v }));
+    // `por_dia` já vem somado e ordenado (ascendente) pela RPC: só remonta a
+    // forma que a tela espera.
+    const porDia: LinhaExtratoPorDia[] = porDiaCru.map((l) => ({
+      dia: l.dia,
+      tokensPonderados: l.tokens_ponderados,
+      chamadas: l.chamadas,
+    }));
 
-    // Por agente: soma através de dia/contato/propósito. Chave "" agrupa as
-    // linhas sem agent_id (conferências internas, embedding, visão).
-    const SEM_AGENTE = "";
-    const porAgenteMapa = new Map<string, { tokensPonderados: number; chamadas: number }>();
-    for (const linha of linhas) {
-      const chave = linha.agent_id ?? SEM_AGENTE;
-      const atual = porAgenteMapa.get(chave) ?? { tokensPonderados: 0, chamadas: 0 };
-      atual.tokensPonderados += linha.tokens_ponderados;
-      atual.chamadas += linha.chamadas;
-      porAgenteMapa.set(chave, atual);
-    }
-    const porAgente: LinhaExtratoPorAgente[] = [...porAgenteMapa.entries()]
-      .map(([chave, v]): LinhaExtratoPorAgente => {
-        if (chave === SEM_AGENTE) {
-          return { agentId: null, tipo: "sem_agente", nome: null, ...v };
-        }
-        const nome = nomePorAgente.get(chave);
-        return nome !== undefined
-          ? { agentId: chave, tipo: "agente", nome, ...v }
-          : { agentId: chave, tipo: "agente_removido", nome: null, ...v };
-      })
-      .sort((a, b) => b.tokensPonderados - a.tokensPonderados);
+    // `por_agente` já vem somado e ordenado (maior consumo primeiro) pela
+    // RPC: só falta o discriminador de três casos (decisão 13) e o nome, que
+    // são responsabilidade deste módulo, não do banco.
+    const porAgente: LinhaExtratoPorAgente[] = porAgenteCru.map((l): LinhaExtratoPorAgente => {
+      if (l.agent_id === null) {
+        return { agentId: null, tipo: "sem_agente", nome: null, tokensPonderados: l.tokens_ponderados, chamadas: l.chamadas };
+      }
+      const nome = nomePorAgente.get(l.agent_id);
+      return nome !== undefined
+        ? { agentId: l.agent_id, tipo: "agente", nome, tokensPonderados: l.tokens_ponderados, chamadas: l.chamadas }
+        : { agentId: l.agent_id, tipo: "agente_removido", nome: null, tokensPonderados: l.tokens_ponderados, chamadas: l.chamadas };
+    });
 
     return { status: "ok", extrato: { ciclo: inicioDoCiclo, porDia, porAgente } };
   } catch (err) {

@@ -1,9 +1,9 @@
 /**
  * Tarefa 5 (parte pendente) da fase F2-B: `painelDeMargem` (decisão 17).
- * Dublê de `SupabaseClient` no molde de `tests/unit/tokens-extrato-do-
- * ciclo.test.ts`: um builder mínimo, thenable/awaitable, que registra tabela
- * e filtros aplicados de verdade, com `maybeSingle` e `like` a mais (esta
- * leitura usa as duas).
+ * Desde a revisão de 23/09/2026 (item 1c/item 9), receita e custo (inclusive
+ * a ESTIMATIVA pelo catálogo) são calculados NO BANCO por
+ * `fn_billing_margem_do_ciclo` (RPC): o dublê é um `admin.rpc` falso, no
+ * molde de `tests/unit/tokens-saldo-da-organizacao.test.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -13,79 +13,35 @@ import { painelDeMargem } from "@/lib/billing/tokens/margem";
 const ORG = "22222222-2222-4222-8222-222222222222";
 const CICLO = "2026-09-01";
 
-interface Chamada {
-  tabela: string;
-  filtros: Record<string, unknown>;
-  single: boolean;
-}
+const MARGEM_ZERADA = {
+  receita_plano_cents: 0,
+  receita_adicionais_cents: 0,
+  receita_creditos_cents: 0,
+  receita_total_cents: 0,
+  custo_conhecido_cents: 0,
+  custo_estimado_cents: 0,
+  chamadas_estimadas: 0,
+  chamadas_sem_preco: 0,
+};
 
 interface OpcoesDoAdminFalso {
-  contratoData?: unknown;
-  contratoErro?: string;
-  adicionaisData?: unknown[];
-  adicionaisErro?: string;
-  creditosData?: unknown[];
-  creditosErro?: string;
-  consumoData?: unknown[];
-  consumoErro?: string;
+  data?: unknown;
+  erro?: string;
+  lanca?: boolean;
 }
 
 function criarAdminFalso(opts: OpcoesDoAdminFalso) {
-  const chamadas: Chamada[] = [];
+  const chamadasRpc: Array<{ nome: string; args: unknown }> = [];
 
-  function builder(tabela: string) {
-    const filtros: Record<string, unknown> = {};
-    let single = false;
-    const api = {
-      select(_cols: string) {
-        return api;
-      },
-      eq(col: string, val: unknown) {
-        filtros[`eq_${col}`] = val;
-        return api;
-      },
-      gte(col: string, val: unknown) {
-        filtros[`gte_${col}`] = val;
-        return api;
-      },
-      like(col: string, val: unknown) {
-        filtros[`like_${col}`] = val;
-        return api;
-      },
-      maybeSingle(): Promise<unknown> {
-        single = true;
-        return new Promise((resolve, reject) => api.then(resolve, reject));
-      },
-      then(resolve: (v: unknown) => void, reject: (e: unknown) => void) {
-        chamadas.push({ tabela, filtros: { ...filtros }, single });
-        try {
-          if (tabela === "billing_contracts") {
-            if (opts.contratoErro) return resolve({ data: null, error: { message: opts.contratoErro } });
-            return resolve({ data: opts.contratoData ?? null, error: null });
-          }
-          if (tabela === "billing_token_adicionais") {
-            if (opts.adicionaisErro) return resolve({ data: null, error: { message: opts.adicionaisErro } });
-            return resolve({ data: opts.adicionaisData ?? [], error: null });
-          }
-          if (tabela === "billing_token_ledger") {
-            if (opts.creditosErro) return resolve({ data: null, error: { message: opts.creditosErro } });
-            return resolve({ data: opts.creditosData ?? [], error: null });
-          }
-          if (tabela === "billing_token_consumo_diario") {
-            if (opts.consumoErro) return resolve({ data: null, error: { message: opts.consumoErro } });
-            return resolve({ data: opts.consumoData ?? [], error: null });
-          }
-          throw new Error(`tabela desconhecida no dublê: ${tabela}`);
-        } catch (err) {
-          reject(err);
-        }
-      },
-    };
-    return api;
+  async function rpc(nome: string, args: unknown) {
+    chamadasRpc.push({ nome, args });
+    if (opts.lanca) throw new Error("conexão com o banco caiu");
+    if (opts.erro) return { data: null, error: { message: opts.erro } };
+    return { data: opts.data ?? MARGEM_ZERADA, error: null };
   }
 
-  const admin = { from: (tabela: string) => builder(tabela) } as unknown as SupabaseClient;
-  return { admin, chamadas };
+  const admin = { rpc } as unknown as SupabaseClient;
+  return { admin, chamadasRpc };
 }
 
 function logFalso() {
@@ -93,15 +49,18 @@ function logFalso() {
 }
 
 describe("painelDeMargem", () => {
-  it("soma receita (plano + adicionais ativos + créditos do ciclo) e custo do ciclo", async () => {
+  it("repassa receita (plano + adicionais + créditos) e custo conhecido do ciclo", async () => {
     const { admin } = criarAdminFalso({
-      contratoData: { billing_plans: { price_monthly_cents: 49900 } },
-      adicionaisData: [{ valor_cents: 10000 }, { valor_cents: 5000 }],
-      creditosData: [{ valor_cents: 2000 }, { valor_cents: null }],
-      consumoData: [
-        { cost_cents_conhecido: 12.5, chamadas_custo_nulo: 0 },
-        { cost_cents_conhecido: 3.25, chamadas_custo_nulo: 2 },
-      ],
+      data: {
+        receita_plano_cents: 49900,
+        receita_adicionais_cents: 15000,
+        receita_creditos_cents: 2000,
+        receita_total_cents: 66900,
+        custo_conhecido_cents: 15.75,
+        custo_estimado_cents: 0,
+        chamadas_estimadas: 0,
+        chamadas_sem_preco: 0,
+      },
     });
 
     const r = await painelDeMargem(admin, ORG, CICLO);
@@ -115,29 +74,42 @@ describe("painelDeMargem", () => {
         receitaCreditosCents: 2000,
         receitaTotalCents: 66900,
         custoConhecidoCentsUsd: 15.75,
-        chamadasCustoNulo: 2,
-        custoIncompleto: true,
+        custoEstimadoCentsUsd: 0,
+        chamadasEstimadas: 0,
+        chamadasSemPreco: 0,
+        custoIncompleto: false,
       },
     });
   });
 
-  it("sem chamada de custo nulo no ciclo: custoIncompleto é falso", async () => {
+  it("item 1c da revisão: custo estimado pelo catálogo e chamadas sem preço são repassados; custoIncompleto reflete chamadasSemPreco", async () => {
     const { admin } = criarAdminFalso({
-      contratoData: { billing_plans: { price_monthly_cents: 0 } },
-      consumoData: [{ cost_cents_conhecido: 1, chamadas_custo_nulo: 0 }],
+      data: { ...MARGEM_ZERADA, custo_estimado_cents: 42.5, chamadas_estimadas: 3, chamadas_sem_preco: 2 },
     });
 
     const r = await painelDeMargem(admin, ORG, CICLO);
 
     expect(r.status).toBe("ok");
-    if (r.status === "ok") {
-      expect(r.margem.chamadasCustoNulo).toBe(0);
-      expect(r.margem.custoIncompleto).toBe(false);
-    }
+    if (r.status !== "ok") return;
+    expect(r.margem.custoEstimadoCentsUsd).toBe(42.5);
+    expect(r.margem.chamadasEstimadas).toBe(3);
+    expect(r.margem.chamadasSemPreco).toBe(2);
+    expect(r.margem.custoIncompleto).toBe(true);
   });
 
-  it("sem contrato gravado: receita do plano é 0, não inventa preço", async () => {
-    const { admin } = criarAdminFalso({ contratoData: null });
+  it("sem chamada sem preço no ciclo: custoIncompleto é falso mesmo com chamadas estimadas", async () => {
+    const { admin } = criarAdminFalso({
+      data: { ...MARGEM_ZERADA, custo_estimado_cents: 10, chamadas_estimadas: 5, chamadas_sem_preco: 0 },
+    });
+
+    const r = await painelDeMargem(admin, ORG, CICLO);
+
+    expect(r.status).toBe("ok");
+    if (r.status === "ok") expect(r.margem.custoIncompleto).toBe(false);
+  });
+
+  it("sem contrato gravado: receita do plano é 0, não inventa preço (a RPC já resolve isso)", async () => {
+    const { admin } = criarAdminFalso({ data: MARGEM_ZERADA });
 
     const r = await painelDeMargem(admin, ORG, CICLO);
 
@@ -145,50 +117,18 @@ describe("painelDeMargem", () => {
     if (r.status === "ok") expect(r.margem.receitaPlanoCents).toBe(0);
   });
 
-  it("créditos avulsos: filtra pela CHAVE credito:%, não pela fonte avulso", async () => {
-    const { admin, chamadas } = criarAdminFalso({ creditosData: [] });
+  it("chama a RPC com a organização e o ciclo certos", async () => {
+    const { admin, chamadasRpc } = criarAdminFalso({ data: MARGEM_ZERADA });
 
     await painelDeMargem(admin, ORG, CICLO);
 
-    const ledger = chamadas.find((c) => c.tabela === "billing_token_ledger");
-    expect(ledger?.filtros.like_chave).toBe("credito:%");
+    expect(chamadasRpc).toEqual([
+      { nome: "fn_billing_margem_do_ciclo", args: { p_org: ORG, p_ciclo: CICLO } },
+    ]);
   });
 
-  it("créditos avulsos: filtra created_at pela virada real do ciclo em São Paulo (UTC-3), não pela data crua", async () => {
-    const { admin, chamadas } = criarAdminFalso({ creditosData: [] });
-
-    await painelDeMargem(admin, ORG, CICLO);
-
-    const ledger = chamadas.find((c) => c.tabela === "billing_token_ledger");
-    expect(ledger?.filtros.gte_created_at).toBe("2026-09-01T00:00:00-03:00");
-  });
-
-  it("adicionais: só os ATIVOS entram na receita", async () => {
-    const { admin, chamadas } = criarAdminFalso({ adicionaisData: [] });
-
-    await painelDeMargem(admin, ORG, CICLO);
-
-    const adicionais = chamadas.find((c) => c.tabela === "billing_token_adicionais");
-    expect(adicionais?.filtros.eq_ativo).toBe(true);
-  });
-
-  it("isolamento: as quatro tabelas são filtradas pela organização", async () => {
-    const { admin, chamadas } = criarAdminFalso({});
-
-    await painelDeMargem(admin, ORG, CICLO);
-
-    for (const tabela of [
-      "billing_contracts",
-      "billing_token_adicionais",
-      "billing_token_ledger",
-      "billing_token_consumo_diario",
-    ]) {
-      expect(chamadas.find((c) => c.tabela === tabela)?.filtros.eq_organization_id).toBe(ORG);
-    }
-  });
-
-  it("a leitura do contrato devolve error: nunca lança, vira leitura_falhou e alarma", async () => {
-    const { admin } = criarAdminFalso({ contratoErro: "permission denied for table billing_contracts" });
+  it("a RPC devolve error: nunca lança, vira leitura_falhou e alarma", async () => {
+    const { admin } = criarAdminFalso({ erro: "permission denied for function fn_billing_margem_do_ciclo" });
     const log = logFalso();
 
     const r = await painelDeMargem(admin, ORG, CICLO, log);
@@ -197,45 +137,28 @@ describe("painelDeMargem", () => {
     expect(log.error).toHaveBeenCalledWith("alarme_planos_leitura", expect.objectContaining({ organization_id: ORG }));
   });
 
-  it("a leitura dos adicionais devolve error: leitura_falhou", async () => {
-    const { admin } = criarAdminFalso({ adicionaisErro: "permission denied" });
+  it("a RPC lança: nunca propaga, vira leitura_falhou", async () => {
+    const { admin } = criarAdminFalso({ lanca: true });
 
     const r = await painelDeMargem(admin, ORG, CICLO);
 
     expect(r).toEqual({ status: "leitura_falhou" });
   });
 
-  it("a leitura dos créditos devolve error: leitura_falhou", async () => {
-    const { admin } = criarAdminFalso({ creditosErro: "permission denied" });
+  it("jsonb fora do esquema (receita_plano_cents não numérico): leitura_falhou", async () => {
+    const { admin } = criarAdminFalso({ data: { ...MARGEM_ZERADA, receita_plano_cents: "muito" } });
 
     const r = await painelDeMargem(admin, ORG, CICLO);
 
     expect(r).toEqual({ status: "leitura_falhou" });
   });
 
-  it("a leitura do consumo devolve error: leitura_falhou", async () => {
-    const { admin } = criarAdminFalso({ consumoErro: "permission denied" });
-
-    const r = await painelDeMargem(admin, ORG, CICLO);
-
-    expect(r).toEqual({ status: "leitura_falhou" });
-  });
-
-  it("linha fora do esquema (valor_cents não numérico): leitura_falhou", async () => {
-    const { admin } = criarAdminFalso({ adicionaisData: [{ valor_cents: "muito" }] });
-
-    const r = await painelDeMargem(admin, ORG, CICLO);
-
-    expect(r).toEqual({ status: "leitura_falhou" });
-  });
-
-  it("sem ciclo informado, calcula o primeiro dia do mês corrente", async () => {
-    const { admin, chamadas } = criarAdminFalso({ consumoData: [] });
+  it("sem ciclo informado, calcula o primeiro dia do mês corrente e passa para a RPC", async () => {
+    const { admin, chamadasRpc } = criarAdminFalso({ data: MARGEM_ZERADA });
 
     const r = await painelDeMargem(admin, ORG);
 
     expect(r.status).toBe("ok");
-    const consumo = chamadas.find((c) => c.tabela === "billing_token_consumo_diario");
-    expect(typeof consumo?.filtros.gte_dia).toBe("string");
+    expect(typeof (chamadasRpc[0]?.args as { p_ciclo: string }).p_ciclo).toBe("string");
   });
 });

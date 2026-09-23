@@ -52,6 +52,7 @@ import {
 import type { LinhaLivroCaixa, ResultadoLivroCaixaDoCiclo, TipoLinhaLivroCaixa } from "@/lib/billing/tokens/livro-caixa-do-ciclo";
 import type { ResultadoPainelDeMargem } from "@/lib/billing/tokens/margem";
 import { FONTES_DA_CARTEIRA, type FonteCarteira, type ResultadoSaldoDaCarteira } from "@/lib/billing/tokens/saldo-da-organizacao";
+import { copyToClipboard } from "@/lib/clipboard";
 import { formatCentsBRL, formatCentsUSD, parseReaisToCents } from "@/lib/money";
 
 // ---------------------------------------------------------------------------
@@ -164,6 +165,31 @@ function formatarLimite(
   t: (texto: string) => string,
 ): string {
   return valor === null ? t("sem limite") : valor.toLocaleString(tagDoIdioma);
+}
+
+/**
+ * O id curto (8 primeiros caracteres) de uma linha do livro-caixa, com botão
+ * de copiar o id INTEIRO (item 9 da revisão, 23/09/2026): é o que preenche o
+ * campo "Linha que compensa" do formulário de ajuste, e um uuid inteiro não
+ * cabe legível numa coluna de tabela.
+ */
+function IdCurtoCopiavel({ id, t }: { id: string; t: (texto: string) => string }) {
+  const [copiado, setCopiado] = useState(false);
+
+  return (
+    <button
+      type="button"
+      title={id}
+      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-xs text-text-muted hover:bg-surface-elevated"
+      onClick={async () => {
+        const ok = await copyToClipboard(id);
+        setCopiado(ok);
+        if (ok) setTimeout(() => setCopiado(false), 1500);
+      }}
+    >
+      {copiado ? t("Copiado") : id.slice(0, 8)}
+    </button>
+  );
 }
 
 function formatarCelulaDoAjuste(
@@ -748,9 +774,16 @@ export function TenantPlanoClient({
                 {t("Custo conhecido do ciclo (dólar)")}:{" "}
                 <span className="font-medium">{formatCentsUSD(margem.margem.custoConhecidoCentsUsd)}</span>
               </p>
+              <p>
+                {t("Custo estimado do ciclo (dólar, pelo catálogo)")}:{" "}
+                <span className="font-medium">{formatCentsUSD(margem.margem.custoEstimadoCentsUsd)}</span>{" "}
+                <span className="text-text-muted">
+                  ({margem.margem.chamadasEstimadas} {t("chamada(s) sem custo real, precificadas pelo catálogo")})
+                </span>
+              </p>
               {margem.margem.custoIncompleto && (
                 <Badge variant="warning">
-                  {t("Custo incompleto")}: {margem.margem.chamadasCustoNulo}{" "}
+                  {t("Custo incompleto")}: {margem.margem.chamadasSemPreco}{" "}
                   {t("chamada(s) do ciclo sem preço conhecido")}
                 </Badge>
               )}
@@ -816,38 +849,47 @@ export function TenantPlanoClient({
         <CardContent>
           {livroCaixa.status === "leitura_falhou" ? (
             <p className="text-sm text-destructive">{t("Não foi possível ler o livro-caixa agora.")}</p>
-          ) : livroCaixa.livroCaixa.linhas.length === 0 ? (
-            <p className="text-sm text-text-muted">{t("Nenhum lançamento neste ciclo ainda.")}</p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t("Dia")}</TableHead>
-                  <TableHead>{t("Fonte")}</TableHead>
-                  <TableHead>{t("Tipo")}</TableHead>
-                  <TableHead>{t("Tokens")}</TableHead>
-                  <TableHead>{t("Valor")}</TableHead>
-                  <TableHead>{t("Nota")}</TableHead>
-                  <TableHead>{t("Autor")}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {livroCaixa.livroCaixa.linhas.map((linha: LinhaLivroCaixa, i: number) => (
-                  <TableRow key={`${linha.dia}-${linha.fonte}-${linha.tipo}-${i}`}>
-                    <TableCell>{linha.dia}</TableCell>
-                    <TableCell>{t(ROTULO_DA_FONTE[linha.fonte])}</TableCell>
-                    <TableCell>
-                      {t(ROTULO_DO_TIPO[linha.tipo])}
-                      {linha.linhas > 1 && <span className="text-text-muted"> ({linha.linhas})</span>}
-                    </TableCell>
-                    <TableCell className="tabular-nums">{linha.tokens.toLocaleString(tagDoIdioma)}</TableCell>
-                    <TableCell>{linha.valorCents !== null ? formatCentsBRL(linha.valorCents) : "-"}</TableCell>
-                    <TableCell className="max-w-xs truncate">{linha.nota ?? "-"}</TableCell>
-                    <TableCell>{linha.autorNome ?? linha.autorEmail ?? "-"}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="space-y-3">
+              {livroCaixa.livroCaixa.truncado && (
+                <Badge variant="warning">{t("Mostrando as 500 linhas mais recentes.")}</Badge>
+              )}
+              {livroCaixa.livroCaixa.linhas.length === 0 ? (
+                <p className="text-sm text-text-muted">{t("Nenhum lançamento neste ciclo ainda.")}</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t("Id")}</TableHead>
+                      <TableHead>{t("Dia")}</TableHead>
+                      <TableHead>{t("Fonte")}</TableHead>
+                      <TableHead>{t("Tipo")}</TableHead>
+                      <TableHead>{t("Tokens")}</TableHead>
+                      <TableHead>{t("Valor")}</TableHead>
+                      <TableHead>{t("Nota")}</TableHead>
+                      <TableHead>{t("Autor")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {livroCaixa.livroCaixa.linhas.map((linha: LinhaLivroCaixa, i: number) => (
+                      <TableRow key={linha.id ?? `${linha.dia}-${linha.fonte}-${linha.tipo}-${i}`}>
+                        <TableCell>{linha.id !== null ? <IdCurtoCopiavel id={linha.id} t={t} /> : "-"}</TableCell>
+                        <TableCell>{linha.dia}</TableCell>
+                        <TableCell>{t(ROTULO_DA_FONTE[linha.fonte])}</TableCell>
+                        <TableCell>
+                          {t(ROTULO_DO_TIPO[linha.tipo])}
+                          {linha.linhas > 1 && <span className="text-text-muted"> ({linha.linhas})</span>}
+                        </TableCell>
+                        <TableCell className="tabular-nums">{linha.tokens.toLocaleString(tagDoIdioma)}</TableCell>
+                        <TableCell>{linha.valorCents !== null ? formatCentsBRL(linha.valorCents) : "-"}</TableCell>
+                        <TableCell className="max-w-xs truncate">{linha.nota ?? "-"}</TableCell>
+                        <TableCell>{linha.autorNome ?? linha.autorEmail ?? "-"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
           )}
         </CardContent>
       </Card>

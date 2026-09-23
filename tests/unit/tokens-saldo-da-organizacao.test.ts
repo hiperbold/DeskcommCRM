@@ -22,6 +22,7 @@ const SALDO_OK = {
   sem_limite: false,
   total_disponivel: 3_100_000,
   total_consumido: 500_000,
+  concessao_pendente: false,
 };
 
 const SALDO_ILIMITADO = {
@@ -30,6 +31,7 @@ const SALDO_ILIMITADO = {
   sem_limite: true,
   total_disponivel: 0,
   total_consumido: 820_000,
+  concessao_pendente: false,
 };
 
 const TEXTO_CRU_DO_BANCO = "coluna organization_id_fantasma não existe na tabela billing_token_wallets";
@@ -71,9 +73,19 @@ describe("saldoDaOrganizacao", () => {
       porFonte: SALDO_OK.por_fonte,
       totalDisponivel: 3_100_000,
       totalConsumido: 500_000,
+      concessaoPendente: false,
     });
     expect(chamadasRpc).toEqual([{ nome: "fn_billing_saldo_da_carteira", args: { p_org: ORG } }]);
     expect(log.error).not.toHaveBeenCalled();
+  });
+
+  it("item 6/13 da revisão: concessao_pendente true é repassado como concessaoPendente", async () => {
+    const { admin } = criarAdminFalso({ data: { ...SALDO_OK, concessao_pendente: true } });
+
+    const r = await saldoDaOrganizacao(admin, ORG);
+
+    expect(r.status).toBe("ok");
+    if (r.status === "ok") expect(r.concessaoPendente).toBe(true);
   });
 
   it("Ilimitado (sem_limite true): status sem_limite, sem totalDisponivel", async () => {

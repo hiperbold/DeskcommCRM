@@ -1,9 +1,10 @@
 /**
  * Tarefa 5 da fase F2-B (hiperbold/planos/fase-F2-B-tarefas.md): leitura de
- * `extratoDoCiclo` e `primeiroDiaDoCicloAtual`. Dublê de `SupabaseClient`
- * sobre uma cadeia `.from().select().eq()...`, no molde de
- * `tests/unit/mcp-externo-conexoes.test.ts` (dublê que aplica filtro de
- * verdade, não um estado fixo).
+ * `extratoDoCiclo` e `primeiroDiaDoCicloAtual`. Desde a revisão de 23/09/2026
+ * (item 1a/item 9), o agregado por dia e por agente vem de
+ * `fn_billing_extrato_do_ciclo` (RPC): o dublê mistura um `admin.rpc` falso
+ * (a RPC) com o builder thenable de `ai_agents` (nomes), no molde de
+ * `tests/unit/mcp-externo-conexoes.test.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -14,22 +15,37 @@ const ORG = "22222222-2222-4222-8222-222222222222";
 const AGENTE_ATIVO = "33333333-3333-4333-8333-333333333333";
 const AGENTE_APAGADO = "44444444-4444-4444-8444-444444444444";
 
-interface Chamada {
+interface ChamadaRpc {
+  nome: string;
+  args: unknown;
+}
+
+interface ChamadaFrom {
   tabela: string;
   filtros: Record<string, unknown>;
 }
 
 interface OpcoesDoAdminFalso {
-  consumoData?: unknown[];
-  consumoErro?: string;
-  consumoLanca?: boolean;
+  extratoData?: unknown;
+  extratoErro?: string;
+  extratoLanca?: boolean;
   agentesData?: unknown[];
   agentesErro?: string;
 }
 
-/** Um builder mínimo, thenable, que registra tabela + filtros aplicados de verdade. */
+const EXTRATO_VAZIO = { por_dia: [], por_agente: [] };
+
+/** Um dublê com `rpc` (a RPC do extrato) e `from` (só `ai_agents`, thenable). */
 function criarAdminFalso(opts: OpcoesDoAdminFalso) {
-  const chamadas: Chamada[] = [];
+  const chamadasRpc: ChamadaRpc[] = [];
+  const chamadasFrom: ChamadaFrom[] = [];
+
+  async function rpc(nome: string, args: unknown) {
+    chamadasRpc.push({ nome, args });
+    if (opts.extratoLanca) throw new Error("conexão com o banco caiu");
+    if (opts.extratoErro) return { data: null, error: { message: opts.extratoErro } };
+    return { data: opts.extratoData ?? EXTRATO_VAZIO, error: null };
+  }
 
   function builder(tabela: string) {
     const filtros: Record<string, unknown> = {};
@@ -41,29 +57,13 @@ function criarAdminFalso(opts: OpcoesDoAdminFalso) {
         filtros[`eq_${col}`] = val;
         return api;
       },
-      gte(col: string, val: unknown) {
-        filtros[`gte_${col}`] = val;
-        return api;
-      },
       in(col: string, vals: unknown) {
         filtros[`in_${col}`] = vals;
         return api;
       },
-      order(_col: string, _opcoes?: unknown) {
-        return api;
-      },
       then(resolve: (v: unknown) => void, reject: (e: unknown) => void) {
-        chamadas.push({ tabela, filtros: { ...filtros } });
+        chamadasFrom.push({ tabela, filtros: { ...filtros } });
         try {
-          if (tabela === "billing_token_consumo_diario") {
-            if (opts.consumoLanca) throw new Error("conexão com o banco caiu");
-            if (opts.consumoErro) {
-              resolve({ data: null, error: { message: opts.consumoErro } });
-              return;
-            }
-            resolve({ data: opts.consumoData ?? [], error: null });
-            return;
-          }
           if (tabela === "ai_agents") {
             if (opts.agentesErro) {
               resolve({ data: null, error: { message: opts.agentesErro } });
@@ -81,25 +81,30 @@ function criarAdminFalso(opts: OpcoesDoAdminFalso) {
     return api;
   }
 
-  const admin = { from: (tabela: string) => builder(tabela) } as unknown as SupabaseClient;
-  return { admin, chamadas };
+  const admin = { rpc, from: (tabela: string) => builder(tabela) } as unknown as SupabaseClient;
+  return { admin, chamadasRpc, chamadasFrom };
 }
 
 function logFalso() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
-const LINHAS_PADRAO = [
-  { dia: "2026-09-01", agent_id: AGENTE_ATIVO, tokens_ponderados: 1000, chamadas: 2 },
-  { dia: "2026-09-01", agent_id: null, tokens_ponderados: 50, chamadas: 1 },
-  { dia: "2026-09-02", agent_id: AGENTE_ATIVO, tokens_ponderados: 3000, chamadas: 5 },
-  { dia: "2026-09-02", agent_id: AGENTE_APAGADO, tokens_ponderados: 200, chamadas: 1 },
-];
+const EXTRATO_PADRAO = {
+  por_dia: [
+    { dia: "2026-09-01", tokens_ponderados: 1050, chamadas: 3 },
+    { dia: "2026-09-02", tokens_ponderados: 3200, chamadas: 6 },
+  ],
+  por_agente: [
+    { agent_id: AGENTE_ATIVO, tokens_ponderados: 4000, chamadas: 7 },
+    { agent_id: AGENTE_APAGADO, tokens_ponderados: 200, chamadas: 1 },
+    { agent_id: null, tokens_ponderados: 50, chamadas: 1 },
+  ],
+};
 
 describe("extratoDoCiclo", () => {
-  it("agrupa por dia, somando através de agente/contato/propósito", async () => {
+  it("repassa por_dia já agregado pela RPC", async () => {
     const { admin } = criarAdminFalso({
-      consumoData: LINHAS_PADRAO,
+      extratoData: EXTRATO_PADRAO,
       agentesData: [{ id: AGENTE_ATIVO, name: "Agente Vendas" }],
     });
 
@@ -113,9 +118,9 @@ describe("extratoDoCiclo", () => {
     ]);
   });
 
-  it("agrupa por agente: nome resolvido, agente apagado e sem agente", async () => {
+  it("por agente: nome resolvido, agente apagado e sem agente (ordem já vem da RPC)", async () => {
     const { admin } = criarAdminFalso({
-      consumoData: LINHAS_PADRAO,
+      extratoData: EXTRATO_PADRAO,
       agentesData: [{ id: AGENTE_ATIVO, name: "Agente Vendas" }],
     });
 
@@ -123,9 +128,6 @@ describe("extratoDoCiclo", () => {
 
     expect(r.status).toBe("ok");
     if (r.status !== "ok") return;
-    // Ordenado por maior consumo primeiro (o mesmo corte de
-    // `linhasDeTokensDeIA`, tarefa 6): agente ativo (4000), agente apagado
-    // (200), depois as conferências sem agente (50).
     expect(r.extrato.porAgente).toEqual([
       { agentId: AGENTE_ATIVO, tipo: "agente", nome: "Agente Vendas", tokensPonderados: 4000, chamadas: 7 },
       { agentId: AGENTE_APAGADO, tipo: "agente_removido", nome: null, tokensPonderados: 200, chamadas: 1 },
@@ -133,41 +135,49 @@ describe("extratoDoCiclo", () => {
     ]);
   });
 
-  it("isolamento: as duas tabelas são filtradas pela organização", async () => {
-    const { admin, chamadas } = criarAdminFalso({
-      consumoData: LINHAS_PADRAO,
+  it("chama a RPC com a organização e o ciclo certos", async () => {
+    const { admin, chamadasRpc } = criarAdminFalso({ extratoData: EXTRATO_VAZIO });
+
+    await extratoDoCiclo(admin, ORG, "2026-09-01");
+
+    expect(chamadasRpc).toEqual([
+      { nome: "fn_billing_extrato_do_ciclo", args: { p_org: ORG, p_ciclo: "2026-09-01" } },
+    ]);
+  });
+
+  it("isolamento: a consulta de nomes filtra pela organização, só os agent_id que aparecem", async () => {
+    const { admin, chamadasFrom } = criarAdminFalso({
+      extratoData: EXTRATO_PADRAO,
       agentesData: [{ id: AGENTE_ATIVO, name: "Agente Vendas" }],
     });
 
     await extratoDoCiclo(admin, ORG, "2026-09-01");
 
-    const consumo = chamadas.find((c) => c.tabela === "billing_token_consumo_diario");
-    const agentes = chamadas.find((c) => c.tabela === "ai_agents");
-    expect(consumo?.filtros.eq_organization_id).toBe(ORG);
-    expect(consumo?.filtros.gte_dia).toBe("2026-09-01");
+    const agentes = chamadasFrom.find((c) => c.tabela === "ai_agents");
     expect(agentes?.filtros.eq_organization_id).toBe(ORG);
-    // Só os agent_id que aparecem no extrato, não uma varredura da tabela inteira.
     expect((agentes?.filtros.in_id as string[]).sort()).toEqual([AGENTE_APAGADO, AGENTE_ATIVO].sort());
   });
 
-  it("sem nenhuma linha com agent_id: não consulta ai_agents", async () => {
-    const { admin, chamadas } = criarAdminFalso({ consumoData: [LINHAS_PADRAO[1] as unknown] });
+  it("sem nenhum agent_id no extrato: não consulta ai_agents", async () => {
+    const { admin, chamadasFrom } = criarAdminFalso({
+      extratoData: { por_dia: [], por_agente: [EXTRATO_PADRAO.por_agente[2]] },
+    });
 
     await extratoDoCiclo(admin, ORG, "2026-09-01");
 
-    expect(chamadas.some((c) => c.tabela === "ai_agents")).toBe(false);
+    expect(chamadasFrom.some((c) => c.tabela === "ai_agents")).toBe(false);
   });
 
   it("sem nenhuma linha no ciclo: devolve os dois extratos vazios", async () => {
-    const { admin } = criarAdminFalso({ consumoData: [] });
+    const { admin } = criarAdminFalso({ extratoData: EXTRATO_VAZIO });
 
     const r = await extratoDoCiclo(admin, ORG, "2026-09-01");
 
     expect(r).toEqual({ status: "ok", extrato: { ciclo: "2026-09-01", porDia: [], porAgente: [] } });
   });
 
-  it("a consulta do consumo devolve error: nunca lança, vira leitura_falhou e alarma", async () => {
-    const { admin } = criarAdminFalso({ consumoErro: "permission denied for table billing_token_consumo_diario" });
+  it("a RPC devolve error: nunca lança, vira leitura_falhou e alarma", async () => {
+    const { admin } = criarAdminFalso({ extratoErro: "permission denied for function fn_billing_extrato_do_ciclo" });
     const log = logFalso();
 
     const r = await extratoDoCiclo(admin, ORG, "2026-09-01", log);
@@ -176,8 +186,8 @@ describe("extratoDoCiclo", () => {
     expect(log.error).toHaveBeenCalledWith("alarme_planos_leitura", expect.objectContaining({ organization_id: ORG }));
   });
 
-  it("a consulta do consumo lança: nunca propaga, vira leitura_falhou", async () => {
-    const { admin } = criarAdminFalso({ consumoLanca: true });
+  it("a RPC lança: nunca propaga, vira leitura_falhou", async () => {
+    const { admin } = criarAdminFalso({ extratoLanca: true });
 
     const r = await extratoDoCiclo(admin, ORG, "2026-09-01");
 
@@ -186,7 +196,7 @@ describe("extratoDoCiclo", () => {
 
   it("a consulta dos agentes devolve error: vira leitura_falhou (não finge nome)", async () => {
     const { admin } = criarAdminFalso({
-      consumoData: [LINHAS_PADRAO[0] as unknown],
+      extratoData: { por_dia: [], por_agente: [EXTRATO_PADRAO.por_agente[0]] },
       agentesErro: "permission denied for table ai_agents",
     });
 
@@ -195,9 +205,9 @@ describe("extratoDoCiclo", () => {
     expect(r).toEqual({ status: "leitura_falhou" });
   });
 
-  it("linha fora do esquema (tokens_ponderados não numérico): leitura_falhou", async () => {
+  it("jsonb fora do esquema (tokens_ponderados não numérico): leitura_falhou", async () => {
     const { admin } = criarAdminFalso({
-      consumoData: [{ dia: "2026-09-01", agent_id: null, tokens_ponderados: "muitos", chamadas: 1 }],
+      extratoData: { por_dia: [{ dia: "2026-09-01", tokens_ponderados: "muitos", chamadas: 1 }], por_agente: [] },
     });
 
     const r = await extratoDoCiclo(admin, ORG, "2026-09-01");
@@ -205,15 +215,15 @@ describe("extratoDoCiclo", () => {
     expect(r).toEqual({ status: "leitura_falhou" });
   });
 
-  it("sem ciclo informado, calcula o primeiro dia do mês corrente e filtra por ele", async () => {
-    const { admin, chamadas } = criarAdminFalso({ consumoData: [] });
+  it("sem ciclo informado, calcula o primeiro dia do mês corrente e passa para a RPC", async () => {
+    const { admin, chamadasRpc } = criarAdminFalso({ extratoData: EXTRATO_VAZIO });
 
     const ciclo = primeiroDiaDoCicloAtual();
     const r = await extratoDoCiclo(admin, ORG);
 
     expect(r.status).toBe("ok");
     if (r.status === "ok") expect(r.extrato.ciclo).toBe(ciclo);
-    expect(chamadas.find((c) => c.tabela === "billing_token_consumo_diario")?.filtros.gte_dia).toBe(ciclo);
+    expect((chamadasRpc[0]?.args as { p_ciclo: string }).p_ciclo).toBe(ciclo);
   });
 });
 

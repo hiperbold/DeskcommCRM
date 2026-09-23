@@ -41,10 +41,17 @@ export interface LinhaCarteiraDeTokens {
   totalConsumido: number;
   /** 0 a 100, arredondado e limitado a 100. `null` quando `semLimite`. */
   percentual: number | null;
-  /** Consumido no total disponível ou acima dele. Nunca `true` com `semLimite`. */
+  /** Consumido no total disponível ou acima dele. Nunca `true` com `semLimite` NEM com `concessaoPendente`. */
   estourou: boolean;
-  /** Consumido ACIMA do disponível (saldo negativo, decisão 15 da fase). Nunca `true` com `semLimite`. */
+  /** Consumido ACIMA do disponível (saldo negativo, decisão 15 da fase). Nunca `true` com `semLimite` NEM com `concessaoPendente`. */
   saldoNegativo: boolean;
+  /**
+   * Item 13 da revisão (23/09/2026): a concessão do ciclo ainda não rodou
+   * (`fn_billing_saldo_da_carteira` emprestou o teto efetivo sem gravar).
+   * Não é "estourou": é uma espera de um instante, e a tela mostra isso, não
+   * o aviso de teto. Sempre `false` com `semLimite`.
+   */
+  concessaoPendente: boolean;
   /** Só as fontes com crédito (`creditado > 0`); `plano` sempre aparece, mesmo zerada. */
   fontes: LinhaFonteDaCarteira[];
 }
@@ -89,6 +96,7 @@ export function linhasDeTokensDeIA(
   // `saldo` de verdade: `totalDisponivel` só existe na variante "ok".
   const totalDisponivel = saldo.status === "ok" ? saldo.totalDisponivel : null;
   const totalConsumido = saldo.totalConsumido;
+  const concessaoPendente = saldo.status === "ok" ? saldo.concessaoPendente : false;
 
   // `totalDisponivel <= 0` é defensivo (mesma guarda de linhas-da-tela-de-plano.ts):
   // a barra aparece cheia em vez de dividir por zero.
@@ -98,8 +106,15 @@ export function linhasDeTokensDeIA(
       : totalDisponivel <= 0
         ? 100
         : Math.min(100, Math.round((totalConsumido / totalDisponivel) * 100));
-  const estourou = totalDisponivel !== null && totalConsumido >= totalDisponivel;
-  const saldoNegativo = totalDisponivel !== null && totalConsumido > totalDisponivel;
+
+  // Item 13 da revisão: concessão pendente nunca é "estourou" (é uma espera
+  // de um instante, não um teto batido); e disponível zero com consumido
+  // zero (organização sem carteira real ainda) também não é. Sem esta
+  // segunda guarda, `0 >= 0` acenderia "No teto" para quem não tem nem dado.
+  const semDadoRealAinda = totalDisponivel === 0 && totalConsumido === 0;
+  const estourou =
+    totalDisponivel !== null && !concessaoPendente && !semDadoRealAinda && totalConsumido >= totalDisponivel;
+  const saldoNegativo = totalDisponivel !== null && !concessaoPendente && totalConsumido > totalDisponivel;
 
   const fontes: LinhaFonteDaCarteira[] = FONTES_DA_CARTEIRA.filter(
     (fonte) => fonte === "plano" || saldo.porFonte[fonte].creditado > 0,
@@ -112,6 +127,7 @@ export function linhasDeTokensDeIA(
     percentual,
     estourou,
     saldoNegativo,
+    concessaoPendente,
     fontes,
   };
 

@@ -5,6 +5,13 @@
  * porque são custo real de operar o agente, mesmo sem `agent_id` próprio) dividido
  * pelo número de RESPOSTAS do agente no mesmo período.
  *
+ * Os dois números vêm de `fn_billing_consumo_para_estimativa` (Parte 6, item
+ * 1d da revisão de 23/09/2026), agregados NO BANCO: a versão anterior deste
+ * módulo trazia `billing_token_consumo_diario` linha a linha e somava no Node,
+ * e o PostgREST corta em `max_rows = 1000` (mesmo defeito do extrato,
+ * `extrato-do-ciclo.ts`). A RPC também conta "resposta" pela mesma regra de
+ * `job_id` descrita abaixo, e não só por `count` de `llm_calls`.
+ *
  * ─── O que conta como "resposta do agente" ──────────────────────────────────
  *
  * `purpose = 'agent_turn'`: é o valor que `runModelCall` grava por padrão
@@ -14,7 +21,9 @@
  * (`purpose: preview ? 'agent_preview' : 'agent_turn'`) para toda resposta
  * REAL que o agente manda a um contato. `agent_preview` é o "Testar como
  * cliente" da tela de configuração do agente e fica fora da conta: o
- * contato nunca recebeu aquela resposta.
+ * contato nunca recebeu aquela resposta. Uma resposta pode gerar VÁRIAS
+ * chamadas (uso de ferramenta no meio do turno, mesmo `job_id`): a RPC conta
+ * uma por `job_id` quando houver, uma por linha quando `job_id` for nulo.
  *
  * ─── Sem amostra ────────────────────────────────────────────────────────────
  *
@@ -34,9 +43,11 @@ import type { Logger } from "@/lib/agent-engine/obs/logger";
 /** Mediana de referência quando a organização ainda não tem amostra própria (decisão 18). */
 export const TOKENS_POR_RESPOSTA_PADRAO = 32_000;
 
-/** O `purpose` gravado para toda resposta real de agente enviada a um contato. */
-const PURPOSE_DA_RESPOSTA_DO_AGENTE = "agent_turn";
-
+/**
+ * Janela de dias que `fn_billing_consumo_para_estimativa` (Parte 6, item 1d)
+ * usa para o `p_dias`: a RPC filtra `purpose = 'agent_turn'` por conta
+ * própria, não este módulo (ver comentário do arquivo).
+ */
 const JANELA_EM_DIAS = 30;
 
 export interface EstimativaDeRespostas {
@@ -50,8 +61,9 @@ export type ResultadoEstimativaDeRespostas =
   | { status: "ok"; estimativa: EstimativaDeRespostas }
   | { status: "leitura_falhou" };
 
-const esquemaDaLinhaDeConsumo = z
-  .object({ tokens_ponderados: z.coerce.number().int() })
+/** O formato exato de `fn_billing_consumo_para_estimativa` (Parte 6, item 1d da revisão). */
+const esquemaDoConsumoParaEstimativa = z
+  .object({ tokens_ponderados: z.coerce.number().int(), respostas: z.coerce.number().int() })
   .strict();
 
 /**
@@ -68,45 +80,22 @@ export async function estimativaDeRespostas(
   log?: Logger,
 ): Promise<ResultadoEstimativaDeRespostas> {
   try {
-    const desdeTimestamp = new Date(Date.now() - JANELA_EM_DIAS * 24 * 60 * 60 * 1000);
-    // O agregado é por DIA (fuso America/Sao_Paulo, o mesmo da carteira);
-    // `llm_calls` não tem coluna de dia, só `created_at` (timestamptz), por
-    // isso os dois filtros usam formatos diferentes do mesmo corte de 30 dias.
-    const desdeDia = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "America/Sao_Paulo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(desdeTimestamp);
+    const { data, error } = await admin.rpc("fn_billing_consumo_para_estimativa", {
+      p_org: organizationId,
+      p_dias: JANELA_EM_DIAS,
+    });
 
-    const [consumoRes, respostasRes] = await Promise.all([
-      admin
-        .from("billing_token_consumo_diario")
-        .select("tokens_ponderados")
-        .eq("organization_id", organizationId)
-        .gte("dia", desdeDia),
-      admin
-        .from("llm_calls")
-        .select("id", { count: "exact", head: true })
-        .eq("organization_id", organizationId)
-        .eq("purpose", PURPOSE_DA_RESPOSTA_DO_AGENTE)
-        .gte("created_at", desdeTimestamp.toISOString()),
-    ]);
-
-    if (consumoRes.error) {
-      throw new Error(`ler consumo dos últimos 30 dias: ${consumoRes.error.message}`);
-    }
-    if (respostasRes.error) {
-      throw new Error(`contar respostas do agente: ${respostasRes.error.message}`);
+    if (error) {
+      throw new Error(`ler consumo para estimativa de respostas: ${error.message}`);
     }
 
-    const linhasParseadas = z.array(esquemaDaLinhaDeConsumo).safeParse(consumoRes.data);
-    if (!linhasParseadas.success) {
-      throw new Error(`consumo dos últimos 30 dias fora do esquema: ${linhasParseadas.error.message}`);
+    const parsed = esquemaDoConsumoParaEstimativa.safeParse(data);
+    if (!parsed.success) {
+      throw new Error(`consumo para estimativa de respostas fora do esquema: ${parsed.error.message}`);
     }
 
-    const consumoTotal = linhasParseadas.data.reduce((acc, l) => acc + l.tokens_ponderados, 0);
-    const respostas = respostasRes.count ?? 0;
+    const consumoTotal = parsed.data.tokens_ponderados;
+    const respostas = parsed.data.respostas;
 
     let tokensPorResposta: number;
     let baseadoEmAmostra: boolean;

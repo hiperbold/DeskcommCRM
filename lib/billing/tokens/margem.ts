@@ -3,41 +3,51 @@
  * SÓ para a plataforma, nunca para a organização (a mesma régua de "livro-
  * caixa e adicionais: privilégio nenhum para authenticated", decisão 19).
  *
- * Por organização e ciclo ATUAL:
+ * Por organização e ciclo ATUAL, tudo calculado NO BANCO por
+ * `fn_billing_margem_do_ciclo` (Parte 6, item 1c da revisão de 23/09/2026):
  *
  *   receita = preço mensal do plano contratado (`billing_contracts` →
  *             `billing_plans.price_monthly_cents`) + `valor_cents` dos
  *             adicionais ATIVOS (`billing_token_adicionais`) + `valor_cents`
  *             dos créditos avulsos DO CICLO (linhas `credito:` do livro-caixa
- *             com `created_at` no ciclo) — tudo em CENTAVOS DE REAL.
+ *             no ciclo), tudo em CENTAVOS DE REAL.
  *
- *   custo   = soma de `cost_cents_conhecido` do agregado
- *             `billing_token_consumo_diario` do ciclo, mais
- *             `chamadas_custo_nulo` (quantas chamadas do ciclo tinham custo
- *             desconhecido).
+ *   custo   = soma de `cost_cents` CONHECIDO de `llm_calls` do ciclo (o que a
+ *             Hiperbold paga de verdade), mais uma ESTIMATIVA pelo catálogo
+ *             `ai_models` para as chamadas com `cost_cents` nulo, mais a
+ *             contagem das que nem o catálogo sabe precificar.
+ *
+ * A versão anterior deste módulo trazia `billing_token_consumo_diario` linha
+ * a linha e somava no Node (mesmo defeito do extrato e do livro-caixa: corte
+ * de `max_rows = 1000` do PostgREST) e filtrava os créditos avulsos com o
+ * mesmo offset `-03:00` fixo de `livro-caixa-do-ciclo.ts`. A RPC também é
+ * quem agora estima o custo das chamadas sem preço, que antes este painel só
+ * contava sem nunca somar.
  *
  * ─── A unidade do custo: CENTAVOS DE DÓLAR, nunca convertidos ───────────────
  *
- * `cost_cents_conhecido` é a soma de `llm_calls.cost_cents`, que
- * `lib/agent-engine/edge/llm/pricing.ts` grava como `(uso em USD) * 100` — ou
- * seja, CENTAVOS DE DÓLAR, não de real (a mesma unidade que `formatCentsUSD`,
- * em `lib/money.ts`, já existe para formatar). Este painel NUNCA converte
+ * `custo_conhecido_cents`/`custo_estimado_cents` somam `llm_calls.cost_cents`
+ * (real) e `ai_models.*_price_per_million_cents` (estimado), que
+ * `lib/agent-engine/edge/llm/pricing.ts` e o catálogo gravam em CENTAVOS DE
+ * DÓLAR, não de real (a mesma unidade que `formatCentsUSD`, em
+ * `lib/money.ts`, já existe para formatar). Este painel NUNCA converte
  * câmbio (D-050/fora de escopo da fase, e câmbio não se inventa): a receita
- * sai em centavos de REAL e o custo em centavos de DÓLAR, sempre como dois
+ * sai em centavos de REAL e o custo em centavos de DÓLAR, sempre como
  * números SEPARADOS. Quem lê decide a taxa do dia, se quiser comparar.
  *
  * ─── Por que a receita do plano nunca lança preço em `llm_calls` (D-050) ────
  *
- * O preço do plano vem só de `billing_plans.price_monthly_cents`, lido por
- * uma leitura própria: este módulo nunca escreve nem lê preço de volta em
- * `llm_calls`.
+ * O preço do plano vem só de `billing_plans.price_monthly_cents`: este
+ * módulo nunca escreve nem lê preço de volta em `llm_calls`.
  *
- * ─── Por que os créditos avulsos filtram por CHAVE, não por fonte ───────────
+ * ─── Estimado é estimativa, não gasto medido ────────────────────────────────
  *
- * A fonte "avulso" no livro-caixa também recebe linhas de CONSUMO
- * (`consumo:<llm_call_id>:avulso`) e de AJUSTE. Só a chave `credito:<uuid>`
- * identifica um crédito de verdade (decisão 6/7); filtrar por
- * `fonte = 'avulso'` contaria consumo e ajuste como se fossem receita.
+ * `custoEstimadoCentsUsd` casa o modelo da chamada com o catálogo
+ * `ai_models` (mesma ordem de busca da correção do item 10,
+ * `lib/ai/runtime/cost.ts`): é o preço de LISTA do provedor, não o que a
+ * Hiperbold de fato pagou (que só `cost_cents` sabe). `chamadasSemPreco` é o
+ * que nem essa estimativa cobre: nem o custo real, nem uma lista de preço
+ * casou.
  *
  * Nunca lança, mesma regra das irmãs desta pasta: qualquer leitura que falhar
  * vira `leitura_falhou`, nunca um número zerado ou inventado (perderia
@@ -49,7 +59,6 @@ import { z } from "zod";
 import type { Logger } from "@/lib/agent-engine/obs/logger";
 
 import { primeiroDiaDoCicloAtual } from "./extrato-do-ciclo";
-import { inicioDoCicloEmUtc } from "./livro-caixa-do-ciclo";
 
 export interface PainelDeMargem {
   ciclo: string;
@@ -61,11 +70,15 @@ export interface PainelDeMargem {
   receitaCreditosCents: number;
   /** Soma das três receitas acima, em CENTAVOS DE REAL. */
   receitaTotalCents: number;
-  /** Soma de `cost_cents_conhecido` do ciclo, em CENTAVOS DE DÓLAR (nunca convertidos para real). */
+  /** Soma de `cost_cents` CONHECIDO do ciclo, em CENTAVOS DE DÓLAR (nunca convertidos para real). */
   custoConhecidoCentsUsd: number;
-  /** Quantas chamadas do ciclo tinham custo desconhecido (`cost_cents` nulo). */
-  chamadasCustoNulo: number;
-  /** Verdadeiro quando `chamadasCustoNulo > 0`: o custo em dólar está incompleto, nunca "é isso". */
+  /** Soma ESTIMADA pelo catálogo `ai_models` para as chamadas do ciclo com `cost_cents` nulo, em CENTAVOS DE DÓLAR: preço de lista, não gasto medido. */
+  custoEstimadoCentsUsd: number;
+  /** Quantas chamadas do ciclo tiveram o custo estimado pelo catálogo (não o real). */
+  chamadasEstimadas: number;
+  /** Quantas chamadas do ciclo não têm `cost_cents` nem preço no catálogo: nem o real, nem a estimativa cobre. */
+  chamadasSemPreco: number;
+  /** Verdadeiro quando `chamadasSemPreco > 0`: mesmo com a estimativa, o custo do ciclo está incompleto, nunca "é isso". */
   custoIncompleto: boolean;
 }
 
@@ -73,20 +86,17 @@ export type ResultadoPainelDeMargem =
   | { status: "ok"; margem: PainelDeMargem }
   | { status: "leitura_falhou" };
 
-const esquemaDoContrato = z
+/** O formato exato de `fn_billing_margem_do_ciclo` (Parte 6, item 1c da revisão). */
+const esquemaDaMargemRpc = z
   .object({
-    billing_plans: z.object({ price_monthly_cents: z.coerce.number().int() }).nullable(),
-  })
-  .strict();
-
-const esquemaDoAdicional = z.object({ valor_cents: z.coerce.number().int().nullable() }).strict();
-
-const esquemaDoCredito = z.object({ valor_cents: z.coerce.number().int().nullable() }).strict();
-
-const esquemaDoConsumoDiario = z
-  .object({
-    cost_cents_conhecido: z.coerce.number(),
-    chamadas_custo_nulo: z.coerce.number().int(),
+    receita_plano_cents: z.coerce.number().int(),
+    receita_adicionais_cents: z.coerce.number().int(),
+    receita_creditos_cents: z.coerce.number().int(),
+    receita_total_cents: z.coerce.number().int(),
+    custo_conhecido_cents: z.coerce.number(),
+    custo_estimado_cents: z.coerce.number(),
+    chamadas_estimadas: z.coerce.number().int(),
+    chamadas_sem_preco: z.coerce.number().int(),
   })
   .strict();
 
@@ -100,76 +110,34 @@ export async function painelDeMargem(
   const inicioDoCiclo = ciclo ?? primeiroDiaDoCicloAtual();
 
   try {
-    const [contratoRes, adicionaisRes, creditosRes, consumoRes] = await Promise.all([
-      admin
-        .from("billing_contracts")
-        .select("billing_plans(price_monthly_cents)")
-        .eq("organization_id", organizationId)
-        .maybeSingle(),
-      admin
-        .from("billing_token_adicionais")
-        .select("valor_cents")
-        .eq("organization_id", organizationId)
-        .eq("ativo", true),
-      admin
-        .from("billing_token_ledger")
-        .select("valor_cents")
-        .eq("organization_id", organizationId)
-        .like("chave", "credito:%")
-        .gte("created_at", inicioDoCicloEmUtc(inicioDoCiclo)),
-      admin
-        .from("billing_token_consumo_diario")
-        .select("cost_cents_conhecido, chamadas_custo_nulo")
-        .eq("organization_id", organizationId)
-        .gte("dia", inicioDoCiclo),
-    ]);
+    const { data, error } = await admin.rpc("fn_billing_margem_do_ciclo", {
+      p_org: organizationId,
+      p_ciclo: inicioDoCiclo,
+    });
 
-    if (contratoRes.error) throw new Error(`ler contrato do painel de margem: ${contratoRes.error.message}`);
-    if (adicionaisRes.error) throw new Error(`ler adicionais do painel de margem: ${adicionaisRes.error.message}`);
-    if (creditosRes.error) throw new Error(`ler créditos do painel de margem: ${creditosRes.error.message}`);
-    if (consumoRes.error) throw new Error(`ler consumo do painel de margem: ${consumoRes.error.message}`);
-
-    // Sem contrato gravado (organização anterior ao gatilho, mesmo caso de
-    // `planoDaOrganizacao`): receita do plano fica 0, nunca inventa preço.
-    let receitaPlanoCents = 0;
-    if (contratoRes.data !== null) {
-      const contratoParseado = esquemaDoContrato.safeParse(contratoRes.data);
-      if (!contratoParseado.success) {
-        throw new Error(`contrato do painel de margem fora do esquema: ${contratoParseado.error.message}`);
-      }
-      receitaPlanoCents = contratoParseado.data.billing_plans?.price_monthly_cents ?? 0;
+    if (error) {
+      throw new Error(`ler painel de margem: ${error.message}`);
     }
 
-    const adicionaisParseados = z.array(esquemaDoAdicional).safeParse(adicionaisRes.data);
-    if (!adicionaisParseados.success) {
-      throw new Error(`adicionais do painel de margem fora do esquema: ${adicionaisParseados.error.message}`);
+    const parsed = esquemaDaMargemRpc.safeParse(data);
+    if (!parsed.success) {
+      throw new Error(`painel de margem fora do esquema: ${parsed.error.message}`);
     }
-    const receitaAdicionaisCents = adicionaisParseados.data.reduce((acc, l) => acc + (l.valor_cents ?? 0), 0);
-
-    const creditosParseados = z.array(esquemaDoCredito).safeParse(creditosRes.data);
-    if (!creditosParseados.success) {
-      throw new Error(`créditos do painel de margem fora do esquema: ${creditosParseados.error.message}`);
-    }
-    const receitaCreditosCents = creditosParseados.data.reduce((acc, l) => acc + (l.valor_cents ?? 0), 0);
-
-    const consumoParseado = z.array(esquemaDoConsumoDiario).safeParse(consumoRes.data);
-    if (!consumoParseado.success) {
-      throw new Error(`consumo do painel de margem fora do esquema: ${consumoParseado.error.message}`);
-    }
-    const custoConhecidoCentsUsd = consumoParseado.data.reduce((acc, l) => acc + l.cost_cents_conhecido, 0);
-    const chamadasCustoNulo = consumoParseado.data.reduce((acc, l) => acc + l.chamadas_custo_nulo, 0);
+    const d = parsed.data;
 
     return {
       status: "ok",
       margem: {
         ciclo: inicioDoCiclo,
-        receitaPlanoCents,
-        receitaAdicionaisCents,
-        receitaCreditosCents,
-        receitaTotalCents: receitaPlanoCents + receitaAdicionaisCents + receitaCreditosCents,
-        custoConhecidoCentsUsd,
-        chamadasCustoNulo,
-        custoIncompleto: chamadasCustoNulo > 0,
+        receitaPlanoCents: d.receita_plano_cents,
+        receitaAdicionaisCents: d.receita_adicionais_cents,
+        receitaCreditosCents: d.receita_creditos_cents,
+        receitaTotalCents: d.receita_total_cents,
+        custoConhecidoCentsUsd: d.custo_conhecido_cents,
+        custoEstimadoCentsUsd: d.custo_estimado_cents,
+        chamadasEstimadas: d.chamadas_estimadas,
+        chamadasSemPreco: d.chamadas_sem_preco,
+        custoIncompleto: d.chamadas_sem_preco > 0,
       },
     };
   } catch (err) {

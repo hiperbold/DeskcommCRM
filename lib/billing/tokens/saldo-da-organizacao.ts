@@ -21,6 +21,15 @@
  * números fazem sentido contra um total disponível), "sem_limite" (Ilimitado,
  * decisão 9: não existe concessão de `plano`, então `total_disponivel` não
  * tem significado e fica de fora do tipo, não só zerado) e "leitura_falhou".
+ *
+ * ─── `concessaoPendente` (item 9/13 da revisão, 23/09/2026) ─────────────────
+ *
+ * `fn_billing_saldo_da_carteira` (Parte 4, item 6 da revisão) devolve
+ * `concessao_pendente: true` quando a trava da carteira estava ocupada e a
+ * concessão do ciclo ainda não rodou: os números de `por_fonte`/`total_*` já
+ * vêm com o teto efetivo emprestado (sem gravar nada), mas quem lê precisa
+ * saber que é um empréstimo, não o retrato final. Só existe na variante "ok"
+ * (Ilimitado nunca concede `plano`, decisão 9, e nunca fica pendente).
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
@@ -44,6 +53,8 @@ export type ResultadoSaldoDaCarteira =
       porFonte: Record<FonteCarteira, SaldoPorFonte>;
       totalDisponivel: number;
       totalConsumido: number;
+      /** Item 6/13 da revisão: a concessão do ciclo ainda não rodou; os números acima já emprestam o teto efetivo. */
+      concessaoPendente: boolean;
     }
   | {
       status: "sem_limite";
@@ -63,7 +74,7 @@ const esquemaDaFonte = z
   })
   .strict();
 
-/** O formato exato de `fn_billing_saldo_da_carteira` (migração 0906, item 22). */
+/** O formato exato de `fn_billing_saldo_da_carteira` (migração 0906, item 22, com `concessao_pendente` da Parte 6/item 6 da revisão). */
 const esquemaDoSaldo = z
   .object({
     ciclo: z.string().min(1),
@@ -73,6 +84,7 @@ const esquemaDoSaldo = z
     sem_limite: z.boolean(),
     total_disponivel: z.coerce.number().int(),
     total_consumido: z.coerce.number().int(),
+    concessao_pendente: z.boolean(),
   })
   .strict();
 
@@ -115,6 +127,7 @@ export async function saldoDaOrganizacao(
       porFonte,
       totalDisponivel: parsed.data.total_disponivel,
       totalConsumido: parsed.data.total_consumido,
+      concessaoPendente: parsed.data.concessao_pendente,
     };
   } catch (err) {
     log?.error("alarme_planos_leitura", {

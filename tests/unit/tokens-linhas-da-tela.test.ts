@@ -23,6 +23,7 @@ const SALDO_OK: ResultadoSaldoDaCarteira = {
   },
   totalDisponivel: 3_100_000,
   totalConsumido: 500_000,
+  concessaoPendente: false,
 };
 
 const SALDO_SEM_LIMITE: ResultadoSaldoDaCarteira = {
@@ -66,6 +67,7 @@ describe("linhasDeTokensDeIA", () => {
       percentual: 16, // round(500000/3100000*100)
       estourou: false,
       saldoNegativo: false,
+      concessaoPendente: false,
       fontes: [
         { fonte: "plano", ...SALDO_OK.porFonte.plano },
         { fonte: "avulso", ...SALDO_OK.porFonte.avulso },
@@ -118,6 +120,30 @@ describe("linhasDeTokensDeIA", () => {
     const r = linhasDeTokensDeIA(saldoNegativo, EXTRATO_OK, ESTIMATIVA_OK);
 
     expect(r.carteira).toMatchObject({ percentual: 100, estourou: true, saldoNegativo: true });
+  });
+
+  it("item 13 da revisão: concessão pendente nunca é estourou, mesmo com consumido >= disponível", () => {
+    const saldoComConcessaoPendente: ResultadoSaldoDaCarteira = {
+      ...SALDO_OK,
+      concessaoPendente: true,
+      totalConsumido: 3_100_000, // igual ao disponível: sem a guarda, marcaria estourou
+    };
+
+    const r = linhasDeTokensDeIA(saldoComConcessaoPendente, EXTRATO_OK, ESTIMATIVA_OK);
+
+    expect(r.carteira).toMatchObject({ concessaoPendente: true, estourou: false, saldoNegativo: false });
+  });
+
+  it("item 13 da revisão: disponível zero e consumido zero nunca é estourou", () => {
+    const saldoSemDadoAinda: ResultadoSaldoDaCarteira = {
+      ...SALDO_OK,
+      totalDisponivel: 0,
+      totalConsumido: 0,
+    };
+
+    const r = linhasDeTokensDeIA(saldoSemDadoAinda, EXTRATO_OK, ESTIMATIVA_OK);
+
+    expect(r.carteira).toMatchObject({ estourou: false, saldoNegativo: false });
   });
 
   it("extrato por dia: mais recente primeiro", () => {
