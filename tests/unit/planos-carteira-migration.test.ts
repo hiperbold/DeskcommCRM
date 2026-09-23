@@ -932,3 +932,118 @@ describe("0906 carteira de tokens de IA (parte 4, Tarefas 4, 5 e 8)", () => {
     );
   });
 });
+
+describe("0906 carteira de tokens de IA (parte 5, correções da auditoria de segurança de 23/09/2026)", () => {
+  it("a parte 5 está no MESMO arquivo, e o bloco do baseline continua idêntico ao arquivo inteiro da migração", () => {
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION);
+    const sqlBloco = removeComentariosEBrancas(extraiBlocoBaseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+    const inicioParte5 = MIGRATION.indexOf("Parte 5: correções da auditoria de segurança");
+    expect(inicioParte5).toBeGreaterThan(-1);
+  });
+
+  it("A1: llm_calls perde insert/update/delete/truncate para authenticated e anon", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/revoke insert, update, delete, truncate on public\.llm_calls from authenticated, anon;/);
+    }
+  });
+
+  it("A1: três policies RESTRICTIVE separadas (insert/update/delete) para authenticated, sem tocar a policy do autor", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/create policy billing_llm_calls_restringe_insert on public\.llm_calls\s*\n\s*as restrictive\s*\n\s*for insert\s*\n\s*to authenticated\s*\n\s*with check \(false\);/);
+      expect(sql).toMatch(/create policy billing_llm_calls_restringe_update on public\.llm_calls\s*\n\s*as restrictive\s*\n\s*for update\s*\n\s*to authenticated\s*\n\s*using \(false\);/);
+      expect(sql).toMatch(/create policy billing_llm_calls_restringe_delete on public\.llm_calls\s*\n\s*as restrictive\s*\n\s*for delete\s*\n\s*to authenticated\s*\n\s*using \(false\);/);
+    }
+    // Nenhuma alteração na policy do autor (0050): esta migration nunca
+    // recria (create/drop policy) tenant_isolation_llm_calls_all: só a
+    // MENCIONA em comentário, explicando por que não foi tocada.
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).not.toMatch(/(create|drop) policy[^\n]*tenant_isolation_llm_calls_all/);
+    }
+  });
+
+  it("A1, item 2: fn_billing_debitar_chamada grava ciclo nas três linhas de consumo, e a coluna nasce ANTES desta função (reordenada para a Parte 2)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicioAlterCedo = sql.indexOf("alter table public.billing_token_ledger add column if not exists ciclo date;");
+      const inicioFuncao = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      expect(inicioAlterCedo, "alter table ciclo não encontrado").toBeGreaterThan(-1);
+      expect(inicioFuncao, "fn_billing_debitar_chamada não encontrada").toBeGreaterThan(-1);
+      expect(inicioAlterCedo).toBeLessThan(inicioFuncao);
+
+      const corpo = sql.slice(inicioFuncao, sql.indexOf("$$;", inicioFuncao));
+      expect(corpo).toMatch(/'consumo:' \|\| p_llm_call_id::text \|\| ':plano', p_llm_call_id, v_ciclo\)/);
+      expect(corpo).toMatch(/'consumo:' \|\| p_llm_call_id::text \|\| ':adicional', p_llm_call_id, v_ciclo\)/);
+      expect(corpo).toMatch(/'consumo:' \|\| p_llm_call_id::text \|\| ':avulso', p_llm_call_id, v_ciclo\)/);
+    }
+  });
+
+  it("M1: fn_billing_debitar_chamada recusa reenvio da MESMA chamada logo depois da trava, antes de recalcular a divisão por fonte", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posTrava = corpo.indexOf("pg_try_advisory_xact_lock(hashtextextended('billing_tokens:'");
+      const posGuardaM1 = corpo.indexOf(
+        "select 1 from public.billing_token_ledger\n    where organization_id = v_chamada.organization_id and llm_call_id = p_llm_call_id",
+      );
+      const posGarantirConcessoes = corpo.indexOf("perform public.fn_billing_garantir_concessoes(v_chamada.organization_id, v_ciclo);");
+      expect(posTrava, "trava não encontrada").toBeGreaterThan(-1);
+      expect(posGuardaM1, "guarda M1 não encontrada").toBeGreaterThan(-1);
+      expect(posGarantirConcessoes, "garantir_concessoes não encontrada").toBeGreaterThan(-1);
+      expect(posTrava).toBeLessThan(posGuardaM1);
+      expect(posGuardaM1).toBeLessThan(posGarantirConcessoes);
+    }
+  });
+
+  it("fn_billing_conferir_carteira recalcula consumido só pela coluna ciclo do livro-caixa, sem nenhum join em llm_calls", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_carteira(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).not.toMatch(/left join public\.llm_calls/);
+      expect(corpo).not.toMatch(/fn_billing_ciclo_de\(c\.created_at\)/);
+      expect(corpo).toMatch(/v_linha\.fonte = 'avulso'\s*\n\s*or l\.ciclo = v_linha\.ciclo/);
+    }
+  });
+
+  it("backfill idempotente preenche ciclo das linhas de consumo antigas a partir de llm_calls.created_at (o único UPDATE no livro-caixa, roda como dono)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /update public\.billing_token_ledger l\s*\n\s*set ciclo = public\.fn_billing_ciclo_de\(c\.created_at\)\s*\n\s*from public\.llm_calls c\s*\n\s*where l\.llm_call_id = c\.id\s*\n\s*and l\.chave like 'consumo:%'\s*\n\s*and l\.ciclo is null;/,
+      );
+    }
+  });
+
+  it("comentário do LGPD/0019 (causa errada da lacuna) não existe mais NESTA migration (só no bloco 0906, outras migrations podem falar de LGPD por outro motivo)", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).not.toMatch(/expurgo de LGPD/);
+      expect(sql).not.toMatch(/LGPD, 0019/);
+    }
+  });
+
+  it("B1: fn_billing_contratar_adicional recusa reenvio da MESMA chave de OUTRA organização (42501)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_contratar_adicional(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /if v_linhas = 0 and not exists \(\s*\n\s*select 1 from public\.billing_token_adicionais where id = p_chave and organization_id = p_org\s*\n\s*\) then\s*\n\s*raise exception 'adicional_de_outra_organizacao' using errcode = '42501';/,
+      );
+    }
+  });
+
+  it("B2: fn_billing_ajustar_tokens recusa um segundo ajuste com o mesmo compensa_id na organização (22023)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ajustar_tokens(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /if p_compensa is not null and exists \(\s*\n\s*select 1 from public\.billing_token_ledger\s*\n\s*where organization_id = p_org and chave like 'ajuste:%' and compensa_id = p_compensa\s*\n\s*\) then\s*\n\s*raise exception 'ajuste_compensa_ja_usado' using errcode = '22023';/,
+      );
+    }
+  });
+
+  it("B3: agent_worker perde SELECT nas cinco tabelas da carteira, no bloco da Parte 5", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /revoke select on public\.billing_token_ledger, public\.billing_token_wallets, public\.billing_token_adicionais, public\.billing_token_consumo_diario, public\.billing_token_avisos_emitidos from agent_worker/,
+      );
+    }
+  });
+});

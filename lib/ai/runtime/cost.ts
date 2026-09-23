@@ -116,10 +116,17 @@ export async function precoDoCatalogoOuNull(
   const semPrefixo = model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model;
   const row = mapa.get(key(provider, semPrefixo));
   if (!row) return { preco: null, falhou: false };
+  // M2 (auditoria de segurança, 23/09/2026): preço PARCIALMENTE nulo no
+  // catálogo (só entrada ou só saída cadastrada) não pode virar custo zero na
+  // metade que falta: `?? 0` fazia exatamente isso. Qualquer um dos dois
+  // nulo é "preço inteiro desconhecido" (D-050): nunca inventa metade de graça.
+  if (row.input_price_per_million_cents === null || row.output_price_per_million_cents === null) {
+    return { preco: null, falhou: false };
+  }
   return {
     preco: {
-      inputCentsPerMillion: Number(row.input_price_per_million_cents ?? 0),
-      outputCentsPerMillion: Number(row.output_price_per_million_cents ?? 0),
+      inputCentsPerMillion: Number(row.input_price_per_million_cents),
+      outputCentsPerMillion: Number(row.output_price_per_million_cents),
     },
     falhou: false,
   };

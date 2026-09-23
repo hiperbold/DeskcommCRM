@@ -171,6 +171,11 @@ export async function custoCentsComCatalogo(
     return null;
   }
   if (!preco) return null;
+  // M2 (auditoria de segurança, 23/09/2026): os dois preços zero não é
+  // diferente de desconhecido, mesma doutrina de `lib/ai/cost.ts` →
+  // `precoDoCatalogo`. 0/0 aqui não é "de graça", é "sem preço cadastrado no
+  // catálogo": devolver o cálculo (sempre 0) esconderia isso do orçamento.
+  if (preco.inputCentsPerMillion === 0 && preco.outputCentsPerMillion === 0) return null;
 
   return (usage.inputTokens * preco.inputCentsPerMillion + usage.outputTokens * preco.outputCentsPerMillion) / 1_000_000;
 }

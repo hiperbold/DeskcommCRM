@@ -38543,6 +38543,18 @@ $$;
 --
 -- Idempotente: create or replace, drop trigger if exists antes de recriar.
 
+-- A1 (auditoria de segurança, 23/09/2026, defesa em profundidade item 2):
+-- billing_token_ledger.ciclo precisa existir ANTES de fn_billing_debitar_
+-- chamada, logo abaixo, gravar nela nas três linhas de CONSUMO (a versão
+-- original desta migration só criava esta coluna na Parte 4, item 17, para
+-- fn_billing_ajustar_tokens; adiantada aqui, de propósito, para o débito
+-- também gravar o ciclo da chamada em toda linha de consumo, sem depender de
+-- llm_calls continuar viva para o conferidor de carteira recalcular
+-- consumido). add column if not exists é idempotente com o item 17 da Parte
+-- 4, mais abaixo, que continua intacto (a mesma instrução ali não faz nada
+-- quando a coluna já existe).
+alter table public.billing_token_ledger add column if not exists ciclo date;
+
 -- ============================================================================
 -- 10. fn_billing_garantir_concessoes: concessão preguiçosa e idempotente
 -- (decisão 9).
@@ -38699,6 +38711,21 @@ begin
     return false;
   end if;
 
+  -- M1 (auditoria de segurança, 23/09/2026): idempotência de verdade, logo
+  -- depois de pegar a trava. As chaves 'consumo:<id>:<fonte>' só travam
+  -- reenvio da MESMA fonte; se entre duas execuções desta função um crédito
+  -- avulso mudar a divisão entre fontes (decisão 6), a segunda execução
+  -- gravava uma linha de fonte NOVA para a MESMA chamada, debitando duas
+  -- vezes o total (30.000 viravam 31.000, medido). Uma chamada já debitada
+  -- (QUALQUER linha 'consumo:%' dela no livro-caixa) nunca é debitada de
+  -- novo, ponto final.
+  if exists (
+    select 1 from public.billing_token_ledger
+    where organization_id = v_chamada.organization_id and llm_call_id = p_llm_call_id
+  ) then
+    return false;
+  end if;
+
   -- Já sob a trava: garante a concessão do ciclo DA CHAMADA (fn_billing_
   -- garantir_concessoes não faz nada sozinha se esse ciclo já fechou).
   perform public.fn_billing_garantir_concessoes(v_chamada.organization_id, v_ciclo);
@@ -38732,8 +38759,14 @@ begin
   v_debito_plano := v_debito_plano + v_restante;
 
   if v_debito_plano > 0 then
-    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id)
-    values (v_chamada.organization_id, 'plano', -v_debito_plano, 'consumo:' || p_llm_call_id::text || ':plano', p_llm_call_id)
+    -- A1 (auditoria de segurança, item 2, defesa em profundidade): grava o
+    -- ciclo DA CHAMADA também na linha de CONSUMO, não só na de concessão
+    -- (que já carrega o ciclo na chave). fn_billing_conferir_carteira (Parte
+    -- 4, abaixo) passa a recalcular consumido por esta coluna, sem depender
+    -- de llm_calls continuar viva nem gravável por ninguém além de
+    -- service_role.
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id, ciclo)
+    values (v_chamada.organization_id, 'plano', -v_debito_plano, 'consumo:' || p_llm_call_id::text || ':plano', p_llm_call_id, v_ciclo)
     on conflict (organization_id, chave) do nothing;
 
     get diagnostics v_linhas = row_count;
@@ -38748,8 +38781,10 @@ begin
   end if;
 
   if v_debito_adicional > 0 then
-    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id)
-    values (v_chamada.organization_id, 'adicional', -v_debito_adicional, 'consumo:' || p_llm_call_id::text || ':adicional', p_llm_call_id)
+    -- A1, item 2 (defesa em profundidade): mesmo racional do bloco de plano,
+    -- acima.
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id, ciclo)
+    values (v_chamada.organization_id, 'adicional', -v_debito_adicional, 'consumo:' || p_llm_call_id::text || ':adicional', p_llm_call_id, v_ciclo)
     on conflict (organization_id, chave) do nothing;
 
     get diagnostics v_linhas = row_count;
@@ -38764,8 +38799,12 @@ begin
   end if;
 
   if v_debito_avulso > 0 then
-    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id)
-    values (v_chamada.organization_id, 'avulso', -v_debito_avulso, 'consumo:' || p_llm_call_id::text || ':avulso', p_llm_call_id)
+    -- A1, item 2 (defesa em profundidade): a linha de consumo também grava
+    -- o ciclo da chamada, informativo (a carteira avulso não usa ciclo,
+    -- decisão 6/N13: fn_billing_conferir_carteira, abaixo, ignora esta
+    -- coluna para a fonte avulso e soma a fonte inteira, como já fazia).
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id, ciclo)
+    values (v_chamada.organization_id, 'avulso', -v_debito_avulso, 'consumo:' || p_llm_call_id::text || ':avulso', p_llm_call_id, v_ciclo)
     on conflict (organization_id, chave) do nothing;
 
     get diagnostics v_linhas = row_count;
@@ -39148,12 +39187,22 @@ $$;
 -- avulso (chave 'credito:%', só a linha de avulso) e ajuste (chave
 -- 'ajuste:%', ciclo lido da coluna nova, positivo e negativo, decisão 4);
 -- consumido = soma (invertida de sinal) das linhas 'consumo:%' desta fonte,
--- casadas por llm_call_id com o ciclo REAL da chamada (fn_billing_ciclo_de
--- de llm_calls.created_at, a mesma regra do débito) para plano/adicional, e
--- sem filtro de ciclo para avulso. Chamada de IA apagada (por exemplo pelo
--- expurgo de LGPD, 0019) some do recálculo: lacuna conhecida e declarada
--- aqui, não escondida: o livro-caixa continua tendo a linha de consumo
--- (não é apagado, decisão 7), só perde a informação de ciclo dela.
+-- casadas pela coluna ciclo GRAVADA NA PRÓPRIA LINHA de consumo (a mesma
+-- coluna que fn_billing_debitar_chamada, Parte 2, passou a preencher com o
+-- ciclo da chamada, correção A1 da auditoria de segurança de 23/09/2026) para
+-- plano/adicional, e sem filtro de ciclo para avulso. Este recálculo NÃO
+-- depende de llm_calls (nenhum join, nenhuma leitura): o comentário anterior
+-- desta função atribuía a lacuna a uma rotina de expurgo de dados pessoais
+-- (citando a migration numerada da limpeza de dados) que nunca existiu em
+-- código nenhum deste repositório; a lacuna real era A1 (qualquer
+-- membro podia apagar ou alterar linhas de llm_calls pelo PostgREST com a
+-- policy `tenant_isolation_llm_calls_all`, FOR ALL, e zerar o consumido no
+-- próximo ciclo do conferidor). Com A1 corrigido (revoke de insert/update/
+-- delete/truncate em llm_calls para authenticated/anon, Parte 5, fim deste
+-- arquivo) E este recálculo independente de llm_calls, a lacuna deixa de
+-- existir nos dois lados: mesmo que uma llm_call seja apagada no futuro por
+-- outro motivo, o consumido recalculado continua correto, porque a
+-- informação de ciclo já está na própria linha do livro-caixa.
 --
 -- Idempotente: add column if not exists, drop constraint if exists, create
 -- or replace, bloco final de agent_worker igual ao das partes 1 a 3.
@@ -39166,9 +39215,29 @@ alter table public.billing_token_ledger add column if not exists ciclo date;
 alter table public.billing_token_ledger add column if not exists compensa_id uuid;
 
 comment on column public.billing_token_ledger.ciclo is
-  '0906, Parte 4: ciclo (mês civil) a que esta linha pertence, gravado só por fn_billing_ajustar_tokens (nulo para ajuste de avulso). Concessão não precisa desta coluna (o ciclo já está na chave, ''plano:<ciclo>''/''adicional:<id>:<ciclo>''); crédito é sempre avulso, sem ciclo; consumo é reconciliado por llm_call_id (fn_billing_conferir_carteira, abaixo), não por esta coluna. SEM default: linha antiga de concessão/crédito/consumo fica com ciclo nulo para sempre, e o conferidor de carteira sabe disso e não depende dela para essas três.';
+  '0906, Parte 4, revisado por A1 (auditoria de segurança, 23/09/2026): ciclo (mês civil) a que esta linha pertence. Gravado por fn_billing_ajustar_tokens (nulo para ajuste de avulso) E, desde A1, também por fn_billing_debitar_chamada (Parte 2) em toda linha de CONSUMO, com o ciclo da chamada (informativo para avulso, que a carteira não agrupa por ciclo). Concessão não precisa desta coluna (o ciclo já está na chave, ''plano:<ciclo>''/''adicional:<id>:<ciclo>''); crédito é sempre avulso, sem ciclo. SEM default: linha antiga de consumo gravada ANTES de A1 fica com ciclo nulo até o backfill idempotente logo abaixo rodar; linha antiga de concessão/crédito continua com ciclo nulo para sempre (não precisa dele).';
 comment on column public.billing_token_ledger.compensa_id is
   '0906, Parte 4, decisão 16: id da linha do livro-caixa que este ajuste compensa (estorno de débito errado), só informativo. SEM chave estrangeira, mesmo racional de llm_call_id e criado_por (decisão 7): apagar a linha compensada não pode travar, e o livro-caixa não tem UPDATE para desfazer uma FK com on delete set null.';
+
+-- A1 (auditoria de segurança, 23/09/2026, defesa em profundidade item 2):
+-- preenchimento ÚNICO das linhas de CONSUMO gravadas ANTES desta correção
+-- (só existem no banco local; nunca foi para produção), a partir do ciclo
+-- REAL da chamada de origem (fn_billing_ciclo_de(llm_calls.created_at), a
+-- MESMA regra que fn_billing_debitar_chamada, Parte 2, já aplica ao gravar
+-- ciclo em toda linha NOVA de consumo). É o ÚNICO update que este arquivo
+-- faz no livro-caixa: a tabela não tem UPDATE para ninguém (nem para
+-- service_role, revoke na Parte 1), mas esta instrução roda AQUI, dentro da
+-- própria migration, como DONO da tabela, bypassa o revoke, nunca em
+-- código de aplicação. Chamada já apagada (llm_call_id sem linha em
+-- llm_calls) permanece com ciclo nulo: mesma lacuna conhecida e declarada,
+-- sem efeito prático porque fn_billing_conferir_carteira, abaixo, já não
+-- depende de llm_calls para recalcular consumido.
+update public.billing_token_ledger l
+  set ciclo = public.fn_billing_ciclo_de(c.created_at)
+  from public.llm_calls c
+  where l.llm_call_id = c.id
+    and l.chave like 'consumo:%'
+    and l.ciclo is null;
 
 alter table public.billing_token_wallets drop constraint if exists billing_token_wallets_creditado_nao_negativo;
 
@@ -39272,6 +39341,19 @@ begin
 
   get diagnostics v_linhas = row_count;
 
+  -- B1 (auditoria de segurança, 23/09/2026): "on conflict (id) do nothing"
+  -- sozinho não confere DONO. Reenvio da MESMA p_chave (id) de OUTRA
+  -- organização reaproveitaria em silêncio o adicional alheio (v_linhas = 0,
+  -- "criado": false, sem erro nenhum). Só confere quando o insert NÃO
+  -- entrou (a chave já existia): mesmo racional e mesmo errcode de
+  -- fn_billing_cancelar_adicional, abaixo (42501, nunca revela mais do que
+  -- "não é seu").
+  if v_linhas = 0 and not exists (
+    select 1 from public.billing_token_adicionais where id = p_chave and organization_id = p_org
+  ) then
+    raise exception 'adicional_de_outra_organizacao' using errcode = '42501';
+  end if;
+
   -- Já concede o ciclo atual (decisão 9 e 16): sem isso, quem acabou de
   -- contratar um adicional no meio do mês veria saldo zero na tela até a
   -- próxima chamada de IA gerar débito (que é quem, hoje, dispara a
@@ -39285,7 +39367,7 @@ end;
 $$;
 
 comment on function public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid) is
-  '0906, Parte 4, decisão 16: contrata (ou reaproveita) um adicional ativo. id = p_chave, idempotente: reenvio da MESMA chave devolve a linha existente sem duplicar ("criado": false). Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE. Concede o ciclo atual chamando fn_billing_garantir_concessoes (decisão 9) já sob a mesma trava, sempre (mesmo em reenvio, é idempotente). Devolve {"id": uuid, "criado": bool}.';
+  '0906, Parte 4, decisão 16, revisado por B1 (auditoria de segurança, 23/09/2026): contrata (ou reaproveita) um adicional ativo. id = p_chave, idempotente: reenvio da MESMA chave DA MESMA organização devolve a linha existente sem duplicar ("criado": false). Reenvio da MESMA chave de OUTRA organização: 42501 (nunca reaproveita adicional alheio em silêncio). Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE. Concede o ciclo atual chamando fn_billing_garantir_concessoes (decisão 9) já sob a mesma trava, sempre (mesmo em reenvio, é idempotente). Devolve {"id": uuid, "criado": bool}.';
 
 revoke execute on function public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid) to service_role;
@@ -39392,6 +39474,19 @@ begin
     raise exception 'ajuste_compensa_linha_invalida' using errcode = '42501';
   end if;
 
+  -- B2 (auditoria de segurança, 23/09/2026): a MESMA linha do livro-caixa
+  -- não pode ser estornada duas vezes por AJUSTES DIFERENTES (a chave
+  -- 'ajuste:<p_chave>' só protege reenvio da MESMA p_chave, decisão 16; uma
+  -- p_chave NOVA apontando para o compensa_id de um ajuste já feito passava
+  -- direto). Recusa quando já existe outra linha 'ajuste:%' desta
+  -- organização com este compensa_id.
+  if p_compensa is not null and exists (
+    select 1 from public.billing_token_ledger
+    where organization_id = p_org and chave like 'ajuste:%' and compensa_id = p_compensa
+  ) then
+    raise exception 'ajuste_compensa_ja_usado' using errcode = '22023';
+  end if;
+
   perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
 
   -- Ciclo = ATUAL para plano/adicional (o admin ajusta o mês corrente, nunca
@@ -39432,7 +39527,7 @@ end;
 $$;
 
 comment on function public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid) is
-  '0906, Parte 4: ajuste manual com sinal livre (nunca zero, 22023), fonte em plano/adicional/avulso (senão 22023), nota obrigatória (texto não vazio, senão 22023). p_compensa opcional referencia uma linha do livro-caixa DA MESMA organização (senão 42501): fica gravado em compensa_id (item 17), sem FK. Ciclo = ATUAL para plano/adicional, nulo para avulso. Linha ''ajuste:<p_chave>'', idempotente por chave. Ajuste POSITIVO soma em creditado; NEGATIVO subtrai de creditado (pode ficar negativo, decisão do plano da fase): a diferença entre consumo real e ajuste nunca se mistura no extrato de consumido, que só o débito escreve. Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE. Devolve {"ajustado": bool (false = reenvio da mesma chave), "saldo": creditado - consumido da fonte/ciclo ajustados}.';
+  '0906, Parte 4, revisado por B2 (auditoria de segurança, 23/09/2026): ajuste manual com sinal livre (nunca zero, 22023), fonte em plano/adicional/avulso (senão 22023), nota obrigatória (texto não vazio, senão 22023). p_compensa opcional referencia uma linha do livro-caixa DA MESMA organização (senão 42501): fica gravado em compensa_id (item 17), sem FK. A MESMA linha compensada não pode ser estornada duas vezes por ajustes DIFERENTES: já existir outro ''ajuste:%'' desta organização com este compensa_id é 22023 (ajuste_compensa_ja_usado). Ciclo = ATUAL para plano/adicional, nulo para avulso. Linha ''ajuste:<p_chave>'', idempotente por chave. Ajuste POSITIVO soma em creditado; NEGATIVO subtrai de creditado (pode ficar negativo, decisão do plano da fase): a diferença entre consumo real e ajuste nunca se mistura no extrato de consumido, que só o débito escreve. Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE. Devolve {"ajustado": bool (false = reenvio da mesma chave), "saldo": creditado - consumido da fonte/ciclo ajustados}.';
 
 revoke execute on function public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid) to service_role;
@@ -39552,22 +39647,27 @@ begin
         );
 
     -- consumido real: linhas 'consumo:<llm_call_id>:<fonte>' desta fonte.
-    -- avulso não tem ciclo, entra inteiro; plano/adicional casam por
-    -- llm_call_id com o ciclo REAL da chamada (fn_billing_ciclo_de de
-    -- llm_calls.created_at, a MESMA regra do débito, Parte 2). Chamada
-    -- apagada (por exemplo LGPD, 0019) some do recálculo: lacuna conhecida,
-    -- declarada aqui de propósito, não escondida (o livro-caixa preserva a
-    -- linha de consumo, decisão 7, só perde a informação de ciclo dela).
+    -- avulso não tem ciclo, entra inteiro; plano/adicional casam pela coluna
+    -- ciclo GRAVADA NA PRÓPRIA LINHA (fn_billing_debitar_chamada, Parte 2,
+    -- grava o ciclo da chamada em toda linha de consumo desde a correção A1
+    -- da auditoria de segurança de 23/09/2026; linha antiga sem ciclo já foi
+    -- preenchida pelo backfill idempotente do item 17, acima). SEM join em
+    -- llm_calls, de propósito: o comentário anterior desta função atribuía a
+    -- lacuna a uma rotina de expurgo de dados pessoais que nunca existiu em
+    -- código nenhum deste repositório: a lacuna real era A1 (qualquer membro apagava ou
+    -- alterava llm_calls pelo PostgREST e zerava o consumido no próximo
+    -- ciclo deste conferidor). Com o ciclo gravado na própria linha, o
+    -- recálculo é correto mesmo que a llm_call de origem seja apagada no
+    -- futuro por outro motivo.
     select coalesce(sum(-l.tokens), 0)
       into v_consumido_real
       from public.billing_token_ledger l
-      left join public.llm_calls c on c.id = l.llm_call_id
       where l.organization_id = p_org
         and l.fonte = v_linha.fonte
         and l.chave like 'consumo:%'
         and (
           v_linha.fonte = 'avulso'
-          or (c.id is not null and public.fn_billing_ciclo_de(c.created_at) = v_linha.ciclo)
+          or l.ciclo = v_linha.ciclo
         );
 
     if v_linha.creditado <> v_creditado_real or v_linha.consumido <> v_consumido_real then
@@ -39585,7 +39685,7 @@ end;
 $$;
 
 comment on function public.fn_billing_conferir_carteira(uuid) is
-  '0906, Parte 4, decisão 8 (Tarefa 8): conferidor diário de UMA organização. Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE, trava cada linha existente de billing_token_wallets (for update) e recalcula creditado/consumido do livro-caixa (ver comentários no corpo para a regra exata de cada fonte). Corrige só quando diverge; devolve quantas linhas divergiam (0 = carteira íntegra). Limitação conhecida e declarada: linha de consumo cuja llm_call foi apagada (por exemplo expurgo de LGPD) não entra no consumido recalculado, porque perde a única forma de saber a que ciclo pertencia.';
+  '0906, Parte 4, decisão 8 (Tarefa 8), revisado por A1 (auditoria de segurança, 23/09/2026): conferidor diário de UMA organização. Sob pg_advisory_xact_lock(''billing_tokens:<org>'') BLOQUEANTE, trava cada linha existente de billing_token_wallets (for update) e recalcula creditado/consumido do livro-caixa (ver comentários no corpo para a regra exata de cada fonte). Corrige só quando diverge; devolve quantas linhas divergiam (0 = carteira íntegra). Desde A1, o recálculo de consumido usa SÓ a coluna ciclo gravada na própria linha de consumo (fn_billing_debitar_chamada, Parte 2): NENHUM join em llm_calls, e nenhuma dependência de a chamada continuar viva. A versão anterior deste comentário atribuía a lacuna a uma rotina de expurgo de dados pessoais que nunca existiu neste repositório; a lacuna real era llm_calls gravável por qualquer membro via PostgREST (corrigido na Parte 5, fim deste arquivo).';
 
 revoke execute on function public.fn_billing_conferir_carteira(uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_conferir_carteira(uuid) to service_role;
@@ -39664,6 +39764,86 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke execute on function public.fn_billing_creditar_tokens(uuid, bigint, uuid, bigint, text, uuid), public.fn_billing_contratar_adicional(uuid, bigint, uuid, bigint, text, uuid), public.fn_billing_cancelar_adicional(uuid, uuid, uuid), public.fn_billing_ajustar_tokens(uuid, text, bigint, uuid, uuid, text, uuid), public.fn_billing_saldo_da_carteira(uuid), public.fn_billing_conferir_carteira(uuid), public.fn_billing_debitos_pendentes(uuid, integer), public.fn_billing_consumo_da_instalacao_no_dia(date) from agent_worker';
+  end if;
+end
+$$;
+
+-- ── Parte 5: correções da auditoria de segurança da fase F2-B (23/09/2026) ──
+--
+-- As partes 1 a 4 (acima) são o texto ORIGINAL desta migration, como a fase
+-- entregou. Esta parte 5 corrige os achados da auditoria de segurança que
+-- bloqueavam a publicação (A1) e os achados médios/baixos (M1, B1, B2, B3),
+-- sem editar nenhuma policy nem função do AUTOR (anterior a esta migration,
+-- por exemplo `tenant_isolation_llm_calls_all`, da 0050) NO LUGAR: só
+-- acrescenta. As correções nas OITO funções desta própria migration (M1 em
+-- fn_billing_debitar_chamada, A1 item 2 em fn_billing_debitar_chamada e
+-- fn_billing_conferir_carteira, B1 em fn_billing_contratar_adicional, B2 em
+-- fn_billing_ajustar_tokens) já foram feitas NO LUGAR, acima, nas partes 2 e
+-- 4 onde essas funções nasceram: só ficaram para cá o que é
+-- estrutural/aditivo por natureza (grants, policy nova, revoke de agent_worker).
+--
+-- A1 (ALTO, bloqueava a publicação): qualquer membro, com o próprio token
+-- pelo PostgREST, fazia UPDATE ou DELETE nas linhas de `llm_calls` da
+-- própria organização (a policy `tenant_isolation_llm_calls_all`, FOR ALL,
+-- da 0050, cobre update/delete/insert além de select) e também INSERT de
+-- linhas forjadas com `cost_cents` arbitrário. Isso deixava apagar consumo
+-- (o conferidor, Parte 4, recalculava e zerava o consumido no ciclo
+-- seguinte, devolvendo saldo à organização) e estourar
+-- `ai_budgets.current_month_consumed_cents` (numeric 12,4) com uma linha
+-- forjada, derrubando toda chamada legítima seguinte no gatilho do autor
+-- `fn_update_budget_consumption` ("numeric field overflow"). Conferido por
+-- grep (ver relatório da tarefa) que NENHUM caminho de código grava
+-- `llm_calls` pela sessão do usuário (`authenticated`): os únicos escritores
+-- são `createAdminClient()` (service_role) e o pool `pg.Pool` do worker/
+-- scripts (conexão direta por `SUPABASE_DB_URL`/`DB_URL`, fora do papel
+-- `authenticated`). Revogar insert/update/delete/truncate de `authenticated`
+-- e `anon` é seguro: nenhum escritor legítimo depende deles.
+revoke insert, update, delete, truncate on public.llm_calls from authenticated, anon;
+
+-- Suspensórios além do cinto (o revoke acima já barra por privilégio, antes
+-- da RLS ser avaliada): três policies RESTRICTIVE para `authenticated`, uma
+-- por comando de escrita. RESTRICTIVE combina em AND com a policy
+-- PERMISSIVE do autor (`tenant_isolation_llm_calls_all`, FOR ALL, 0050, não
+-- tocada): mesmo que um GRANT futuro reabra insert/update/delete/truncate
+-- para `authenticated` por engano, a RLS ainda barra. Três policies
+-- separadas, não uma FOR ALL: uma única "as restrictive for all using(true)
+-- with check(false)" NÃO bloquearia DELETE, porque DELETE só avalia USING
+-- (nunca WITH CHECK): with check(false) e using(true) juntos deixariam
+-- DELETE passar livre, o oposto do que este bloco existe para fazer.
+drop policy if exists billing_llm_calls_restringe_insert on public.llm_calls;
+create policy billing_llm_calls_restringe_insert on public.llm_calls
+  as restrictive
+  for insert
+  to authenticated
+  with check (false);
+
+drop policy if exists billing_llm_calls_restringe_update on public.llm_calls;
+create policy billing_llm_calls_restringe_update on public.llm_calls
+  as restrictive
+  for update
+  to authenticated
+  using (false);
+
+drop policy if exists billing_llm_calls_restringe_delete on public.llm_calls;
+create policy billing_llm_calls_restringe_delete on public.llm_calls
+  as restrictive
+  for delete
+  to authenticated
+  using (false);
+
+-- B3 (auditoria de segurança): `agent_worker` tem bypassrls e, pelas mesmas
+-- default privileges que dão a ela select em toda tabela nova do schema
+-- public (o motivo dos blocos de revoke de escrita nas partes 1 a 4, acima),
+-- ficou também com SELECT em todo o livro-caixa (nota e valor incluídos),
+-- adicionais, avisos emitidos, carteira e agregado: nenhuma delas revogava
+-- select, só insert/update/delete/truncate. Conferido por grep (ver
+-- relatório da tarefa) que nenhum código de `workers/` ou
+-- `lib/agent-engine/` lê nenhuma destas cinco tabelas: revoga select das
+-- cinco.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke select on public.billing_token_ledger, public.billing_token_wallets, public.billing_token_adicionais, public.billing_token_consumo_diario, public.billing_token_avisos_emitidos from agent_worker';
   end if;
 end
 $$;

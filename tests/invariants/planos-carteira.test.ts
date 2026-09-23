@@ -107,6 +107,15 @@ const ORG_DEBITOS_PENDENTES = "09060003-0000-4000-8000-00000000001c";
 const ORG_DELETE_CASCATA = "09060003-0000-4000-8000-00000000001d";
 const ORG_TRAVA_SO_CARTEIRA = "09060003-0000-4000-8000-00000000001e";
 
+// Casos 30 a 34: correções da auditoria de segurança da fase F2-B (23/09/2026).
+const ORG_A1_LLM_CALLS = "09060003-0000-4000-8000-00000000001f";
+const USER_A1_VIEWER = "09060003-1111-4000-8000-000000000005";
+const ORG_CONFERIR_SEM_LLM_CALLS = "09060003-0000-4000-8000-000000000020";
+const ORG_M1_CREDITO_ENTRE_DEBITOS = "09060003-0000-4000-8000-000000000021";
+const ORG_B1_ADICIONAL_OUTRA_ORG_A = "09060003-0000-4000-8000-000000000022";
+const ORG_B1_ADICIONAL_OUTRA_ORG_B = "09060003-0000-4000-8000-000000000023";
+const ORG_B2_AJUSTE_DUPLO = "09060003-0000-4000-8000-000000000024";
+
 /** Marcador das linhas de resultado, o psql também imprime SET, INSERT 0 1 etc. */
 const MARCA = "SONDA|";
 
@@ -1146,5 +1155,173 @@ describe("29. Exclusão da organização, como service_role, apaga em cascata li
         || ':' || (select count(*) from public.billing_token_avisos_emitidos where organization_id = '${ORG_DELETE_CASCATA}');
     `);
     expect(linhas).toEqual(["0:0:0:0:0"]);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Casos 30 a 34: correções da AUDITORIA DE SEGURANÇA da fase F2-B (23/09/2026).
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("30. A1 (auditoria de segurança): viewer não escreve em llm_calls pela sessão, continua lendo; service_role continua debitando", () => {
+  beforeAll(() => {
+    comoServico(`
+      insert into auth.users (id, email) values ('${USER_A1_VIEWER}', 'carteira-a1-viewer@invariant.test')
+        on conflict (id) do nothing;
+      ${criarOrgSql(ORG_A1_LLM_CALLS, "carteira-a1-llm-calls")}
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at) values
+        ('${USER_A1_VIEWER}', '${ORG_A1_LLM_CALLS}', 'viewer', now())
+      on conflict do nothing;
+      ${ajustarTeto(ORG_A1_LLM_CALLS, 1000)}
+      ${sqlChamada(ORG_A1_LLM_CALLS, "a1-seed", 10)}
+    `);
+  });
+
+  it("viewer lê a própria organização em llm_calls normalmente (RLS de leitura intacta)", () => {
+    expect(
+      membro(USER_A1_VIEWER, `select 'SONDA|' || count(*) from public.llm_calls where organization_id = '${ORG_A1_LLM_CALLS}';`),
+    ).toEqual(["1"]);
+  });
+
+  it("viewer é barrado por permission denied ao inserir em llm_calls", () => {
+    esperaBarrado(
+      USER_A1_VIEWER,
+      `insert into public.llm_calls (organization_id, purpose, provider, model, input_tokens, output_tokens, cache_read_tokens) values ('${ORG_A1_LLM_CALLS}', 'agent_turn', 'anthropic', 'a1-forja-insert', 0, 1, 0)`,
+      "insert em llm_calls pela sessão",
+    );
+  });
+
+  it("viewer é barrado por permission denied ao dar UPDATE em llm_calls", () => {
+    esperaBarrado(
+      USER_A1_VIEWER,
+      `update public.llm_calls set model = 'a1-forjado' where organization_id = '${ORG_A1_LLM_CALLS}'`,
+      "update em llm_calls pela sessão",
+    );
+  });
+
+  it("viewer é barrado por permission denied ao dar DELETE em llm_calls", () => {
+    esperaBarrado(
+      USER_A1_VIEWER,
+      `delete from public.llm_calls where organization_id = '${ORG_A1_LLM_CALLS}'`,
+      "delete em llm_calls pela sessão",
+    );
+  });
+
+  it("service_role continua inserindo em llm_calls, e o gatilho continua debitando", () => {
+    const antes = linhasDeConsumoDe(ORG_A1_LLM_CALLS);
+    comoServico(sqlChamada(ORG_A1_LLM_CALLS, "a1-service-depois", 20));
+    expect(linhasDeConsumoDe(ORG_A1_LLM_CALLS)).toBe(antes + 1);
+  });
+});
+
+describe("31. A1, item 2 (defesa em profundidade): fn_billing_conferir_carteira não depende de llm_calls (nenhum join)", () => {
+  it("apagar a linha de llm_calls (como postgres) não muda o consumido recalculado", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_CONFERIR_SEM_LLM_CALLS, "carteira-conferir-sem-llm-calls")}
+      ${ajustarTeto(ORG_CONFERIR_SEM_LLM_CALLS, 500)}
+      ${sqlChamada(ORG_CONFERIR_SEM_LLM_CALLS, "conferir-sem-llm-calls-150", 150)}
+    `);
+
+    const consumidoAntes = comoServico(
+      `select 'SONDA|' || consumido from public.billing_token_wallets where organization_id = '${ORG_CONFERIR_SEM_LLM_CALLS}' and fonte = 'plano';`,
+    );
+    expect(consumidoAntes).toEqual(["150"]);
+
+    comoServico(
+      `delete from public.llm_calls where organization_id = '${ORG_CONFERIR_SEM_LLM_CALLS}' and model = 'conferir-sem-llm-calls-150';`,
+    );
+
+    const divergentes = comoServico(`select 'SONDA|' || public.fn_billing_conferir_carteira('${ORG_CONFERIR_SEM_LLM_CALLS}'::uuid);`);
+    expect(divergentes, "a llm_call apagada não pode zerar o consumido recalculado").toEqual(["0"]);
+
+    const consumidoDepois = comoServico(
+      `select 'SONDA|' || consumido from public.billing_token_wallets where organization_id = '${ORG_CONFERIR_SEM_LLM_CALLS}' and fonte = 'plano';`,
+    );
+    expect(consumidoDepois).toEqual(["150"]);
+  });
+});
+
+describe("32. M1 (auditoria de segurança): crédito avulso entre duas execuções do débito da MESMA chamada não duplica nem debita duas vezes", () => {
+  it("reenviar fn_billing_debitar_chamada da MESMA chamada, depois de um crédito avulso mudar a divisão, devolve false e não grava linha nova", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_M1_CREDITO_ENTRE_DEBITOS, "carteira-m1-credito-entre-debitos")}
+      ${ajustarTeto(ORG_M1_CREDITO_ENTRE_DEBITOS, 100)}
+      ${sqlChamada(ORG_M1_CREDITO_ENTRE_DEBITOS, "m1-atravessa-600", 600)}
+    `);
+
+    const idDaChamada = comoServico(
+      `select 'SONDA|' || id from public.llm_calls where organization_id = '${ORG_M1_CREDITO_ENTRE_DEBITOS}' and model = 'm1-atravessa-600';`,
+    )[0];
+
+    // O gatilho já debitou (caso 5: o que passa do saldo cai todo em plano).
+    expect(linhasDeConsumoDe(ORG_M1_CREDITO_ENTRE_DEBITOS)).toBe(1);
+    const totalAntes = comoServico(
+      `select 'SONDA|' || (-tokens) from public.billing_token_ledger where organization_id = '${ORG_M1_CREDITO_ENTRE_DEBITOS}' and chave like 'consumo:%';`,
+    );
+    expect(totalAntes).toEqual(["600"]);
+
+    // Um crédito avulso chega DEPOIS do primeiro débito: muda o que a divisão
+    // por fonte faria se recalculada do zero (o defeito do M1).
+    comoServico(
+      `select public.fn_billing_creditar_tokens('${ORG_M1_CREDITO_ENTRE_DEBITOS}'::uuid, 1000, '09060003-c0de-4000-8000-0000000000f1'::uuid, null, 'credito do caso 32', null);`,
+    );
+
+    // Reenvio manual do débito da MESMA chamada (o cenário do conferidor
+    // reprocessando, ou um segundo disparo): a guarda M1 devolve false ANTES
+    // de recalcular a divisão por fonte.
+    const reenvio = comoServico(`select 'SONDA|' || public.fn_billing_debitar_chamada('${idDaChamada}'::uuid);`);
+    expect(reenvio).toEqual(["false"]);
+
+    // Continua com UMA única linha de consumo, total 600 (não uma segunda
+    // linha de fonte avulso somando mais 600, que faria 30.000 virar 31.000
+    // no cenário real medido).
+    expect(linhasDeConsumoDe(ORG_M1_CREDITO_ENTRE_DEBITOS)).toBe(1);
+    const totalDepois = comoServico(
+      `select 'SONDA|' || (-tokens) from public.billing_token_ledger where organization_id = '${ORG_M1_CREDITO_ENTRE_DEBITOS}' and chave like 'consumo:%';`,
+    );
+    expect(totalDepois).toEqual(["600"]);
+  });
+});
+
+describe("33. B1 (auditoria de segurança): reenvio de fn_billing_contratar_adicional com a MESMA chave de OUTRA organização é recusado (42501)", () => {
+  it("a segunda organização não reaproveita o adicional da primeira", () => {
+    const CHAVE = "09060003-c0de-4000-8000-0000000000f2";
+    comoServico(`
+      ${criarOrgSql(ORG_B1_ADICIONAL_OUTRA_ORG_A, "carteira-b1-adicional-a")}
+      ${criarOrgSql(ORG_B1_ADICIONAL_OUTRA_ORG_B, "carteira-b1-adicional-b")}
+      select public.fn_billing_contratar_adicional('${ORG_B1_ADICIONAL_OUTRA_ORG_A}'::uuid, 500, '${CHAVE}'::uuid, null, 'adicional de A', null);
+    `);
+
+    const erro = erroDe(
+      `select public.fn_billing_contratar_adicional('${ORG_B1_ADICIONAL_OUTRA_ORG_B}'::uuid, 500, '${CHAVE}'::uuid, null, 'tenta reaproveitar de B', null);`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("adicional_de_outra_organizacao");
+
+    const donoContinua = comoServico(
+      `select 'SONDA|' || organization_id from public.billing_token_adicionais where id = '${CHAVE}';`,
+    );
+    expect(donoContinua).toEqual([ORG_B1_ADICIONAL_OUTRA_ORG_A]);
+  });
+});
+
+describe("34. B2 (auditoria de segurança): a mesma linha compensada não pode ser estornada duas vezes por ajustes diferentes (22023)", () => {
+  it("um segundo ajuste com p_chave NOVA, mesmo p_compensa, é recusado", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_B2_AJUSTE_DUPLO, "carteira-b2-ajuste-duplo")}
+      select public.fn_billing_creditar_tokens('${ORG_B2_AJUSTE_DUPLO}'::uuid, 100, '09060003-c0de-4000-8000-0000000000f3'::uuid, null, 'linha a compensar', null);
+    `);
+    const idDaLinha = comoServico(
+      `select 'SONDA|' || id from public.billing_token_ledger where organization_id = '${ORG_B2_AJUSTE_DUPLO}' and chave = 'credito:09060003-c0de-4000-8000-0000000000f3';`,
+    )[0];
+
+    comoServico(
+      `select public.fn_billing_ajustar_tokens('${ORG_B2_AJUSTE_DUPLO}'::uuid, 'avulso', -100, '09060003-c0de-4000-8000-0000000000f4'::uuid, '${idDaLinha}'::uuid, 'primeiro estorno', null);`,
+    );
+
+    const erro = erroDe(
+      `select public.fn_billing_ajustar_tokens('${ORG_B2_AJUSTE_DUPLO}'::uuid, 'avulso', -100, '09060003-c0de-4000-8000-0000000000f5'::uuid, '${idDaLinha}'::uuid, 'segundo estorno da MESMA linha', null);`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("ajuste_compensa_ja_usado");
   });
 });

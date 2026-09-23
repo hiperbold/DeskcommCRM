@@ -247,6 +247,26 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
     expect(custo).toBeNull();
   });
 
+  // M2 (auditoria de segurança, 23/09/2026): preço nulo (parcial ou total) no
+  // catálogo nunca pode virar custo zero.
+  it("um dos dois preços nulo no catálogo: null, o resolvedor nunca cobra a metade conhecida sozinha", async () => {
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: null, output_price_per_million_cents: 120 },
+    ];
+    const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const custo = await custoCentsComCatalogo("openai", "gpt-5.6-luna", usage);
+    expect(custo).toBeNull();
+  });
+
+  it("os dois preços zero no catálogo: null, não é diferente de desconhecido (mesma doutrina de lib/ai/cost.ts)", async () => {
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 0, output_price_per_million_cents: 0 },
+    ];
+    const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const custo = await custoCentsComCatalogo("openai", "gpt-5.6-luna", usage);
+    expect(custo).toBeNull();
+  });
+
   it("falha na leitura do catálogo: null, nunca derruba a chamada, e avisa no log", async () => {
     catalogoDeveFalhar = true;
     const avisos: Array<[string, Record<string, unknown> | undefined]> = [];

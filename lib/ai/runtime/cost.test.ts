@@ -92,4 +92,22 @@ describe("precoDoCatalogoOuNull, a leitura nova (D-050): null nunca é zero", ()
       falhou: true,
     });
   });
+
+  // M2 (auditoria de segurança, 23/09/2026): preço PARCIALMENTE nulo no
+  // catálogo não pode virar custo zero na metade que falta.
+  it("preço de entrada nulo no catálogo: preco null inteiro, não {inputCentsPerMillion: 0, ...}", async () => {
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: null, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: null, falhou: false });
+  });
+
+  it("preço de saída nulo no catálogo: preco null inteiro", async () => {
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: null },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: null, falhou: false });
+  });
 });
