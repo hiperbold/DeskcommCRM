@@ -46,7 +46,7 @@ Isto não nasce do zero. O levantamento do código mostrou três coisas aproveit
 
 ### 4.1 O catálogo de planos
 
-Uma tabela com os planos que existem para venda. Cada plano tem um apelido estável (`basico`, `intermediario`, `avancado`, `ilimitado`), um nome de tela, um preço mensal e anual, se está à venda ou não, e duas listas: **os tetos** (quantos de cada coisa) e **os recursos** (o que está ligado ou desligado).
+Uma tabela com os planos que existem para venda. Cada plano tem um apelido estável (`pro`, `max`, `escale`, `ilimitado`), um nome de tela, um preço mensal e anual, se está à venda ou não, e duas listas: **os tetos** (quantos de cada coisa) e **os recursos** (o que está ligado ou desligado).
 
 Tetos e recursos ficam em campo flexível, não em uma coluna por item. Motivo prático: cada item novo que você quiser limitar viraria uma migração de banco e um deploy. Com campo flexível, plano novo e teto novo são cadastro, não obra.
 
@@ -99,9 +99,9 @@ A leitura da tela de uso é uma consulta só, que devolve todos os números de u
 
 ---
 
-## 5. A matriz dos planos (rascunho para você mexer)
+## 5. A matriz dos planos
 
-Os números abaixo são chute inicial meu, para você ter algo concreto para discordar. **Quem define é você**, e o desenho acima aceita qualquer número sem mudar código.
+**Definida pelo Filipe em 23/09/2026.** Os números abaixo são os dele. O que está em itálico é interpretação minha de um termo que ele não detalhou, e cada uma virou pergunta na seção 12.
 
 ### O que nunca é limitado
 
@@ -109,44 +109,60 @@ Estas são as funções essenciais. Limitar qualquer uma delas transforma uma ve
 
 - Receber e responder mensagem, em qualquer canal contratado
 - Histórico de conversa e busca no histórico
-- Contato e lead (o número deles pode ser limitado, mas o uso não)
 - Registro de auditoria e segurança
 - Backup e exportação dos dados do cliente
-- Convite e remoção de usuário dentro do teto contratado
 
-### O que é limitado, por nível
+### Os três planos
 
-| Item | Básico | Intermediário | Avançado |
+| Item | Pro | Max | Escale |
 |---|---|---|---|
-| Usuários | 3 | 10 | 30 |
-| Números de WhatsApp conectados | 1 | 3 | 10 |
-| Agentes de IA | 1 | 5 | 20 |
-| Funis (pipelines) | 1 | 5 | ilimitado |
-| Conexões MCP | 0 | 3 | 10 |
-| Automações ativas | 3 | 20 | ilimitado |
-| Campanhas por mês | 1 | 10 | ilimitado |
-| Contatos | 2.000 | 20.000 | 200.000 |
-| Crédito de IA incluso por mês (ver seção 6) | R$ 50 | R$ 200 | R$ 800 |
-| Retenção de mídia | 90 dias | 365 dias | 730 dias |
+| Preço mensal | R$ 199 | R$ 399 | R$ 599 |
+| Funis (pipelines) | 5 | 10 | 25 |
+| Etapas por funil | até 10 | até 15 | até 20 |
+| Leads | 5 mil | 50 mil | 100 mil |
+| Membros | 3 | 15 | 30 |
+| Conexões *(números de WhatsApp conectados)* | 3 | 10 | 20 |
+| Integrações webhook | 3 | 10 | 20 |
+| Tokens de IA por mês | 1 milhão | 1 milhão | 1 milhão |
 
-### O que é recurso ligado ou desligado, por nível
+Mais o plano **Ilimitado**, que não está à venda: é onde nascem todas as organizações enquanto a cobrança não existe, e onde ficam as organizações internas da Hiperbold.
 
-| Recurso | Básico | Intermediário | Avançado |
-|---|---|---|---|
-| Agente de IA respondendo sozinho | sim | sim | sim |
-| Operador (o agente que executa ações) | não | sim | sim |
-| Conexões MCP (sistemas externos) | não | sim | sim |
-| Campanhas | não | sim | sim |
-| Automações | limitado | sim | sim |
-| Relatórios avançados | não | não | sim |
-| Acesso por API | não | não | sim |
-| Chave de IA própria do cliente | não ofertado (decisão de 22/09/2026, ver seção 6) | | |
+### Como cada item se conta *(interpretação, a confirmar)*
 
-Três observações que valem mais que os números:
+- **Funis**: funis ativos da organização. Funil arquivado não conta, senão arquivar não libera vaga.
+- **Etapas por funil**: o teto vale para cada funil, não para a soma.
+- **Leads**: leads (`crm_leads`) não arquivados. Contatos sem lead não contam.
+- **Membros**: membros ativos **mais convites pendentes**. Sem contar os convites, dá para convidar 50 pessoas e aceitar depois, e o teto vaza pelo convite.
+- **Conexões**: números de WhatsApp conectados, de qualquer tipo (UAZAPI ou API oficial), não arquivados.
+- **Integrações webhook**: a entidade que a tela do CRM chama de integração webhook. O código tem dois candidatos (captação de lead que ENTRA por webhook, e webhook que SAI das automações); a fase 2 começa decidindo qual é, pelo que a tela mostra ao cliente.
+- **Tokens**: ver a seção 6.
 
-- **O teto de IA é o que protege sua margem.** É o único item cujo custo é diretamente seu. Ele já existe pronto no CRM e só precisa passar a ser preenchido pelo plano.
-- **Conexão de WhatsApp é o segundo custo real**, se for por instância paga da UAZAPI. Vale conferir esse custo antes de fechar o número do plano básico.
-- **Contatos é o limite mais perigoso da lista.** É o que mais cresce sozinho, e o cliente que bate nele no meio de uma campanha vai ligar bravo. Talvez seja melhor como aviso, não como bloqueio.
+### O que não está na lista do Filipe, e por isso não é limitado
+
+Agentes de IA, automações, campanhas, conexões MCP, contatos e capacidades por agente. **Todos os recursos existem nos três planos**: a diferença entre eles é só de quantidade. A matriz de "recurso ligado ou desligado por nível" do rascunho anterior foi descartada.
+
+O teto de 10 conexões MCP por organização, que já existe no código desde as conexões MCP, continua valendo como proteção técnica, igual para todos.
+
+### O ponto que precisa de atenção antes de vender: 1 milhão de tokens é pouco
+
+Medido em 23/09/2026 no banco local, nos testes do agente pelo Testar (amostra pequena, com as conexões MCP ligadas):
+
+| O que roda a cada mensagem do cliente | Tokens |
+|---|---|
+| O agente respondendo (média) | 28.500, dos quais 21.650 aproveitados do cache |
+| Conferências internas (intenção, promessa, etapa, sentimento, resumo) | cerca de 3.700 |
+| **Total por mensagem respondida pela IA** | **cerca de 32 mil** |
+
+Então 1 milhão de tokens dá para:
+
+- **cerca de 30 respostas da IA**, se todo token contar igual
+- **cerca de 95 respostas**, se o token aproveitado do cache não contar (ele custa perto de um décimo do preço)
+
+Uma loja com WhatsApp movimentado passa disso em um ou dois dias. O cliente vai bater no teto logo na primeira semana, e a primeira impressão do produto vai ser "a IA parou".
+
+Isso não quer dizer que o número está errado: pode ser a estratégia (vender pacote de tokens). Mas precisa ser uma escolha consciente, e está na seção 12 como pergunta.
+
+Um agente mais enxuto (sem conexões MCP, prompt menor, menos histórico) gasta menos, e a amostra é pequena. A medição com volume real é tarefa da fase 2.
 
 ---
 
@@ -156,7 +172,13 @@ Decisão do Filipe em 22/09/2026: **a chave de IA é da Hiperbold**. O cliente n
 
 Isso é a mudança mais importante deste plano, porque transforma um custo em receita, e porque coloca a conta do fornecedor de IA no seu nome. Tudo que segue é consequência disso.
 
-### 6.1 A unidade de venda: crédito em reais, não token
+### 6.1 A unidade de venda: tokens
+
+**Decisão do Filipe em 23/09/2026: a unidade é token**, 1 milhão por mês em cada plano, com pacote adicional à venda. Onde este plano fala em "crédito", leia "tokens". O fator de remarcação sai do escopo (o preço do pacote é definido por ele, na mão), e o que fica é o painel de margem, que compara o que a organização pagou com o que ela custou de verdade.
+
+Regra de contagem, até ele decidir outra (pergunta na seção 12): **conta a entrada sem cache e a saída inteiras, e o token aproveitado do cache a 10%**, que é a proporção do preço dele no fornecedor. Conta todo consumo de IA feito em nome da organização, inclusive as conferências internas. O peso do cache fica em configuração, não no código.
+
+A recomendação original, registrada para memória porque o risco continua valendo:
 
 **Recomendação forte: não venda "tokens".** Mil tokens em um modelo custam várias vezes mais que mil tokens em outro, e o mesmo atendimento consome quantidades diferentes conforme o modelo que o agente usar. Vendendo token, toda troca de modelo e todo reajuste do fornecedor mexem na sua margem sozinhos, e o pacote que você já vendeu vira prejuízo.
 
@@ -363,6 +385,26 @@ Enquanto o gateway não existe, o cliente compra pacote adicional falando com vo
 ---
 
 ## 12. Perguntas abertas, que são suas e não minhas
+
+### Respondidas pelo Filipe em 23/09/2026
+
+- **Preço mensal**: Pro R$ 199, Max R$ 399, Escale R$ 599 (pergunta 1, falta o anual).
+- **O que fica em cada plano**: todos os recursos nos três, diferença só de quantidade (pergunta 2, resolvida).
+- **Unidade de venda da IA**: tokens, 1 milhão por mês em cada plano (pergunta 8, resolvida).
+
+### Novas, que a matriz dele abriu
+
+- **N1. 1 milhão de tokens é suficiente?** Medido: cerca de 32 mil tokens por resposta da IA, o que dá 30 a 95 respostas por mês (seção 5). É a estratégia de vender pacote, ou o número precisa subir? *Sem resposta: fica 1 milhão, e a tela mostra ao cliente quantas respostas isso rende no consumo real dele.*
+- **N2. O mesmo 1 milhão nos três planos é de propósito?** *Sem resposta: sim.*
+- **N3. Como o token se conta:** o aproveitado do cache conta inteiro, a 10%, ou não conta? As conferências internas de segurança contam no saldo do cliente? *Sem resposta: cache a 10%, conferências contam.*
+- **N4. "Conexões" são números de WhatsApp?** *Sem resposta: sim, qualquer tipo.*
+- **N5. "Integrações webhook" são as de entrada (captação de lead) ou as de saída (automação)?** *Sem resposta: a que a tela chama assim.*
+- **N6. Convite pendente conta como membro?** *Sem resposta: conta, senão o teto vaza pelo convite.*
+- **N7. Agentes, automações, campanhas e conexões MCP ficam sem limite?** *Sem resposta: sim, só o teto técnico de 10 conexões MCP que já existe.*
+- **N8. Preço anual** dos três planos, e se tem desconto.
+- **N9. Preço do pacote adicional de tokens**, e de quantos tokens ele é.
+
+### As que já existiam
 
 São 18, agrupadas pelo assunto e ordenadas pelo que trava mais coisa. Cada uma diz qual fase ela segura e o que eu faço se você não responder. **Nenhuma delas trava a F1.**
 
