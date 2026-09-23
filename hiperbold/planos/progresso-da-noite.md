@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F2
-Etapa da fase: tarefas 3 (gatilhos) e 7 (tela) em paralelo. Feitas: 1 (registro, D-050), 2 (a977b56), 6 (35f0ebf). Faltam 4, 5 e 8.
+Etapa da fase: teste de banco da tarefa 3 e tarefa 5 (conferidor diário) em paralelo. Feitas: 1 (registro, D-050), 2 (a977b56), 3 parte SQL (d78572d, provada à mão), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano). Faltam 4 e 8.
 
 ## Fases
 
