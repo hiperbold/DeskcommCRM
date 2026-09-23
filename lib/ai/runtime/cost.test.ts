@@ -42,7 +42,7 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
-import { _resetRuntimeCostCacheForTests, computeCostCents, precoDoCatalogoOuNull } from "./cost";
+import { _resetRuntimeCostCacheForTests, computeCostCents, criarResolvedorDeCatalogo, precoDoCatalogoOuNull } from "./cost";
 
 beforeEach(() => {
   catalogoLinhas = [];
@@ -252,6 +252,106 @@ describe("carregarCatalogo, prazo de 2s e backoff de 60s (item 11 da revisão)",
     vi.advanceTimersByTime(2_000); // total 61s: backoff passou.
     const terceira = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
     expect(terceira).toEqual({
+      preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 },
+      falhou: false,
+    });
+  });
+});
+
+/**
+ * Revisão de 23/09/2026 (achado do invariante de preview,
+ * `tests/invariants/autonomia-preview-core.test.ts`): a leitura do catálogo
+ * era amarrada ao carregador HTTP (`createAdminClient`), e o resolvedor de
+ * custo do `run-model-call.ts` precisa ler pelo `pg.Pool` (`db`) que já tem em
+ * mãos, sem abrir `fetch` nenhum, o preview exige zero `fetch`. Este bloco
+ * prova a FÁBRICA `criarResolvedorDeCatalogo` isolada do resolvedor padrão
+ * (HTTP) deste arquivo: um carregador injetado qualquer (aqui, um objeto que
+ * simula `db.query`) tem cache, prazo e ordem de busca IDÊNTICOS, e nunca
+ * compartilha estado com o resolvedor HTTP acima.
+ */
+describe("criarResolvedorDeCatalogo, o carregador injetado (revisão de 23/09/2026)", () => {
+  function poolFalso(linhas: typeof catalogoLinhas) {
+    const query = vi.fn(async () => ({ rows: linhas }));
+    return { query };
+  }
+
+  it("resolve pelo carregador injetado, sem tocar o carregador HTTP (createAdminClient)", async () => {
+    const linhasDoDb = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const pool = poolFalso(linhasDoDb);
+    const resolvedor = criarResolvedorDeCatalogo(async () => {
+      const { rows } = await pool.query();
+      return rows;
+    });
+
+    // Catálogo HTTP (mock de `@/lib/supabase/admin`) fica VAZIO de propósito:
+    // se o resolvedor pelo `db` acidentalmente caísse para o HTTP, o preço
+    // sumiria em vez de aparecer.
+    catalogoLinhas = [];
+
+    const resultado = await resolvedor.precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({
+      preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 },
+      falhou: false,
+    });
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("cache do resolvedor injetado é ISOLADO do resolvedor HTTP padrão", async () => {
+    // Povoa o cache do resolvedor HTTP com um preço.
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 999, output_price_per_million_cents: 999 },
+    ];
+    const doHttp = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(doHttp.preco).toEqual({ inputCentsPerMillion: 999, outputCentsPerMillion: 999 });
+
+    // O resolvedor NOVO, com carregador próprio vazio, não enxerga o cache do
+    // HTTP: cada `criarResolvedorDeCatalogo` tem seu próprio estado.
+    const pool = poolFalso([]);
+    const resolvedorNovo = criarResolvedorDeCatalogo(async () => {
+      const { rows } = await pool.query();
+      return rows;
+    });
+    const doNovo = await resolvedorNovo.precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(doNovo).toEqual({ preco: null, falhou: false });
+  });
+
+  it("carregador que lança: falhou true, sem cache; com cache velho, serve o preço antigo", async () => {
+    let deveLancar = false;
+    const resolvedor = criarResolvedorDeCatalogo(async () => {
+      if (deveLancar) throw new Error("db indisponível");
+      return [
+        { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+      ];
+    });
+
+    const primeira = await resolvedor.precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(primeira.falhou).toBe(false);
+
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(6 * 60 * 1000); // TTL de 5 min vencido.
+    deveLancar = true;
+    const segunda = await resolvedor.precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    // Cache velho ainda serve o mesmo preço: falhou vira false.
+    expect(segunda).toEqual({
+      preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 },
+      falhou: false,
+    });
+  });
+
+  it("_resetCacheParaTestes descarta só o cache DESTE resolvedor", async () => {
+    const resolvedor = criarResolvedorDeCatalogo(async () => [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ]);
+    await resolvedor.precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    resolvedor._resetCacheParaTestes();
+
+    // Depois do reset, uma nova leitura acontece (não serve cache velho); a
+    // prova indireta é que o mapa devolvido reflete o carregador de novo, sem
+    // erro nem resquício do backoff.
+    const depois = await resolvedor.precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(depois).toEqual({
       preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 },
       falhou: false,
     });

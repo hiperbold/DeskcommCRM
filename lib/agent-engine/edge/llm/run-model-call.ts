@@ -21,6 +21,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 
 import { PONTO_POR_ID } from '@/lib/ai/pontos/registro';
+import { criarResolvedorDeCatalogo, type ModelPricingRow } from '@/lib/ai/runtime/cost';
 import { scrubMessage } from '@/lib/sentry/scrub';
 
 import type { Logger } from '../../obs/logger';
@@ -505,6 +506,49 @@ async function registrarRecusaDeEnderecoSemChave(d: {
   return erro;
 }
 
+/**
+ * Um resolvedor de catálogo POR POOL. Revisão de 23/09/2026 (achado do
+ * invariante de preview): antes, o custo de `llm_calls` sempre passava pelo
+ * catálogo HTTP (`precoDoCatalogoOuNull`, `lib/ai/runtime/cost.ts`), que abre
+ * `fetch` para o PostgREST (`createAdminClient`). `runAgentPreview` (o ensaio
+ * do agente) exige ZERO `fetch`, e este seam já recebe um `pg.Pool` (`db`)
+ * para tudo o mais. O resolvedor abaixo lê `ai_models` pelo MESMO `db`, com o
+ * mesmo cache de 5 min, o mesmo prazo de 2s e o mesmo backoff de 60s da leitura
+ * HTTP (a lógica é compartilhada, `criarResolvedorDeCatalogo`; só a FONTE
+ * muda).
+ *
+ * `WeakMap<pg.Pool, …>` em vez de uma variável de módulo única: cada `db`
+ * (normalmente um único `pg.Pool` por processo, ver `lib/agent-engine/db/pool.ts`)
+ * ganha seu PRÓPRIO cache. Dois `Pool` diferentes (produção vs. um teste que
+ * cria um pool novo) nunca compartilham nem vazam estado entre si, e um pool
+ * finalizado libera o resolvedor sozinho (`WeakMap` não retém).
+ *
+ * A consulta usa `Promise.race` (dentro de `criarResolvedorDeCatalogo`) para o
+ * prazo de 2s, não `SET LOCAL statement_timeout`, de propósito: `SET LOCAL`
+ * só vale dentro de uma transação, e fora dela vira `SET` de sessão, que uma
+ * conexão do pool levaria para a PRÓXIMA consulta de outro chamador. Sem
+ * transação aqui (é um único `select`), `Promise.race` dá o mesmo prazo sem
+ * abrir esse risco.
+ */
+const resolvedoresDeCatalogoPorPool = new WeakMap<
+  pg.Pool,
+  ReturnType<typeof criarResolvedorDeCatalogo>
+>();
+
+function resolvedorDeCatalogoPeloDb(db: pg.Pool) {
+  const existente = resolvedoresDeCatalogoPorPool.get(db);
+  if (existente) return existente;
+  const resolvedor = criarResolvedorDeCatalogo(async () => {
+    const { rows } = await db.query<ModelPricingRow>(
+      `select provider, model_id, input_price_per_million_cents, output_price_per_million_cents, deprecated_at
+         from ai_models`,
+    );
+    return rows;
+  });
+  resolvedoresDeCatalogoPorPool.set(db, resolvedor);
+  return resolvedor;
+}
+
 export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunModelCallInput, deps: RunModelCallDeps = {}) {
   // O knob do raciocínio da DeepSeek entra pela fábrica: `deepseekThinking` só é
   // lido pela fábrica `deepseek`, então os outros provedores não têm como mudar.
@@ -728,8 +772,17 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
   //
   // D-050: modelo fora da tabela de Anthropic (ex.: `gpt-5.6-luna`) cai para o
   // catálogo `ai_models` em vez de virar `cost_cents` nulo para sempre, ver o
-  // resolvedor único em `./pricing`.
-  const cost = await custoCentsComCatalogo(config.provider, model, usage, cfg.cacheTtl ?? '1h', deps.log);
+  // resolvedor único em `./pricing`. Revisão de 23/09/2026: a leitura do
+  // catálogo aqui é pelo `db` (pg.Pool), nunca HTTP; ver o comentário do
+  // resolvedor acima.
+  const cost = await custoCentsComCatalogo(
+    config.provider,
+    model,
+    usage,
+    cfg.cacheTtl ?? '1h',
+    deps.log,
+    resolvedorDeCatalogoPeloDb(db).precoDoCatalogoOuNull,
+  );
 
   const { rows } = await db.query<{ id: string }>(
     `insert into llm_calls

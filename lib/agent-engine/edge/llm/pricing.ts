@@ -31,7 +31,7 @@
  * contrato escrito acima.
  */
 
-import { precoDoCatalogoOuNull } from '@/lib/ai/runtime/cost';
+import { precoDoCatalogoOuNull, type LeituraDePrecoDoCatalogo } from '@/lib/ai/runtime/cost';
 
 import type { CacheTtl } from './stable-prefix';
 
@@ -118,6 +118,21 @@ interface LoggerMinimo {
 }
 
 /**
+ * A leitura do catálogo `ai_models` para um par (provider, model), mesma
+ * forma de `precoDoCatalogoOuNull`. Parâmetro injetável (revisão de
+ * 23/09/2026, achado do invariante de preview): sem isto, `custoCentsComCatalogo`
+ * só sabia falar com o catálogo por HTTP (`createAdminClient`), e o seam de
+ * `run-model-call.ts`, que já tem um `pg.Pool` em mãos, abria DOIS `fetch`
+ * por chamada de IA só para saber o preço. `runAgentPreview` (o ensaio do
+ * agente) exige ZERO `fetch`, e é exatamente o resolvedor pelo `db` que
+ * `run-model-call.ts` passa aqui que fecha esse buraco.
+ */
+export type CarregadorDePrecoDoCatalogo = (
+  provider: string,
+  model: string,
+) => Promise<LeituraDePrecoDoCatalogo>;
+
+/**
  * O RESOLVEDOR ÚNICO de preço para toda linha de `llm_calls` (D-050,
  * `hiperbold/DEBITO.md`, decisão do Filipe em 23/09/2026: os agentes passam a
  * usar modelos baratos fora da Anthropic, e o orçamento de IA precisa
@@ -142,6 +157,13 @@ interface LoggerMinimo {
  * `usage.inputTokens` já é o TOTAL do SDK (inclui a parcela de cache, mesma
  * convenção do resto deste arquivo), então a fórmula não precisa somar as
  * partes separadamente.
+ *
+ * `carregador` (revisão de 23/09/2026): de onde vem a leitura do catálogo
+ * quando a tabela escrita à mão não conhece o modelo. Opcional, quem não
+ * passar nada continua com o carregador HTTP de sempre (`precoDoCatalogoOuNull`,
+ * `lib/ai/runtime/cost.ts`), o comportamento inalterado de `lib/ai/cost.ts` e
+ * `lib/ai/telemetria-sem-custo.ts`. `run-model-call.ts` é o único chamador que
+ * passa um carregador próprio, pelo `db` (pg.Pool) que já tem em mãos.
  */
 export async function custoCentsComCatalogo(
   provider: string,
@@ -149,6 +171,7 @@ export async function custoCentsComCatalogo(
   usage: UsoDeTokensParaCusto,
   cacheTtl: CacheTtl = '1h',
   log?: LoggerMinimo,
+  carregador: CarregadorDePrecoDoCatalogo = precoDoCatalogoOuNull,
 ): Promise<number | null> {
   const daTabela = costCents(
     model,
@@ -162,7 +185,7 @@ export async function custoCentsComCatalogo(
   );
   if (daTabela !== null) return daTabela;
 
-  const { preco, falhou } = await precoDoCatalogoOuNull(provider, model);
+  const { preco, falhou } = await carregador(provider, model);
   if (falhou) {
     log?.warn('pricing: leitura do catálogo ai_models falhou, custo gravado como desconhecido (null)', {
       provider,

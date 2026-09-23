@@ -281,3 +281,54 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
     expect(avisos[0]![0]).toMatch(/catálogo/i);
   });
 });
+
+/**
+ * Revisão de 23/09/2026 (achado do invariante de preview): `run-model-call.ts`
+ * passa um `carregador` PRÓPRIO (pelo `db`, um `pg.Pool`) em vez do carregador
+ * HTTP padrão, para o custo de `llm_calls` nunca abrir `fetch`. Este bloco
+ * prova o PARÂMETRO em `custoCentsComCatalogo`, isolado do resolvedor HTTP: o
+ * catálogo HTTP fica vazio de propósito, e o carregador injetado é a ÚNICA
+ * fonte de preço para o modelo fora da tabela escrita à mão.
+ */
+describe("custoCentsComCatalogo, o carregador opcional (revisão de 23/09/2026)", () => {
+  it("usa o carregador injetado, não o catálogo HTTP padrão", async () => {
+    catalogoLinhas = []; // catálogo HTTP vazio: se o resolvedor caísse nele, o preço sumiria.
+    const chamadas: Array<[string, string]> = [];
+    const carregadorPeloDb = async (provider: string, model: string) => {
+      chamadas.push([provider, model]);
+      if (provider === "openai" && model === "gpt-5.6-luna") {
+        return { preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 }, falhou: false };
+      }
+      return { preco: null, falhou: false };
+    };
+    const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const custo = await custoCentsComCatalogo(
+      "openai",
+      "gpt-5.6-luna",
+      usage,
+      "1h",
+      undefined,
+      carregadorPeloDb,
+    );
+    expect(custo).toBeCloseTo(0.044, 6);
+    expect(chamadas).toEqual([["openai", "gpt-5.6-luna"]]);
+  });
+
+  it("modelo da tabela escrita à mão nunca chega ao carregador injetado", async () => {
+    // Mesma doutrina do teste "Anthropic continua igual" acima: a tabela
+    // vence ANTES de qualquer catálogo, HTTP ou injetado.
+    const carregadorQueNuncaDeveSerChamado = async () => {
+      throw new Error("carregador não deveria ser chamado para modelo da tabela");
+    };
+    const usage: TokenUsage = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const custo = await custoCentsComCatalogo(
+      "anthropic",
+      "claude-sonnet-5",
+      usage,
+      "1h",
+      undefined,
+      carregadorQueNuncaDeveSerChamado,
+    );
+    expect(custo).toBeCloseTo(200, 6);
+  });
+});
