@@ -379,6 +379,7 @@ Cada fase entrega algo utilizável sozinha. Nenhuma fase depende do gateway, exc
 | **F3** | Bloqueio ligado, com a mesma gramática do orçamento de IA: avisa antes, tem carência, tem chave de emergência da instalação | F2-B |
 | **F4** | Os três planos de venda cadastrados, período de avaliação, estados de atrasado e suspenso, modo leitura, catálogo de pacotes de crédito vendidos na mão | F3 |
 | **F5** | Asaas: cobrança recorrente, compra de pacote pelo próprio cliente, recarga automática, webhook, troca de plano automática. Começa pelo sandbox, com o roteiro de homologação do manual comum | F4 e as respostas de 14 a 18 |
+| **F6** | Site de vendas do CRM (pedido do Filipe em 23/09/2026): a homepage é a página de vendas completa (benefícios, diferenciais, planos, para quem é e para quem não é, FAQ, rodapé completo), com muitos blocos mostrando o sistema por dentro, em prints ou em blocos HTML que simulam a tela, com animação nos números, gráficos e chat. Além dela, só `/precos`, Termos de Uso e Política de Privacidade | a matriz de planos (já fechada); os textos legais precisam de revisão jurídica e dos dados da empresa |
 
 Ordem de grandeza, para você calibrar expectativa: F1, F2 e F2-B são as fases grandes, F3 é média, F4 é média com muito teste, e F5 depende inteiramente do gateway escolhido.
 
