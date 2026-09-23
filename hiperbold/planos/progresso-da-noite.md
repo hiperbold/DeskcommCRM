@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F1
-Etapa da fase: tarefas 2 e 3 de 6, em paralelo (arquivos não se cruzam; tarefa 1 commitada em 502a4a8)
+Etapa da fase: tarefas 2 e 4 de 6, em paralelo (tarefa 1 em 502a4a8, tarefa 3 em 684de89)
 
 ## Fases
 
@@ -19,9 +19,9 @@ Etapa da fase: tarefas 2 e 3 de 6, em paralelo (arquivos não se cruzam; tarefa 
 | # | Tarefa | Estado |
 |---|---|---|
 | 1 | Tabelas e funções na migração 0904 e no baseline | feita (migração e bloco do baseline aplicados duas vezes no banco local sem erro; gatilho provado; 12 testes) |
-| 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | em andamento |
+| 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | feita (49 casos novos; com rls-isolation e a varredura de completude, 224 verdes) |
 | 3 | Módulo de leitura de plano | feita (20 testes; embed e RPC provados contra o PostgREST local) |
-| 4 | Ações do admin da plataforma (só escopo full) | pendente |
+| 4 | Ações do admin da plataforma (só escopo full) | em andamento |
 | 5 | Aba "Plano" no painel do admin da plataforma | pendente |
 | 6 | Aposentar o "Plano" antigo da criação de organização | pendente |
 
@@ -34,6 +34,8 @@ Etapa da fase: tarefas 2 e 3 de 6, em paralelo (arquivos não se cruzam; tarefa 
 - **Organização nova ganha contrato por gatilho no banco**, porque há cinco caminhos de criação, dois em SQL. Onde mudar: `fn_billing_contrato_da_organizacao_nova`.
 - **Plano fora de venda pode ser atribuído pelo admin da plataforma**; "à venda" só governa a compra pelo próprio cliente (F5).
 - **Semeadura não sobrescreve preço**: `on conflict do nothing`, porque o baseline roda de novo a cada atualização de produção.
+- **Plano de reserva fixo no código** (`{ code: "ilimitado", version: 1 }`) quando a leitura falha ou não há contrato: uma segunda consulta ao banco no caminho de erro é mais uma coisa que pode falhar justo quando o banco está ruim. Onde mudar: `PLANO_ILIMITADO_PADRAO` em `lib/billing/planos/plano-da-organizacao.ts`.
+- **Travessão**: os executores escreveram travessão em comentários nas tarefas 1 e 3 apesar da regra; corrigido à mão na revisão de cada tarefa, e o briefing passou a exigir a conferência antes de responder.
 
 ## Perguntas para o Filipe
 

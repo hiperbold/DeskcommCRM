@@ -488,6 +488,17 @@ beforeAll(() => {
             (organization_id, campaign_id, channel_session_id)
             values (v_org, v_camp, v_sess);
         end if;
+
+        -- migration 0904 (fork Hiperbold): planos de assinatura.
+        -- billing_contracts já nasce sozinho pelo gatilho ao inserir a
+        -- organização (acima, em seedOrg); billing_plan_adjustments não tem
+        -- gatilho, e o TABLES exige controle positivo (uma linha própria
+        -- lida) por organização, então a semente cria um ajuste parcial
+        -- válido para cada uma.
+        if not exists (select 1 from public.billing_plan_adjustments where organization_id = v_org) then
+          insert into public.billing_plan_adjustments (organization_id, limits)
+            values (v_org, '{"leads": 100}'::jsonb);
+        end if;
       end loop;
     end
     $seed$;
@@ -507,6 +518,9 @@ beforeAll(() => {
  * cabeçalho do caso de `contact_field_proposals` abaixo.
  */
 export const TABLES = [
+  // migration 0904 (fork Hiperbold): planos de assinatura.
+  "billing_contracts",
+  "billing_plan_adjustments",
   "conversations",
   "messages",
   "contacts",
