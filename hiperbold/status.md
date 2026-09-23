@@ -4,11 +4,11 @@ Atualizado em 22/09/2026.
 
 ## Onde está tudo agora
 
-- **Produção** (`crm.hiperbold.com.br`): versão `9da397d`, saudável. Tem as conexões MCP dos agentes e o tema claro como padrão. **Não foi tocada depois disso.**
-- **`main` do fork**: igual à produção, `9da397d`.
-- **Branch `merge/upstream-2026-09-22`**: a atualização do autor original mais o trabalho do dia, commitada e com a bateria completa verde. **Ainda não publicada, à espera da conferência do Filipe.**
+- **Produção** (`crm.hiperbold.com.br`): versão `02e4797`, publicada em 22/09/2026 às 21h37, saudável. Traz a release 1.42.0 do autor original, as correções de segurança do webhook UAZAPI e a trava de dado de cliente nas conexões MCP.
+- **`main` do fork**: igual à produção, `02e4797`.
+- Antes dessa publicação a produção estava em `9da397d`. O backup do banco de antes é `hiperbold-crm-2026-09-22_2120.dump`, em `D:\Hiperbold\backups\hiperbold-crm`.
 
-## O que essa branch tem dentro
+## O que essa publicação levou
 
 **A atualização do autor (D-028).** Release 1.42.0, 2298 arquivos, merge `65ca0a253`. 18 conflitos resolvidos. A migração dele tinha derrubado a UAZAPI da regra de canais, e a nossa migração 0903 devolve os dois lados.
 
@@ -31,10 +31,9 @@ O único vermelho é `tests/unit/e2e-parte-4-fala-com-os-servicos-do-runner.test
 
 ## Para retomar
 
-1. **Conferir na tela local** (o Filipe), antes de publicar: é um salto grande de versão. `http://localhost:3300`.
-2. **Publicar** só depois dessa conferência. O caminho é o de sempre: `backup-prod.sh`, `prod-schema.sh`, e só então push no `main` do fork, que dispara a imagem e o deploy.
-3. **Débitos pequenos** que sobraram para emendar: D-034, D-035, D-036, D-038, D-039, D-040, D-041, D-042, D-043, D-044.
-4. **Planos e assinatura**: o plano está escrito em `hiperbold/planos/2026-09-22-planos-e-assinatura.md` e espera as 13 respostas do Filipe. Nada implementado.
+1. **Conferir a produção na tela** (o Filipe): é um salto grande de versão, e a conferência não aconteceu antes da publicação. Olhar Conexões, IA, funil e conversas. Se algo estiver errado, o caminho de volta é publicar o commit `9da397d` de novo, e o backup do banco de antes está guardado.
+2. **Débitos pequenos** para emendar: D-034, D-035, D-036, D-038, D-039, D-040, D-041, D-042, D-043, D-044.
+3. **Planos e assinatura**: o plano está escrito em `hiperbold/planos/2026-09-22-planos-e-assinatura.md` e espera as 13 respostas do Filipe. Nada implementado.
 
 ## Ambiente local
 
