@@ -73,6 +73,29 @@ const PLANOS_SEMEADOS = [
   },
 ];
 
+/**
+ * Extrai o bloco 0904 do baseline, do começo da linha do marcador de início
+ * até (sem incluir) a VARREDURA anon, que vem logo depois na ordem da
+ * migração de 0116 (o bloco de 0904 é o último antes da varredura).
+ */
+function extraiBlocoBaseline(): string {
+  const marcadorInicio = "catálogo de planos e contrato da organização (migration 0904";
+  const marcadorFim = "-- ---- VARREDURA anon:";
+  const posicaoMarcador = BASELINE.indexOf(marcadorInicio);
+  const inicioLinha = BASELINE.lastIndexOf("\n", posicaoMarcador) + 1;
+  const fim = BASELINE.indexOf(marcadorFim, posicaoMarcador);
+  return BASELINE.slice(inicioLinha, fim);
+}
+
+/** Remove linhas de comentário (--) e linhas em branco, para comparar só o SQL. */
+function removeComentariosEBrancas(sql: string): string {
+  return sql
+    .split("\n")
+    .map((linha) => linha.trim())
+    .filter((linha) => linha.length > 0 && !linha.startsWith("--"))
+    .join("\n");
+}
+
 describe("0904 catálogo de planos e contrato da organização", () => {
   it("o bloco do baseline vem depois do último apêndice 09xx e antes da VARREDURA anon", () => {
     const inicioBloco = BASELINE.indexOf(
@@ -83,6 +106,12 @@ describe("0904 catálogo de planos e contrato da organização", () => {
     expect(inicioBloco).toBeGreaterThan(-1);
     expect(varreduraAnon).toBeGreaterThan(-1);
     expect(inicioBloco).toBeLessThan(varreduraAnon);
+  });
+
+  it("o SQL da migração e o SQL do bloco do baseline são iguais, ignorando comentários e linhas em branco", () => {
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION);
+    const sqlBloco = removeComentariosEBrancas(extraiBlocoBaseline());
+    expect(sqlBloco).toBe(sqlMigracao);
   });
 
   it("as três tabelas têm RLS ligada, na migration e no baseline", () => {
@@ -124,7 +153,10 @@ describe("0904 catálogo de planos e contrato da organização", () => {
   });
 
   it("o backfill de contrato das organizações existentes usa where not exists e on conflict do nothing", () => {
-    for (const sql of [MIGRATION, BASELINE]) {
+    // Busca só dentro do bloco da 0904: o baseline inteiro tem outras
+    // migrations com `where not exists`/`on conflict (organization_id) do
+    // nothing` que satisfazem a busca sem provar nada sobre esta migração.
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
       expect(sql).toMatch(/where not exists/);
       expect(sql).toMatch(/on conflict \(organization_id\) do nothing/);
     }
@@ -215,11 +247,29 @@ describe("0904 catálogo de planos e contrato da organização", () => {
    * só o select é a única forma que não depende de lembrar cada privilégio.
    */
   it("authenticated perde tudo e recebe de volta só o select", () => {
-    const lista = "public\\.billing_plans, public\\.billing_contracts, public\\.billing_plan_adjustments";
+    const listaTres = "public\\.billing_plans, public\\.billing_contracts, public\\.billing_plan_adjustments";
+    // billing_plan_adjustments saiu do grant select de tabela inteira (nota e
+    // autor do ajuste não são assunto do membro): o select dela volta por
+    // coluna, conferido no caso seguinte.
+    const listaSemAjuste = "public\\.billing_plans, public\\.billing_contracts";
     for (const sql of [MIGRATION, BASELINE]) {
-      expect(sql).toMatch(new RegExp(`revoke all on ${lista} from anon, authenticated;`));
-      expect(sql).toMatch(new RegExp(`grant select on ${lista} to authenticated;`));
+      expect(sql).toMatch(new RegExp(`revoke all on ${listaTres} from anon, authenticated;`));
+      expect(sql).toMatch(new RegExp(`grant select on ${listaSemAjuste} to authenticated;`));
       expect(sql).not.toMatch(/revoke insert, update, delete on public\.billing_/);
+    }
+  });
+
+  it("nota e autor do ajuste (note, granted_by) não vazam pelo grant: select só por coluna, sem billing_plan_adjustments na lista inteira", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /grant select \(organization_id, limits, created_at, updated_at\) on public\.billing_plan_adjustments to authenticated;/,
+      );
+      // Nenhum `grant select on` com as três tabelas na mesma lista: essa
+      // era a falha (billing_plan_adjustments recebia select da tabela
+      // inteira, então note e granted_by ficavam legíveis por authenticated).
+      expect(sql).not.toMatch(
+        /grant select on public\.billing_plans, public\.billing_contracts, public\.billing_plan_adjustments to authenticated;/,
+      );
     }
   });
 });

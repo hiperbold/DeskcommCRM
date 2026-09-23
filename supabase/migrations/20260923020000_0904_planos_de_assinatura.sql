@@ -30,7 +30,13 @@
 -- `full`; `support_readonly` só lê). Nenhuma política de RLS de escrita para
 -- `authenticated`: por isso a única forma de mudar plano ou ajuste é pelas
 -- funções, que travam a linha (`for update`), gravam e devolvem o antes e o
--- depois, para a auditoria da Tarefa 4 não mentir numa troca concorrente.
+-- depois, para a auditoria da Tarefa 4 não mentir numa troca concorrente. A
+-- role `agent_worker` (hiperbold/scripts/role-agent-worker.sql) ganha, por
+-- `alter default privileges`, escrita em toda tabela nova e execute em toda
+-- função nova do schema `public`, e tem `bypassrls`: por isso, no fim desta
+-- migration, um bloco revoga dela explicitamente a escrita nas três tabelas e
+-- o execute das duas funções de troca, para "só service_role escreve"
+-- continuar verdadeiro mesmo com essa role existindo.
 --
 -- A precedência dos limites mora em UMA função SQL,
 -- `fn_billing_limites_efetivos`, estável, uma consulta só: o servidor chama
@@ -63,6 +69,7 @@ create or replace function public.fn_billing_limites_validos(l jsonb, parcial bo
 returns boolean
 language plpgsql
 immutable
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_chave text;
@@ -86,9 +93,13 @@ begin
       -- null é o valor documentado de "sem limite": aceito.
       null;
     elsif jsonb_typeof(v_valor) = 'number' then
+      -- A fase seguinte faz (limits->>'x')::int: '5.0'::int quebra, por isso
+      -- o texto do número precisa casar com inteiro puro, não só o valor
+      -- numérico bater com o truncado (5.0 = trunc(5.0), e passaria).
       if (v_valor::text)::numeric <> trunc((v_valor::text)::numeric)
         or (v_valor::text)::numeric < 0
         or (v_valor::text)::numeric > 2147483647
+        or (v_valor::text) !~ '^[0-9]+$'
       then
         return false;
       end if;
@@ -344,6 +355,13 @@ begin
     raise exception 'organizacao_nao_encontrada' using errcode = 'P0002';
   end if;
 
+  -- Advisory lock por organização, não `for update` em `organizations`: essa
+  -- trava bloquearia os inserts de qualquer tabela filha da organização
+  -- durante a troca. `for update` na linha do contrato não serve sozinho
+  -- porque não trava nada quando a linha ainda não existe (organização sem
+  -- contrato), e duas trocas concorrentes registrariam o mesmo "antes".
+  perform pg_advisory_xact_lock(hashtextextended('billing:' || p_org::text, 0));
+
   select id into v_plan_id
   from public.billing_plans
   where code = p_plan_code and active
@@ -399,6 +417,10 @@ begin
     raise exception 'organizacao_nao_encontrada' using errcode = 'P0002';
   end if;
 
+  -- Mesmo racional de fn_billing_trocar_plano: advisory lock por
+  -- organização, não `for update` em `organizations`.
+  perform pg_advisory_xact_lock(hashtextextended('billing:' || p_org::text, 0));
+
   select limits into v_antes
   from public.billing_plan_adjustments
   where organization_id = p_org
@@ -431,9 +453,21 @@ alter table public.billing_plans enable row level security;
 alter table public.billing_contracts enable row level security;
 alter table public.billing_plan_adjustments enable row level security;
 
+-- for_sale=true é catálogo público de venda; um plano sob medida
+-- (for_sale=false) só é legível pelo admin da plataforma e pela organização
+-- que o contratou (senão qualquer usuário de qualquer organização lia o
+-- preço do plano sob medida de outro cliente).
 drop policy if exists billing_plans_select on public.billing_plans;
 create policy billing_plans_select on public.billing_plans
-  for select using (true);
+  for select using (
+    for_sale
+    or public.fn_is_platform_admin()
+    or id in (
+      select bc.plan_id
+      from public.billing_contracts bc
+      where bc.organization_id in (select public.fn_user_org_ids())
+    )
+  );
 
 drop policy if exists billing_contracts_select on public.billing_contracts;
 create policy billing_contracts_select on public.billing_contracts
@@ -454,6 +488,28 @@ create policy billing_plan_adjustments_select on public.billing_plan_adjustments
 -- truncate, references e trigger, que vêm no grant padrão do Supabase; e
 -- truncate passa por cima da RLS. Só as funções desta migration, com
 -- service_role, escrevem; service_role mantém acesso total.
+--
+-- `billing_plan_adjustments` é exceção ao select da tabela inteira: `note` e
+-- `granted_by` (o id do admin da plataforma que fez o ajuste manual) não são
+-- assunto do membro da organização, nem viewer. Grant por coluna, só
+-- `organization_id`, `limits`, `created_at`, `updated_at`.
 revoke all on public.billing_plans, public.billing_contracts, public.billing_plan_adjustments from anon, authenticated;
-grant select on public.billing_plans, public.billing_contracts, public.billing_plan_adjustments to authenticated;
+grant select on public.billing_plans, public.billing_contracts to authenticated;
+grant select (organization_id, limits, created_at, updated_at) on public.billing_plan_adjustments to authenticated;
 grant all on public.billing_plans, public.billing_contracts, public.billing_plan_adjustments to service_role;
+
+-- ── 13. agent_worker não escreve em plano ──
+--
+-- `hiperbold/scripts/role-agent-worker.sql` dá a esta role, por `alter
+-- default privileges`, escrita em toda tabela nova e execute em toda função
+-- nova do schema `public`, e ela tem `bypassrls`. Sem este bloco, a role
+-- burlaria a RLS e escreveria plano por fora das funções de auditoria. A
+-- role pode não existir (o banco de teste do test:db não a cria).
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke insert, update, delete, truncate on public.billing_plans, public.billing_contracts, public.billing_plan_adjustments from agent_worker';
+    execute 'revoke execute on function public.fn_billing_trocar_plano(uuid, text, uuid), public.fn_billing_ajustar_limites(uuid, jsonb, text, uuid) from agent_worker';
+  end if;
+end
+$$;

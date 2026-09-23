@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F1
-Etapa da fase: revisar e auditar (as 6 tarefas commitadas: 1 em 502a4a8, 2 em d335259, 3 em 684de89, 4 em 80510b8, 5 em 7c0e377, 6 em ffa92d6); revisor e auditor rodando em paralelo desde 08:10
+Etapa da fase: corrigindo achados da revisão e da auditoria (duas frentes em paralelo: banco e aplicação); depois, portões completos
 
 ## Fases
 
@@ -45,6 +45,8 @@ Etapa da fase: revisar e auditar (as 6 tarefas commitadas: 1 em 502a4a8, 2 em d3
 
 - **Alto, corrigido na tarefa 1 da F1**: revogar só `insert, update, delete` de `authenticated` deixava `TRUNCATE` (e `REFERENCES`, `TRIGGER`) nas três tabelas novas, pelo grant padrão do Supabase. `TRUNCATE` passa por cima da RLS. Medido no banco local, antes e depois. Agora: `revoke all` e `grant select`; o teste `planos-migration` trava a volta.
 - **Alto, corrigido no plano da F1 antes de implementar**: admin da plataforma com escopo `support_readonly` conseguiria trocar plano. As ações passam a exigir `full`.
+- **Auditoria da F1 (08:40): nenhum crítico nem alto.** Médio: membro de organização grava registro falso na auditoria (política do autor, anterior à fase): virou D-046, a resolver antes da cobrança real. Baixos em correção agora: role `agent_worker` escrevia nas tabelas de plano; ações sem conferência de MFA; nota e autor do ajuste legíveis pelo membro; catálogo de planos inteiro legível por qualquer usuário; `search_path` da função de validação. Baixos anteriores à fase, registrados: D-047 (TRUNCATE em 114 tabelas) e D-048 (admin de suporte escreve em `organizations`).
+- **Revisão da F1 (08:30): nenhum alto.** Médios em correção agora: erro de leitura na aba Plano podia apagar o ajuste ao salvar; nota do ajuste visível ao membro. Médio que é regra da F2: gatilho de contagem tem de ser `security definer` (D-049).
 
 ## Bloqueios
 

@@ -189,13 +189,49 @@ describe("3. RLS: membro de A lê o próprio contrato e ajuste, não os de B", (
     ).toEqual(["0"]);
   });
 
-  it("billing_plans é catálogo público (select true), os dois tenants leem", () => {
+  // Antes a policy de billing_plans era `using (true)`: catálogo aberto,
+  // qualquer usuário de qualquer organização lia o preço de um plano sob
+  // medida (for_sale=false) que não era o dele. A correção troca por: lê o
+  // plano do CONTRATO da própria organização (ou um plano for_sale=true, ou
+  // o admin da plataforma), não lê um plano fora de venda alheio.
+  it("lê o plano do próprio contrato (pro), não um plano fora de venda que não é dele", () => {
+    comoServico(`select public.fn_billing_trocar_plano('${ORG_A}'::uuid, 'pro', null);`);
     expect(
-      membro(USER_A, `select 'SONDA|' || count(*) from public.billing_plans where active;`),
-    ).toEqual(["4"]);
+      membro(USER_A, `select 'SONDA|' || count(*) from public.billing_plans where code = 'pro' and active;`),
+    ).toEqual(["1"]);
     expect(
-      membro(USER_B, `select 'SONDA|' || count(*) from public.billing_plans where active;`),
-    ).toEqual(["4"]);
+      membro(USER_B, `select 'SONDA|' || count(*) from public.billing_plans where code = 'pro' and active;`),
+    ).toEqual(["0"]);
+  });
+});
+
+describe("3b. RLS: authenticated lê só as colunas liberadas de billing_plan_adjustments", () => {
+  it("membro lê organization_id e limits do próprio ajuste", () => {
+    expect(
+      membro(USER_A, `select 'SONDA|' || organization_id from public.billing_plan_adjustments where organization_id = '${ORG_A}';`),
+    ).toEqual([ORG_A]);
+    expect(
+      membro(
+        USER_A,
+        `select 'SONDA|' || (limits ->> 'leads') from public.billing_plan_adjustments where organization_id = '${ORG_A}';`,
+      ),
+    ).toEqual(["111"]);
+  });
+
+  it("membro recebe erro de permissão ao selecionar note", () => {
+    esperaBarrado(
+      USER_A,
+      `select note from public.billing_plan_adjustments where organization_id = '${ORG_A}'`,
+      "select note em billing_plan_adjustments",
+    );
+  });
+
+  it("membro recebe erro de permissão ao selecionar granted_by", () => {
+    esperaBarrado(
+      USER_A,
+      `select granted_by from public.billing_plan_adjustments where organization_id = '${ORG_A}'`,
+      "select granted_by em billing_plan_adjustments",
+    );
   });
 });
 
@@ -319,6 +355,15 @@ describe("5. fn_billing_limites_validos", () => {
     expect(
       valida(
         "jsonb_build_object('funis','muito','etapas_por_funil',10,'leads',5000,'membros',3,'conexoes',3,'integracoes_webhook',3,'tokens_ia_mes',1000000)",
+        false,
+      ),
+    ).toBe(false);
+  });
+
+  it("recusa 5.0 (a fase seguinte faz (limits->>'x')::int, e '5.0'::int quebra)", () => {
+    expect(
+      valida(
+        "jsonb_build_object('funis',5.0,'etapas_por_funil',10,'leads',5000,'membros',3,'conexoes',3,'integracoes_webhook',3,'tokens_ia_mes',1000000)",
         false,
       ),
     ).toBe(false);
