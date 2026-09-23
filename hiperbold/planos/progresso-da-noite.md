@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F2
-Etapa da fase: planejar
+Etapa da fase: tarefa 2 de 8 (plano revisado: 2 altos e 8 médios incorporados; tarefa 1 virou registro, sem código, D-050)
 
 ## Fases
 
@@ -38,10 +38,17 @@ F2: ainda não planejadas. Abaixo, as da F1, para registro.
 - **Semeadura não sobrescreve preço**: `on conflict do nothing`, porque o baseline roda de novo a cada atualização de produção.
 - **Plano de reserva fixo no código** (`{ code: "ilimitado", version: 1 }`) quando a leitura falha ou não há contrato: uma segunda consulta ao banco no caminho de erro é mais uma coisa que pode falhar justo quando o banco está ruim. Onde mudar: `PLANO_ILIMITADO_PADRAO` em `lib/billing/planos/plano-da-organizacao.ts`.
 - **Travessão**: os executores escreveram travessão em comentários nas tarefas 1 e 3 apesar da regra; corrigido à mão na revisão de cada tarefa, e o briefing passou a exigir a conferência antes de responder.
+- **F2: integração webhook é `webhook_sources`** (a entrada automática de leads), e não o webhook que sai das automações, porque automação não é limitada no plano. Onde mudar: o gatilho da F2 nessa tabela.
+- **F2: configuração dos planos numa tabela nossa (`billing_settings`)**, e não em `platform_settings`, que é do autor e daria conflito em toda junção.
+- **F2: aviso na Central com `kind = 'other'`** e deduplicação por título, para não mexer na restrição de tipos do autor.
+- **F2: leads por contador materializado**; o resto por contagem na hora. Contar 100 mil leads a cada importação derrubaria a importação.
 
 ## Perguntas para o Filipe
 
 - **Preço anual (N8)**: nulo no catálogo até ele responder. Onde muda: `price_yearly_cents` em `billing_plans`.
+- **N10. Lead ganho ou perdido ocupa vaga do plano?** Padrão usado: não, conta só o lead aberto (`status = 'open'`), que é a leitura que menos cobra do cliente. Onde muda: a contagem de leads na F2.
+- **N11. Quem vê a tela "Plano e uso" da organização?** Padrão usado: admin e gerente. Onde muda: a tarefa 7 da F2.
+- **N12. Ligar o preço do catálogo nas chamadas de IA?** O orçamento de IA que já existe está cego para modelos fora da Anthropic, inclusive em produção. O catálogo com preço existe no banco, mas ligá-lo faz o orçamento começar a contar de uma hora para outra, e a IA pode parar no meio do mês. Padrão usado: não ligar; o painel de margem da F2-B calcula por fora. Registrado como D-050.
 
 ## Achados de segurança
 
