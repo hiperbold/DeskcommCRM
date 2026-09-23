@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F1
-Etapa da fase: revisar-plano (plano em hiperbold/planos/fase-F1-tarefas.md, com o revisor)
+Etapa da fase: tarefa 2 de 6 (tarefa 1 commitada)
 
 ## Fases
 
@@ -18,11 +18,12 @@ Etapa da fase: revisar-plano (plano em hiperbold/planos/fase-F1-tarefas.md, com 
 
 | # | Tarefa | Estado |
 |---|---|---|
-| 1 | Tabelas na migração 0904 e no baseline | pendente |
-| 2 | Provas de banco (RLS, gatilho, semeadura) | pendente |
+| 1 | Tabelas e funções na migração 0904 e no baseline | feita (migração e bloco do baseline aplicados duas vezes no banco local sem erro; gatilho provado; 12 testes) |
+| 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | pendente |
 | 3 | Módulo de leitura de plano | pendente |
-| 4 | Ações do admin da plataforma | pendente |
+| 4 | Ações do admin da plataforma (só escopo full) | pendente |
 | 5 | Aba "Plano" no painel do admin da plataforma | pendente |
+| 6 | Aposentar o "Plano" antigo da criação de organização | pendente |
 
 ## Decisões tomadas sozinho
 
@@ -39,6 +40,9 @@ Etapa da fase: revisar-plano (plano em hiperbold/planos/fase-F1-tarefas.md, com 
 - **Preço anual (N8)**: nulo no catálogo até ele responder. Onde muda: `price_yearly_cents` em `billing_plans`.
 
 ## Achados de segurança
+
+- **Alto, corrigido na tarefa 1 da F1**: revogar só `insert, update, delete` de `authenticated` deixava `TRUNCATE` (e `REFERENCES`, `TRIGGER`) nas três tabelas novas, pelo grant padrão do Supabase. `TRUNCATE` passa por cima da RLS. Medido no banco local, antes e depois. Agora: `revoke all` e `grant select`; o teste `planos-migration` trava a volta.
+- **Alto, corrigido no plano da F1 antes de implementar**: admin da plataforma com escopo `support_readonly` conseguiria trocar plano. As ações passam a exigir `full`.
 
 ## Bloqueios
 
