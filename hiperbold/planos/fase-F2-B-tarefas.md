@@ -1,0 +1,90 @@
+# Fase F2-B: a carteira de tokens de IA
+
+Plano mestre: `hiperbold/planos/2026-09-22-planos-e-assinatura.md`, seções 6.1 a 6.6 e 11. Escrito em 23/09/2026, na sessão da noite, sem o Filipe; toda decisão de produto abaixo usa o padrão da seção 12 do plano ou, sem padrão, a opção mais conservadora (não cobra a mais, não bloqueia cliente, não apaga dado). Revisado antes de implementar (histórico no fim).
+
+**Nesta fase nada bloqueia.** A carteira mede, debita, avisa e mostra. Parar a IA quando o saldo acaba é a F3.
+
+**Fora desta fase, de propósito**: fator de remarcação e folga de câmbio (a seção 6.1 do plano mestre tirou a remarcação do escopo: o preço do pacote é definido pelo Filipe na mão); catálogo de pacotes à venda (F4); compra pelo próprio cliente e recarga automática (F5).
+
+## O que já existe e é a base
+
+- `llm_calls`: uma linha por chamada de IA, com `input_tokens` (TOTAL: inclui o lido e o gravado no cache no `run-model-call`; conferido no ai 7 com Anthropic, OpenAI e Google), `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `agent_id`, `contact_id`, `purpose`, `cost_cents` (nulo quando o preço é desconhecido ou por decisão, D-050), `legacy_invocation_id` (linha copiada do histórico antigo pelo bloco da 0130 do baseline, que roda de novo a cada atualização). Inserts: `run-model-call` (dois), `log-invocation`, `telemetria-sem-custo`, o backfill da 0130 e `scripts/smoke-llm.ts`.
+- `billing_plans.limits.tokens_ia_mes`: 1 milhão nos três planos, nulo (sem limite) no Ilimitado. `fn_billing_limites_efetivos(p_org)` já aplica o ajuste.
+- `billing_settings` (linha única): `modo` desligado, avisar ou bloquear.
+- Aviso na Central: `agent_inbox_items`, `kind = 'other'`, `ref_kind = 'billing_limite'`, deduplicado; depois da segunda leva de correções da F2, só o banco grava esse tipo.
+- A origem da chave de cada chamada já é conhecida no código (`OrigemDaChaveLlm` em `lib/agent-engine/edge/llm/credentials.ts:152`: `credencial_da_organizacao` ou `chave_da_instalacao`), mas não é gravada.
+- Timeouts no banco local: `authenticator` (PostgREST) com `statement_timeout` 8 s e `lock_timeout` 4 s; `agent_worker` sem nenhum dos dois.
+
+## Decisões de desenho
+
+1. **Unidade: token ponderado**, inteiro (`bigint`). `ponderado = ceil((max(input - cache_read, 0) + output + cache_read * peso_cache / 100) * peso_proposito / 100)`. `peso_cache` em `billing_settings.peso_cache_leitura_pct` (padrão 10, pergunta N3); `peso_proposito` em `billing_settings.pesos_por_proposito` (jsonb, ausente = 100). Os pesos entram como PARÂMETRO de uma função `immutable`; quem chama lê a configuração. O ponderado fica gravado na linha do livro-caixa: trocar o peso no meio do ciclo não recalcula o passado. Ponderado zero não gera linha.
+2. **Embedding com peso 0 nesta fase** (`{"embedding_indexar": 0, "embedding_consultar": 0}`): o embedding custa uma fração do token de modelo, e subir uma base de conhecimento de 500 mil tokens não pode comer metade do mês do cliente. O extrato mostra os tokens brutos mesmo assim. Pergunta N16. A transcrição entra com zero tokens (D-051), então também sai de graça, e isso fica escrito na tela da plataforma.
+3. **Só consome carteira o que é pago pela Hiperbold**: coluna nova `llm_calls.origem_da_chave` (nula), gravada nos pontos que conhecem a origem. Debita só `chave_da_instalacao`. Nulo (histórico, ponto que não sabe) NÃO debita: é a leitura que não cobra do cliente por engano (plano mestre 6.7: consumo com a chave do próprio cliente não passa pela carteira). É uma coluna a mais numa tabela do autor, acrescentada por `add column if not exists`; registrado como ponto de atenção para as junções com o upstream.
+4. **Ciclo = mês civil no fuso `America/Sao_Paulo`**, primeiro dia do mês (`date`), SEMPRE calculado de `llm_calls.created_at` da chamada, nunca de `now()`. O mesmo vale para o dia do agregado. O orçamento do autor usa o mês UTC; aqui o extrato não pode virar o mês às 21h do último dia. Onde mudar: `fn_billing_ciclo_de(timestamptz)`.
+5. **Marca de início**: `billing_settings.carteira_desde timestamptz`, preenchida uma vez (`coalesce`, nunca sobrescrita) quando a 0906 roda. Gatilho e conferidor ignoram chamada com `created_at < carteira_desde` e chamada com `legacy_invocation_id` preenchido. Sem isso, a primeira noite do conferidor cobraria 35 dias de histórico de uma vez.
+6. **Três fontes**, na ordem de consumo (seção 6.2): `plano` (concedido todo ciclo, não acumula), `adicional` (assinatura mensal a mais, concedida todo ciclo, não acumula) e `avulso` (pacote comprado, sem ciclo, **sem prazo de validade nesta fase**, pergunta N13).
+7. **Livro-caixa só de acréscimo** (`billing_token_ledger`): toda concessão, crédito, ajuste e consumo vira linha; nenhum saldo muda sem linha. `tokens` positivo é entrada, negativo é saída. Coluna `llm_call_id uuid` indexada, SEM chave estrangeira (FK com `on delete set null` viraria UPDATE numa tabela sem update; sem ação, travaria apagar dado do autor); `criado_por uuid` também sem FK. `chave` única por organização: `plano:<ciclo>`, `adicional:<id>:<ciclo>`, `consumo:<llm_call_id>:<fonte>`, `credito:<uuid>`, `ajuste:<uuid>`. Uma chamada gera no máximo UMA linha por fonte: o que passa do saldo total entra somado na linha de `plano` da mesma chamada (nunca duas parcelas com a mesma chave). Escrita sempre `insert ... on conflict do nothing`, e a carteira e o agregado só mudam quando o insert entrou de fato (`row_count`). Ninguém tem `update`, `delete` nem `truncate` (nem o `service_role`); nenhum gatilho BEFORE UPDATE/DELETE na tabela. A exclusão em cascata da organização funciona porque a ação referencial roda como dono; a tarefa 3 prova isso apagando a organização como `service_role`. A `nota` do crédito nunca pode ser apagada: o formulário avisa para não pôr dado pessoal.
+8. **Saldo materializado** (`billing_token_wallets`: organização, fonte, ciclo, com `avulso` de ciclo nulo e `unique nulls not distinct`; Postgres 15.8): `creditado` e `consumido`, alterados na MESMA transação da linha do livro-caixa. Conferidor diário recalcula a carteira do livro-caixa e corrige divergência.
+9. **Concessão preguiçosa e idempotente** (`fn_billing_garantir_concessoes(p_org, p_ciclo)`), sob a MESMA advisory lock da organização que o débito usa: nasce no primeiro consumo do ciclo ou quando a RPC de leitura do saldo roda (que, por isso, escreve e trava igual). Usa o teto efetivo do momento; troca de plano no meio do ciclo não refaz (N15). No Ilimitado não concede: o consumo é debitado de `plano` sem teto, o extrato mostra, o saldo diz "sem limite". Concessão nunca é criada para ciclo que já fechou.
+10. **Débito** (`fn_billing_debitar_chamada(p_llm_call_id)`, a peça única usada pelo gatilho e pelo conferidor): calcula o ponderado, garante a concessão do ciclo DA CHAMADA, divide pelas fontes, grava livro-caixa, carteira e agregado, e (só quando o ciclo da chamada é o atual) confere avisos e travas. Nunca lança.
+11. **Gatilho `after insert` em `llm_calls`** que chama o débito e nunca derruba o insert: corpo inteiro dentro de `begin ... exception when others`; `pg_try_advisory_xact_lock` pela organização (chave `billing_tokens:<org>`), e se não conseguir, não espera: sai e deixa para o conferidor; função com `set lock_timeout = '1s'` no próprio `create function` (restaurado ao sair, não vaza para a transação de quem chamou), para qualquer espera de linha virar erro capturável muito antes do `statement_timeout` de 8 s, que não é capturável e apagaria a própria linha de `llm_calls`.
+12. **Conferidor de débito** (cron diário): procura chamadas com `created_at >= greatest(carteira_desde, now() - 35 dias)`, `legacy_invocation_id` nulo, `origem_da_chave = 'chave_da_instalacao'`, ponderado maior que zero e sem linha de consumo (anti-join por `llm_call_id`), e debita uma organização por vez. Débito de ciclo já fechado entra no ciclo da chamada e não gera aviso.
+13. **Agregado do extrato** (`billing_token_consumo_diario`: organização, dia, `agent_id`, `contact_id`, `purpose`, tokens ponderados, entrada, saída, cache lido, chamadas, soma de `cost_cents` conhecido, chamadas com custo nulo), `unique nulls not distinct`, sem FK em cascata para agente nem contato (apagar agente não apaga histórico de consumo; o `contact_id` é só chave de agrupamento). Atualizado DENTRO do débito, só quando a linha do livro-caixa entrou. Índice em (organização, dia, contact_id) para o teto por conversa. O extrato lê só daqui.
+14. **Avisos a 50%, 80% e 100%** do total disponível no ciclo (plano + adicional + avulso), um por limiar por ciclo, na Central, texto fixo, `ref_kind = 'billing_limite'` (o mesmo tipo protegido da F2). Registrar o tipo em `lib/ai/inbox-destino.ts` e no texto de `lib/ai/agent-inbox-copy.ts` se o projeto exigir.
+15. **Travas de segurança só avisam nesta fase**: teto por organização por dia (soma do agregado do dia, sem trava) e teto por conversa por dia (soma do agregado por `contact_id`), conferidos no débito; teto da instalação por dia conferido pelo conferidor (cron), nunca dentro do gatilho, porque um total de todas as organizações serializaria tudo. Os três nulos (desligados) por padrão, pergunta N14. O alarme do teto da instalação vai para o log com o prefixo de alarme do projeto e para a aba da plataforma; um destino de alarme próprio da plataforma não existe e fica registrado no DEBITO.
+16. **Crédito, adicional e ajuste pelo admin da plataforma**: `fn_billing_creditar_tokens` (avulso), `fn_billing_contratar_adicional` e cancelar, `fn_billing_ajustar_tokens` (sinal livre, com referência opcional à linha que compensa, para estornar débito errado). Só escopo `full`, MFA em dia, auditoria, IP pela régua do projeto. **A chave idempotente nasce quando o formulário é montado** (uuid no formulário), o servidor valida o formato e a reaproveita: clique duplo ou reenvio não credita duas vezes. Valor em reais recebido gravado opcionalmente no crédito e no adicional (`valor_cents`), para o painel de margem.
+17. **Painel de margem só para a plataforma**: por organização e ciclo, receita (preço do plano contratado + adicionais + avulsos com valor) contra custo (soma de `cost_cents` conhecido do agregado mais estimativa das chamadas de custo nulo pelo preço do catálogo `ai_models`, marcada como estimativa). Não liga preço em `llm_calls` (D-050).
+18. **Estimativa de respostas** para o cliente (N1): consumo ponderado total da organização nos últimos 30 dias dividido pelo número de respostas do agente no mesmo período (as conferências internas entram no custo por resposta); sem amostra, 32 mil (seção 5), sempre marcada como estimativa.
+19. **Quem vê o quê**: carteira e agregado, gerente para cima da própria organização (mesma régua de "Plano e uso", N11), com `grant select` e política com `fn_role_at_least(organization_id, 'manager')`. Livro-caixa e adicionais: privilégio nenhum para `authenticated` (só a plataforma, pelo servidor). Na varredura de completude de RLS (`tests/invariants/rls-completude-varredura.test.ts`), carteira e agregado entram como prova própria (apontando para `planos-carteira.test.ts`) e livro-caixa e adicionais na classe "privilégio nenhum"; não entram em `TABLES` de `rls-isolation`, cujo usuário semeado é agente e falharia por acerto.
+
+## Tarefa 1: tabelas, pesos, ciclo e a origem da chave (migração 0906, parte 1)
+
+Migração nova `supabase/migrations/<timestamp>_0906_planos_carteira_de_tokens.sql`, bloco idêntico no `supabase/baseline.sql` depois do da 0905 e antes de `-- ---- VARREDURA anon:`, linha no `MANIFEST.md`. Colunas novas em `billing_settings` (pesos, `carteira_desde`, os três tetos); coluna `origem_da_chave` em `llm_calls` com check dos dois valores; tabelas `billing_token_ledger`, `billing_token_wallets`, `billing_token_adicionais`, `billing_token_consumo_diario`; funções `fn_billing_ciclo_de(timestamptz)` e `fn_billing_tokens_ponderados(...)`. RLS, grants, `agent_worker`. No código: gravar `origem_da_chave` nos dois inserts do `run-model-call` e onde a origem for conhecida (`log-invocation`, visão no `media-derive-worker`, embedding, transcrição; onde não for, fica nulo e vai para a resposta). `lib/database.types.ts` se as colunas e RPCs forem usadas tipadas. Pronto quando: aplica duas vezes no banco local; `tests/unit/planos-carteira-migration.test.ts` cobra bloco igual, grants (sem update/delete/truncate no livro-caixa para ninguém), RLS, ausência de FK no livro-caixa, `nulls not distinct`; testes dos pontos que passaram a gravar a origem.
+
+## Tarefa 2a: concessão, débito, gatilho e agregado (migração 0906, parte 2)
+
+`fn_billing_garantir_concessoes`, `fn_billing_debitar_chamada`, o gatilho em `llm_calls`, o agregado (decisões 9 a 13). Pronto quando: provado à mão no banco local, em transação com rollback: ordem das fontes; a chamada que atravessa o fim do saldo grava o total (o caso de 100 de saldo e 600 de consumo); repetir o débito não duplica nem mexe na carteira nem no agregado; Ilimitado registra sem saldo; `legacy_invocation_id` e chamada anterior à marca não debitam; `origem_da_chave` nula ou da organização não debita; erro forçado e trava ocupada por outra sessão não derrubam nem atrasam o insert em `llm_calls`.
+
+## Tarefa 2b: avisos e travas (migração 0906, parte 3)
+
+Avisos de 50/80/100 e travas por organização e por conversa (decisões 14 e 15), dentro do débito e só no ciclo atual. Pronto quando: provado à mão que cada limiar avisa uma vez por ciclo, que débito tardio de ciclo fechado não avisa, que as travas nulas não fazem nada.
+
+## Tarefa 3: provas de banco
+
+`tests/invariants/planos-carteira.test.ts` (novo): isolamento com dois usuários reais (gerente de A não lê B; agente de A não lê a carteira de A); ninguém faz update nem delete no livro-caixa (nem o `service_role`); débito concorrente de duas sessões não duplica e não trava; idempotência de concessão, crédito, ajuste e débito; ordem de consumo e o caso que atravessa o saldo; saldo negativo sem bloquear; histórico e chave da organização não debitam; exclusão da organização em cascata como `service_role`; conferidores de carteira e de débito. Entrada das tabelas novas em `rls-completude-varredura` pela classe certa (decisão 19).
+
+## Tarefa 4: crédito, adicional e ajuste pelo admin da plataforma
+
+As três funções (service_role só) e as ações em `app/actions/admin/` no molde de `planoDaOrganizacao.ts` (decisão 16). Auditoria `billing.tokens_credited`, `billing.tokens_adjusted`, `billing.addon_changed`. Testes no molde de `tests/unit/planos-acoes-do-admin.test.ts`, incluindo reenvio com a mesma chave.
+
+## Tarefa 5: leitura no servidor
+
+`lib/billing/tokens/`: saldo (RPC que concede e lê), extrato do ciclo por dia e por agente, estimativa de respostas (decisão 18), painel de margem (decisão 17). Falha de leitura vira "não foi possível medir agora", nunca "sem limite" nem zero. Testes unitários.
+
+## Tarefa 6: tela do cliente
+
+`app/app/settings/plano/page.tsx` ganha "Tokens de IA": saldo por fonte com barra, consumo do ciclo, estimativa de respostas, extrato por dia e por agente. Textos pelo dicionário (português e espanhol). Gerente para cima. Testes das linhas da tela.
+
+## Tarefa 7: aba do admin da plataforma
+
+A aba "Plano" de `app/admin/(protected)/tenants/[id]/plano/` ganha: saldo, livro-caixa com nota e autor, creditar avulso, contratar e cancelar adicional, ajustar (com a linha que compensa), painel de margem, e o aviso de que embedding e transcrição não debitam nesta fase. Uuid do pedido gerado na montagem do formulário. Testes no molde de `tests/unit/planos-aba-do-admin.test.ts`.
+
+## Tarefa 8: os conferidores diários
+
+Rota `app/api/v1/cron/conferir-carteira-de-tokens/route.ts` (`autorizaCron`, frase fixa no erro): conferidor de débito (decisão 12), de carteira (decisão 8) e o teto da instalação (decisão 15), uma organização por vez. Linha nova em `docker/scheduler/entrypoint.sh`. Lógica em `lib/billing/tokens/`, nunca exportada da rota. Testes unitários.
+
+## Fechamento da fase
+
+Revisão da fase inteira, auditoria com o foco de saldo (toda entrada e saída vira linha, nada credita duas vezes, inteiros, isolamento), portões completos, commit.
+
+## Perguntas novas desta fase
+
+- **N13. O pacote avulso vence?** Padrão usado: não vence. Onde muda: a fonte `avulso` da carteira.
+- **N14. Quais os tetos de segurança** (por organização por dia, por conversa por dia, da instalação por dia)? Padrão usado: nenhum; quando ligados, nesta fase só avisam. Onde muda: `billing_settings`.
+- **N15. Mudança de plano no meio do mês refaz a concessão do mês?** Padrão usado: não; o admin ajusta se quiser. Onde muda: `fn_billing_garantir_concessoes`.
+- **N16. Embedding (base de conhecimento) consome tokens do cliente?** Padrão usado: não (peso 0), porque custa uma fração do token de modelo. Onde muda: `billing_settings.pesos_por_proposito`.
+- **N17. Consumo com a chave de IA da própria organização** (as que já cadastraram chave) fica fora da carteira? Padrão usado: sim, fica fora (plano mestre 6.7). Onde muda: o filtro de `origem_da_chave` no débito.
+
+## Histórico da revisão
+
+Revisado em 23/09/2026 antes de implementar. Altos corrigidos no plano: a primeira noite do conferidor cobraria 35 dias de histórico (marca de início e ciclo pela data da chamada); a chave de consumo descartava o que passava do saldo (uma linha por fonte, somada); um erro ou espera no gatilho podia derrubar a resposta do agente depois de o fornecedor cobrar (corpo inteiro capturado, trava sem espera, `lock_timeout` da função). Médios incorporados: classe certa na varredura de RLS; consumo com a chave da organização fora da carteira; histórico copiado não debita; ajuste para estornar; chave idempotente nascida no formulário; agregado dentro do débito e `nulls not distinct`; peso do embedding; desenho das travas; tarefa 2 dividida. Baixos incorporados: ponderado zero sem linha e `llm_call_id` indexado; peso como parâmetro; livro-caixa sem FK; concessão sob a mesma trava; estimativa pelo consumo total; escopo que ficou fora declarado.
