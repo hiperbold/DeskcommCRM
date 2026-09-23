@@ -256,7 +256,7 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     "fn_billing_trava_team_invites()",
     "fn_billing_trava_user_organizations()",
     "fn_billing_trava_crm_leads()",
-    "fn_billing_conferir_contadores()",
+    "fn_billing_conferir_contador(uuid)",
   ] as const;
 
   it("todas as nove funções novas da parte 2 são security definer com search_path fixo", () => {
@@ -288,9 +288,9 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     }
   });
 
-  it("fn_billing_conferir_teto e fn_billing_conferir_contadores são volatile", () => {
+  it("fn_billing_conferir_teto e fn_billing_conferir_contador são volatile", () => {
     for (const sql of [MIGRATION, BASELINE]) {
-      for (const nome of ["fn_billing_conferir_teto", "fn_billing_conferir_contadores"]) {
+      for (const nome of ["fn_billing_conferir_teto", "fn_billing_conferir_contador"]) {
         const inicio = sql.indexOf(`create or replace function public.${nome}(`);
         const trecho = sql.slice(inicio, inicio + 300);
         expect(trecho).toMatch(/\bvolatile\b/);
@@ -399,15 +399,17 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
       expect(sql).toMatch(/set valor = public\.billing_usage_counters\.valor \+ 1,/);
       expect(sql).toMatch(/elsif v_status_antigo = 'open' then/);
       expect(sql).toMatch(/set valor = greatest\(valor - 1, 0\),/);
-      // A subtração é só update: não pode existir um segundo "insert into
-      // billing_usage_counters" fora do ramo de soma (senão recriaria a
+      // A subtração é só update: não pode existir um "insert into
+      // billing_usage_counters" no ramo de subtração (senão recriaria a
       // linha no meio de uma exclusão em cascata de organização).
       const ocorrenciasDeInsert = [
         ...sql.matchAll(/insert into public\.billing_usage_counters/g),
       ].length;
       // Uma no preenchimento inicial da parte 1, uma no ramo de soma do
-      // gatilho de leads da parte 2. Nenhuma no ramo de subtração.
-      expect(ocorrenciasDeInsert).toBe(2);
+      // gatilho de leads da parte 2, uma no ramo "sem linha" de
+      // fn_billing_conferir_contador (achado 3, cria a linha que falta).
+      // Nenhuma no ramo de subtração do gatilho de leads.
+      expect(ocorrenciasDeInsert).toBe(3);
     }
   });
 
@@ -419,9 +421,9 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     }
   });
 
-  it("fn_billing_conferir_contadores trava a linha (for update) e só num comando SEGUINTE conta e corrige", () => {
+  it("fn_billing_conferir_contador trava a linha (for update) e só num comando SEGUINTE conta e corrige", () => {
     for (const sql of [MIGRATION, BASELINE]) {
-      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_contadores(");
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_contador(");
       const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
       const posFor = trecho.indexOf("for update;");
       const posCount = trecho.indexOf("select count(*) into v_real");
@@ -429,7 +431,31 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
       expect(posFor).toBeGreaterThan(-1);
       expect(posCount).toBeGreaterThan(posFor);
       expect(posUpdate).toBeGreaterThan(posCount);
-      expect(trecho).toMatch(/return v_divergiam;/);
+      expect(trecho).toMatch(/return v_divergia;/);
+    }
+  });
+
+  it("fn_billing_conferir_contador, achado 3: recebe UMA organização (p_org uuid) e devolve boolean, não integer", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(/create or replace function public\.fn_billing_conferir_contador\(p_org uuid\)/);
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_contador(");
+      const trecho = sql.slice(inicio, inicio + 200);
+      expect(trecho).toMatch(/returns boolean/);
+      // A versão antiga (sem argumento, retornava integer) foi removida: o
+      // baseline precisa do drop para ficar idempotente (a 0905 nunca foi a
+      // produção).
+      expect(sql).toMatch(/drop function if exists public\.fn_billing_conferir_contadores\(\);/);
+      expect(sql).not.toMatch(/create or replace function public\.fn_billing_conferir_contadores\(\)/);
+    }
+  });
+
+  it("fn_billing_conferir_contador cria a linha do contador quando ela não existe, com a contagem real", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_contador(");
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(trecho).toMatch(/insert into public\.billing_usage_counters \(organization_id, item, valor\)/);
+      expect(trecho).toMatch(/values \(p_org, 'leads', v_real\)/);
+      expect(trecho).toMatch(/on conflict \(organization_id, item\) do update/);
     }
   });
 

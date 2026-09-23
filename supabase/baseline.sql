@@ -37242,8 +37242,8 @@ $$;
 -- seis gatilhos de transição (crm_pipelines, crm_stages, channel_sessions,
 -- webhook_sources, team_invites, user_organizations), o gatilho de leads
 -- (decisão 6, o mais delicado: precisa enxergar a mudança de status feita
--- por OUTRO gatilho) e fn_billing_conferir_contadores (o conferidor diário
--- que a Tarefa 5 agenda).
+-- por OUTRO gatilho) e fn_billing_conferir_contador (o conferidor diário,
+-- uma organização por chamada, que a Tarefa 5 agenda).
 --
 -- Nesta fase a trava só AVISA (ver cabeçalho do arquivo): quando a
 -- organização passa do teto, nasce um item na Central
@@ -37616,13 +37616,20 @@ begin
   end if;
 
   if v_status_novo = 'open' then
+    -- Achado 2 (revisão fase F2): CONFERE antes de SOMAR. fn_billing_pode_criar
+    -- lê o CONTADOR materializado (billing_usage_counters.valor), não um
+    -- count(*) da tabela: então chamar fn_billing_conferir_teto aqui, antes do
+    -- upsert abaixo, faz a leitura enxergar o valor de ANTES deste lead, a
+    -- mesma semântica dos seis gatilhos BEFORE (que avisam no teto + 1, não no
+    -- teto). Na ordem antiga o 100º lead de um teto de 100 já via o contador
+    -- somado e avisava um lead cedo demais.
+    perform public.fn_billing_conferir_teto(v_org, 'leads', null);
+
     insert into public.billing_usage_counters (organization_id, item, valor)
     values (v_org, 'leads', 1)
     on conflict (organization_id, item) do update
       set valor = public.billing_usage_counters.valor + 1,
           updated_at = now();
-
-    perform public.fn_billing_conferir_teto(v_org, 'leads', null);
   elsif v_status_antigo = 'open' then
     update public.billing_usage_counters
       set valor = greatest(valor - 1, 0),
@@ -37639,7 +37646,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_leads() is
-  'Gatilho de plano (Tarefa 3, decisão 6): after insert/update/delete SEM lista de colunas em crm_leads, porque trg_crm_lead_close_on_stage (before, do autor) muda o status na troca de etapa e um gatilho com lista de colunas não veria essa mudança; só o valor final da linha resolve. Mantém billing_usage_counters (item leads) por upsert ao somar e update simples (greatest(valor - 1, 0)) ao subtrair, nunca recriando a linha na subtração (decisão 11, exclusão em cascata de organização). Confere o teto só quando somou. Captura qualquer erro (decisão 11).';
+  'Gatilho de plano (Tarefa 3, decisão 6): after insert/update/delete SEM lista de colunas em crm_leads, porque trg_crm_lead_close_on_stage (before, do autor) muda o status na troca de etapa e um gatilho com lista de colunas não veria essa mudança; só o valor final da linha resolve. Confere o teto ANTES de somar (achado 2 da revisão fase F2): fn_billing_pode_criar lê o CONTADOR materializado, então conferir antes do upsert faz a leitura enxergar o valor sem o lead novo, a mesma semântica dos seis gatilhos BEFORE: na ordem antiga o 100º lead de um teto de 100 já avisava, um lead cedo demais. Mantém billing_usage_counters (item leads) por upsert ao somar e update simples (greatest(valor - 1, 0)) ao subtrair, nunca recriando a linha na subtração (decisão 11, exclusão em cascata de organização). Captura qualquer erro (decisão 11).';
 
 revoke execute on function public.fn_billing_trava_crm_leads() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_leads() to service_role;
@@ -37650,60 +37657,85 @@ create trigger trg_billing_trava_crm_leads
   for each row
   execute function public.fn_billing_trava_crm_leads();
 
--- 10. fn_billing_conferir_contadores: o conferidor diário (chamado pela
--- Tarefa 5, ainda não escrita). Por organização com contador de leads, TRAVA
--- a linha (select ... for update) e só DEPOIS, num comando SEGUINTE, conta os
--- leads abertos de verdade e corrige, nunca no mesmo comando que travou,
--- senão o count enxergaria a mesma foto de dados de quando a trava foi
+-- 10. fn_billing_conferir_contador: o conferidor diário (chamado pela Tarefa
+-- 5), UMA ORGANIZAÇÃO por chamada.
+--
+-- Achado 3 (revisão fase F2): a versão antiga (fn_billing_conferir_contadores,
+-- sem argumento) rodava TODAS as organizações numa transação/RPC só, com
+-- select ... for update em cada linha e soltura de TODAS só no commit final.
+-- Durante a rodada, todo lead criado ou fechado numa organização já conferida
+-- esperava a trava; a sessão authenticated tem lock_timeout curto, o erro é
+-- engolido pelo exception block de fn_billing_trava_crm_leads, e a contagem se
+-- perde: a própria divergência que o conferidor existe para corrigir. Por
+-- isso a chamada agora é uma função por organização: quem chama (Tarefa 5)
+-- itera as organizações por fora e faz uma RPC por organização, cada uma sua
+-- própria transação.
+--
+-- Mesmo desenho de trava e contagem em comandos SEPARADOS da versão antiga:
+-- TRAVA a linha (select ... for update) e só DEPOIS, num comando SEGUINTE,
+-- conta os leads abertos de verdade e corrige: nunca no mesmo comando que
+-- travou, senão o count enxergaria a mesma foto de dados de quando a trava foi
 -- pega, e uma escrita concorrente que esperou a trava passaria batida.
--- Devolve quantos contadores divergiam.
-create or replace function public.fn_billing_conferir_contadores()
-returns integer
+--
+-- Também CRIA a linha do contador quando ela não existe (a versão antiga só
+-- percorria organização que já tinha linha em billing_usage_counters, e uma
+-- organização sem linha nunca era conferida). Sem linha, o valor efetivo é
+-- zero, mesma doutrina do coalesce(valor, 0) de fn_billing_uso e
+-- fn_billing_pode_criar: então divergia = a contagem real não é zero.
+--
+-- Devolve true se o contador divergia (ou não existia e a contagem real não
+-- era zero), false quando já estava certo.
+create or replace function public.fn_billing_conferir_contador(p_org uuid)
+returns boolean
 language plpgsql
 volatile
 security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_org record;
   v_real bigint;
-  v_divergiam integer := 0;
+  v_existia boolean;
+  v_divergia boolean;
 begin
-  for v_org in
-    select organization_id
+  perform 1
     from public.billing_usage_counters
-    where item = 'leads'
-    order by organization_id
-  loop
-    perform 1
-      from public.billing_usage_counters
-      where organization_id = v_org.organization_id and item = 'leads'
-      for update;
+    where organization_id = p_org and item = 'leads'
+    for update;
+  v_existia := found;
 
-    select count(*) into v_real
-      from public.crm_leads
-      where organization_id = v_org.organization_id and status = 'open';
+  select count(*) into v_real
+    from public.crm_leads
+    where organization_id = p_org and status = 'open';
 
+  if v_existia then
     update public.billing_usage_counters
       set valor = v_real, updated_at = now()
-      where organization_id = v_org.organization_id
+      where organization_id = p_org
         and item = 'leads'
         and valor <> v_real;
+    v_divergia := found;
+  else
+    insert into public.billing_usage_counters (organization_id, item, valor)
+    values (p_org, 'leads', v_real)
+    on conflict (organization_id, item) do update
+      set valor = excluded.valor,
+          updated_at = now();
+    v_divergia := v_real <> 0;
+  end if;
 
-    if found then
-      v_divergiam := v_divergiam + 1;
-    end if;
-  end loop;
-
-  return v_divergiam;
+  return v_divergia;
 end;
 $$;
 
-comment on function public.fn_billing_conferir_contadores() is
-  'Conferidor diário (Tarefa 5) de billing_usage_counters (item leads): por organização, trava a linha (for update) e só num comando SEGUINTE conta os leads abertos e corrige, para não enxergar a mesma foto do momento da trava. Devolve quantos contadores estavam divergentes.';
+comment on function public.fn_billing_conferir_contador(uuid) is
+  'Conferidor diário (Tarefa 5) de UMA organização em billing_usage_counters (item leads), achado 3 da revisão fase F2: a versão antiga (fn_billing_conferir_contadores, sem argumento) segurava a trava de todas as organizações até o commit final de uma transação só, fazendo lead novo de organização já conferida esperar (lock_timeout curto da sessão authenticated engolia o erro e perdia a contagem, a divergência que este conferidor existe para corrigir). Por organização: trava a linha (for update) e só num comando SEGUINTE conta os leads abertos e corrige, para não enxergar a mesma foto do momento da trava. CRIA a linha do contador quando ela não existe (upsert com a contagem real), em vez de pular. Devolve true se divergia (ou não existia e a contagem real não era zero).';
 
-revoke execute on function public.fn_billing_conferir_contadores() from public, anon, authenticated;
-grant execute on function public.fn_billing_conferir_contadores() to service_role;
+-- Baseline idempotente: a 0905 ainda não foi para produção, então o drop da
+-- função antiga (achado 3) não perde histórico nenhum.
+drop function if exists public.fn_billing_conferir_contadores();
+
+revoke execute on function public.fn_billing_conferir_contador(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_conferir_contador(uuid) to service_role;
 
 -- 11. agent_worker não confere nem trava plano pelos gatilhos e funções
 -- novos desta parte 2 (mesmo racional do bloco 6 da parte 1, acima): por
@@ -37712,7 +37744,7 @@ grant execute on function public.fn_billing_conferir_contadores() to service_rol
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
-    execute 'revoke execute on function public.fn_billing_conferir_teto(uuid, text, uuid), public.fn_billing_trava_crm_pipelines(), public.fn_billing_trava_crm_stages(), public.fn_billing_trava_channel_sessions(), public.fn_billing_trava_webhook_sources(), public.fn_billing_trava_team_invites(), public.fn_billing_trava_user_organizations(), public.fn_billing_trava_crm_leads(), public.fn_billing_conferir_contadores() from agent_worker';
+    execute 'revoke execute on function public.fn_billing_conferir_teto(uuid, text, uuid), public.fn_billing_trava_crm_pipelines(), public.fn_billing_trava_crm_stages(), public.fn_billing_trava_channel_sessions(), public.fn_billing_trava_webhook_sources(), public.fn_billing_trava_team_invites(), public.fn_billing_trava_user_organizations(), public.fn_billing_trava_crm_leads(), public.fn_billing_conferir_contador(uuid) from agent_worker';
   end if;
 end
 $$;
@@ -37802,7 +37834,6 @@ begin
   end if;
 end
 $$;
-
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

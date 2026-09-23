@@ -24,8 +24,9 @@ import { motivoDoErro, sql } from "./psql-transporte";
  *     lote por `fn_mover_leads_em_lote`, reabrir em lote, apagar);
  *  8. apagar a organização inteira não erra, e a linha do contador some junto
  *     (cascade, sem a exclusão recriar a linha no meio do caminho);
- *  9. `fn_billing_conferir_contadores` corrige um contador adulterado e
- *     devolve 1; rodada de novo, já consistente, devolve 0;
+ *  9. `fn_billing_conferir_contador(p_org)` corrige um contador adulterado e
+ *     devolve true; rodada de novo, já consistente, devolve false; sem linha
+ *     de contador, cria com a contagem real;
  *  10. criar lead como membro comum, com `authenticated` e JWT real, continua
  *      funcionando (o gatilho `security definer` não quebra o insert da
  *      sessão do usuário);
@@ -33,7 +34,7 @@ import { motivoDoErro, sql } from "./psql-transporte";
  *      conta;
  *  12. `billing_usage_counters` isolado por RLS entre organizações;
  *  13. membro comum não escreve em `billing_usage_counters` nem executa
- *      `fn_billing_conferir_teto`, `fn_billing_conferir_contadores`,
+ *      `fn_billing_conferir_teto`, `fn_billing_conferir_contador`,
  *      `fn_billing_uso` nem `fn_billing_pode_criar`.
  *
  * Mais duas, da Tarefa 4 (D-034, teto TÉCNICO de conexões MCP, não é item de
@@ -44,6 +45,16 @@ import { motivoDoErro, sql } from "./psql-transporte";
  *  15. concorrência real (duas sessões psql separadas): a 10ª conexão fica
  *      presa numa transação aberta enquanto uma 11ª tenta inserir ao mesmo
  *      tempo, e só uma das duas grava.
+ *
+ * Achado 4 da revisão fase F2 acrescenta mais seis casos (16 a 21, ao final
+ * do arquivo): falha forçada dentro da conferência não perde a operação do
+ * cliente nem grava aviso pela metade (funis e leads); o N-ésimo lead aberto
+ * não avisa e o N+1-ésimo avisa (prova do achado 2); os avisos de
+ * `user_organizations`, `team_invites` e `channel_sessions`; o Ilimitado não
+ * toma advisory lock nenhum; e membro comum criando lead acima do teto
+ * também gera aviso. O conferidor novo (achado 3) ganhou dois casos a mais
+ * DENTRO do caso 9 (linha ausente vira linha criada; devolve false quando
+ * já está certo).
  *
  * Como `planos-de-assinatura.test.ts` (fase F1), fala com o Postgres por
  * `tests/invariants/psql-transporte.ts` (não `gov-helpers.ts`, congelado) e usa
@@ -73,12 +84,22 @@ const ORG_RBAC = "09050001-0000-4000-8000-00000000000e";
 const ORG_MCP_A = "09050001-0000-4000-8000-00000000000f";
 const ORG_MCP_B = "09050001-0000-4000-8000-000000000010";
 const ORG_MCP_CONCORRENCIA = "09050001-0000-4000-8000-000000000011";
+const ORG_FALHA_FUNIS = "09050001-0000-4000-8000-000000000012";
+const ORG_FALHA_LEADS = "09050001-0000-4000-8000-000000000013";
+const ORG_LEADS_ACHADO2 = "09050001-0000-4000-8000-000000000014";
+const ORG_AVISO_MEMBROS = "09050001-0000-4000-8000-000000000015";
+const ORG_AVISO_CONVITE = "09050001-0000-4000-8000-000000000016";
+const ORG_AVISO_CONEXAO = "09050001-0000-4000-8000-000000000017";
+const ORG_ILIMITADO_LOCK = "09050001-0000-4000-8000-000000000018";
+const ORG_MEMBRO_TETO = "09050001-0000-4000-8000-000000000019";
 
 const USER_MEMBRO_INS = "09050001-1111-4000-8000-00000000000a";
 const USER_MEMBROS_REAL = "09050001-1111-4000-8000-00000000000b";
 const USER_MEMBROS_PROV = "09050001-1111-4000-8000-00000000000c";
 const USER_ISO_A = "09050001-1111-4000-8000-00000000000d";
 const USER_RBAC = "09050001-1111-4000-8000-00000000000e";
+const USER_AVISO_MEMBROS = "09050001-1111-4000-8000-000000000012";
+const USER_MEMBRO_TETO = "09050001-1111-4000-8000-000000000013";
 
 /** Marcador das linhas de resultado, o psql também imprime SET, INSERT 0 1 etc. */
 const MARCA = "SONDA|";
@@ -162,6 +183,33 @@ function avisosDe(org: string): number {
     `select 'SONDA|' || count(*) from public.agent_inbox_items where organization_id = '${org}' and kind = 'other' and ref_kind = 'billing_limite' and status = 'open';`,
   );
   return Number(linhas[0]);
+}
+
+/**
+ * Roda `corpo` dentro de uma transação em que TODO insert em
+ * `agent_inbox_items` explode (achado 4: prova que uma falha na hora de
+ * gravar o aviso não perde a operação do cliente). O gatilho e a função que
+ * o cria são DDL transacional: nascem e morrem com a transação, o
+ * `rollback` no fim desfaz os dois e não deixa rastro para os outros casos.
+ * `corpo` deve terminar com as sondas (`select 'SONDA|' || ...`) que o
+ * chamador quer ler.
+ */
+function dentroDeFalhaForcada(corpo: string): string[] {
+  return comoServico(`
+    begin;
+    create or replace function public.fn_forca_falha_aviso_teste_achado4() returns trigger
+    language plpgsql as $BODY$
+    begin
+      raise exception 'falha_forcada_teste_achado4';
+    end;
+    $BODY$;
+    create trigger trg_forca_falha_aviso_teste_achado4
+      before insert on public.agent_inbox_items
+      for each row execute function public.fn_forca_falha_aviso_teste_achado4();
+
+    ${corpo}
+    rollback;
+  `);
 }
 
 describe("1. Pro com teto de funis = 2: o funil que passa do teto avisa, o seguinte não duplica", () => {
@@ -466,7 +514,10 @@ describe("8. Apagar a organização inteira não dá erro, e a linha do contador
   });
 });
 
-describe("9. fn_billing_conferir_contadores corrige um contador adulterado e devolve 1; de novo, devolve 0", () => {
+describe("9. fn_billing_conferir_contador(p_org) corrige um contador adulterado e devolve true; de novo, devolve false", () => {
+  // Achado 3 da revisão fase F2: a função deixou de varrer todas as
+  // organizações numa RPC só e passou a UMA organização por chamada,
+  // devolvendo boolean (divergia ou não), não mais integer.
   beforeAll(() => {
     comoServico(`
       insert into public.organizations (id, slug, legal_name, display_name)
@@ -491,9 +542,9 @@ describe("9. fn_billing_conferir_contadores corrige um contador adulterado e dev
     expect(linhas).toEqual(["999"]);
   });
 
-  it("a primeira rodada corrige e devolve 1", () => {
-    const linhas = comoServico(`select 'SONDA|' || public.fn_billing_conferir_contadores();`);
-    expect(linhas).toEqual(["1"]);
+  it("a primeira rodada corrige e devolve true", () => {
+    const linhas = comoServico(`select 'SONDA|' || public.fn_billing_conferir_contador('${ORG_CONTADOR}'::uuid);`);
+    expect(linhas).toEqual(["true"]);
   });
 
   it("o valor foi corrigido para o real (1 lead aberto)", () => {
@@ -503,9 +554,31 @@ describe("9. fn_billing_conferir_contadores corrige um contador adulterado e dev
     expect(linhas).toEqual(["1"]);
   });
 
-  it("a segunda rodada, já consistente, devolve 0", () => {
-    const linhas = comoServico(`select 'SONDA|' || public.fn_billing_conferir_contadores();`);
-    expect(linhas).toEqual(["0"]);
+  it("a segunda rodada, já consistente, devolve false", () => {
+    const linhas = comoServico(`select 'SONDA|' || public.fn_billing_conferir_contador('${ORG_CONTADOR}'::uuid);`);
+    expect(linhas).toEqual(["false"]);
+  });
+
+  it("organização SEM linha de contador: a função CRIA a linha com a contagem real e devolve true", () => {
+    // Segundo funil e lead, na mesma organização, só para este caso: apaga a
+    // linha do contador (sem apagar o lead) para simular uma organização que
+    // nunca teve billing_usage_counters: a versão antiga (sem argumento)
+    // nunca visitava quem não tinha linha; esta precisa criar.
+    comoServico(
+      `delete from public.billing_usage_counters where organization_id = '${ORG_CONTADOR}' and item = 'leads';`,
+    );
+    const semLinha = comoServico(
+      `select 'SONDA|' || count(*) from public.billing_usage_counters where organization_id = '${ORG_CONTADOR}' and item = 'leads';`,
+    );
+    expect(semLinha, "controle: a linha precisa estar ausente antes de conferir").toEqual(["0"]);
+
+    const linhas = comoServico(`select 'SONDA|' || public.fn_billing_conferir_contador('${ORG_CONTADOR}'::uuid);`);
+    expect(linhas).toEqual(["true"]);
+
+    const depois = comoServico(
+      `select 'SONDA|' || valor from public.billing_usage_counters where organization_id = '${ORG_CONTADOR}' and item = 'leads';`,
+    );
+    expect(depois, "a linha nasceu com a contagem real (1 lead aberto)").toEqual(["1"]);
   });
 });
 
@@ -658,8 +731,12 @@ describe("13. Membro comum não escreve em billing_usage_counters nem executa as
     );
   });
 
-  it("não executa fn_billing_conferir_contadores", () => {
-    esperaBarrado(USER_RBAC, `select public.fn_billing_conferir_contadores()`, "fn_billing_conferir_contadores");
+  it("não executa fn_billing_conferir_contador", () => {
+    esperaBarrado(
+      USER_RBAC,
+      `select public.fn_billing_conferir_contador('${ORG_RBAC}'::uuid)`,
+      "fn_billing_conferir_contador",
+    );
   });
 
   it("não executa fn_billing_uso", () => {
@@ -780,5 +857,240 @@ describe("15. Concorrência real: duas sessões inserindo ao mesmo tempo, só um
       `select 'SONDA|' || count(*) from public.ai_mcp_connections where organization_id = '${ORG_MCP_CONCORRENCIA}';`,
     );
     expect(linhas).toEqual(["10"]);
+  });
+});
+
+// ── Achado 4 (revisão fase F2): casos 16 a 21 ──
+
+describe("16. Falha forçada ao gravar o aviso (funis): o insert do funil sobrevive, nenhum aviso fica gravado", () => {
+  it("funil acima do teto, com a gravação do aviso forçada a explodir: a linha do funil existe e não há aviso", () => {
+    const linhas = dentroDeFalhaForcada(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_FALHA_FUNIS}', 'trava-falha-funis', 'Trava Falha Funis LTDA', 'Trava Falha Funis');
+      select public.fn_billing_trocar_plano('${ORG_FALHA_FUNIS}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_FALHA_FUNIS}'::uuid, '{"funis": 1}'::jsonb, null, null);
+      -- o funil "Pedidos" seedado já ocupa a vaga (teto 1); este passa do teto
+      -- e dispara a tentativa de aviso, que EXPLODE pelo gatilho forçado.
+      insert into public.crm_pipelines (organization_id, name, slug) values ('${ORG_FALHA_FUNIS}', 'Funil Falha', 'funil-falha');
+
+      select 'SONDA|' || count(*) from public.crm_pipelines where organization_id = '${ORG_FALHA_FUNIS}' and slug = 'funil-falha';
+      select 'SONDA|' || count(*) from public.agent_inbox_items where organization_id = '${ORG_FALHA_FUNIS}' and ref_kind = 'billing_limite';
+    `);
+    expect(linhas, "[funil sobreviveu?, quantos avisos gravados]").toEqual(["1", "0"]);
+  });
+});
+
+describe("17. Falha forçada ao gravar o aviso (leads): o insert do lead sobrevive, nenhum aviso fica gravado", () => {
+  it("lead acima do teto, com a gravação do aviso forçada a explodir: os dois leads existem e não há aviso", () => {
+    const linhas = dentroDeFalhaForcada(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_FALHA_LEADS}', 'trava-falha-leads', 'Trava Falha Leads LTDA', 'Trava Falha Leads');
+      select public.fn_billing_trocar_plano('${ORG_FALHA_LEADS}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_FALHA_LEADS}'::uuid, '{"leads": 1}'::jsonb, null, null);
+      insert into public.crm_pipelines (organization_id, name, slug)
+        values ('${ORG_FALHA_LEADS}', 'Funil Falha Leads', 'funil-falha-leads');
+      insert into public.crm_stages (organization_id, pipeline_id, name, slug, position)
+        values ('${ORG_FALHA_LEADS}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_FALHA_LEADS}' and slug = 'funil-falha-leads'),
+                'Comum', 'comum', 1000);
+
+      -- 1º lead, dentro do teto (0 < 1), não tenta gravar aviso nenhum.
+      insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+        values ('${ORG_FALHA_LEADS}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_FALHA_LEADS}' and slug = 'funil-falha-leads'),
+                (select id from public.crm_stages where organization_id = '${ORG_FALHA_LEADS}' and slug = 'comum'), 'Lead 1');
+      -- 2º lead, acima do teto: dispara a tentativa de aviso, que EXPLODE.
+      -- fn_billing_trava_crm_leads também captura qualquer erro (decisão 11
+      -- da 0905), dupla proteção, e nenhuma delas pode perder o lead.
+      insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+        values ('${ORG_FALHA_LEADS}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_FALHA_LEADS}' and slug = 'funil-falha-leads'),
+                (select id from public.crm_stages where organization_id = '${ORG_FALHA_LEADS}' and slug = 'comum'), 'Lead 2');
+
+      select 'SONDA|' || count(*) from public.crm_leads where organization_id = '${ORG_FALHA_LEADS}';
+      select 'SONDA|' || count(*) from public.agent_inbox_items where organization_id = '${ORG_FALHA_LEADS}' and ref_kind = 'billing_limite';
+    `);
+    expect(linhas, "[quantos leads sobreviveram, quantos avisos gravados]").toEqual(["2", "0"]);
+  });
+});
+
+describe("18. Aviso de leads: o N-ésimo lead aberto NÃO avisa, o N+1-ésimo avisa (prova do achado 2)", () => {
+  beforeAll(() => {
+    comoServico(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_LEADS_ACHADO2}', 'trava-leads-achado2', 'Trava Leads Achado2 LTDA', 'Trava Leads Achado2')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_LEADS_ACHADO2}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_LEADS_ACHADO2}'::uuid, '{"leads": 3}'::jsonb, null, null);
+      insert into public.crm_pipelines (organization_id, name, slug)
+        values ('${ORG_LEADS_ACHADO2}', 'Funil Achado2', 'funil-achado2');
+      insert into public.crm_stages (organization_id, pipeline_id, name, slug, position)
+        values ('${ORG_LEADS_ACHADO2}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_LEADS_ACHADO2}' and slug = 'funil-achado2'),
+                'Comum', 'comum', 1000);
+    `);
+  });
+
+  function criarLead(titulo: string): void {
+    comoServico(`
+      insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+        values ('${ORG_LEADS_ACHADO2}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_LEADS_ACHADO2}' and slug = 'funil-achado2'),
+                (select id from public.crm_stages where organization_id = '${ORG_LEADS_ACHADO2}' and slug = 'comum'), '${titulo}');
+    `);
+  }
+
+  it("o teto é 3: os leads 1, 2 e 3 (o N-ésimo) não avisam", () => {
+    criarLead("Lead 1");
+    criarLead("Lead 2");
+    criarLead("Lead 3");
+    // Achado 2: fn_billing_conferir_teto roda ANTES do upsert do contador,
+    // no 3º lead o contador ainda lê 2 (< teto 3), não avisa. Na ordem
+    // antiga (soma antes de conferir) o 3º já veria o contador em 3 e
+    // avisaria um lead cedo demais.
+    expect(avisosDe(ORG_LEADS_ACHADO2)).toBe(0);
+  });
+
+  it("o lead N+1 (o 4º, com o contador já em 3) avisa", () => {
+    criarLead("Lead 4");
+    expect(avisosDe(ORG_LEADS_ACHADO2)).toBe(1);
+  });
+});
+
+describe("19. Aviso gerado pelos gatilhos de user_organizations, team_invites e channel_sessions", () => {
+  it("aceitar um membro acima do teto (user_organizations) avisa", () => {
+    comoServico(`
+      insert into auth.users (id, email) values
+        ('${USER_MEMBROS_REAL}', 'aviso-membros-ocupa@invariant.test')
+      on conflict (id) do nothing;
+      insert into auth.users (id, email) values
+        ('${USER_AVISO_MEMBROS}', 'aviso-membros-novo@invariant.test')
+      on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_AVISO_MEMBROS}', 'trava-aviso-membros', 'Trava Aviso Membros LTDA', 'Trava Aviso Membros')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_AVISO_MEMBROS}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_AVISO_MEMBROS}'::uuid, '{"membros": 1}'::jsonb, null, null);
+      -- um membro já ativo ocupa a única vaga do teto.
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_MEMBROS_REAL}', '${ORG_AVISO_MEMBROS}', 'agent', now())
+        on conflict do nothing;
+      -- um segundo membro nasce PENDENTE (não conta ainda)...
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_AVISO_MEMBROS}', '${ORG_AVISO_MEMBROS}', 'agent', null)
+        on conflict do nothing;
+    `);
+    expect(avisosDe(ORG_AVISO_MEMBROS), "controle: convite pendente ainda não avisa").toBe(0);
+
+    comoServico(
+      `update public.user_organizations set accepted_at = now()
+         where user_id = '${USER_AVISO_MEMBROS}' and organization_id = '${ORG_AVISO_MEMBROS}';`,
+    );
+    expect(avisosDe(ORG_AVISO_MEMBROS), "aceite acima do teto avisa").toBe(1);
+  });
+
+  it("um convite pendente acima do teto (team_invites) avisa", () => {
+    comoServico(`
+      insert into auth.users (id, email) values ('${USER_MEMBROS_REAL}', 'aviso-convite-ocupa@invariant.test')
+        on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_AVISO_CONVITE}', 'trava-aviso-convite', 'Trava Aviso Convite LTDA', 'Trava Aviso Convite')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_AVISO_CONVITE}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_AVISO_CONVITE}'::uuid, '{"membros": 1}'::jsonb, null, null);
+      -- um membro ativo já ocupa a única vaga do teto.
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_MEMBROS_REAL}', '${ORG_AVISO_CONVITE}', 'agent', now())
+        on conflict do nothing;
+    `);
+    expect(avisosDe(ORG_AVISO_CONVITE), "controle: nasceu sem convite, sem aviso").toBe(0);
+
+    comoServico(`
+      insert into public.team_invites (organization_id, email, role, expires_at)
+        values ('${ORG_AVISO_CONVITE}', 'aviso-convite-novo@invariant.test', 'agent', now() + interval '7 days');
+    `);
+    expect(avisosDe(ORG_AVISO_CONVITE), "convite pendente acima do teto avisa").toBe(1);
+  });
+
+  it("conectar um canal acima do teto (channel_sessions) avisa", () => {
+    comoServico(`
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_AVISO_CONEXAO}', 'trava-aviso-conexao', 'Trava Aviso Conexao LTDA', 'Trava Aviso Conexao')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_AVISO_CONEXAO}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_AVISO_CONEXAO}'::uuid, '{"conexoes": 1}'::jsonb, null, null);
+      -- primeira conexão, ativa, sozinha preenche o teto (0 < 1, não avisa).
+      insert into public.channel_sessions (organization_id, waha_session_name, webhook_secret_encrypted)
+        values ('${ORG_AVISO_CONEXAO}', 'aviso-conexao-1', '\\x00'::bytea);
+    `);
+    expect(avisosDe(ORG_AVISO_CONEXAO), "controle: a primeira conexão não avisa").toBe(0);
+
+    comoServico(`
+      insert into public.channel_sessions (organization_id, waha_session_name, webhook_secret_encrypted)
+        values ('${ORG_AVISO_CONEXAO}', 'aviso-conexao-2', '\\x00'::bytea);
+    `);
+    expect(avisosDe(ORG_AVISO_CONEXAO), "a segunda conexão, acima do teto, avisa").toBe(1);
+  });
+});
+
+describe("20. Ilimitado não toma trava nenhuma (nenhum advisory lock)", () => {
+  it("criar um funil numa organização Ilimitado não aparece em pg_locks como advisory lock desta transação", () => {
+    const linhas = comoServico(`
+      begin;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_ILIMITADO_LOCK}', 'trava-ilimitado-lock', 'Trava Ilimitado Lock LTDA', 'Trava Ilimitado Lock')
+        on conflict (id) do nothing;
+      insert into public.crm_pipelines (organization_id, name, slug)
+        values ('${ORG_ILIMITADO_LOCK}', 'Funil Ilimitado Lock', 'funil-ilimitado-lock');
+      select 'SONDA|' || count(*) from pg_locks where locktype = 'advisory' and pid = pg_backend_pid();
+      rollback;
+    `);
+    // fn_billing_conferir_teto lê o teto efetivo ANTES do pg_advisory_xact_lock
+    // (decisão 8 da 0905) e sai sem travar quando não há teto: o Ilimitado
+    // nunca chega perto do lock.
+    expect(linhas).toEqual(["0"]);
+  });
+});
+
+describe("21. Membro comum criando lead numa organização COM teto e acima dele: o insert passa e o aviso nasce", () => {
+  beforeAll(() => {
+    comoServico(`
+      insert into auth.users (id, email) values ('${USER_MEMBRO_TETO}', 'aviso-membro-teto@invariant.test')
+        on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_MEMBRO_TETO}', 'trava-membro-teto', 'Trava Membro Teto LTDA', 'Trava Membro Teto')
+        on conflict (id) do nothing;
+      select public.fn_billing_trocar_plano('${ORG_MEMBRO_TETO}'::uuid, 'pro', null);
+      select public.fn_billing_ajustar_limites('${ORG_MEMBRO_TETO}'::uuid, '{"leads": 1}'::jsonb, null, null);
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_MEMBRO_TETO}', '${ORG_MEMBRO_TETO}', 'agent', now())
+        on conflict do nothing;
+      insert into public.crm_pipelines (organization_id, name, slug)
+        values ('${ORG_MEMBRO_TETO}', 'Funil Membro Teto', 'funil-membro-teto');
+      insert into public.crm_stages (organization_id, pipeline_id, name, slug, position)
+        values ('${ORG_MEMBRO_TETO}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_MEMBRO_TETO}' and slug = 'funil-membro-teto'),
+                'Comum', 'comum', 1000);
+      -- 1º lead, criado pelo serviço, ocupa a única vaga do teto.
+      insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+        values ('${ORG_MEMBRO_TETO}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_MEMBRO_TETO}' and slug = 'funil-membro-teto'),
+                (select id from public.crm_stages where organization_id = '${ORG_MEMBRO_TETO}' and slug = 'comum'), 'Lead Serviço');
+    `);
+  });
+
+  it("o membro comum consegue criar o 2º lead, acima do teto (nesta fase a trava só avisa)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_MEMBRO_TETO)}
+      insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+        values ('${ORG_MEMBRO_TETO}',
+                (select id from public.crm_pipelines where organization_id = '${ORG_MEMBRO_TETO}' and slug = 'funil-membro-teto'),
+                (select id from public.crm_stages where organization_id = '${ORG_MEMBRO_TETO}' and slug = 'comum'), 'Lead do Membro Acima do Teto');
+    `);
+    expect(erro).toBeNull();
+  });
+
+  it("o aviso nasceu", () => {
+    expect(avisosDe(ORG_MEMBRO_TETO)).toBe(1);
   });
 });

@@ -27,6 +27,23 @@
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+/**
+ * Os quatro `purpose` que esta função grava, na única lista canônica: quem
+ * precisar saber "isto é telemetria sem custo por decisão (D-050), não preço
+ * desconhecido" importa DAQUI, nunca repete a string. O achado 1 da revisão
+ * da fase F2 nasceu de `check.ts` repetir esses nomes por fora: o dia em que
+ * um quinto ponto entrasse aqui, o aviso de "gasto incompleto" da tela
+ * continuaria contando a linha dele como furo de medição para sempre.
+ */
+export const PROPOSITOS_SEM_CUSTO_POR_DECISAO = [
+  "embedding_indexar",
+  "embedding_consultar",
+  "transcricao_de_audio",
+  "visao_de_imagem",
+] as const;
+
+export type PropositoSemCustoPorDecisao = (typeof PROPOSITOS_SEM_CUSTO_POR_DECISAO)[number];
+
 export interface TelemetriaSemCustoInput {
   /**
    * `null`/`undefined` é um estado legítimo: alguns pontos podem ser chamados

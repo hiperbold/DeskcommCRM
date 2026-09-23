@@ -24,6 +24,7 @@ vi.mock("@/lib/logger", () => ({
 import { getBudgetStatus } from "@/lib/ai/budget/check";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { PROPOSITOS_SEM_CUSTO_POR_DECISAO } from "@/lib/ai/telemetria-sem-custo";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 
@@ -69,6 +70,7 @@ function fazerAdmin(opts: {
       select: (...a: unknown[]) => registra("select", a),
       eq: (...a: unknown[]) => registra("eq", a),
       is: (...a: unknown[]) => registra("is", a),
+      not: (...a: unknown[]) => registra("not", a),
       gte: (...a: unknown[]) => registra("gte", a),
       maybeSingle: async () => ({ data: tabela === "ai_budgets" ? LINHA : null, error: null }),
       then: (res: (v: unknown) => unknown) =>
@@ -127,6 +129,96 @@ describe("o furo de medição é medido, não presumido", () => {
       expect(inicio.getUTCDate()).toBe(1);
       expect(inicio.getUTCMonth()).toBe(agora.getUTCMonth());
       expect(inicio.getUTCFullYear()).toBe(agora.getUTCFullYear());
+      // Achado 1 (revisão fase F2): a exclusão usa a lista ÚNICA de
+      // `telemetria-sem-custo.ts`, não uma cópia das strings.
+      const exclusao = llm.find((f) => f.metodo === "not" && f.args[0] === "purpose");
+      expect(exclusao, "sem `.not(\"purpose\", \"in\", ...)`: telemetria sem custo por decisão vira furo").toBeDefined();
+      for (const proposito of PROPOSITOS_SEM_CUSTO_POR_DECISAO) {
+        expect(String(exclusao?.args[2])).toContain(proposito);
+      }
+    });
+  });
+
+  describe("achado 1: telemetria sem custo por decisão (D-050) não é furo de medição", () => {
+    /**
+     * Dublê mais fiel que `fazerAdmin`: em vez de injetar a contagem pronta,
+     * guarda linhas de `llm_calls` de verdade e aplica os filtros que a
+     * consulta encadeia: prova que a EXCLUSÃO funciona, não só que ela foi
+     * pedida.
+     */
+    function fazerAdminComLinhas(
+      linhas: Array<{ organization_id: string; cost_cents: number | null; purpose: string; created_at: string }>,
+    ) {
+      const from = (tabela: string) => {
+        if (tabela !== "llm_calls") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const outro: any = {
+            select: () => outro,
+            eq: () => outro,
+            maybeSingle: async () => ({ data: null, error: null }),
+            then: (res: (v: unknown) => unknown) => Promise.resolve({ count: 0, error: null }).then(res),
+          };
+          return outro;
+        }
+
+        let org: string | undefined;
+        let excluidos: string[] = [];
+        let desde: string | undefined;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const chain: any = {
+          select: () => chain,
+          eq: (coluna: string, valor: string) => {
+            if (coluna === "organization_id") org = valor;
+            return chain;
+          },
+          is: () => chain, // fixture já só tem `cost_cents: null`
+          not: (coluna: string, _op: string, valor: string) => {
+            if (coluna === "purpose") excluidos = String(valor).replace(/^\(|\)$/g, "").split(",");
+            return chain;
+          },
+          gte: (coluna: string, valor: string) => {
+            if (coluna === "created_at") desde = valor;
+            return chain;
+          },
+          then: (res: (v: unknown) => unknown) => {
+            const count = linhas.filter(
+              (l) =>
+                (!org || l.organization_id === org) &&
+                l.cost_cents === null &&
+                !excluidos.includes(l.purpose) &&
+                (!desde || l.created_at >= desde),
+            ).length;
+            return Promise.resolve({ count, error: null }).then(res);
+          },
+        };
+        return chain;
+      };
+
+      vi.mocked(createAdminClient).mockReturnValue({
+        from,
+        rpc: async () => ({ data: 0, error: null }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+    }
+
+    it("linha sem custo de propósito de telemetria não liga o aviso", async () => {
+      const agora = new Date().toISOString();
+      fazerAdminComLinhas([
+        { organization_id: ORG, cost_cents: null, purpose: "embedding_indexar", created_at: agora },
+        { organization_id: ORG, cost_cents: null, purpose: "embedding_consultar", created_at: agora },
+        { organization_id: ORG, cost_cents: null, purpose: "transcricao_de_audio", created_at: agora },
+        { organization_id: ORG, cost_cents: null, purpose: "visao_de_imagem", created_at: agora },
+      ]);
+
+      expect((await getBudgetStatus(ORG)).gasto_incompleto).toBe(false);
+    });
+
+    it("linha sem custo de chat liga o aviso", async () => {
+      const agora = new Date().toISOString();
+      fazerAdminComLinhas([{ organization_id: ORG, cost_cents: null, purpose: "chat", created_at: agora }]);
+
+      expect((await getBudgetStatus(ORG)).gasto_incompleto).toBe(true);
     });
   });
 

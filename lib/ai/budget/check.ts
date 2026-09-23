@@ -38,6 +38,7 @@ import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { carregarComportamentoDaInstalacao } from "@/lib/instalacao/comportamento-servidor";
+import { PROPOSITOS_SEM_CUSTO_POR_DECISAO } from "@/lib/ai/telemetria-sem-custo";
 
 export interface BudgetStatus {
   organization_id: string;
@@ -72,6 +73,14 @@ export interface BudgetStatus {
    * OpenRouter já grava preço real — `lib/ai/cost.ts`), e é item próprio. No
    * intervalo, a tela não pode PROMETER uma parada que não vai acontecer: este
    * campo é o que ela usa para dizer a verdade ao lado da opção.
+   *
+   * NÃO CONTA os `purpose` de `PROPOSITOS_SEM_CUSTO_POR_DECISAO` (embedding,
+   * transcrição, leitura de imagem, Tarefa 8 da fase F2). Essas linhas têm
+   * `cost_cents` nulo por DECISÃO (D-050: ligar o custo ligaria o orçamento
+   * para consumos que hoje ele não vê), não porque o produto desconhece o
+   * preço do modelo. Contá-las aqui faria toda organização que usa base de
+   * conhecimento ou recebe áudio ver o aviso âmbar para sempre: achado 1 da
+   * revisão da fase F2.
    */
   gasto_incompleto: boolean;
   /**
@@ -165,11 +174,16 @@ export async function getBudgetStatus(orgId: string): Promise<BudgetStatus> {
     // O furo de medição, medido onde ele aparece: chamada do mês sem custo
     // conhecido. `idx_llm_calls_org_time (organization_id, created_at)` serve o
     // filtro; `head: true` não traz linha nenhuma.
+    //
+    // `.not("purpose", "in", ...)` tira os propósitos da Tarefa 8 (embedding,
+    // transcrição, visão): `cost_cents` nulo ali é decisão (D-050), não preço
+    // desconhecido; ver o comentário de `gasto_incompleto` acima.
     admin
       .from("llm_calls")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", orgId)
       .is("cost_cents", null)
+      .not("purpose", "in", `(${PROPOSITOS_SEM_CUSTO_POR_DECISAO.join(",")})`)
       .gte("created_at", inicioDoMesUtc()),
   ]);
 

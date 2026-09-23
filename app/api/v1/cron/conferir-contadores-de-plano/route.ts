@@ -10,10 +10,14 @@
  * engoliu um erro, um `truncate` (que não dispara gatilho de linha nenhum,
  * ver "Para a F3" no `hiperbold/planos/fase-F2-tarefas.md`), uma corrida rara.
  *
- * Esta rota é a rede de segurança: chama `fn_billing_conferir_contadores()`
- * (só `service_role` executa), que por organização trava a linha do
- * contador, conta os leads abertos de verdade num comando seguinte e
- * corrige o que estiver errado. A regra inteira mora no banco e em
+ * Esta rota é a rede de segurança: lista as organizações e chama
+ * `fn_billing_conferir_contador(p_org)` (só `service_role` executa) uma por
+ * uma, achado 3 da revisão fase F2: a função antiga conferia todas numa
+ * transação só, segurando a trava de organizações já conferidas até o
+ * commit final. Por organização, a função trava a linha do contador, conta
+ * os leads abertos de verdade num comando seguinte e corrige o que estiver
+ * errado (ou cria a linha, se a organização não tinha contador). A regra de
+ * iteração e a regra de banco moram em
  * `lib/billing/planos/conferir-contadores.ts`; este arquivo só autentica,
  * chama e registra no log.
  *
