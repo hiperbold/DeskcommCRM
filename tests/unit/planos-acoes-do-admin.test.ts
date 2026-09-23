@@ -15,6 +15,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * fixa; qualquer outro erro do banco nunca aparece na resposta, só no log. O
  * sucesso audita exatamente o `antes`/`depois` que a função devolveu, nunca
  * uma releitura, e revalida a aba.
+ *
+ * ─── MFA e a auditoria de remoção (correções de revisão e auditoria) ────────
+ *
+ * As duas actions também conferem `mfaEmDivida()` logo depois do escopo:
+ * sessão com o segundo fator em dívida é recusada antes de qualquer RPC. E
+ * `ajustarLimitesDaOrganizacao` distingue três casos pelo `antes`/`depois` que
+ * a RPC devolveu: nada mudou (não audita), `depois: null` com `antes` que
+ * existia (remoção, `billing.adjustment_removed`), e qualquer outra mudança
+ * (concessão, `billing.adjustment_granted`, com a nota enviada no metadata).
  */
 
 const USUARIO = "11111111-1111-4111-8111-111111111111";
@@ -25,9 +34,11 @@ const h = vi.hoisted(() => ({
   rpc: vi.fn(),
   audit: vi.fn(),
   revalidatePath: vi.fn(),
+  mfaEmDivida: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/requirePlatformAdmin", () => ({ requirePlatformAdmin: h.guard }));
+vi.mock("@/lib/auth/server", () => ({ mfaEmDivida: h.mfaEmDivida }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ rpc: h.rpc }) }));
 vi.mock("@/lib/audit", () => ({ audit: h.audit }));
 vi.mock("next/cache", () => ({ revalidatePath: h.revalidatePath }));
@@ -39,6 +50,7 @@ const ADMIN_SUPORTE = { user: { id: USUARIO }, platformAdmin: { scope: "support_
 beforeEach(() => {
   vi.clearAllMocks();
   h.guard.mockResolvedValue(ADMIN_FULL);
+  h.mfaEmDivida.mockResolvedValue(false);
   h.rpc.mockResolvedValue({
     data: { antes: { plan_code: "pro", version: 1 }, depois: { plan_code: "max", version: 1 } },
     error: null,
@@ -60,6 +72,17 @@ describe("trocarPlanoDaOrganizacao", () => {
 
   it("⭐ admin com escopo support_readonly é recusado e nenhuma RPC é chamada", async () => {
     h.guard.mockResolvedValueOnce(ADMIN_SUPORTE);
+    const { trocarPlanoDaOrganizacao } = await acoes();
+
+    const r = await trocarPlanoDaOrganizacao({ organizationId: ORG, planCode: "max" });
+
+    expect(r.ok).toBe(false);
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
+  it("⭐ com MFA em dívida, nenhuma RPC é chamada", async () => {
+    h.mfaEmDivida.mockResolvedValueOnce(true);
     const { trocarPlanoDaOrganizacao } = await acoes();
 
     const r = await trocarPlanoDaOrganizacao({ organizationId: ORG, planCode: "max" });
@@ -177,6 +200,17 @@ describe("ajustarLimitesDaOrganizacao", () => {
     expect(h.rpc).not.toHaveBeenCalled();
   });
 
+  it("⭐ com MFA em dívida, nenhuma RPC é chamada", async () => {
+    h.mfaEmDivida.mockResolvedValueOnce(true);
+    const { ajustarLimitesDaOrganizacao } = await acoes();
+
+    const r = await ajustarLimitesDaOrganizacao({ organizationId: ORG, limites: { leads: 10000 } });
+
+    expect(r.ok).toBe(false);
+    expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+
   it("organizationId que não é uuid é recusado sem RPC", async () => {
     const { ajustarLimitesDaOrganizacao } = await acoes();
 
@@ -233,7 +267,7 @@ describe("ajustarLimitesDaOrganizacao", () => {
     expect(JSON.stringify(r)).not.toContain(MENSAGEM_MARCADA);
   });
 
-  it("sucesso audita o antes/depois exatamente como a RPC devolveu, e revalida a aba", async () => {
+  it("sucesso audita o antes/depois exatamente como a RPC devolveu, com a nota no metadata, e revalida a aba", async () => {
     const { ajustarLimitesDaOrganizacao } = await acoes();
 
     const r = await ajustarLimitesDaOrganizacao({
@@ -248,10 +282,74 @@ describe("ajustarLimitesDaOrganizacao", () => {
         action: "billing.adjustment_granted",
         resourceType: "organization",
         resourceId: ORG,
-        metadata: { antes: null, depois: { leads: 10000 } },
+        metadata: {
+          antes: null,
+          depois: { leads: 10000 },
+          nota: "exceção combinada por telefone",
+        },
       }),
     );
     expect(h.revalidatePath).toHaveBeenCalledWith(`/admin/tenants/${ORG}/plano`);
+  });
+
+  it("concessão sem nota grava `nota: null` no metadata", async () => {
+    const { ajustarLimitesDaOrganizacao } = await acoes();
+
+    await ajustarLimitesDaOrganizacao({ organizationId: ORG, limites: { leads: 10000 } });
+
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "billing.adjustment_granted",
+        metadata: { antes: null, depois: { leads: 10000 }, nota: null },
+      }),
+    );
+  });
+
+  it("remover um ajuste existente audita billing.adjustment_removed, sem nota no metadata", async () => {
+    h.rpc.mockResolvedValueOnce({
+      data: { antes: { leads: 10000 }, depois: null },
+      error: null,
+    });
+    const { ajustarLimitesDaOrganizacao } = await acoes();
+
+    const r = await ajustarLimitesDaOrganizacao({ organizationId: ORG, limites: {} });
+
+    expect(r).toEqual({ ok: true, antes: { leads: 10000 }, depois: null });
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "billing.adjustment_removed",
+        resourceType: "organization",
+        resourceId: ORG,
+        metadata: { antes: { leads: 10000 }, depois: null },
+      }),
+    );
+  });
+
+  it("remover um ajuste que já não existia (antes e depois null) não audita nada, e devolve ok:true", async () => {
+    h.rpc.mockResolvedValueOnce({
+      data: { antes: null, depois: null },
+      error: null,
+    });
+    const { ajustarLimitesDaOrganizacao } = await acoes();
+
+    const r = await ajustarLimitesDaOrganizacao({ organizationId: ORG, limites: {} });
+
+    expect(r).toEqual({ ok: true, antes: null, depois: null });
+    expect(h.audit).not.toHaveBeenCalled();
+    expect(h.revalidatePath).toHaveBeenCalledWith(`/admin/tenants/${ORG}/plano`);
+  });
+
+  it("gravar exatamente o mesmo ajuste que já existia não audita nada", async () => {
+    h.rpc.mockResolvedValueOnce({
+      data: { antes: { leads: 10000 }, depois: { leads: 10000 } },
+      error: null,
+    });
+    const { ajustarLimitesDaOrganizacao } = await acoes();
+
+    const r = await ajustarLimitesDaOrganizacao({ organizationId: ORG, limites: { leads: 10000 } });
+
+    expect(r).toEqual({ ok: true, antes: { leads: 10000 }, depois: { leads: 10000 } });
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it("ajuste vazio chama a RPC com {}, que é assim que se remove o ajuste", async () => {

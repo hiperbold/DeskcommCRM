@@ -883,6 +883,12 @@ export const AUDIT_ACTIONS = [
   // depois que a função SQL devolveu, nunca uma leitura separada.
   "billing.plan_changed",
   "billing.adjustment_granted",
+  // O ajuste removido por completo (correção da revisão da fase F1). Até aqui
+  // "Remover ajuste" sempre gravava `adjustment_granted`, mesmo quando não
+  // sobrava ajuste nenhum. `depois: null` com `antes` que existia vira esta
+  // ação; quando `antes` e `depois` já eram iguais (inclusive os dois `null`),
+  // a action não audita nada, porque nada mudou.
+  "billing.adjustment_removed",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

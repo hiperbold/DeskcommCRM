@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
+import { mfaEmDivida } from "@/lib/auth/server";
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { logger } from "@/lib/logger";
@@ -25,6 +26,15 @@ import { esquemaDoAjusteDeLimites, type AjusteDeLimites } from "@/lib/billing/pl
  * `app/api/v1/admin/tenants/route.ts:166`, onde suporte lê e nunca escreve.
  * Sem essa segunda checagem, um admin de suporte trocaria o plano de
  * qualquer cliente por um POST direto na action.
+ *
+ * ── Por que as duas conferem `mfaEmDivida()`, e não só o escopo ─────────────
+ *
+ * Achado da auditoria: a criação de organização já exige a verificação em
+ * duas etapas provada NA SESSÃO (`app/api/v1/admin/tenants/route.ts`, mesma
+ * régua de `mfaEmDivida()`), e trocar o plano ou abrir uma exceção de teto é
+ * escrita de negócio do mesmo porte. Sem a checagem, uma sessão de admin
+ * `full` com o segundo fator pendente (ex.: sessão antiga que ainda não caiu)
+ * faria a mesma escrita sem provar de novo que é quem diz ser.
  *
  * ── Por que o "antes"/"depois" vêm da FUNÇÃO SQL, nunca de uma leitura à parte ──
  *
@@ -91,6 +101,25 @@ function mensagemDoErroDeEscrita(error: { code?: string; message?: string } | nu
   return "Não foi possível salvar. Tente de novo.";
 }
 
+/**
+ * Compara o `antes`/`depois` que `fn_billing_ajustar_limites` devolveu. Os
+ * dois só existem como `null` (sem ajuste) ou como um objeto raso de
+ * `chave -> número | null` (o formato de `AjusteDeLimites`), então a
+ * comparação campo a campo é suficiente; não há aninhamento a percorrer.
+ */
+function ajusteAntesEDepoisIguais(antes: unknown, depois: unknown): boolean {
+  if (antes === depois) return true;
+  if (antes === null || depois === null) return false;
+  if (typeof antes !== "object" || typeof depois !== "object") return false;
+  const objAntes = antes as Record<string, unknown>;
+  const objDepois = depois as Record<string, unknown>;
+  const chaves = new Set([...Object.keys(objAntes), ...Object.keys(objDepois)]);
+  for (const chave of chaves) {
+    if (objAntes[chave] !== objDepois[chave]) return false;
+  }
+  return true;
+}
+
 export async function trocarPlanoDaOrganizacao(input: {
   organizationId: string;
   planCode: string;
@@ -99,6 +128,10 @@ export async function trocarPlanoDaOrganizacao(input: {
 
   if (platformAdmin.scope !== "full") {
     return { ok: false, error: "Seu acesso de suporte não permite trocar o plano." };
+  }
+
+  if (await mfaEmDivida()) {
+    return { ok: false, error: "Confirme a verificação em duas etapas." };
   }
 
   const parsed = entradaTrocarPlano.safeParse(input);
@@ -148,6 +181,10 @@ export async function ajustarLimitesDaOrganizacao(input: {
     return { ok: false, error: "Seu acesso de suporte não permite ajustar limites." };
   }
 
+  if (await mfaEmDivida()) {
+    return { ok: false, error: "Confirme a verificação em duas etapas." };
+  }
+
   const parsed = entradaAjustarLimites.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: "Dados inválidos." };
@@ -166,20 +203,32 @@ export async function ajustarLimitesDaOrganizacao(input: {
   }
 
   const resultado = data as { antes: unknown; depois: unknown };
-  const { requestId, ip, userAgent } = await contextoDaRequisicao();
 
-  await audit({
-    action: "billing.adjustment_granted",
-    actorUserId: user.id,
-    actingAsPlatformAdmin: true,
-    organizationId: parsed.data.organizationId,
-    resourceType: "organization",
-    resourceId: parsed.data.organizationId,
-    metadata: { antes: resultado.antes, depois: resultado.depois },
-    requestId,
-    ip,
-    userAgent,
-  });
+  // Remover o ajuste não é conceder um (achado da revisão). Sem esta
+  // distinção, "Remover ajuste" gravava sempre `adjustment_granted`, até
+  // numa organização que já não tinha ajuste nenhum, o que auditava um evento
+  // vazio (`antes: null, depois: null`). Agora: nada mudou não audita nada
+  // (inclusive os dois `null`); `depois: null` com `antes` que existia é
+  // remoção; qualquer outra mudança é concessão, e só ela carrega a nota.
+  if (!ajusteAntesEDepoisIguais(resultado.antes, resultado.depois)) {
+    const foiRemocao = resultado.depois === null && resultado.antes !== null;
+    const { requestId, ip, userAgent } = await contextoDaRequisicao();
+
+    await audit({
+      action: foiRemocao ? "billing.adjustment_removed" : "billing.adjustment_granted",
+      actorUserId: user.id,
+      actingAsPlatformAdmin: true,
+      organizationId: parsed.data.organizationId,
+      resourceType: "organization",
+      resourceId: parsed.data.organizationId,
+      metadata: foiRemocao
+        ? { antes: resultado.antes, depois: resultado.depois }
+        : { antes: resultado.antes, depois: resultado.depois, nota: parsed.data.nota ?? null },
+      requestId,
+      ip,
+      userAgent,
+    });
+  }
 
   revalidatePath(caminhoDaAbaDePlano(parsed.data.organizationId));
   return { ok: true, antes: resultado.antes, depois: resultado.depois };

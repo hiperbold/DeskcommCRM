@@ -167,6 +167,26 @@ export function TenantPlanoClient({
   const [planoSelecionado, setPlanoSelecionado] = useState(leituraFalhou ? "" : plano.code);
   const [trocandoPlano, iniciarTrocaDePlano] = useTransition();
 
+  // Trocar de plano é permitido em três casos, não só "código diferente":
+  //
+  // 1. Sem contrato gravado: `plano.code` é o fallback Ilimitado que
+  //    `planoDaOrganizacao` inventa quando não existe linha em
+  //    `billing_contracts`, e selecionar esse mesmo código ainda GRAVA o
+  //    primeiro contrato da organização, que não é um no-op.
+  // 2. Código diferente do contratado: a troca óbvia.
+  // 3. Mesmo código, mas a versão ATIVA dele (a que `planosAtivos` lista)
+  //    difere da versão que o contrato tem hoje: a organização está numa
+  //    versão INATIVA do plano, e mover para a versão ativa do mesmo código
+  //    também é uma escrita real, mesmo sem trocar `plan_code`.
+  const versaoAtivaDoPlanoSelecionado = planosAtivos.find(
+    (p) => p.code === planoSelecionado,
+  )?.version;
+  const podeSalvarTrocaDePlano =
+    Boolean(planoSelecionado) &&
+    (contrato === null ||
+      planoSelecionado !== plano.code ||
+      versaoAtivaDoPlanoSelecionado !== plano.version);
+
   function salvarPlano() {
     if (!planoSelecionado) return;
     iniciarTrocaDePlano(async () => {
@@ -357,7 +377,7 @@ export function TenantPlanoClient({
               <Button
                 data-testid="salvar-plano"
                 onClick={salvarPlano}
-                disabled={trocandoPlano || !planoSelecionado || planoSelecionado === plano.code}
+                disabled={trocandoPlano || !podeSalvarTrocaDePlano}
               >
                 {t("Salvar")}
               </Button>

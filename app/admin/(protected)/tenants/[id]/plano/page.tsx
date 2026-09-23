@@ -8,6 +8,7 @@ import {
   type Limites,
 } from "@/lib/billing/planos/limites";
 import { planoDaOrganizacao } from "@/lib/billing/planos/plano-da-organizacao";
+import { algumaLeituraFalhou, podeEscreverNaAba } from "@/lib/billing/planos/pode-escrever-na-aba";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import { TenantPlanoClient, type PlanoAtivo } from "./_client";
@@ -31,7 +32,12 @@ interface TenantPlanoPageProps {
  * A tela NÃO é a barreira: toda escrita (`trocarPlanoDaOrganizacao`,
  * `ajustarLimitesDaOrganizacao`) confere de novo `requirePlatformAdmin()` e o
  * escopo `full` dentro da própria server action. Aqui `podeEscrever` só
- * decide o que a tela MOSTRA.
+ * decide o que a tela MOSTRA, e essa decisão, extraída para
+ * `podeEscreverNaAba` (`lib/billing/planos/pode-escrever-na-aba.ts`), também
+ * cai para leitura quando QUALQUER uma das quatro leituras abaixo falhou:
+ * escrever por cima de um estado que a própria tela não conseguiu ler
+ * apagaria, no upsert de `fn_billing_ajustar_limites`, exatamente a chave que
+ * ninguém leu direito.
  */
 export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) {
   const { id } = await params;
@@ -87,13 +93,46 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
 
   const planosAtivos: PlanoAtivo[] = (planosRes.data ?? []) as PlanoAtivo[];
 
+  // As três leituras que este componente faz direto (a quarta, o plano
+  // efetivo, já vem resolvida em `resultado.leituraFalhou`). O erro do banco
+  // vai só para o log: nunca para a tela, e nunca impede a tela de decidir
+  // corretamente que não pode escrever.
+  if (contratoCruRes.error) {
+    log.error("alarme_planos_leitura", {
+      organization_id: id,
+      etapa: "limites_crus_do_plano_contratado",
+      error: contratoCruRes.error.message.slice(0, 300),
+    });
+  }
+  if (ajusteRes.error) {
+    log.error("alarme_planos_leitura", {
+      organization_id: id,
+      etapa: "ajuste_de_limites",
+      error: ajusteRes.error.message.slice(0, 300),
+    });
+  }
+  if (planosRes.error) {
+    log.error("alarme_planos_leitura", {
+      organization_id: id,
+      etapa: "lista_de_planos_ativos",
+      error: planosRes.error.message.slice(0, 300),
+    });
+  }
+
+  const leituras = {
+    leituraDoPlanoFalhou: resultado.leituraFalhou,
+    leituraDosLimitesDoPlanoFalhou: Boolean(contratoCruRes.error),
+    leituraDoAjusteFalhou: Boolean(ajusteRes.error),
+    leituraDosPlanosAtivosFalhou: Boolean(planosRes.error),
+  };
+
   return (
     <TenantPlanoClient
       organizationId={id}
-      podeEscrever={platformAdmin.scope === "full"}
+      podeEscrever={podeEscreverNaAba(platformAdmin.scope, leituras)}
       plano={resultado.plano}
       contrato={resultado.contrato}
-      leituraFalhou={resultado.leituraFalhou}
+      leituraFalhou={algumaLeituraFalhou(leituras)}
       limitesEmVigor={resultado.limites}
       limitesDoPlano={limitesDoPlano}
       ajusteAtual={ajusteAtual}
