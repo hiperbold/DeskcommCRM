@@ -2,7 +2,7 @@
 
 Escrito em 22/09/2026, a pedido do Filipe. **Isto é planejamento. Nada aqui foi implementado.**
 
-O gateway de pagamento ainda não foi escolhido, e este plano é desenhado para que essa escolha continue aberta até a última fase.
+**Gateway escolhido em 22/09/2026: Asaas.** O contrato de integração é comum aos três produtos da Hiperbold e está em `F:\github-projects\hiper-track\docs\manual-api-asaas-saas.md`. A seção 8 deste plano foi reescrita a partir dele. O resto do desenho não mudou: a escolha do gateway confirmou a arquitetura em vez de alterá-la.
 
 ---
 
@@ -231,29 +231,60 @@ As três existem porque cada uma falha de um jeito. Só banco dá erro feio. Só
 
 ---
 
-## 8. Assinatura e pagamento
+## 8. Assinatura e pagamento pelo Asaas
 
-### O que não depende do gateway escolhido
+O gateway foi escolhido em 22/09/2026. O contrato comum aos três produtos da Hiperbold está em `F:\github-projects\hiper-track\docs\manual-api-asaas-saas.md`, e **ele manda** no que diz respeito a nomes, eventos e ordem das coisas: os três apps precisam falar a mesma língua para a conciliação funcionar. Esta seção registra só o que é do CRM.
 
-Quase tudo: catálogo, tetos, contagem, trava, telas, estados da assinatura, modo leitura, avisos. Tudo isso pode ser construído e usado com você trocando o plano na mão. **É por isso que a escolha do gateway não trava nenhuma fase antes da última.**
+### O que não depende do gateway
 
-### O que o gateway precisa fazer
+Quase tudo: catálogo, tetos, contagem, trava, telas, estados da assinatura, modo leitura, avisos. Tudo isso se constrói e se usa com você trocando o plano na mão. **É por isso que a escolha do Asaas não antecipa nenhuma fase antes da F5.**
 
-1. Criar cliente e assinatura recorrente em reais
-2. Avisar por webhook quando o pagamento entra, falha ou a assinatura é cancelada
-3. Aceitar troca de plano no meio do período
-4. Emitir cobrança por Pix, boleto e cartão, que é o que o mercado brasileiro usa
-5. De preferência, emitir nota fiscal de serviço, ou integrar com quem emite
+### O que o CRM herda do contrato comum
 
-Candidatos naturais no Brasil: Asaas, Iugu, Vindi, Pagar.me, Stripe (que agora opera em reais, mas com menos jeito para boleto e nota). **Não recomendo escolher agora.** A escolha fica muito mais fácil quando as fases 1 a 4 estiverem de pé e você souber exatamente o que precisa pedir.
+- **Uma conta Asaas da Hiperbold**, com uma chave de API e um webhook por aplicativo. Chave separada NÃO é isolamento de autorização: toda rota confere a posse local do recurso antes de agir, porque as chamadas continuam caindo na mesma conta.
+- **Prefixo `HC:`** nas referências externas do CRM (o HiperTrack usa `HT:`, o Studio `HS:`). A referência é id opaco nosso, nunca e-mail nem documento.
+- **Preço mora no nosso banco.** O navegador nunca manda valor que o servidor aceite.
+- **Valor em centavos aqui, decimal em reais só na borda** da chamada.
+- **Acesso se libera por evento de PAGAMENTO**, nunca por assinatura criada, nunca por o cliente ter voltado na tela de sucesso, nunca por QR exibido.
+- **Nomes de tabela do contrato comum**: `billing_customers`, `billing_plans`, `billing_orders`, `billing_contracts`, `billing_payments`, `asaas_webhook_events`. Onde este plano falava em catálogo e assinatura, valem esses nomes.
 
-### O que o CRM guarda sobre pagamento
+### As três formas de venda
 
-Id do cliente e id da assinatura no gateway, e o estado. **Nada de dado de cartão, nunca.** Isso é regra, não preferência: guardar cartão muda o nível de exigência de segurança da empresa inteira.
+| Oferta | No Asaas | Renova sozinho? |
+|---|---|---|
+| Mensal no cartão | Assinatura `MONTHLY` | sim |
+| Anual no cartão | Assinatura `YEARLY` | sim |
+| Anual no Pix | Cobrança avulsa `PIX` | não, gera cobrança nova no ano seguinte |
+
+Pix dentro de assinatura gera cobrança, mas não debita ninguém sozinho. Pix Automático é outro produto, com autorização própria, e está fora.
+
+### O crédito de IA, que o contrato comum não cobre
+
+É o que existe de específico do CRM, porque os outros dois produtos não vendem consumo. Pelo desenho do Asaas, cai assim:
+
+- **Pacote avulso** de crédito: cobrança única (`POST /payments`), Pix ou cartão.
+- **Adicional recorrente** de crédito: uma segunda assinatura, do mesmo cliente.
+- **Recarga automática**: só faz sentido com cartão salvo, e é onde mora o risco da fatura absurda (risco 5-A). Entra por último, com limite de recargas por dia.
+
+### A decisão que é sua: onde o cliente digita o cartão
+
+O manual é explícito: **colocar campo de cartão dentro do nosso CRM põe a Hiperbold no escopo de PCI DSS.** A certificação do Asaas não certifica a gente, e tokenizar no nosso servidor não tira o nosso servidor do escopo. Isso significa mapear navegador, CDN, proxy, logs, ferramenta de monitoramento, suporte e backup para provar que número de cartão não passa em lugar nenhum.
+
+**Recomendo a página de checkout hospedada do Asaas para cartão**, mantendo o Pix com QR dentro do nosso app (o Pix não tem esse problema). O ganho estético de digitar o cartão sem sair do CRM não paga esse custo, e dá para trocar depois, se um dia pagar.
 
 ### Webhook de cobrança
 
-Mesma disciplina que já usamos nos webhooks de WhatsApp: segredo na URL, assinatura conferida, evento repetido não conta duas vezes, e todo evento arquivado antes de ser processado. Um webhook de pagamento processado em dobro vira crédito indevido ou suspensão errada.
+Rota própria, com as regras do contrato comum, que são as mesmas que já usamos nos webhooks de WhatsApp: token conferido com comparação segura, corpo limitado, evento guardado com chave única antes de qualquer processamento, **resposta exatamente 200** (201 e 204 contam como falha para o Asaas), e processamento depois, em rotina durável.
+
+Três armadilhas que o manual nomeia e que valem repetir:
+
+1. **O mesmo evento chega mais de uma vez**, e fora de ordem. Concessão de acesso precisa de chave única por pagamento e período, e nunca de "somar 30 dias" a cada evento que chega.
+2. **Depois de 15 falhas seguidas de entrega, a fila do Asaas pausa**, e os eventos ficam guardados por 14 dias. Sem alarme nosso, a cobrança some sem ninguém notar.
+3. **Timeout em chamada financeira não se repete cegamente.** Consulta antes, senão vira cobrança dobrada.
+
+### O que fica fora da primeira versão
+
+Nota fiscal automática, split de pagamento, subconta, transferência, antecipação e Pix Automático. Nota fiscal segue manual, e isso é escolha declarada, não esquecimento.
 
 ---
 
@@ -323,7 +354,7 @@ Cada fase entrega algo utilizável sozinha. Nenhuma fase depende do gateway, exc
 | **F2-B** | A carteira de crédito de IA: saldo por fonte, livro-caixa, extrato para o cliente, fator de remarcação, painel de margem para você, e as travas por conversa, por dia e da instalação | F2 |
 | **F3** | Bloqueio ligado, com a mesma gramática do orçamento de IA: avisa antes, tem carência, tem chave de emergência da instalação | F2-B |
 | **F4** | Os três planos de venda cadastrados, período de avaliação, estados de atrasado e suspenso, modo leitura, catálogo de pacotes de crédito vendidos na mão | F3 |
-| **F5** | Gateway de pagamento: cobrança recorrente, compra de pacote pelo próprio cliente, recarga automática, webhook, troca de plano automática, nota fiscal | escolha do gateway |
+| **F5** | Asaas: cobrança recorrente, compra de pacote pelo próprio cliente, recarga automática, webhook, troca de plano automática. Começa pelo sandbox, com o roteiro de homologação do manual comum | F4 e as respostas de 14 a 18 |
 
 Ordem de grandeza, para você calibrar expectativa: F1, F2 e F2-B são as fases grandes, F3 é média, F4 é média com muito teste, e F5 depende inteiramente do gateway escolhido.
 
@@ -349,6 +380,16 @@ Sobre o crédito de IA, que virou a seção 6:
 11. **Acumula ou não acumula** o crédito não usado do mês. Minha recomendação é não acumular o do plano e deixar o pacote avulso durar.
 12. **Quando zera:** para a IA e cai para atendimento humano (minha proposta), ou você prefere que continue rodando e vire cobrança no mês seguinte? A segunda é mais cara de errar.
 13. **Recarga automática:** quer oferecer? Ela vende mais e é o caminho mais curto para uma fatura absurda por defeito. Se quiser, entra na F5 com limite de recargas por dia.
+
+Sobre o Asaas, que o manual comum levanta e eu não tinha perguntado:
+
+14. **O plano anual no cartão renova sozinho** depois de um ano, ou termina e pede pagamento novo?
+15. **Parcelamento do anual no cartão:** existe? Em quantas vezes, e quem assume o custo? (No Asaas isso é venda parcelada, não assinatura: é uma oferta separada.)
+16. **Tolerância antes de suspender** por falta de pagamento, e o que acontece no cancelamento: preserva o acesso até o fim do período já pago?
+17. **Política de estorno** e regra de subir ou descer de plano no meio do período.
+18. **Onde o cliente digita o cartão:** página hospedada do Asaas, como recomendo, ou dentro do CRM assumindo o escopo de PCI DSS?
+
+Até você responder de 14 a 17, o manual manda usar o padrão dele: mensal e anual no cartão renovando sozinhos, anual no Pix renovando na mão, e nada de parcelamento nem de cobrança proporcional.
 
 ---
 

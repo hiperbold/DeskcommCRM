@@ -1,43 +1,63 @@
 # Status do fork Hiperbold
 
-Atualizado em 22/09/2026.
+Atualizado em 22/09/2026, fim do dia.
 
 ## Onde está tudo agora
 
-- **Produção** (`crm.hiperbold.com.br`): versão `02e4797`, publicada em 22/09/2026 às 21h37, saudável. Traz a release 1.42.0 do autor original, as correções de segurança do webhook UAZAPI e a trava de dado de cliente nas conexões MCP.
-- **`main` do fork**: igual à produção, `02e4797`.
-- Antes dessa publicação a produção estava em `9da397d`. O backup do banco de antes é `hiperbold-crm-2026-09-22_2120.dump`, em `D:\Hiperbold\backups\hiperbold-crm`.
+- **Produção** (`crm.hiperbold.com.br`): versão `02e4797`, publicada às 21h37, saudável. Traz a release 1.42.0 do autor original, as correções de segurança do webhook UAZAPI e a trava de dado de cliente nas conexões MCP.
+- **`main` do fork**: `7f35a92` (a versão de produção mais o registro da publicação).
+- **Branch `fix/debitos-pequenos-2026-09-22`**: quatro dívidas fechadas e os documentos do dia, commitados, **sem push e sem ir para produção**. Push no `main` dispara deploy sozinho, então essa branch espera decisão do Filipe.
+- Backup do banco de antes da publicação: `hiperbold-crm-2026-09-22_2120.dump`, em `D:\Hiperbold\backups\hiperbold-crm`.
 
-## O que essa publicação levou
+## O que foi publicado hoje
 
-**A atualização do autor (D-028).** Release 1.42.0, 2298 arquivos, merge `65ca0a253`. 18 conflitos resolvidos. A migração dele tinha derrubado a UAZAPI da regra de canais, e a nossa migração 0903 devolve os dois lados.
+A junção com o autor (D-028), 2298 arquivos, 18 conflitos resolvidos. Junto foram:
 
-**Quatro correções de segurança no webhook da UAZAPI**, achadas em auditoria: o token da instância era gravado em claro no log de webhooks e qualquer membro da organização podia lê-lo; o token passou a ser obrigatório no evento de mensagem; o payload passou a ser conferido contra a sessão; e a leitura do log de webhooks passou a exigir papel de gerente (migração 0902).
+- **Quatro correções de segurança no webhook da UAZAPI**: o token da instância era gravado em claro no log de webhooks e qualquer membro da organização lia; o token virou obrigatório no evento de mensagem; o payload passou a ser conferido contra a sessão; a leitura do log passou a exigir gerente.
+- **A trava de dado de cliente nas conexões MCP (D-037)**: telefone, e-mail, CPF, CNPJ e endereço de WhatsApp não saem mais nos argumentos que vão para servidor de terceiro. Campo de código (`sku`, `ean`, `placa`) fica fora da regra de dígitos, senão código de barras seria confundido com telefone.
+- **Uma regressão grave, pega pela revisão antes de publicar**: a conferência nova comparava o NOME da instância contra o ID dela. Como os dois quase nunca são iguais, todo evento legítimo viraria "evento de outra conta", com resposta 200 que a UAZAPI não reentrega: o canal pararia de receber mensagem em silêncio.
 
-**Uma regressão grave, pega pela revisão antes de publicar.** A conferência nova comparava o NOME da instância contra o ID dela. Como os dois quase nunca são iguais, todo evento legítimo viraria "evento de outra conta", com resposta 200, que a UAZAPI não reentrega: o canal pararia de receber mensagem em silêncio. A conferência passou a usar só o número dono, e há um teste que falharia com o código de antes.
+## O que está commitado e ainda não publicado
 
-**A trava de dado de cliente nas conexões MCP (D-037).** `lib/ai/mcp-externo/sem-dado-de-cliente.ts` limpa o argumento antes de sair para o servidor de terceiro. Campo de código (`sku`, `ean`, `placa`) fica fora da regra de dígitos, senão código de barras seria confundido com telefone.
+Na branch `fix/debitos-pequenos-2026-09-22`, commit `ca31fb5`:
 
-## Bateria final, rodada em 22/09 às 19h47
-
-| Passo | Resultado |
+| Dívida | O que mudou |
 |---|---|
-| typecheck | verde |
-| unitários | 1293 arquivos verdes, 1 vermelho |
-| test:db | verde, 2193 testes, 9 min |
-| build | verde |
+| D-035 | Mensagem de erro do Postgres não sai mais na resposta HTTP de rota protegida |
+| D-038 | Hash dos argumentos na auditoria deixou de ser reversível por força bruta |
+| D-039 | A Central passa a avisar do segundo problema em vez de ficar muda |
+| D-040 | Ferramenta MCP com nome repetido é marcada na leitura, e a aprovação volta a funcionar |
 
-O único vermelho é `tests/unit/e2e-parte-4-fala-com-os-servicos-do-runner.test.ts`, no caso "a espera pelo Redis falha FECHADO quando o serviço não responde". É defeito de ambiente, não de código: o teste aponta para uma porta que, no WSL, não recusa conexão na hora e fica pendurada, e o caso levou 67 minutos para desistir. Fora do WSL ele passa.
+Portões dessa branch: typecheck limpo, lint com 0 erros, `lint:channels` ok, unitários com **13.195 testes verdes**. O único vermelho é `e2e-parte-4-fala-com-os-servicos-do-runner`, que espera uma porta que no WSL não recusa conexão na hora. É ambiente, não código, e o caso leva 67 minutos para desistir.
+
+## O teste de ponta a ponta do CI está vermelho, e importa
+
+Comparação entre as duas versões de produção:
+
+| Versão | Casos vermelhos |
+|---|---|
+| `9da397d` (antes) | 3 |
+| `02e4797` (agora) | 11 |
+
+Os 8 novos vieram da junção, e a maioria é colisão com escolhas nossas, não defeito de produto:
+
+1. **Três** conferem se a fonte da interface é a Atkinson. Trocamos por Inter (mantendo o nome da variável, que outro teste dele exige). O que eles querem provar, "o tema carregou", continua verdade.
+2. **Dois** criam número de WhatsApp pelo caminho do WAHA, que saiu da instalação em 16/09: o canal existe no banco e não aparece na tela.
+3. **Um** é conectar WhatsApp por código de pareamento, feature do WAHA, que não existe mais aqui.
+4. **Um é real e é nosso**: `vps-fresh-onboarding` J1.7. Numa instalação nova, o passo "Treinar" cria o atendente, não consegue publicar porque ainda não há número conectado, e **avança sem dizer que ficou como rascunho**. Nos outros motivos (sem chave, sem modelo) ele para e explica. Isso virou o caminho normal quando o passo do telefone deixou de criar canal por QR. A tela seguinte diz "seu funcionário ainda não está no ar", então não é mudo, mas é fraco.
+5. Os outros dois (`degradacao-silenciosa`, `logo-moldura-no-tema-escuro`) já eram vermelhos antes.
+
+**Por que isso importa**: CI permanentemente vermelho é CI que ninguém lê, e o próximo defeito de verdade entra sem alarme.
 
 ## Para retomar
 
-1. **Conferir a produção na tela** (o Filipe): é um salto grande de versão, e a conferência não aconteceu antes da publicação. Olhar Conexões, IA, funil e conversas. Se algo estiver errado, o caminho de volta é publicar o commit `9da397d` de novo, e o backup do banco de antes está guardado.
-2. **Débitos pequenos** para emendar: D-034, D-035, D-036, D-038, D-039, D-040, D-041, D-042, D-043, D-044.
-3. **Planos e assinatura**: o plano está escrito em `hiperbold/planos/2026-09-22-planos-e-assinatura.md` e espera as 13 respostas do Filipe. Nada implementado.
+Ver `hiperbold/HANDOFF.md`, que tem a ordem sugerida e o contexto de cada item.
 
 ## Ambiente local
 
-O WSL desliga junto com a máquina. Se o CRM local não abrir, o banco do Supabase costuma voltar sem rede Docker: `docker network connect supabase_network_deskcomm-crm supabase_db_deskcomm-crm`, esperar, e `docker restart supabase_rest_deskcomm-crm`. O servidor de desenvolvimento na porta 3300 precisa de uma sessão WSL aberta o tempo todo. O typecheck precisa de `NODE_OPTIONS=--max-old-space-size=6144`.
+O WSL desliga junto com a máquina. Se o CRM local não abrir, o banco do Supabase costuma voltar sem rede Docker: `docker network connect supabase_network_deskcomm-crm supabase_db_deskcomm-crm`, esperar, e `docker restart supabase_rest_deskcomm-crm`. O servidor de desenvolvimento (`PORT=3300 pnpm dev`) precisa de uma sessão WSL aberta o tempo todo. O typecheck precisa de `NODE_OPTIONS=--max-old-space-size=6144`.
+
+O `gh` no repositório resolve para o remoto do AUTOR: sempre passar `-R hiperbold/DeskcommCRM`, senão você lê os fluxos dele achando que são nossos.
 
 ## Fluxo de teste no n8n
 
