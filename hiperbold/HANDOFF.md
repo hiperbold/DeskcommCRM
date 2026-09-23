@@ -76,6 +76,8 @@ O plano está escrito e o gateway está escolhido (Asaas). Nada implementado, po
 5. **Redirecionamento de saída para pasta que não existe** faz o comando morrer devolvendo sucesso. Uma suíte "verde" assim não rodou. Criar a pasta antes.
 6. **Heredoc e crase passando pelo `wsl` chegam mangleados** e o conteúdo vira comando executado. Escreva arquivo com a ferramenta de escrita, ou grave um `.sh` em `F:\temp` e rode com bash.
 7. **O typecheck estoura a memória** sem `NODE_OPTIONS=--max-old-space-size=6144`.
+8. **Confira o que está preparado para commit antes de commitar** (`git diff --cached --stat`). Em 23/09/2026 um executor em paralelo preparou arquivos com `git add` só para contar travessões, e um commit que devia ter só o banco levou junto código da aplicação ainda sem conferência. Desfeito com `git reset --soft`, sem perda, porque nada tinha subido.
+9. **Executor escreve travessão mesmo com a regra no briefing.** Aconteceu em quatro tarefas seguidas na F1. Conte na revisão de toda tarefa, só nas linhas acrescentadas (`git diff | grep '^+'`): os arquivos do autor têm centenas, e eles não são nossos.
 
 ---
 

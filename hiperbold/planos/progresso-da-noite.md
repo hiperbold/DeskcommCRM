@@ -2,21 +2,23 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: F1
-Etapa da fase: corrigindo achados da revisão e da auditoria (duas frentes em paralelo: banco e aplicação); depois, portões completos
+Fase atual: F2
+Etapa da fase: planejar
 
 ## Fases
 
 | Fase | Estado | Commit | Data |
 |---|---|---|---|
-| F1 | em andamento | | |
+| F1 | **feita**: 6 tarefas, revisão e auditoria sem achado alto, todos os portões verdes | 8fa4893 | 23/09/2026 09:44 |
 | F2 | pendente | | |
 | F2-B | pendente | | |
 | F3 | pendente | | |
 
 ## Tarefas da fase atual
 
-| # | Tarefa | Estado |
+F2: ainda não planejadas. Abaixo, as da F1, para registro.
+
+| # | Tarefa da F1 | Estado |
 |---|---|---|
 | 1 | Tabelas e funções na migração 0904 e no baseline | feita (migração e bloco do baseline aplicados duas vezes no banco local sem erro; gatilho provado; 12 testes) |
 | 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | feita (49 casos novos; com rls-isolation e a varredura de completude, 224 verdes) |
@@ -52,4 +54,15 @@ Etapa da fase: corrigindo achados da revisão e da auditoria (duas frentes em pa
 
 ## Portões
 
-(nenhum rodado ainda nesta branch; referência da branch de origem: typecheck limpo, lint 0 erros, unitários 13.195 verdes com 1 vermelho de ambiente, test:db 2193 verdes)
+Fechamento da F1, 23/09/2026 08:20 a 09:44, no commit 8fa4893:
+
+| Portão | Resultado |
+|---|---|
+| typecheck | limpo |
+| lint | 0 erros, 420 avisos (todos anteriores) |
+| lint:channels | ok |
+| unitários | 1300 arquivos e 13.279 testes verdes; 1 vermelho, o de ambiente conhecido (`e2e-parte-4`, espera pelo Redis) |
+| test:db | 256 arquivos e 2254 testes verdes |
+| build | verde, 38 s de compilação |
+
+O servidor de desenvolvimento na porta 3300 sobreviveu ao build. A rota da aba Plano sem sessão manda para o login e volta para a aba depois.
