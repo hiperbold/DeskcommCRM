@@ -349,3 +349,178 @@ describe("0906 carteira de tokens de IA (parte 1, Tarefa 1)", () => {
     }
   });
 });
+
+const FUNCOES_PARTE2 = [
+  "fn_billing_garantir_concessoes(uuid, date)",
+  "fn_billing_debitar_chamada(uuid)",
+  "fn_billing_trg_debitar_chamada()",
+] as const;
+
+describe("0906 carteira de tokens de IA (parte 2, Tarefa 2a)", () => {
+  it("a parte 2 está no MESMO arquivo da parte 1, depois dela, e o bloco do baseline continua idêntico ao arquivo inteiro da migração", () => {
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION);
+    const sqlBloco = removeComentariosEBrancas(extraiBlocoBaseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+    // A parte 2 vem DEPOIS do bloco final de agent_worker da parte 1 (item 9).
+    const fimParte1 = MIGRATION.indexOf(
+      "9. agent_worker não escreve nem confere carteira pelas peças novas desta",
+    );
+    const inicioParte2 = MIGRATION.indexOf("fn_billing_garantir_concessoes: concessão preguiçosa");
+    expect(fimParte1).toBeGreaterThan(-1);
+    expect(inicioParte2).toBeGreaterThan(fimParte1);
+  });
+
+  it("as três funções novas são security definer, com search_path fixo em public, pg_temp", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE2) {
+        const nome = assinatura.split("(")[0];
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
+        const trecho = sql.slice(inicio, inicio + 500);
+        expect(trecho).toMatch(/security definer/);
+        expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      }
+    }
+  });
+
+  it("fn_billing_trg_debitar_chamada tem lock_timeout de 1s no próprio create function", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trg_debitar_chamada()");
+      const fimCorpo = sql.indexOf("as $$", inicio);
+      const cabecalho = sql.slice(inicio, fimCorpo);
+      expect(cabecalho).toMatch(/set lock_timeout = '1s'/);
+    }
+  });
+
+  it("fn_billing_trg_debitar_chamada: corpo inteiro em begin...exception when others, nunca derruba o insert", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trg_debitar_chamada()");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/\bbegin\b/);
+      expect(corpo).toMatch(/perform public\.fn_billing_debitar_chamada\(new\.id\);/);
+      expect(corpo).toMatch(/exception\s*\n\s*when others then/);
+      expect(corpo).toMatch(/raise warning/);
+      // Duas saídas "return null": uma no fluxo normal, outra no handler de exceção.
+      expect([...corpo.matchAll(/return null;/g)].length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("o gatilho after insert em llm_calls chama a função de débito", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).toMatch(
+        /create trigger trg_billing_debitar_llm_call\s*\n\s*after insert on public\.llm_calls\s*\n\s*for each row\s*\n\s*execute function public\.fn_billing_trg_debitar_chamada\(\);/,
+      );
+      expect(sql).toMatch(/drop trigger if exists trg_billing_debitar_llm_call on public\.llm_calls;/);
+    }
+  });
+
+  it("fn_billing_debitar_chamada usa pg_try_advisory_xact_lock (não pg_advisory_xact_lock) pela chave billing_tokens:<org>", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(
+        /pg_try_advisory_xact_lock\(hashtextextended\('billing_tokens:' \|\| v_chamada\.organization_id::text, 0\)\)/,
+      );
+      // Garante que NÃO é a variante bloqueante em nenhum ponto do corpo.
+      expect(corpo).not.toMatch(/[^_]pg_advisory_xact_lock\(/);
+    }
+  });
+
+  it("fn_billing_debitar_chamada sai sem debitar em legacy_invocation_id, origem_da_chave errada e created_at anterior à carteira", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/if v_chamada\.legacy_invocation_id is not null then\s*\n\s*return false;/);
+      expect(corpo).toMatch(
+        /if v_chamada\.origem_da_chave is distinct from 'chave_da_instalacao' then\s*\n\s*return false;/,
+      );
+      expect(corpo).toMatch(/if v_chamada\.created_at < v_settings\.carteira_desde then\s*\n\s*return false;/);
+      expect(corpo).toMatch(/if v_ponderado = 0 then\s*\n\s*return false;/);
+    }
+  });
+
+  it("fn_billing_debitar_chamada calcula ciclo e dia SEMPRE de created_at da chamada, nunca de now()", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/v_ciclo := public\.fn_billing_ciclo_de\(v_chamada\.created_at\);/);
+      expect(corpo).toMatch(
+        /v_dia := \(v_chamada\.created_at at time zone 'America\/Sao_Paulo'\)::date;/,
+      );
+    }
+  });
+
+  it("fn_billing_debitar_chamada divide plano, adicional, avulso nesta ordem e soma a sobra na linha de plano", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posPlano = corpo.indexOf("fonte = 'plano' and ciclo = v_ciclo");
+      const posAdicional = corpo.indexOf("fonte = 'adicional' and ciclo = v_ciclo");
+      const posAvulso = corpo.indexOf("fonte = 'avulso' and ciclo is null");
+      const posSobra = corpo.indexOf("v_debito_plano := v_debito_plano + v_restante;");
+      expect(posPlano).toBeGreaterThan(-1);
+      expect(posAdicional).toBeGreaterThan(posPlano);
+      expect(posAvulso).toBeGreaterThan(posAdicional);
+      expect(posSobra).toBeGreaterThan(posAvulso);
+      // Cada fonte só grava UMA linha por chamada (chave por fonte, on conflict do nothing).
+      expect(corpo).toMatch(/'consumo:' \|\| p_llm_call_id::text \|\| ':plano'/);
+      expect(corpo).toMatch(/'consumo:' \|\| p_llm_call_id::text \|\| ':adicional'/);
+      expect(corpo).toMatch(/'consumo:' \|\| p_llm_call_id::text \|\| ':avulso'/);
+      expect([...corpo.matchAll(/on conflict \(organization_id, chave\) do nothing;/g)].length).toBe(3);
+    }
+  });
+
+  it("fn_billing_debitar_chamada só atualiza a carteira e o agregado quando alguma linha de consumo entrou de fato (get diagnostics row_count)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_debitar_chamada(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect([...corpo.matchAll(/get diagnostics v_linhas = row_count;/g)].length).toBe(3);
+      expect(corpo).toMatch(/v_entrou := true;/);
+      expect(corpo).toMatch(/if v_entrou then\s*\n\s*insert into public\.billing_token_consumo_diario/);
+      expect(corpo).toMatch(/return v_entrou;/);
+    }
+  });
+
+  it("fn_billing_garantir_concessoes nunca concede para ciclo anterior ao ciclo atual e não concede no Ilimitado (teto nulo)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_garantir_concessoes(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).toMatch(/if p_ciclo < public\.fn_billing_ciclo_de\(now\(\)\) then\s*\n\s*return;/);
+      expect(corpo).toMatch(/if v_teto is not null then/);
+      expect(corpo).toMatch(
+        /v_teto := \(public\.fn_billing_limites_efetivos\(p_org\) ->> 'tokens_ia_mes'\)::bigint;/,
+      );
+    }
+  });
+
+  it("as três funções novas: revoke de public/anon/authenticated e grant só para service_role", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      for (const assinatura of FUNCOES_PARTE2) {
+        expect(sql).toMatch(
+          new RegExp(
+            `revoke execute on function public\\.${assinatura.replace(/[()]/g, (c) => `\\${c}`)} from public, anon, authenticated;`,
+          ),
+        );
+        expect(sql).toMatch(
+          new RegExp(
+            `grant execute on function public\\.${assinatura.replace(/[()]/g, (c) => `\\${c}`)} to service_role;`,
+          ),
+        );
+      }
+    }
+  });
+
+  it("o bloco da role agent_worker da parte 2 revoga execute das três funções novas", () => {
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_garantir_concessoes\(uuid, date\), public\.fn_billing_debitar_chamada\(uuid\), public\.fn_billing_trg_debitar_chamada\(\) from agent_worker/,
+      );
+    }
+  });
+
+  it("livro-caixa continua sem nenhum gatilho na parte 2 (o gatilho novo é em llm_calls, não em billing_token_ledger)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      expect(sql).not.toMatch(/create trigger[^;]*on public\.billing_token_ledger/);
+    }
+  });
+});

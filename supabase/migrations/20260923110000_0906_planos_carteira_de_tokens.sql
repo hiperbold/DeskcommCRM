@@ -311,14 +311,22 @@ create table if not exists public.billing_token_consumo_diario (
   -- Soma de llm_calls.cost_cents CONHECIDO (nunca inventa valor para chamada
   -- com custo nulo, D-050) e a contagem de quantas chamadas do dia tinham
   -- custo nulo: as duas juntas dizem ao painel de margem (decisão 17) que
-  -- fração do dia é estimativa.
-  cost_cents_conhecido bigint not null default 0,
+  -- fração do dia é estimativa. numeric e não bigint: modelo barato custa
+  -- fração de centavo por chamada (o GPT-5.6 Luna sai perto de 0,03 centavo
+  -- numa resposta de 1.000 tokens), e arredondar cada chamada para inteiro
+  -- zeraria o custo do dia inteiro.
+  cost_cents_conhecido numeric(14,4) not null default 0,
   chamadas_custo_nulo bigint not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint billing_token_consumo_diario_unique
     unique nulls not distinct (organization_id, dia, agent_id, contact_id, purpose)
 );
+
+-- Banco que criou a coluna como bigint antes da correção (só o local, a 0906
+-- não foi para produção): converte no lugar. Sem efeito quando já é numeric.
+alter table public.billing_token_consumo_diario
+  alter column cost_cents_conhecido type numeric(14,4);
 
 comment on table public.billing_token_consumo_diario is
   '0906, decisão 13: agregado diário que o extrato lê (organização, dia, agente, contato, propósito). Atualizado DENTRO do débito (Tarefa 2a), só quando a linha do livro-caixa entrou de fato. unique nulls not distinct trata agent_id/contact_id nulos como iguais entre si, para o agregado de uma chamada auxiliar sem agente nem contato não duplicar linha a cada chamada do dia.';
@@ -442,6 +450,384 @@ begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke insert, update, delete, truncate on public.billing_token_ledger, public.billing_token_wallets, public.billing_token_adicionais, public.billing_token_consumo_diario from agent_worker';
     execute 'revoke execute on function public.fn_billing_ciclo_de(timestamptz), public.fn_billing_tokens_ponderados(int, int, int, int, int) from agent_worker';
+  end if;
+end
+$$;
+
+-- ── Parte 2 (Tarefa 2a): concessão, débito e gatilho ──
+--
+-- A parte 1 (acima) trouxe configuração, tabelas e as duas funções puras de
+-- cálculo. Esta parte 2 traz quem de fato CONCEDE e DEBITA:
+-- fn_billing_garantir_concessoes (decisão 9), fn_billing_debitar_chamada (a
+-- peça única de débito, decisão 10), o gatilho after insert em llm_calls que
+-- a chama (decisão 11), e o agregado diário (decisão 13), atualizado DENTRO
+-- do débito. Avisos (50/80/100%) e as três travas de segurança são a Tarefa
+-- 2b, ainda NÃO estão nesta parte.
+--
+-- fn_billing_garantir_concessoes NÃO trava sozinha: quem chama (o débito,
+-- abaixo, ou a RPC de leitura de saldo da Tarefa 5) já está sob
+-- pg_try_advisory_xact_lock('billing_tokens:<org>'). Chamá-la duas vezes no
+-- mesmo ciclo não duplica nada: a concessão em si é "insert ... on conflict
+-- do nothing" pela chave única (organization_id, chave) do livro-caixa, e só
+-- quando o insert entra de fato é que billing_token_wallets.creditado soma
+-- (decisão 9). Nunca concede para ciclo que já fechou (comparação com
+-- fn_billing_ciclo_de(now()), não com o ciclo da chamada): a guarda mora
+-- DENTRO desta função porque ela nasce pensada para mais de um chamador.
+--
+-- fn_billing_debitar_chamada é a ÚNICA função de débito (decisão 10), usada
+-- pelo gatilho abaixo e, na Tarefa 8, pelo conferidor. Sai sem fazer nada
+-- (sem travar, sem contar) quando: a chamada tem legacy_invocation_id
+-- (histórico copiado, decisão 5), a origem da chave não é
+-- 'chave_da_instalacao' (nula ou credencial_da_organizacao, decisão 3/N17),
+-- created_at é anterior a billing_settings.carteira_desde (decisão 5), ou o
+-- ponderado calculado é zero (decisão 1). Ciclo e dia são SEMPRE calculados
+-- de llm_calls.created_at, nunca de now() (decisão 4). A trava é
+-- pg_try_advisory_xact_lock (NÃO pg_advisory_xact_lock): se outra sessão já
+-- segura a mesma organização, sai imediatamente com false, sem esperar; o
+-- conferidor da Tarefa 8 pega essa chamada depois. Sob a trava, garante a
+-- concessão do ciclo da chamada e divide o ponderado pelas três fontes, na
+-- ordem plano, adicional, avulso, pelo saldo (creditado - consumido, nunca
+-- negativo na conta, embora o saldo ARMAZENADO possa ficar negativo,
+-- decisão 15) de cada uma; o que sobra depois de zerar as três é SOMADO na
+-- linha de plano da mesma chamada (decisão 6): nunca uma quarta linha, nunca
+-- duas linhas de plano. No Ilimitado (sem concessão nenhuma, saldo de plano
+-- sempre zero) isso faz o ponderado inteiro cair em plano, e a chamada fica
+-- registrada mesmo sem teto (decisão 9). Cada fonte escreve no máximo UMA
+-- linha no livro-caixa por chamada, com chave
+-- 'consumo:<llm_call_id>:<fonte>' e "on conflict do nothing": chamar esta
+-- função de novo para a MESMA chamada não gera nenhuma linha nova (todas
+-- colidem pela chave), billing_token_wallets.consumido só soma quando o
+-- insert do livro-caixa entra de fato, e o retorno (v_entrou) é
+-- exatamente esse "debitou AGORA": true na primeira vez, false num reenvio.
+-- billing_token_consumo_diario só é atualizado quando ALGUMA linha de
+-- consumo entrou (decisão 13), uma vez só por chamada, com o ponderado
+-- TOTAL (não fatiado por fonte) e os brutos (input/output/cache) crus da
+-- chamada.
+--
+-- O gatilho (fn_billing_trg_debitar_chamada, after insert on llm_calls)
+-- nunca derruba o insert (decisão 11): corpo inteiro dentro de
+-- "begin ... exception when others then raise warning ...; return null;
+-- end", e "set lock_timeout = '1s'" no próprio create function (não vaza
+-- para a transação de quem inseriu a chamada), para qualquer espera de
+-- linha (por exemplo em billing_token_wallets, sob concorrência) virar erro
+-- capturável muito antes do statement_timeout de 8s de authenticator, que
+-- não é capturável e apagaria a própria linha de llm_calls que o fornecedor
+-- de IA já cobrou.
+--
+-- Idempotente: create or replace, drop trigger if exists antes de recriar.
+
+-- ============================================================================
+-- 10. fn_billing_garantir_concessoes: concessão preguiçosa e idempotente
+-- (decisão 9).
+-- ============================================================================
+create or replace function public.fn_billing_garantir_concessoes(p_org uuid, p_ciclo date)
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_teto bigint;
+  v_linhas int;
+  v_adicional record;
+begin
+  -- Nunca concede para ciclo que já fechou (decisão 9). Comparação com o
+  -- ciclo ATUAL (de now()), não com o ciclo da chamada que disparou a
+  -- concessão: esta função é chamada com p_ciclo = ciclo DA CHAMADA por
+  -- fn_billing_debitar_chamada, e uma chamada tardia de ciclo fechado
+  -- (Tarefa 8) nunca deve criar concessão nova para um mês que já acabou.
+  if p_ciclo < public.fn_billing_ciclo_de(now()) then
+    return;
+  end if;
+
+  v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;
+
+  -- Ilimitado (teto nulo) não concede nada: o consumo cai direto na fonte
+  -- plano sem saldo, e o extrato mostra "sem limite" (decisão 9).
+  if v_teto is not null then
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave)
+    values (p_org, 'plano', v_teto, 'plano:' || p_ciclo::text)
+    on conflict (organization_id, chave) do nothing;
+
+    get diagnostics v_linhas = row_count;
+    if v_linhas > 0 then
+      insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+      values (p_org, 'plano', p_ciclo, v_teto, 0)
+      on conflict (organization_id, fonte, ciclo) do update
+        set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+            updated_at = now();
+    end if;
+  end if;
+
+  for v_adicional in
+    select id, tokens_por_ciclo
+    from public.billing_token_adicionais
+    where organization_id = p_org and ativo
+  loop
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave)
+    values (p_org, 'adicional', v_adicional.tokens_por_ciclo, 'adicional:' || v_adicional.id::text || ':' || p_ciclo::text)
+    on conflict (organization_id, chave) do nothing;
+
+    get diagnostics v_linhas = row_count;
+    if v_linhas > 0 then
+      insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+      values (p_org, 'adicional', p_ciclo, v_adicional.tokens_por_ciclo, 0)
+      on conflict (organization_id, fonte, ciclo) do update
+        set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+            updated_at = now();
+    end if;
+  end loop;
+end;
+$$;
+
+comment on function public.fn_billing_garantir_concessoes(uuid, date) is
+  '0906, decisão 9: concessão preguiçosa e idempotente da fonte plano (teto efetivo do momento) e de cada adicional ativo, para o ciclo informado. NÃO trava sozinha: quem chama (fn_billing_debitar_chamada, abaixo, ou a RPC de saldo da Tarefa 5) já precisa estar sob pg_try_advisory_xact_lock(''billing_tokens:<org>''). insert ... on conflict do nothing no livro-caixa; billing_token_wallets.creditado só soma quando o insert entrou de fato. Ilimitado (tokens_ia_mes nulo) não concede nada. Nunca concede para ciclo anterior ao ciclo atual (fn_billing_ciclo_de(now())).';
+
+revoke execute on function public.fn_billing_garantir_concessoes(uuid, date) from public, anon, authenticated;
+grant execute on function public.fn_billing_garantir_concessoes(uuid, date) to service_role;
+
+-- ============================================================================
+-- 11. fn_billing_debitar_chamada: a peça única de débito (decisão 10).
+-- ============================================================================
+create or replace function public.fn_billing_debitar_chamada(p_llm_call_id uuid)
+returns boolean
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_chamada record;
+  v_settings record;
+  v_peso_proposito int;
+  v_ponderado bigint;
+  v_ciclo date;
+  v_dia date;
+  v_restante bigint;
+  v_saldo bigint;
+  v_debito_plano bigint := 0;
+  v_debito_adicional bigint := 0;
+  v_debito_avulso bigint := 0;
+  v_linhas int;
+  v_entrou boolean := false;
+begin
+  select c.organization_id, c.created_at, c.legacy_invocation_id, c.origem_da_chave,
+         c.purpose, c.agent_id, c.contact_id, c.input_tokens, c.output_tokens,
+         c.cache_read_tokens, c.cost_cents
+    into v_chamada
+    from public.llm_calls c
+    where c.id = p_llm_call_id;
+
+  if not found then
+    return false;
+  end if;
+
+  -- Decisão 5: histórico copiado nunca debita.
+  if v_chamada.legacy_invocation_id is not null then
+    return false;
+  end if;
+
+  -- Decisão 3/N17: só a chave da instalação passa pela carteira. Nulo
+  -- (ponto do código que ainda não grava a origem) e credencial_da_organizacao
+  -- (BYOK, o cliente já paga direto) saem sem debitar.
+  if v_chamada.origem_da_chave is distinct from 'chave_da_instalacao' then
+    return false;
+  end if;
+
+  select carteira_desde, peso_cache_leitura_pct, pesos_por_proposito
+    into v_settings
+    from public.billing_settings
+    where id = 1;
+
+  -- Decisão 5: marca de início. Sem isso a primeira noite do conferidor
+  -- (Tarefa 8) cobraria de uma vez todo o histórico anterior à carteira.
+  if v_chamada.created_at < v_settings.carteira_desde then
+    return false;
+  end if;
+
+  v_peso_proposito := coalesce((v_settings.pesos_por_proposito ->> v_chamada.purpose)::int, 100);
+
+  v_ponderado := public.fn_billing_tokens_ponderados(
+    v_chamada.input_tokens,
+    v_chamada.output_tokens,
+    v_chamada.cache_read_tokens,
+    v_settings.peso_cache_leitura_pct,
+    v_peso_proposito
+  );
+
+  -- Decisão 1: ponderado zero não gera linha nenhuma.
+  if v_ponderado = 0 then
+    return false;
+  end if;
+
+  -- Decisão 4: ciclo e dia SEMPRE do momento da CHAMADA, nunca de now().
+  v_ciclo := public.fn_billing_ciclo_de(v_chamada.created_at);
+  v_dia := (v_chamada.created_at at time zone 'America/Sao_Paulo')::date;
+
+  -- Decisão 10/11: trava SEM espera, por organização. Se outra sessão já
+  -- segura, sai já (o conferidor da Tarefa 8 pega depois); nunca atrasa
+  -- quem inseriu a chamada.
+  if not pg_try_advisory_xact_lock(hashtextextended('billing_tokens:' || v_chamada.organization_id::text, 0)) then
+    return false;
+  end if;
+
+  -- Já sob a trava: garante a concessão do ciclo DA CHAMADA (fn_billing_
+  -- garantir_concessoes não faz nada sozinha se esse ciclo já fechou).
+  perform public.fn_billing_garantir_concessoes(v_chamada.organization_id, v_ciclo);
+
+  -- Decisão 6: divide pelas fontes, nesta ordem, pelo saldo (creditado -
+  -- consumido) de cada uma. sum() garante uma linha sempre (mesmo sem
+  -- wallet ainda criada, vira 0 pelo coalesce) em vez de "select" simples,
+  -- que sobre zero linhas deixaria a variável com o valor da fonte anterior.
+  select coalesce(sum(creditado - consumido), 0) into v_saldo
+    from public.billing_token_wallets
+    where organization_id = v_chamada.organization_id and fonte = 'plano' and ciclo = v_ciclo;
+  v_restante := v_ponderado;
+  v_debito_plano := least(v_restante, greatest(v_saldo, 0));
+  v_restante := v_restante - v_debito_plano;
+
+  select coalesce(sum(creditado - consumido), 0) into v_saldo
+    from public.billing_token_wallets
+    where organization_id = v_chamada.organization_id and fonte = 'adicional' and ciclo = v_ciclo;
+  v_debito_adicional := least(v_restante, greatest(v_saldo, 0));
+  v_restante := v_restante - v_debito_adicional;
+
+  select coalesce(sum(creditado - consumido), 0) into v_saldo
+    from public.billing_token_wallets
+    where organization_id = v_chamada.organization_id and fonte = 'avulso' and ciclo is null;
+  v_debito_avulso := least(v_restante, greatest(v_saldo, 0));
+  v_restante := v_restante - v_debito_avulso;
+
+  -- O que sobra depois de zerar as três vai SOMADO na linha de plano
+  -- (decisão 6): nunca uma quarta linha, nunca duas linhas de plano na
+  -- mesma chamada. É o caso que atravessa o fim do saldo.
+  v_debito_plano := v_debito_plano + v_restante;
+
+  if v_debito_plano > 0 then
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id)
+    values (v_chamada.organization_id, 'plano', -v_debito_plano, 'consumo:' || p_llm_call_id::text || ':plano', p_llm_call_id)
+    on conflict (organization_id, chave) do nothing;
+
+    get diagnostics v_linhas = row_count;
+    if v_linhas > 0 then
+      v_entrou := true;
+      insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+      values (v_chamada.organization_id, 'plano', v_ciclo, 0, v_debito_plano)
+      on conflict (organization_id, fonte, ciclo) do update
+        set consumido = public.billing_token_wallets.consumido + excluded.consumido,
+            updated_at = now();
+    end if;
+  end if;
+
+  if v_debito_adicional > 0 then
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id)
+    values (v_chamada.organization_id, 'adicional', -v_debito_adicional, 'consumo:' || p_llm_call_id::text || ':adicional', p_llm_call_id)
+    on conflict (organization_id, chave) do nothing;
+
+    get diagnostics v_linhas = row_count;
+    if v_linhas > 0 then
+      v_entrou := true;
+      insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+      values (v_chamada.organization_id, 'adicional', v_ciclo, 0, v_debito_adicional)
+      on conflict (organization_id, fonte, ciclo) do update
+        set consumido = public.billing_token_wallets.consumido + excluded.consumido,
+            updated_at = now();
+    end if;
+  end if;
+
+  if v_debito_avulso > 0 then
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, llm_call_id)
+    values (v_chamada.organization_id, 'avulso', -v_debito_avulso, 'consumo:' || p_llm_call_id::text || ':avulso', p_llm_call_id)
+    on conflict (organization_id, chave) do nothing;
+
+    get diagnostics v_linhas = row_count;
+    if v_linhas > 0 then
+      v_entrou := true;
+      insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+      values (v_chamada.organization_id, 'avulso', null, 0, v_debito_avulso)
+      on conflict (organization_id, fonte, ciclo) do update
+        set consumido = public.billing_token_wallets.consumido + excluded.consumido,
+            updated_at = now();
+    end if;
+  end if;
+
+  -- Decisão 13: o agregado só muda quando ALGUMA linha de consumo entrou de
+  -- fato, uma vez por chamada, com o ponderado TOTAL (não fatiado por fonte)
+  -- e os brutos crus da chamada.
+  if v_entrou then
+    insert into public.billing_token_consumo_diario (
+      organization_id, dia, agent_id, contact_id, purpose,
+      tokens_ponderados, tokens_entrada, tokens_saida, tokens_cache_lido,
+      chamadas, cost_cents_conhecido, chamadas_custo_nulo
+    )
+    values (
+      v_chamada.organization_id, v_dia, v_chamada.agent_id, v_chamada.contact_id, v_chamada.purpose,
+      v_ponderado, v_chamada.input_tokens, v_chamada.output_tokens, v_chamada.cache_read_tokens,
+      1, coalesce(v_chamada.cost_cents, 0), case when v_chamada.cost_cents is null then 1 else 0 end
+    )
+    on conflict (organization_id, dia, agent_id, contact_id, purpose) do update
+      set tokens_ponderados = public.billing_token_consumo_diario.tokens_ponderados + excluded.tokens_ponderados,
+          tokens_entrada = public.billing_token_consumo_diario.tokens_entrada + excluded.tokens_entrada,
+          tokens_saida = public.billing_token_consumo_diario.tokens_saida + excluded.tokens_saida,
+          tokens_cache_lido = public.billing_token_consumo_diario.tokens_cache_lido + excluded.tokens_cache_lido,
+          chamadas = public.billing_token_consumo_diario.chamadas + excluded.chamadas,
+          cost_cents_conhecido = public.billing_token_consumo_diario.cost_cents_conhecido + excluded.cost_cents_conhecido,
+          chamadas_custo_nulo = public.billing_token_consumo_diario.chamadas_custo_nulo + excluded.chamadas_custo_nulo,
+          updated_at = now();
+  end if;
+
+  return v_entrou;
+end;
+$$;
+
+comment on function public.fn_billing_debitar_chamada(uuid) is
+  '0906, decisão 10: peça ÚNICA de débito, usada pelo gatilho (abaixo) e pelo conferidor (Tarefa 8). Devolve true só quando debitou AGORA (pelo menos uma linha nova no livro-caixa); reenviar a MESMA chamada devolve false sem mudar livro-caixa, carteira nem agregado (todas as chaves de consumo colidem pelo conflict). Sai sem nada quando legacy_invocation_id não é nulo, origem_da_chave não é chave_da_instalacao, created_at é anterior a carteira_desde, ou o ponderado é zero. Ciclo e dia SEMPRE de created_at da chamada. pg_try_advisory_xact_lock (NUNCA pg_advisory_xact_lock) por organização, sem espera; ocupada = sai, o conferidor pega depois. Garante a concessão do ciclo da chamada já sob a trava, divide o ponderado por plano/adicional/avulso pelo saldo de cada uma, e soma o que sobra na linha de plano (decisão 6, o caso que atravessa o saldo).';
+
+revoke execute on function public.fn_billing_debitar_chamada(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_debitar_chamada(uuid) to service_role;
+
+-- ============================================================================
+-- 12. Gatilho after insert em llm_calls chamando o débito (decisão 11).
+-- ============================================================================
+create or replace function public.fn_billing_trg_debitar_chamada()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+set lock_timeout = '1s'
+as $$
+begin
+  perform public.fn_billing_debitar_chamada(new.id);
+  return null;
+exception
+  when others then
+    raise warning 'billing_debitar_chamada_falhou: llm_call_id=%, sqlerrm=%', new.id, sqlerrm;
+    return null;
+end;
+$$;
+
+comment on function public.fn_billing_trg_debitar_chamada() is
+  '0906, decisão 11: gatilho after insert em llm_calls que chama fn_billing_debitar_chamada. Corpo inteiro dentro de begin...exception when others, nunca derruba o insert (a resposta do agente já foi cobrada pelo fornecedor de IA). set lock_timeout = ''1s'' no próprio create function (restaurado ao sair, não vaza para a transação de quem inseriu a chamada): qualquer espera de linha vira erro capturável muito antes do statement_timeout de 8s de authenticator, que não é capturável.';
+
+revoke execute on function public.fn_billing_trg_debitar_chamada() from public, anon, authenticated;
+grant execute on function public.fn_billing_trg_debitar_chamada() to service_role;
+
+drop trigger if exists trg_billing_debitar_llm_call on public.llm_calls;
+create trigger trg_billing_debitar_llm_call
+  after insert on public.llm_calls
+  for each row
+  execute function public.fn_billing_trg_debitar_chamada();
+
+-- ============================================================================
+-- 13. agent_worker não concede nem debita pelas peças novas desta parte 2
+-- (mesmo racional do bloco 9, acima): por alter default privileges ela
+-- ganharia execute em toda função nova do schema public, e tem bypassrls.
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_garantir_concessoes(uuid, date), public.fn_billing_debitar_chamada(uuid), public.fn_billing_trg_debitar_chamada() from agent_worker';
   end if;
 end
 $$;
