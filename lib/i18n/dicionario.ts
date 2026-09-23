@@ -11606,6 +11606,36 @@ export const DICIONARIO: Traducoes = {
     es: "El número es del embudo con más etapas activas.",
   },
   "No teto": { es: "En el tope" },
+
+  // ─── Tarefa 6, fase F2-B (carteira de tokens de IA): a seção "Tokens de IA"
+  // da tela "Plano e uso" (app/app/settings/plano) ───
+  "Consumo do mês": { es: "Consumo del mes" },
+  "O consumo passou do contratado. Nesta fase a IA continua respondendo normalmente.": {
+    es: "El consumo superó lo contratado. En esta fase la IA sigue respondiendo con normalidad.",
+  },
+  "Saldo por fonte": { es: "Saldo por fuente" },
+  "Do plano contratado": { es: "Del plan contratado" },
+  "Assinatura adicional": { es: "Suscripción adicional" },
+  "Pacote avulso": { es: "Paquete adicional" },
+  "Dá para aproximadamente": { es: "Alcanza para aproximadamente" },
+  "respostas da IA.": { es: "respuestas de la IA." },
+  "Cada resposta usa, em média,": { es: "Cada respuesta usa, en promedio," },
+  "tokens ponderados.": { es: "tokens ponderados." },
+  "Estimativa pelo seu consumo dos últimos 30 dias.": {
+    es: "Estimación según tu consumo de los últimos 30 días.",
+  },
+  "Estimativa pela média de referência: ainda não há consumo suficiente para medir o seu.": {
+    es: "Estimación según el promedio de referencia: todavía no hay consumo suficiente para medir el tuyo.",
+  },
+  "Extrato do mês": { es: "Extracto del mes" },
+  "Nenhum consumo registrado neste ciclo ainda.": { es: "Todavía no hay consumo registrado en este ciclo." },
+  "Por dia": { es: "Por día" },
+  "Por agente": { es: "Por agente" },
+  "Agente removido": { es: "Agente eliminado" },
+  "Conferências e mídia": { es: "Verificaciones internas y medios" },
+  "Não foi possível ler o consumo de tokens de IA agora. Os números desta seção não refletem a realidade: recarregue a página antes de decidir qualquer coisa com base neles.": {
+    es: "No se pudo leer el consumo de tokens de IA ahora. Los números de esta sección no reflejan la realidad: recarga la página antes de decidir algo basándote en ellos.",
+  },
 };
 
 /**
