@@ -47,9 +47,21 @@
  * organizações com um teto único é uma pergunta sobre a instalação inteira,
  * não sobre uma organização, e fazê-la por organização repetiria a mesma
  * soma N vezes à toa. Lê `billing_settings.teto_instalacao_tokens_dia`
- * (nulo = desligado, decisão 15) e, quando ligado, soma o consumo do DIA DE
- * HOJE no fuso `America/Sao_Paulo` (`fn_billing_consumo_da_instalacao_no_
- * dia`, decisão 4: o dia do agregado usa o mesmo fuso do ciclo, nunca UTC).
+ * (nulo = desligado, decisão 15) e, quando ligado, soma o consumo do DIA
+ * ANTERIOR COMPLETO no fuso `America/Sao_Paulo` (`fn_billing_consumo_da_
+ * instalacao_no_dia`, decisão 4: o dia do agregado usa o mesmo fuso do
+ * ciclo, nunca UTC).
+ *
+ * Item 12 da revisão (23/09/2026): o scheduler roda em UTC
+ * (`docker-compose.prod.yml`, `TZ: UTC`) e este cron dispara às 05:25 UTC
+ * (`docker/scheduler/entrypoint.sh`), que são 02:25 em São Paulo, ainda
+ * dentro do MESMO dia civil paulista, só que com 2h25 dele decorridas.
+ * Conferir "hoje" (`hojeNoFusoDaCarteira`) comparava o teto DIÁRIO contra um
+ * dia que mal começou, e nunca contra um dia inteiro: a checagem nunca via o
+ * consumo real de nenhum dia completo. O dia que de fato TERMINOU e tem
+ * consumo fechado para comparar às 02:25 é o ANTERIOR
+ * (`diaAnteriorNoFusoDaCarteira`, abaixo).
+ *
  * Passou do teto: alarme em log (prefixo `alarme_planos_...`, a mesma
  * família de `alarme_planos_leitura` já usada em toda `lib/billing/`) e
  * `tetoDaInstalacaoPassou: true` no resumo. NESTA FASE só avisa (decisão
@@ -200,6 +212,27 @@ function hojeNoFusoDaCarteira(agora: Date): string {
   return `${ano}-${mes}-${dia}`;
 }
 
+/**
+ * O dia ANTERIOR completo, `YYYY-MM-DD`, no fuso da carteira. Item 12 da
+ * revisão: o scheduler dispara às 05:25 UTC = 02:25 em São Paulo, ainda
+ * dentro do dia civil paulista corrente (só que com 2h25 dele decorridas).
+ * O teto da instalação é DIÁRIO: o dia que já fechou e tem consumo completo
+ * para comparar nesse horário é o de ONTEM, não o de hoje. Subtrai sobre o
+ * texto `YYYY-MM-DD` (via `Date.UTC`, sem fuso) em vez de subtrair 24h do
+ * `Date` de `agora`: subtrair horas de um instante e só depois formatar no
+ * fuso local pode acertar o dia errado perto de uma transição de horário de
+ * verão (Brasil não tem mais DST, mas o cálculo fica correto mesmo assim).
+ */
+function diaAnteriorNoFusoDaCarteira(agora: Date): string {
+  const hoje = hojeNoFusoDaCarteira(agora);
+  const [ano, mes, dia] = hoje.split("-").map(Number);
+  const ontem = new Date(Date.UTC(ano!, mes! - 1, dia! - 1));
+  const anoOntem = String(ontem.getUTCFullYear());
+  const mesOntem = String(ontem.getUTCMonth() + 1).padStart(2, "0");
+  const diaOntem = String(ontem.getUTCDate()).padStart(2, "0");
+  return `${anoOntem}-${mesOntem}-${diaOntem}`;
+}
+
 export interface ResumoDoConferidorDeCarteira {
   /** Quantas organizações a rodada percorreu (paginação completa). */
   organizacoesVistas: number;
@@ -275,10 +308,13 @@ async function debitarPendentesDaOrganizacao(
 
 /**
  * Confere o teto da instalação (decisão 15): lê `teto_instalacao_tokens_dia`
- * e, se ligado, compara com o consumo de HOJE (fuso da carteira) de TODAS as
- * organizações. Nunca lança: falha de leitura vira `alarme_planos_leitura`
- * e a checagem simplesmente não roda nesta rodada (o cron de amanhã tenta de
- * novo). Devolve `true` só quando o teto está ligado E foi ultrapassado.
+ * e, se ligado, compara com o consumo do DIA ANTERIOR COMPLETO (fuso da
+ * carteira) de TODAS as organizações (item 12 da revisão: às 02:25 em São
+ * Paulo, horário em que este cron roda, "hoje" mal começou; "ontem" é o
+ * único dia com consumo fechado para comparar contra um teto diário). Nunca
+ * lança: falha de leitura vira `alarme_planos_leitura` e a checagem
+ * simplesmente não roda nesta rodada (o cron de amanhã tenta de novo).
+ * Devolve `true` só quando o teto está ligado E foi ultrapassado.
  */
 async function confereTetoDaInstalacao(db: ConferidorDeCarteiraDb, agora: Date): Promise<boolean> {
   try {
@@ -286,8 +322,11 @@ async function confereTetoDaInstalacao(db: ConferidorDeCarteiraDb, agora: Date):
     if (erroTeto) throw new Error(`billing_settings: ${erroTeto.message}`);
     if (teto === null) return false; // decisão 15: nulo = desligado.
 
-    const hoje = hojeNoFusoDaCarteira(agora);
-    const { data: consumo, error: erroConsumo } = await db.consumoDaInstalacaoNoDia(hoje);
+    // Item 12 da revisão: o dia ANTERIOR completo, não "hoje" (ver o
+    // comentário do bloco "O teto da instalação" no topo do arquivo e de
+    // `diaAnteriorNoFusoDaCarteira`).
+    const dia = diaAnteriorNoFusoDaCarteira(agora);
+    const { data: consumo, error: erroConsumo } = await db.consumoDaInstalacaoNoDia(dia);
     if (erroConsumo) {
       throw new Error(`fn_billing_consumo_da_instalacao_no_dia: ${erroConsumo.message}`);
     }
@@ -299,7 +338,7 @@ async function confereTetoDaInstalacao(db: ConferidorDeCarteiraDb, agora: Date):
       // plataforma para este alarme não existe (decisão 15, registrado no
       // DEBITO).
       logger.error("alarme_planos_teto_instalacao", {
-        dia: hoje,
+        dia,
         teto_instalacao_tokens_dia: teto,
         consumo_do_dia: consumoDoDia,
       });

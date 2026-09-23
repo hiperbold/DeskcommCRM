@@ -41,6 +41,7 @@ function bancoDeCarteira(
   chamadasDebitosPendentes: string[];
   chamadasDebitarChamada: string[];
   chamadasConferirCarteira: string[];
+  diasConsultados: string[];
 } {
   const pendentesPorOrg: Record<string, string[]> = {};
   for (const [org, pendentes] of Object.entries(opts.pendentesPorOrg ?? {})) {
@@ -54,6 +55,7 @@ function bancoDeCarteira(
   const chamadasDebitosPendentes: string[] = [];
   const chamadasDebitarChamada: string[] = [];
   const chamadasConferirCarteira: string[] = [];
+  const diasConsultados: string[] = [];
 
   const db: ConferidorDeCarteiraDb = {
     async listarOrganizacoes(de, ate) {
@@ -96,13 +98,14 @@ function bancoDeCarteira(
       if (opts.erroTeto) return { data: null, error: { message: opts.erroTeto } };
       return { data: opts.teto ?? null, error: null };
     },
-    async consumoDaInstalacaoNoDia() {
+    async consumoDaInstalacaoNoDia(dia) {
+      diasConsultados.push(dia);
       if (opts.erroConsumo) return { data: null, error: { message: opts.erroConsumo } };
       return { data: opts.consumoDoDia ?? 0, error: null };
     },
   };
 
-  return { db, chamadasDebitosPendentes, chamadasDebitarChamada, chamadasConferirCarteira };
+  return { db, chamadasDebitosPendentes, chamadasDebitarChamada, chamadasConferirCarteira, diasConsultados };
 }
 
 describe("conferirCarteiraDeTokens, o conferidor diário da carteira de tokens", () => {
@@ -238,6 +241,34 @@ describe("conferirCarteiraDeTokens, o conferidor diário da carteira de tokens",
       "alarme_planos_teto_instalacao",
       expect.objectContaining({ teto_instalacao_tokens_dia: 1_000_000, consumo_do_dia: 1_000_001 }),
     );
+  });
+
+  /**
+   * Item 12 da revisão (23/09/2026): o scheduler roda em UTC
+   * (`docker-compose.prod.yml`, `TZ: UTC`) e o cron dispara `25 5 * * *`,
+   * 05:25 UTC = 02:25 em América/São_Paulo, ainda dentro do MESMO dia civil
+   * paulista, só com 2h25 dele decorridas. O teto é DIÁRIO: o dia que já
+   * fechou é o ANTERIOR, não "hoje". `2026-09-10T05:25:00Z` cai às 02:25 de
+   * 10/09 em São Paulo; o dia anterior completo é 09/09.
+   */
+  it("teto da instalação: às 02h25 de SP do dia 10, confere o consumo do dia 9 (anterior), não do 10", async () => {
+    const { db, diasConsultados } = bancoDeCarteira(["org-a"], { teto: 1_000_000, consumoDoDia: 500_000 });
+    const agora = new Date("2026-09-10T05:25:00Z"); // UTC, 02:25 em São Paulo (UTC-3), ainda dia 10 lá.
+
+    await conferirCarteiraDeTokens(db, agora);
+
+    expect(diasConsultados).toEqual(["2026-09-09"]);
+  });
+
+  it("teto da instalação: perto da virada, meia-noite de SP ainda é o dia anterior de verdade", async () => {
+    const { db, diasConsultados } = bancoDeCarteira(["org-a"], { teto: 1_000_000, consumoDoDia: 500_000 });
+    // 03:00 UTC de 01/01 = 00:00 em São Paulo, já 01/01 lá; o dia anterior
+    // completo é 31/12 do ano anterior, vira o ano também, não só o dia.
+    const agora = new Date("2026-01-01T03:00:00Z");
+
+    await conferirCarteiraDeTokens(db, agora);
+
+    expect(diasConsultados).toEqual(["2025-12-31"]);
   });
 
   it("leitura do teto falha: não lança, não passa a rodada, vira alarme_planos_leitura", async () => {

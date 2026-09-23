@@ -113,7 +113,12 @@ CRONS="
 15 4 * * *|60|api/v1/cron/sync-model-catalog
 40 4 * * *|120|api/v1/cron/data-retention
 55 4 * * *|60|api/v1/cron/conferir-contadores-de-plano
-# A CARTEIRA DE TOKENS (F2-B, Tarefa 8). 05:25, meia hora depois do conferidor
+# A CARTEIRA DE TOKENS (F2-B, Tarefa 8). 05:25 UTC (este container roda com
+# TZ: UTC, docker-compose.prod.yml), que são 02:25 em América/São_Paulo:
+# ainda dentro do MESMO dia civil paulista, só com 2h25 dele decorridas. Por
+# isso o teto da instalação (decisão 15) confere o DIA ANTERIOR completo
+# nesse fuso, nunca "hoje" (item 12 da revisão, 23/09/2026; ver
+# lib/billing/tokens/conferir-carteira.ts). Meia hora depois do conferidor
 # de contadores acima, para as duas rodadas diárias de billing não disputarem
 # a mesma janela de I/O no banco. Teto de 90s (maior que o irmão, 60s): além
 # de conferir o saldo materializado de cada organização (mesma forma do

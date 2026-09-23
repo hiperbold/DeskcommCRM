@@ -12,15 +12,18 @@
  *  - `precoDoCatalogoOuNull`, a leitura nova, devolve `null` (nunca 0) e sinaliza
  *    a falha de leitura separadamente, normalizando o prefixo `provider/`.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let catalogoLinhas: Array<{
   provider: string;
   model_id: string;
   input_price_per_million_cents: number | null;
   output_price_per_million_cents: number | null;
+  deprecated_at?: string | null;
 }> = [];
 let catalogoDeveFalhar = false;
+/** Item 11 da revisão: quando não nulo, o mock demora este tanto antes de responder. */
+let catalogoAtrasoMs: number | null = null;
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
@@ -28,6 +31,9 @@ vi.mock("@/lib/supabase/admin", () => ({
       if (tabela !== "ai_models") throw new Error(`tabela inesperada no mock: ${tabela}`);
       return {
         select: async () => {
+          if (catalogoAtrasoMs !== null) {
+            await new Promise((resolve) => setTimeout(resolve, catalogoAtrasoMs!));
+          }
           if (catalogoDeveFalhar) return { data: null, error: { message: "conexão com o catálogo recusada" } };
           return { data: catalogoLinhas, error: null };
         },
@@ -41,7 +47,12 @@ import { _resetRuntimeCostCacheForTests, computeCostCents, precoDoCatalogoOuNull
 beforeEach(() => {
   catalogoLinhas = [];
   catalogoDeveFalhar = false;
+  catalogoAtrasoMs = null;
   _resetRuntimeCostCacheForTests();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("computeCostCents, contrato de hoje, inalterado (lib/ai/runtime/agent.ts espera isto)", () => {
@@ -109,5 +120,140 @@ describe("precoDoCatalogoOuNull, a leitura nova (D-050): null nunca é zero", ()
     ];
     const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
     expect(resultado).toEqual({ preco: null, falhou: false });
+  });
+});
+
+/**
+ * Item 10 da revisão (23/09/2026, regressão): o cron `sync-model-catalog`
+ * (`lib/ai/catalogo/openrouter.ts`) grava modelo da OpenRouter como
+ * `provider = 'openrouter'` e `model_id` COM o prefixo do fabricante
+ * (`openai/gpt-5.6-luna`). A versão antiga só tentava `(provider, modelo sem
+ * prefixo)`, e nunca achava essa linha. Os quatro formatos abaixo são os
+ * citados no briefing da revisão.
+ */
+describe("precoDoCatalogoOuNull, ordem de busca da OpenRouter (item 10 da revisão)", () => {
+  const PRECO_LUNA = { inputCentsPerMillion: 20, outputCentsPerMillion: 120 };
+
+  it("openai + gpt-5.6-luna, com linha direta do provider (passo 1)", async () => {
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: PRECO_LUNA, falhou: false });
+  });
+
+  it("openai + openai/gpt-5.6-luna, só com a linha da OpenRouter (passo 3: modelo como chegou)", async () => {
+    catalogoLinhas = [
+      { provider: "openrouter", model_id: "openai/gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "openai/gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: PRECO_LUNA, falhou: false });
+  });
+
+  it("openrouter + openai/gpt-5.6-luna, chave exata (passo 1)", async () => {
+    catalogoLinhas = [
+      { provider: "openrouter", model_id: "openai/gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openrouter", "openai/gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: PRECO_LUNA, falhou: false });
+  });
+
+  it("openai + gpt-5.6-luna SEM prefixo, só existe a linha prefixada da OpenRouter (passo 4: soma o prefixo)", async () => {
+    catalogoLinhas = [
+      { provider: "openrouter", model_id: "openai/gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: PRECO_LUNA, falhou: false });
+  });
+
+  it("modelo em lugar nenhum do catálogo: preco null, falhou false", async () => {
+    catalogoLinhas = [
+      { provider: "openrouter", model_id: "outro-fabricante/outro-modelo", input_price_per_million_cents: 1, output_price_per_million_cents: 1 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: null, falhou: false });
+  });
+
+  it("qualquer provider com o mesmo model_id, comportamento antigo mantido por último (passo 5/6)", async () => {
+    catalogoLinhas = [
+      { provider: "fabricante-inesperado", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: PRECO_LUNA, falhou: false });
+  });
+
+  it("linha depreciada (deprecated_at preenchido) não conta, mesmo model_id ativo em outro provider ganha", async () => {
+    catalogoLinhas = [
+      {
+        provider: "openai",
+        model_id: "gpt-5.6-luna",
+        input_price_per_million_cents: 999,
+        output_price_per_million_cents: 999,
+        deprecated_at: "2026-01-01T00:00:00Z",
+      },
+      { provider: "outro-fabricante", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const resultado = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(resultado).toEqual({ preco: PRECO_LUNA, falhou: false });
+  });
+});
+
+/**
+ * Item 11 da revisão (23/09/2026): prazo de 2s na leitura do catálogo, cache
+ * velho como resposta de uma falha (quando existe) e backoff de 60s antes de
+ * tentar de novo. Relógio falso: os prazos são medidos em tempo real, e um
+ * teste com `setTimeout` de verdade seria lento e instável.
+ */
+describe("carregarCatalogo, prazo de 2s e backoff de 60s (item 11 da revisão)", () => {
+  it("consulta que demora mais que 2s conta como falha; sem cache, falhou true", async () => {
+    vi.useFakeTimers();
+    catalogoAtrasoMs = 5000;
+    const promessa = precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    await vi.advanceTimersByTimeAsync(2001);
+    await expect(promessa).resolves.toEqual({ preco: null, falhou: true });
+  });
+
+  it("falha com cache velho disponível: falhou false, usa o preço do cache antigo", async () => {
+    // Primeira leitura bem-sucedida, povoa o cache.
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    const primeira = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(primeira.falhou).toBe(false);
+
+    // TTL de 5 min vencido, nova tentativa falha: cache velho ainda serve o
+    // mesmo preço, e falhou vira false porque o preço É conhecido.
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(6 * 60 * 1000);
+    catalogoDeveFalhar = true;
+    const segunda = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(segunda).toEqual({
+      preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 },
+      falhou: false,
+    });
+  });
+
+  it("depois de uma falha, não tenta de novo por 60s mesmo com o catálogo já consertado", async () => {
+    vi.useFakeTimers();
+    catalogoDeveFalhar = true;
+    const primeira = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(primeira).toEqual({ preco: null, falhou: true });
+
+    // "Conserta" o catálogo, mas ainda dentro da janela de 60s de backoff.
+    catalogoDeveFalhar = false;
+    catalogoLinhas = [
+      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 20, output_price_per_million_cents: 120 },
+    ];
+    vi.advanceTimersByTime(59_000);
+    const segunda = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    // Ainda em backoff: nem tentou de novo, continua sem cache.
+    expect(segunda).toEqual({ preco: null, falhou: true });
+
+    vi.advanceTimersByTime(2_000); // total 61s: backoff passou.
+    const terceira = await precoDoCatalogoOuNull("openai", "gpt-5.6-luna");
+    expect(terceira).toEqual({
+      preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 },
+      falhou: false,
+    });
   });
 });
