@@ -17,7 +17,7 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 |---|---|---|---|
 | F1 | **feita**: 6 tarefas, revisão e auditoria sem achado alto, todos os portões verdes | 8fa4893 | 23/09/2026 09:44 |
 | F2 | **feita**: 8 tarefas, revisão e auditoria sem achado alto (médios corrigidos em duas levas), todos os portões verdes | 28d21a3 | 23/09/2026 15:20 |
-| F2-B | pendente | | |
+| F2-B | **feita**: 8 tarefas, revisão (2 altos) e auditoria (1 alto) corrigidas; portões no commit 3898b63 com os vermelhos abaixo, todos corrigidos e reconferidos | a0f7d60 | 23/09/2026 21:05 |
 | F3 | em andamento: plano revisado (7c9d3f6, a28b704); tarefa 1 (modo, carência, bloqueio de funis, etapas, conexões e webhooks) em execução enquanto os portões da F2-B rodam na cópia separada no commit 3898b63 | | |
 | F6 | registrada (pedido do Filipe, 23/09 à tarde): site de vendas, `/precos`, Termos e Privacidade. Fica depois das fases do loop; não começa sem confirmação | ff34e69 | |
 
@@ -71,6 +71,8 @@ F2: ainda não planejadas. Abaixo, as da F1, para registro.
 - **Alto, corrigido na tarefa 1 da F1**: revogar só `insert, update, delete` de `authenticated` deixava `TRUNCATE` (e `REFERENCES`, `TRIGGER`) nas três tabelas novas, pelo grant padrão do Supabase. `TRUNCATE` passa por cima da RLS. Medido no banco local, antes e depois. Agora: `revoke all` e `grant select`; o teste `planos-migration` trava a volta.
 - **Alto, corrigido no plano da F1 antes de implementar**: admin da plataforma com escopo `support_readonly` conseguiria trocar plano. As ações passam a exigir `full`.
 - **Auditoria da F1 (08:40): nenhum crítico nem alto.** Médio: membro de organização grava registro falso na auditoria (política do autor, anterior à fase): virou D-046, a resolver antes da cobrança real. Baixos em correção agora: role `agent_worker` escrevia nas tabelas de plano; ações sem conferência de MFA; nota e autor do ajuste legíveis pelo membro; catálogo de planos inteiro legível por qualquer usuário; `search_path` da função de validação. Baixos anteriores à fase, registrados: D-047 (TRUNCATE em 114 tabelas) e D-048 (admin de suporte escreve em `organizations`).
+- **Para a auditoria da F3 olhar (suspeita da sessão principal, não provada)**: a isenção 2 do bloqueio de membros aceita qualquer vínculo inserido com `invited_by` ou `invited_at` preenchido; se o admin da organização consegue inserir em `user_organizations` pela política do autor (`user_orgs_insert`), ele contornaria o teto de membros gravando essas colunas. Conferir quem pode inserir e, se for o caso, exigir que a marca venha de `fn_accept_team_invite` (papel da sessão).
+- **Portões da F2-B pegaram uma regressão**: o invariante do autor `autonomia-preview-core` (o Testar agente não pode fazer HTTP) falhou porque o custo pelo catálogo lia `ai_models` pelo PostgREST; corrigido em d0a7230 (o agente lê pelo pool pg). Cinco testes estruturais da carteira estavam desatualizados depois da correção da revisão; atualizados em b5b42b7.
 - **Auditoria da F2-B (23/09): 1 ALTO, anterior à fase e agravado por ela**: qualquer membro, até viewer, escreve em `llm_calls` (política FOR ALL e grants do autor); provado que apagar ou reescrever a própria chamada fazia o conferidor devolver os tokens, e que uma linha falsa com custo enorme estoura `ai_budgets` e derruba toda chamada legítima da organização. Em correção: revogar escrita de `authenticated` em `llm_calls` e conferidor pelo livro-caixa, sem depender de `llm_calls`. Médios: débito em dobro quando a divisão entre fontes muda (conferidor em paralelo); preço nulo no catálogo virando custo zero. Baixos: adicional reenviado com chave de outra organização, estorno repetido da mesma linha, `agent_worker` lendo o livro-caixa de todas as organizações.
 - **Revisão da F2-B (23/09): 2 altos**: extrato, livro-caixa, margem e estimativa sem paginação (o PostgREST corta em 1000 linhas e os totais saem menores); custo de modelo servido pela OpenRouter com prefixo de fabricante virou nulo (regressão da correção do D-050). Médios: avulso de toda a vida entrando na porcentagem do mês; teto da instalação conferido às 2h25 de São Paulo com o dia quase vazio; leitura do catálogo sem prazo no caminho do agente; débito pendente recalculado com o peso atual; organização Ilimitado com crédito avulso perdendo saldo e recebendo avisos; conferidor que cresce com o histórico; margem sem estimar custo nulo.
 - **Auditoria da F2 (23/09): nenhum crítico nem alto.** Médios, que virariam alto na F3 quando a trava bloquear: (M1) o admin da organização marca membro como `provisional_until_handover` e ele some da contagem de vagas (coluna do autor gravável por `authenticated`); (M2) qualquer membro, até viewer, forja ou apaga o aviso de plano na Central, e a deduplicação por título faz o aviso falso suprimir o verdadeiro (política FOR ALL do autor em `agent_inbox_items`). Os dois em correção na segunda leva. Baixos: convite reenviado volta a pendente sem aviso (B1, em correção); troca de `organization_id` em lead não move o contador (B2, do autor, registrado); conferidor só via organização com contador (B3, corrigido na primeira leva); desarquivar funil não confere etapas e troca de `pipeline_id` de etapa não dispara (B4, em correção); qualquer membro lê o total de leads pelo contador (B5, em correção: só gerente para cima); erro engolido no gatilho de leads sem alarme (B6, junto do D-052).
@@ -93,6 +95,16 @@ Fechamento da F1, 23/09/2026 08:20 a 09:44, no commit 8fa4893:
 | build | verde, 38 s de compilação |
 
 O servidor de desenvolvimento na porta 3300 sobreviveu ao build.
+
+Fechamento da F2-B, 23/09/2026 19:20 a 21:05, na cópia separada, no commit 3898b63:
+
+| Portão | Resultado |
+|---|---|
+| typecheck, lint, lint:channels, build | verdes |
+| test:db | 2.407 verdes, 1 vermelho: `autonomia-preview-core` (do autor: o Testar agente fazia HTTP ao ler o catálogo de preços). Corrigido em d0a7230 (leitura pelo pool pg) e reconferido verde |
+| unitários | 13.595 verdes, 9 vermelhos: o de ambiente (`e2e-parte-4`, Redis); 5 testes estruturais da carteira desatualizados (corrigidos em b5b42b7); 3 testes do autor quebrados por código nosso: `comanda-invariantes-no-schema` (variável `v_saldo`, a0f7d60), `random-id` e `tailwind-tokens` (aba do admin, bbe5607). Todos reconferidos verdes nos arquivos afetados |
+
+A bateria inteira volta a rodar no fechamento da F3, cobrindo tudo junto.
 
 Fechamento da F2, 23/09/2026 13:40 a 15:20, no commit 28d21a3, numa cópia separada (`~/projects/deskcommcrm-portoes`):
 
