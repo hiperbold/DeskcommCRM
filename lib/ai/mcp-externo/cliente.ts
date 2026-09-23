@@ -24,7 +24,11 @@
  *   - CABEÇALHO: só nomes que fazem sentido como credencial de API
  *     (`Authorization`, `X-*`). Qualquer outro (`Host`, `Cookie`, `Mcp-*`,
  *     `Content-*`...) forjaria ou quebraria o protocolo HTTP/MCP por cima do
- *     que quem cadastrou a conexão digitou.
+ *     que quem cadastrou a conexão digitou;
+ *   - NOME REPETIDO: se o servidor listar duas ferramentas com o mesmo
+ *     `name`, só a primeira fica ativa — a segunda (e além) já entra
+ *     `recusada` no cache, nunca como duplicata silenciosa (senão a
+ *     aprovação depois recusa com 422 sem o admin entender por quê).
  *
  * Transporte: Streamable HTTP; se o servidor recusar, SSE (servidores e n8n
  * mais antigos). NÃO recua para SSE em recusa de segurança nem em demora. O
@@ -218,22 +222,35 @@ export async function listarFerramentas(sessao: Sessao, apelido: string): Promis
     PRAZO_DA_CHAMADA_MS,
     "mcp_lista_sem_resposta",
   );
+  // Nome repetido na lista do servidor: a aprovação (Tarefa 6) casa pelo
+  // `name` e recusa com 422 quando acha mais de uma entrada — o defeito tem
+  // que morrer AQUI, na leitura, não lá na hora de aprovar. Só a primeira
+  // ocorrência de cada nome fica ativa.
+  const nomesVistos = new Set<string>();
   return tools.slice(0, MAXIMO_DE_FERRAMENTAS).map((t) => {
     const id = montarIdDaFerramenta(apelido, t.name);
     const inputSchema = (t.inputSchema ?? { type: "object" }) as Record<string, unknown>;
     const esquemaGrandeDemais = JSON.stringify(inputSchema).length > TAMANHO_MAXIMO_DO_ESQUEMA;
+    const nomeRepetido = nomesVistos.has(t.name);
+    nomesVistos.add(t.name);
     return {
       nome: t.name,
       descricao: (t.description ?? "").slice(0, 1_000),
       input_schema: inputSchema,
       somente_leitura: t.annotations?.readOnlyHint === true,
       id,
+      // Não descarta a duplicata em silêncio: ela fica na lista, marcada
+      // `recusada`, para o admin ver na tela que o servidor mandou nome
+      // repetido — sumir sem explicação faria parecer que a ferramenta nunca
+      // existiu.
       recusada:
         id === null
           ? "O nome desta ferramenta não pode ser usado por um agente (caracteres ou tamanho)."
-          : esquemaGrandeDemais
-            ? "O esquema desta ferramenta é grande demais."
-            : null,
+          : nomeRepetido
+            ? "O servidor listou este nome de ferramenta mais de uma vez; só a primeira ocorrência é usada."
+            : esquemaGrandeDemais
+              ? "O esquema desta ferramenta é grande demais."
+              : null,
     };
   });
 }

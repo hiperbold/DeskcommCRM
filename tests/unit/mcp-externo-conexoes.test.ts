@@ -987,6 +987,40 @@ describe("aprovarFerramenta", () => {
     expect(escritas.filter((e) => e.tipo === "update")).toHaveLength(0);
   });
 
+  /**
+   * A partir da correção do D-040, `listarFerramentas` marca a SEGUNDA
+   * ocorrência de um nome como recusada, e só a primeira fica ativa. Sem este
+   * caso, a aprovação continuaria recusando com 422 por duplicidade e o admin
+   * ficaria sem conseguir aprovar uma ferramenta que está perfeitamente
+   * utilizável. O 422 do caso B1 acima segue valendo para cache antigo, onde as
+   * duas estão ativas e não dá para saber qual delas o admin leu.
+   */
+  it("D-040: com a duplicata já marcada recusada, a primeira é aprovada e só ela muda", async () => {
+    const { admin, escritas } = criarAdminFalso([
+      {
+        id: "conexao-1",
+        organization_id: ORG,
+        slug: "imoveis",
+        name: "Imóveis",
+        url: "https://mcp.exemplo.com",
+        tools_cache: [
+          ferramenta(),
+          ferramenta({
+            descricao: "Segunda declaração do mesmo nome",
+            recusada: "O servidor listou este nome de ferramenta mais de uma vez; só a primeira ocorrência é usada.",
+          }),
+        ],
+      },
+    ]);
+    const r = await aprovarFerramenta(admin, ORG, "conexao-1", "buscar_imoveis", true, VERSAO_PADRAO);
+    expect(r.ok).toBe(true);
+    const update = escritas.find((e) => e.tipo === "update");
+    const cache = (update?.patch as { tools_cache: Array<Record<string, unknown>> }).tools_cache;
+    expect(cache[0]!.somente_leitura_confirmado).toBe(true);
+    // A duplicata recusada fica como estava: aprovar por nome teria mexido nas duas.
+    expect(cache[1]!.somente_leitura_confirmado ?? null).toBeNull();
+  });
+
   it("M1: escrita concorrente entre a leitura e a gravação recusa com 409", async () => {
     const { admin, linhas } = criarAdminFalso(
       [

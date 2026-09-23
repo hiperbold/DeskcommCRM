@@ -1665,6 +1665,21 @@ export interface AgentTurnInput {
   }) => string;
 }
 
+/** Abertura fixa do corpo do aviso: a lista de motivos vem depois dela. */
+const PREFIXO_DO_CORPO =
+  'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
+  'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
+  'Motivos técnicos: ';
+
+/**
+ * Teto do corpo do aviso: sem ele, uma organização cuja conexão MCP falha de
+ * formas diferentes turno após turno acumularia motivos pra sempre e o campo
+ * cresceria sem fim. 4000 é folgado para o punhado de frases fixas que este
+ * fluxo produz (ver `mensagensDePuladasParaAvisar`) e ainda cobre a única com
+ * texto dinâmico (`conexao_indisponivel`, que lista ids).
+ */
+const TETO_DO_CORPO = 4000;
+
 /**
  * Núcleo do run do agente, compartilhado por inbound_turn (F2-09) e followup_turn
  * (F3-03): ritual de abertura, loop de tools, fechamento com checkpoint e veto. Não
@@ -1682,9 +1697,23 @@ export interface AgentTurnInput {
  * linhas idênticas — inbox inundado é inbox ignorado. Quem resolver o item e
  * vir o problema voltar recebe um item novo, que é o comportamento certo.
  *
- * Best-effort de propósito: se ATÉ o aviso falhar, o turno continua. Derrubar o
- * atendimento do cliente para reclamar de uma tool extra seria trocar um
- * problema pequeno por um grande.
+ * Enquanto o item aberto segue aberto, um MOTIVO NOVO (uma segunda conexão MCP
+ * que caiu depois da primeira, por exemplo) não pode ficar mudo: o corpo do
+ * item é ATUALIZADO para acumular o motivo, em vez de só recusar por já haver
+ * um item aberto. Motivo repetido não escreve nada (evita UPDATE a cada turno
+ * só porque o mesmo defeito continua batendo) — `agent_inbox_items` não tem
+ * campo estruturado para os motivos (conferido em `supabase/baseline.sql`),
+ * então eles vivem concatenados no `body`, texto legível.
+ *
+ * LEITURA e ESCRITA em queries separadas (mesmo padrão de
+ * `lib/agent-engine/edge/crm/drain.ts`, que também decide no código entre
+ * INSERT e UPDATE a partir de uma leitura anterior): a janela entre elas
+ * reabre a MESMA corrida que o INSERT isolado já corria antes desta função
+ * ganhar o UPDATE (duas execuções concorrentes podem ver "nenhum item
+ * aberto" ao mesmo tempo) — o `where not exists` do INSERT não piorou. Uma
+ * atualização perdida por corrida (duas leem o mesmo corpo antigo, uma pisa
+ * no motivo que a outra acabou de acrescentar) é o mesmo tipo de risco que o
+ * resto da função já assume: best-effort, nunca o que derruba o turno.
  */
 export async function avisarCapacidadesAusentes(
   db: pg.Pool,
@@ -1694,6 +1723,28 @@ export async function avisarCapacidadesAusentes(
   log: Logger,
 ): Promise<void> {
   try {
+    const { rows } = await db.query<{ id: string; body: string | null }>(
+      `select id, body from agent_inbox_items
+        where organization_id = $1 and kind = 'capabilities_missing' and status = 'open'
+        order by created_at desc
+        limit 1`,
+      [tenantId],
+    );
+    const aberto = rows[0];
+
+    if (aberto) {
+      // Motivo já registrado: nada para escrever — sem isto, o mesmo defeito
+      // batendo turno após turno viraria um UPDATE a cada turno, à toa.
+      if ((aberto.body ?? '').includes(detalhe)) return;
+      const corpoNovo = `${aberto.body ?? ''}; ${detalhe}`;
+      // Corpo cheio: para de acumular em vez de gravar o mesmo texto cortado a
+      // cada turno. Cortar no meio faria o `includes` acima nunca mais casar, e
+      // o motivo seguinte viraria um UPDATE por turno, para sempre.
+      if (corpoNovo.length > TETO_DO_CORPO) return;
+      await db.query(`update agent_inbox_items set body = $2 where id = $1`, [aberto.id, corpoNovo]);
+      return;
+    }
+
     await db.query(
       `insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
        select $1, 'capabilities_missing', 'critical', $2, $3, 'conversation', $4
@@ -1704,9 +1755,7 @@ export async function avisarCapacidadesAusentes(
       [
         tenantId,
         'O agente atendeu sem as capacidades que você ligou',
-        'As ferramentas configuradas na tela do agente não puderam ser carregadas neste ' +
-          'atendimento, e ele respondeu ao cliente sem elas. A conversa não foi interrompida. ' +
-          `Motivo técnico: ${detalhe}`,
+        (PREFIXO_DO_CORPO + detalhe).slice(0, TETO_DO_CORPO),
         conversationId,
       ],
     );

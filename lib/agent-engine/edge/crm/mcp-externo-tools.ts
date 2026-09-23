@@ -26,12 +26,13 @@
  * externo por `chamarFerramenta` (`{ ok, dados, cortada, aviso }`), e é esse
  * objeto que vai para o modelo sem transformação.
  */
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 
 import { jsonSchema, tool, type Tool } from "ai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { audit } from "@/lib/audit";
+import { env } from "@/lib/env";
 import { abrirSessao, chamarFerramenta, motivoLegivel, type Sessao } from "@/lib/ai/mcp-externo/cliente";
 import { limparArgumentosExternos } from "@/lib/ai/mcp-externo/sem-dado-de-cliente";
 import { carregarParaOTurno } from "@/lib/ai/mcp-externo/conexoes";
@@ -162,8 +163,33 @@ function ordenarChavesRecursivamente(valor: unknown): unknown {
   return ordenado;
 }
 
+/**
+ * Rótulo da derivação: dá a este uso uma chave PRÓPRIA, diferente de qualquer
+ * outro HMAC que também parta de `INTERNAL_SECRET` (cookie de impersonate,
+ * state OAuth etc.) — vazar uma chave derivada nunca deveria abrir as outras.
+ */
+const ROTULO_DA_CHAVE = "mcp-args-v1";
+
+function chaveDosArgumentos(): Buffer {
+  return createHmac("sha256", env.INTERNAL_SECRET).update(ROTULO_DA_CHAVE).digest();
+}
+
+/**
+ * `args_sha256` era SHA-256 puro: um argumento de baixa entropia (telefone,
+ * CPF) é reversível por força bruta só de ler a tabela de auditoria — dá pra
+ * testar todos os telefones do Brasil em minutos. Trocado por HMAC-SHA256
+ * com chave derivada de `INTERNAL_SECRET`, que só quem tem o segredo do
+ * servidor consegue reproduzir.
+ *
+ * Hash antigo (SHA-256 puro) e novo (HMAC) NÃO se comparam entre si — a troca
+ * quebra a correlação de linhas gravadas antes dela. Isso é aceitável: a
+ * correlação de `args_sha256` serve para uma janela de investigação (mesma
+ * chamada repetida em pouco tempo), não para achar histórico desde sempre.
+ */
 function hashDosArgumentos(args: unknown): string {
-  return createHash("sha256").update(JSON.stringify(ordenarChavesRecursivamente(args ?? {}))).digest("hex");
+  return createHmac("sha256", chaveDosArgumentos())
+    .update(JSON.stringify(ordenarChavesRecursivamente(args ?? {})))
+    .digest("hex");
 }
 
 /**

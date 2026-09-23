@@ -10,6 +10,7 @@ import {
   listarFerramentas,
   motivoLegivel,
   valorDeCabecalhoValido,
+  type Sessao,
 } from "@/lib/ai/mcp-externo/cliente";
 import { servidorDeTeste } from "./_helpers/servidor-mcp-de-teste";
 
@@ -174,6 +175,30 @@ describe("cliente MCP externo", () => {
     expect(gigante?.id).toBe("mcp_imoveis__schema_gigante");
     expect(gigante?.recusada).toMatch(/esquema.*grande demais/i);
     await sessao.fechar();
+  });
+
+  it("nome repetido na lista do servidor: só a primeira ocorrência fica ativa, a segunda é recusada (nunca some em silêncio)", async () => {
+    // `McpServer.registerTool` real não deixa cadastrar o mesmo nome duas
+    // vezes — por isso a sessão aqui é uma dublê mínima, só para simular um
+    // servidor de terceiro mal comportado que devolve `name` repetido em
+    // `tools/list`.
+    const sessaoComNomeRepetido = {
+      client: {
+        listTools: async () => ({
+          tools: [
+            { name: "buscar_imoveis", description: "primeira", inputSchema: { type: "object" } },
+            { name: "buscar_imoveis", description: "segunda, repetida", inputSchema: { type: "object" } },
+          ],
+        }),
+      },
+      fechar: async () => {},
+    } as unknown as Sessao;
+
+    const lista = await listarFerramentas(sessaoComNomeRepetido, "imoveis");
+    const ocorrencias = lista.filter((f) => f.nome === "buscar_imoveis");
+    expect(ocorrencias).toHaveLength(2);
+    expect(ocorrencias[0]?.recusada).toBeNull();
+    expect(ocorrencias[1]?.recusada).toMatch(/mais de uma vez/i);
   });
 
   it("usa o dado estruturado quando a ferramenta não devolve bloco de texto", async () => {

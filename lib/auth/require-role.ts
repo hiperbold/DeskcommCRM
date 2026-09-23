@@ -23,6 +23,7 @@ import { audit } from "@/lib/audit";
 import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK, type ActiveOrg, type AuthUser, type Role } from "@/lib/auth/types";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 
 export type RoleCheck =
@@ -95,7 +96,17 @@ export async function requireRole(min: Role, opts: RequireRoleOpts = {}): Promis
     p_org: org.orgId,
   });
   if (error) {
-    return { ok: false, response: fail("internal_error", error.message, 500, { requestId }) };
+    // `error.message` vem do Postgres e pode citar nome de função, coluna ou
+    // detalhe interno do schema — nunca sai na resposta HTTP. Fica só no log.
+    logger.error("[auth] fn_user_role_in_org falhou", {
+      code: error.code ?? null,
+      message: error.message,
+      org_id: org.orgId,
+    });
+    return {
+      ok: false,
+      response: fail("internal_error", "Erro ao verificar permissões.", 500, { requestId }),
+    };
   }
 
   const rank = effectiveRole ? (ROLE_RANK[effectiveRole as Role] ?? 0) : 0;

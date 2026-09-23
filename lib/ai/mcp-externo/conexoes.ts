@@ -488,12 +488,21 @@ export async function aprovarFerramenta(
 
   const candidatas = linha.tools_cache.filter((f) => f.nome === nomeDaFerramenta);
   if (candidatas.length === 0) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_NAO_ENCONTRADA };
-  if (candidatas.length > 1) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_DUPLICADA };
-  const ferramenta = candidatas[0]!;
+  // Servidor que lista o mesmo `name` duas vezes: `listarFerramentas` deixa a
+  // primeira ocorrência ativa e marca as outras como recusadas, então aqui
+  // sobra UMA ativa e a aprovação segue. A recusa por duplicidade continua
+  // valendo para cache gravado ANTES dessa trava, onde as duas estão ativas:
+  // nesse caso ninguém sabe qual das duas o admin está aprovando, e aprovar a
+  // errada libera uma ferramenta que ele não leu.
+  const ativas = candidatas.filter((f) => !f.recusada);
+  if (ativas.length > 1) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_DUPLICADA };
+  const ferramenta = ativas[0] ?? candidatas[0]!;
   if (ferramenta.recusada) return { ok: false, status: 422, motivo: MOTIVO_FERRAMENTA_RECUSADA };
 
+  // Compara por identidade, não por nome: por nome, a decisão cairia também na
+  // duplicata recusada, e uma ferramenta recusada não pode nascer aprovada.
   const novoCache = linha.tools_cache.map((f) =>
-    f.nome === nomeDaFerramenta
+    f === ferramenta
       ? {
           ...f,
           somente_leitura_confirmado: somenteLeituraConfirmado,
