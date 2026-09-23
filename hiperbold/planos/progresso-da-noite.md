@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F1
-Etapa da fase: tarefa 2 de 6 (tarefa 1 commitada)
+Etapa da fase: tarefas 2 e 3 de 6, em paralelo (arquivos não se cruzam; tarefa 1 commitada em 502a4a8)
 
 ## Fases
 
@@ -19,8 +19,8 @@ Etapa da fase: tarefa 2 de 6 (tarefa 1 commitada)
 | # | Tarefa | Estado |
 |---|---|---|
 | 1 | Tabelas e funções na migração 0904 e no baseline | feita (migração e bloco do baseline aplicados duas vezes no banco local sem erro; gatilho provado; 12 testes) |
-| 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | pendente |
-| 3 | Módulo de leitura de plano | pendente |
+| 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | em andamento |
+| 3 | Módulo de leitura de plano | feita (20 testes; embed e RPC provados contra o PostgREST local) |
 | 4 | Ações do admin da plataforma (só escopo full) | pendente |
 | 5 | Aba "Plano" no painel do admin da plataforma | pendente |
 | 6 | Aposentar o "Plano" antigo da criação de organização | pendente |
