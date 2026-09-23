@@ -609,14 +609,25 @@ describe("0906 carteira de tokens de IA (parte 3, Tarefa 2b)", () => {
     }
   });
 
-  it("fn_billing_avisar_carteira: limiares 50/80/100, dedup por billing_token_avisos_emitidos, sem teto (creditado zero) não avisa", () => {
+  it("fn_billing_avisar_carteira: limiares 50/80/100 só avisam com teto efetivo (Ilimitado nunca avisa por teto nulo), avulso soma pela proporção do ciclo corrente, dedup por billing_token_avisos_emitidos", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_carteira(");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
-      expect(corpo).toMatch(/if v_teto_total > 0 then/);
+      // Ilimitado (teto efetivo nulo) nunca avisa por limiar, mesmo que
+      // v_teto_total (plano+adicional do ciclo, mais avulso) seja positivo.
+      expect(corpo).toMatch(/if v_teto_efetivo is not null and v_teto_total > 0 then/);
+      // Avulso entra pela proporção do MÊS (item 2 da revisão): creditado
+      // (vida inteira) menos o consumido em ciclos ANTERIORES a este; o
+      // consumido do ciclo soma só o consumo do avulso deste ciclo.
+      expect(corpo).toMatch(
+        /v_teto_total := v_teto_total \+ \(coalesce\(v_avulso_creditado_total, 0\) - v_avulso_consumido_antes\);/,
+      );
+      expect(corpo).toMatch(/v_consumido_ciclo := v_consumido_ciclo \+ v_avulso_consumido_mes;/);
       expect(corpo).toMatch(/foreach v_limiar in array array\[50, 80, 100\] loop/);
       expect(corpo).toMatch(/v_consumido_ciclo \* 100 >= v_teto_total \* v_limiar/);
-      expect(corpo).toMatch(/'limiar:' \|\| p_ciclo::text \|\| ':' \|\| v_limiar::text/);
+      expect(corpo).toMatch(
+        /'limiar:' \|\| to_char\(p_ciclo, 'YYYY-MM-DD'\) \|\| ':' \|\| v_limiar::text/,
+      );
       expect(corpo).toMatch(/on conflict \(organization_id, chave\) do nothing;/);
       expect(corpo).toMatch(/get diagnostics v_linhas = row_count;/);
       // Texto fixo: só o número do limiar e o mês, nenhum outro dado do banco.
@@ -626,7 +637,7 @@ describe("0906 carteira de tokens de IA (parte 3, Tarefa 2b)", () => {
     }
   });
 
-  it("fn_billing_avisar_carteira: travas por organização e por conversa lidas de billing_settings, nulo desliga", () => {
+  it("fn_billing_avisar_carteira: travas por organização e por conversa lidas de billing_settings, nulo desliga, chave por to_char (YYYY-MM-DD)", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_carteira(");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
@@ -635,8 +646,12 @@ describe("0906 carteira de tokens de IA (parte 3, Tarefa 2b)", () => {
       );
       expect(corpo).toMatch(/if v_teto_org_dia is not null then/);
       expect(corpo).toMatch(/if v_teto_conversa_dia is not null and p_contact_id is not null then/);
-      expect(corpo).toMatch(/'teto_org_dia:' \|\| p_dia::text/);
-      expect(corpo).toMatch(/'teto_conversa_dia:' \|\| p_dia::text \|\| ':' \|\| p_contact_id::text/);
+      // Item 8 da revisão: to_char('YYYY-MM-DD'), não ::text (não depende do
+      // DateStyle da sessão).
+      expect(corpo).toMatch(/'teto_org_dia:' \|\| to_char\(p_dia, 'YYYY-MM-DD'\)/);
+      expect(corpo).toMatch(
+        /'teto_conversa_dia:' \|\| to_char\(p_dia, 'YYYY-MM-DD'\) \|\| ':' \|\| p_contact_id::text/,
+      );
       // teto_instalacao_tokens_dia NÃO é LIDO nem SOMADO aqui (decisão 15: é
       // do conferidor, Tarefa 8); só o comentário explicando o porquê pode
       // citar o nome da coluna, nunca um "select"/variável funcional.
@@ -876,14 +891,27 @@ describe("0906 carteira de tokens de IA (parte 4, Tarefas 4, 5 e 8)", () => {
     }
   });
 
-  it("fn_billing_conferir_carteira recalcula creditado (concessão/crédito/ajuste) e consumido (linhas de consumo) e corrige divergência", () => {
+  it("fn_billing_conferir_carteira recalcula só o ciclo atual, o anterior e o avulso (creditado por concessão/crédito/ajuste, consumido por chave), e corrige divergência", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_conferir_carteira(");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
       expect(corpo).toMatch(/for v_linha in\s*\n\s*select id, fonte, ciclo, creditado, consumido/);
-      expect(corpo).toMatch(/from public\.billing_token_wallets\s*\n\s*where organization_id = p_org\s*\n\s*for update/);
-      expect(corpo).toMatch(/l\.chave = 'plano:' \|\| v_linha\.ciclo::text/);
-      expect(corpo).toMatch(/l\.chave like 'adicional:%:' \|\| v_linha\.ciclo::text/);
+      // Item 5 da revisão: varre só o ciclo atual, o anterior (débito tardio
+      // ainda pode gravar nele) e o avulso (nunca tem ciclo, nunca fecha),
+      // não a carteira inteira desde carteira_desde.
+      expect(corpo).toMatch(
+        /from public\.billing_token_wallets\s*\n\s*where organization_id = p_org\s*\n\s*and \(ciclo in \(v_ciclo_atual, v_ciclo_anterior\) or fonte = 'avulso'\)\s*\n\s*for update/,
+      );
+      expect(corpo).toMatch(/v_ciclo_atual date := public\.fn_billing_ciclo_de\(now\(\)\);/);
+      expect(corpo).toMatch(
+        /v_ciclo_anterior date := \(public\.fn_billing_ciclo_de\(now\(\)\) - interval '1 month'\)::date;/,
+      );
+      // Item 8 da revisão: to_char('YYYY-MM-DD') na comparação com a chave,
+      // não ::text (a chave foi gravada com a mesma conversão).
+      expect(corpo).toMatch(/l\.chave = 'plano:' \|\| to_char\(v_linha\.ciclo, 'YYYY-MM-DD'\)/);
+      expect(corpo).toMatch(
+        /l\.chave like 'adicional:%:' \|\| to_char\(v_linha\.ciclo, 'YYYY-MM-DD'\)/,
+      );
       expect(corpo).toMatch(/l\.chave like 'credito:%'/);
       expect(corpo).toMatch(/l\.chave like 'ajuste:%' and l\.ciclo is not distinct from v_linha\.ciclo/);
       expect(corpo).toMatch(/l\.chave like 'consumo:%'/);
@@ -895,11 +923,16 @@ describe("0906 carteira de tokens de IA (parte 4, Tarefas 4, 5 e 8)", () => {
     }
   });
 
-  it("fn_billing_debitos_pendentes usa os mesmos filtros do débito (carteira_desde/35 dias, legacy nulo, chave da instalação, ponderado > 0) e anti-join por llm_call_id", () => {
+  it("fn_billing_debitos_pendentes usa os mesmos filtros do débito (carteira_desde/pesos_alterados_em/35 dias, legacy nulo, chave da instalação, ponderado > 0) e anti-join por llm_call_id", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_debitos_pendentes(");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
-      expect(corpo).toMatch(/c\.created_at >= greatest\(s\.carteira_desde, now\(\) - interval '35 days'\)/);
+      // Item 3 da revisão: pesos_alterados_em entra no greatest (ao lado de
+      // carteira_desde e "hoje - 35 dias") para nunca recalcular, com o peso
+      // NOVO, uma chamada anterior à última troca de peso.
+      expect(corpo).toMatch(
+        /c\.created_at >= greatest\(s\.carteira_desde, s\.pesos_alterados_em, now\(\) - interval '35 days'\)/,
+      );
       expect(corpo).toMatch(/c\.legacy_invocation_id is null/);
       expect(corpo).toMatch(/c\.origem_da_chave = 'chave_da_instalacao'/);
       expect(corpo).toMatch(/public\.fn_billing_tokens_ponderados\(/);
@@ -920,16 +953,41 @@ describe("0906 carteira de tokens de IA (parte 4, Tarefas 4, 5 e 8)", () => {
     }
   });
 
-  it("billing_token_ledger_llm_call_id_idx já existe desde a parte 1: nenhum índice novo foi criado na parte 4 para o anti-join", () => {
+  it("billing_token_ledger_llm_call_id_idx (Parte 1) sustenta o anti-join sem índice novo na Parte 4; billing_token_ledger_org_fonte_ciclo_idx (Parte 6) é o índice novo de apoio ao conferidor, por (organization_id, fonte, ciclo)", () => {
     // O índice usado pelo anti-join de fn_billing_debitos_pendentes já nasceu
-    // na Parte 1 (item 3, "3. billing_token_ledger"); a Parte 4 não precisou
-    // criar nenhum "create index" novo.
+    // na Parte 1 (item 3, "3. billing_token_ledger"); a Parte 4 (delimitada
+    // até o início da Parte 5, senão o "create index" da Parte 6 mais abaixo
+    // no mesmo arquivo faria esta checagem falhar) não precisou criar nenhum
+    // "create index" novo para o anti-join.
     const inicioParte4 = MIGRATION.indexOf("17. billing_token_ledger ganha ciclo e compensa_id");
-    const trechoParte4 = MIGRATION.slice(inicioParte4);
+    const inicioParte5 = MIGRATION.indexOf("Parte 5: correções da auditoria de segurança");
+    expect(inicioParte4).toBeGreaterThan(-1);
+    expect(inicioParte5).toBeGreaterThan(inicioParte4);
+    const trechoParte4 = MIGRATION.slice(inicioParte4, inicioParte5);
     expect(trechoParte4).not.toMatch(/create index/);
+
+    const posLlmCallIdIdx = MIGRATION.indexOf(
+      "create index if not exists billing_token_ledger_llm_call_id_idx",
+    );
+    expect(posLlmCallIdIdx).toBeGreaterThan(-1);
+    expect(posLlmCallIdIdx).toBeLessThan(inicioParte4);
     expect(MIGRATION).toMatch(
       /create index if not exists billing_token_ledger_llm_call_id_idx\s*\n\s*on public\.billing_token_ledger \(llm_call_id\);/,
     );
+
+    // Item 5 da revisão (Parte 6, depois da Parte 5): índice novo de apoio ao
+    // `like 'consumo:%'` dentro do loop de fn_billing_conferir_carteira, para
+    // o conferidor não varrer a fatia (organização, fonte) inteira por
+    // sequential scan a cada linha da carteira conferida.
+    const posOrgFonteCicloIdx = MIGRATION.indexOf(
+      "create index if not exists billing_token_ledger_org_fonte_ciclo_idx",
+    );
+    expect(posOrgFonteCicloIdx).toBeGreaterThan(inicioParte5);
+    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+      expect(sql).toMatch(
+        /create index if not exists billing_token_ledger_org_fonte_ciclo_idx\s*\n\s*on public\.billing_token_ledger \(organization_id, fonte, ciclo\);/,
+      );
+    }
   });
 });
 
