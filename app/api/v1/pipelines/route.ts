@@ -13,6 +13,7 @@ import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import {
   ETAPAS_INICIAIS,
   posicaoEntre,
@@ -132,6 +133,10 @@ export async function POST(req: NextRequest): Promise<Response> {
     .single();
 
   if (error) {
+    // Fase F3, decisão 3: o gatilho de plano recusa ANTES do conflito de nome
+    // (mesma ordem do banco). PT402 pelo `code`, nunca pelo texto do Postgres.
+    const recusa = recusaDoPlano(error);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
     const conflito = conflitoDoBanco(error as { code?: string }, name, requestId);
     if (conflito) return conflito;
     return fail("internal_error", error.message, 500, { requestId });
@@ -155,6 +160,15 @@ export async function POST(req: NextRequest): Promise<Response> {
       .delete()
       .eq("id", pipelineId)
       .eq("organization_id", orgId);
+
+    // Fase F3, decisão 3: o teto de etapas por funil é POR FUNIL, então um
+    // funil que nasce com as etapas iniciais pode bater nele já na primeira
+    // etapa (organização com teto menor que ETAPAS_INICIAIS.length). A
+    // compensação acima é a mesma de qualquer outra falha aqui: o funil sem
+    // etapa não pode ficar.
+    const recusa = recusaDoPlano(etapasErr);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+
     return fail(
       "internal_error",
       `Não consegui criar as etapas de «${name}». Nada foi salvo — tente de novo.`,

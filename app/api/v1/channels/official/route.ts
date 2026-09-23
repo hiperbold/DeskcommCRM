@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { CHANNEL_PROVIDER_META } from "@/lib/channels/capabilities";
 import { appDaMeta, appDaMetaDoAmbiente } from "@/lib/channels/meta/app";
@@ -278,7 +279,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // auditoria de volta sai de lá, junto da ressurreição, não daqui.
   let idDaSessao: string | null = existente?.id ?? null;
   let webhookPathToken: string | null = existente?.webhook_path_token ?? null;
-  let error: { message?: string | null } | null = null;
+  // Tipo largo o bastante para carregar `code`/`details`/`detail`: é isso que
+  // `recusaDoPlano` lê para reconhecer o PT402 (fase F3, decisão 9) — um tipo só
+  // com `message` esconderia o código e a recusa cairia sempre no 500 genérico.
+  let error: {
+    message?: string | null;
+    code?: string | null;
+    details?: unknown;
+    detail?: unknown;
+  } | null = null;
 
   if (existente) {
     ({ error } = await reactivateChannelSession(
@@ -316,6 +325,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   if (error) {
+    // Fase F3, decisão 3: cobre as DUAS escritas acima (o INSERT de canal novo
+    // e o UPDATE de `reactivateChannelSession`) — as duas contam contra o teto
+    // de conexões. PT402 pelo `code`, nunca pelo texto do Postgres.
+    const recusa = recusaDoPlano(error);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
     return fail("internal_error", error.message ?? "channel_session_write_failed", 500, {
       requestId,
     });

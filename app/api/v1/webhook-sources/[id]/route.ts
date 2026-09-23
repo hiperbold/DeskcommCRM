@@ -8,6 +8,7 @@ import type { NextRequest } from "next/server";
 
 import { ok, fail, noContent } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { autoriaDaMudanca } from "@/lib/operacao/autoria";
 import { updateWebhookSourceSchema } from "@/lib/schemas";
@@ -91,7 +92,15 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .select("*")
     .single();
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  if (updErr) {
+    // Fase F3, decisão 3: este PATCH é um SEGUNDO caminho de escrita para
+    // `is_active` (o outro é `definirEntradaAtiva`, usado pelo agente de IA) —
+    // ativar por aqui também conta contra o teto de integrações. PT402 pelo
+    // `code`, nunca pelo texto do Postgres.
+    const recusa = recusaDoPlano(updErr);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    return fail("internal_error", updErr.message, 500, { requestId });
+  }
 
   void audit({
     action: "webhook.source_updated",

@@ -23,6 +23,7 @@ import { z } from "zod";
 import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import {
   podeExcluirDeVez,
   posicaoEntre,
@@ -262,6 +263,12 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
       .eq("id", u.pipelineId)
       .eq("organization_id", orgId);
     if (!error) continue;
+
+    // Fase F3, decisão 3: este update é o único ponto desta rota que pode
+    // desarquivar (`tiraDoArquivo`), e desarquivar conta contra o teto de
+    // funis. PT402 pelo `code`, nunca pelo texto do Postgres.
+    const recusa = recusaDoPlano(error);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
 
     const nome = funis.find((f) => f.id === u.pipelineId)?.name ?? alvo.name;
     const conflito = conflitoDoBanco(error as { code?: string }, nome, requestId);

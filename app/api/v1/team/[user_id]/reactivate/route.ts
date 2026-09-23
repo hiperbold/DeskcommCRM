@@ -38,6 +38,7 @@ import type { NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -81,7 +82,15 @@ export async function POST(
     .from("user_organizations")
     .update({ revoked_at: null, updated_at: nowIso })
     .eq("id", target.id);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  if (updErr) {
+    // Fase F3, decisão 4 (item 2): reativação pelo ADMIN é "vínculo direto",
+    // não aceite de convite — nenhuma das três isenções do gatilho vale
+    // aqui, então bloqueia igual. PT402 pelo `code`, nunca pelo texto do
+    // Postgres.
+    const recusa = recusaDoPlano(updErr);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    return fail("internal_error", updErr.message, 500, { requestId });
+  }
 
   await audit({
     action: "member.reactivated",

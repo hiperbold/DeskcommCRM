@@ -105,7 +105,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     urlDoWebhook: (pathToken) => `${base}/api/v1/webhooks/channel/${pathToken}`,
   });
   if (!r.ok) {
-    return fail(r.status === 422 ? "invalid_request" : "internal_error", r.reason, r.status, { requestId });
+    // Fase F3, decisão 9: código próprio para a recusa do plano — a tela
+    // precisa distinguir "chegou ao teto" de "credencial inválida".
+    const codigo =
+      r.status === 402 ? "plano_limite_atingido" : r.status === 422 ? "invalid_request" : "internal_error";
+    return fail(codigo, r.reason, r.status, { requestId });
   }
 
   void audit({

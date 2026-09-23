@@ -11,6 +11,7 @@ import type { NextRequest } from "next/server";
 
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { ok, fail } from "@/lib/api/wrappers";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { isServiceRoleConfigured } from "@/lib/audit";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -66,13 +67,22 @@ export async function POST(
     });
   }
 
-  const resultado = await reenviarConvite(admin, {
-    convite,
-    orgName: activeOrg.name,
-    actorId: authUser.id,
-    actorName: authUser.full_name ?? authUser.email ?? "Um colega",
-    requestId,
-  });
+  let resultado;
+  try {
+    resultado = await reenviarConvite(admin, {
+      convite,
+      orgName: activeOrg.name,
+      actorId: authUser.id,
+      actorName: authUser.full_name ?? authUser.email ?? "Um colega",
+      requestId,
+    });
+  } catch (err) {
+    // Fase F3, decisão 4 (item 1): renovar um convite VENCIDO volta a ocupar
+    // vaga de membro (achado B1 da 0905) — bloqueia igual, sem isenção.
+    const recusa = recusaDoPlano(err);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    throw err;
+  }
   if (!resultado) {
     return fail("state_conflict", t("O convite mudou. Atualize e tente de novo."), 409, {
       requestId,

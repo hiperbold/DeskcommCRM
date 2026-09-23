@@ -23,6 +23,7 @@ import type { NextRequest } from "next/server";
 import { ok, fail } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 
+import { recusaDoPlano } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { inviteMemberSchema, validateRequest } from "@/lib/schemas";
@@ -98,16 +99,32 @@ export async function POST(req: NextRequest): Promise<Response> {
     }
 
     if (admin) {
-      const { convite, accept_url, email_dispatched, email_error } = await emitirConvite(admin, {
-        email,
-        role: inv.role,
-        interfaceSettings: inv.interface_settings,
-        organizationId: activeOrg.orgId,
-        orgName: activeOrg.name,
-        inviterId: authUser.id,
-        inviterName,
-        requestId,
-      });
+      let emitido;
+      try {
+        emitido = await emitirConvite(admin, {
+          email,
+          role: inv.role,
+          interfaceSettings: inv.interface_settings,
+          organizationId: activeOrg.orgId,
+          orgName: activeOrg.name,
+          inviterId: authUser.id,
+          inviterName,
+          requestId,
+        });
+      } catch (err) {
+        // Fase F3, decisão 4 (item 1 — convite novo/renovado bloqueia, sem
+        // isenção): este é um LOTE de até 20 e-mails, então um convite acima
+        // do teto vira UMA falha do item, e o resto do lote segue (mesmo
+        // contrato de `already_member`) — não aborta a requisição inteira.
+        // Qualquer outro erro segue sendo defeito de programação: propaga.
+        const recusa = recusaDoPlano(err);
+        if (recusa) {
+          failed.push({ email, reason: recusa.mensagem });
+          continue;
+        }
+        throw err;
+      }
+      const { convite, accept_url, email_dispatched, email_error } = emitido;
       sent.push({
         email,
         invite_id: convite.id,

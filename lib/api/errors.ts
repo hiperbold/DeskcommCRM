@@ -106,6 +106,11 @@ export const ApiErrorCodes = {
   // 429
   rate_limited: "rate_limited",
 
+  // 402: o banco recusou a escrita por PT402 (fase F3 do plano). Código PRÓPRIO
+  // porque a tela precisa distinguir "chegou ao teto do plano" de qualquer outro
+  // erro 500/422 — ver lib/billing/planos/recusa-do-plano.ts.
+  plano_limite_atingido: "plano_limite_atingido",
+
   // ─── ANÚNCIOS, eixo de LEITURA (0214) ───
   //
   // Declarados aqui pelo mesmo motivo que os da Agenda: `fail()` aceita

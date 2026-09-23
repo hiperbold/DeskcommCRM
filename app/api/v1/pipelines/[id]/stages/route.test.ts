@@ -181,6 +181,31 @@ describe("POST /api/v1/pipelines/[id]/stages", () => {
     expect(body.error.message).not.toContain("constraint");
   });
 
+  /**
+   * Fase F3, decisão 3 e 9: o gatilho de plano recusa a criação da etapa com
+   * PT402. A rota devolve 402 com a frase fixa, nunca o texto do Postgres.
+   */
+  it("banco recusa por limite do plano (PT402) → 402 com a frase fixa", async () => {
+    authOk();
+    makeDb({
+      stages: funil(),
+      writeError: () => {
+        const erro = { code: "PT402", message: "Limite do plano atingido", details: "etapas_por_funil" };
+        return erro;
+      },
+    });
+    const { POST } = await import("./route");
+    const res = await POST(reqPost({ name: "Retorno" }), ctx);
+
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("plano_limite_atingido");
+    expect(body.error.message).toBe(
+      "O plano desta organização chegou ao limite de etapas por funil. Fale com o suporte para ampliar.",
+    );
+    expect(body.error.message).not.toContain("Limite do plano atingido");
+  });
+
   it("erro inesperado do banco → 500, sem inventar sucesso", async () => {
     authOk();
     makeDb({

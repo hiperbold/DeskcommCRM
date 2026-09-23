@@ -333,7 +333,7 @@ export async function salvarConexaoUazapi(
     displayName: string;
     status: string;
   },
-): Promise<{ id: string | null; error: string | null }> {
+): Promise<{ id: string | null; error: string | null; errorRaw: { code?: string; details?: unknown } | null }> {
   const linha = {
     organization_id: input.organizationId,
     provider: CHANNEL_PROVIDER_UAZAPI,
@@ -362,7 +362,11 @@ export async function salvarConexaoUazapi(
         .select("id")
         .maybeSingle();
 
-  return { id: (data as { id: string } | null)?.id ?? null, error: error?.message ?? null };
+  return {
+    id: (data as { id: string } | null)?.id ?? null,
+    error: error?.message ?? null,
+    errorRaw: error ?? null,
+  };
 }
 
 /** Guarda o id do nosso webhook, sem perder o resto do `metadata` (acesso da IA, números de teste). */

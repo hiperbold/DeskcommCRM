@@ -24,6 +24,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { buildLeadActivityRow, stageChangeReason } from "@/lib/leads/activity-emitter";
 import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
 import {
@@ -166,6 +167,13 @@ function erroDeBanco(
   nomeDaEtapa: string,
   requestId: string,
 ): ApiError {
+  // Fase F3, decisão 3: criar (ou desarquivar) uma etapa acima do teto do
+  // plano vem como PT402. Reconhecido pelo `code`, nunca pelo texto do
+  // Postgres — vai ANTES do conflito de nome, mesma ordem do gatilho no banco.
+  const recusa = recusaDoPlano(erro);
+  if (recusa) {
+    return new ApiError(STATUS_RECUSA_DO_PLANO, "plano_limite_atingido", undefined, requestId, recusa.mensagem);
+  }
   return (
     conflitoDoBanco(erro, nomeDaEtapa, requestId) ??
     new ApiError(500, "internal_error", undefined, requestId, erro.message)

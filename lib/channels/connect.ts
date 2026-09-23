@@ -210,7 +210,11 @@ export async function savePartnerSession(
     phoneNumber: string | null;
     displayName: string;
   },
-): Promise<{ error: string | null }> {
+  // Erro CRU do banco (`code`/`details` inclusos), e não só a mensagem — fase
+  // F3, decisão 9: quem chama precisa do `code` para reconhecer o PT402 sem
+  // depender do texto do Postgres. `errorMessage` continua para quem só quer o
+  // texto (compatibilidade com o `POST` de hoje).
+): Promise<{ error: string | null; errorRaw: { code?: string; details?: unknown } | null }> {
   const linha = {
     organization_id: input.organizationId,
     provider: PARTNER_CHANNEL_PROVIDER,
@@ -230,5 +234,5 @@ export async function savePartnerSession(
         .from("channel_sessions")
         .insert({ ...linha, metadata: metadataInicialDoCanal() });
 
-  return { error: error?.message ?? null };
+  return { error: error?.message ?? null, errorRaw: error ?? null };
 }

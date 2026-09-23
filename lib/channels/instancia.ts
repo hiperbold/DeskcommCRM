@@ -17,6 +17,7 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { decryptWebhookSecret, encryptWebhookSecret } from "@/lib/webhooks/secrets";
 
 import {
@@ -52,7 +53,7 @@ export type ResultadoDaConexao =
       /** A volta: sem ela o canal envia e não recebe. `aviso` diz por que não ligou. */
       webhook: { registrado: boolean; aviso: string | null };
     }
-  | { ok: false; status: 422 | 500; reason: string };
+  | { ok: false; status: 402 | 422 | 500; reason: string };
 
 /**
  * Endereço que o servidor da instância não alcança. Registrar webhook para ele
@@ -115,7 +116,12 @@ export async function conectarPorInstancia(
     displayName,
     status: v.status,
   });
-  if (salvo.error || !salvo.id) return { ok: false, status: 500, reason: salvo.error ?? "a conexão não foi gravada" };
+  if (salvo.error || !salvo.id) {
+    // Fase F3, decisão 3: PT402 pelo `code`, nunca pelo texto do Postgres.
+    const recusa = recusaDoPlano(salvo.errorRaw);
+    if (recusa) return { ok: false, status: STATUS_RECUSA_DO_PLANO, reason: recusa.mensagem };
+    return { ok: false, status: 500, reason: salvo.error ?? "a conexão não foi gravada" };
+  }
 
   const conexao = { id: salvo.id, displayName, phoneNumber: v.phoneNumber, status: v.status };
   const url = input.urlDoWebhook(pathToken);

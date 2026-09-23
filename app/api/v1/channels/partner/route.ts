@@ -23,6 +23,8 @@ import { z } from "zod";
 
 import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import {
   PARTNER_CHANNEL_LABEL,
   findPartnerSession,
@@ -104,6 +106,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return fail("invalid_request", t("account_id e api_key são obrigatórios"), 422, { requestId });
   }
 
+  const admin = createAdminClient();
+
+  // Lido AQUI (antes da chamada ao provedor) só para a checagem de plano
+  // abaixo — a leitura de novo depois de `validatePartnerCredentials` segue
+  // igual, porque o estado pode ter mudado nesse meio-tempo (outra aba).
+  const existenteAntes = await findPartnerSession(admin, orgId);
+
+  // Fase F3, decisão 3 (tarefa 6 desta rodada — "podeCriar antes da escrita só
+  // onde evita trabalho caro"): conectar por credencial faz uma chamada de
+  // REDE ao provedor (`validatePartnerCredentials`) antes de gravar. Só uma
+  // sessão NOVA ou uma REATIVAÇÃO (arquivada) conta contra o
+  // teto de conexões — editar uma sessão já ativa não dispara o gatilho do
+  // banco (ver fn_billing_trava_channel_sessions, 0905), então não vale a
+  // pena barrar aqui. `podeCriar` é só um AVISO adiantado: quem trava de
+  // verdade continua sendo o gatilho no INSERT/UPDATE abaixo.
+  if (!existenteAntes || existenteAntes.archivedAt) {
+    const veredito = await podeCriar(admin, orgId, "conexoes");
+    if (!veredito.pode && veredito.motivo === "teto_atingido") {
+      return fail(
+        "plano_limite_atingido",
+        "O plano desta organização chegou ao limite de conexões. Fale com o suporte para ampliar.",
+        STATUS_RECUSA_DO_PLANO,
+        { requestId },
+      );
+    }
+  }
+
   // A rota não sabe com quem fala: pergunta se a credencial presta e o canal responde.
   const v = await validatePartnerCredentials({
     accountId: parsed.data.account_id,
@@ -111,7 +140,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   });
   if (!v.ok) return fail("invalid_request", v.reason, 422, { requestId });
 
-  const admin = createAdminClient();
   const chaveCifrada = await encryptWebhookSecret(admin, parsed.data.api_key);
   // Segredo do webhook: é o que autentica o que ENTRA. Sem ele a rota de entrada
   // recusa tudo — que é o comportamento certo, mas o canal ficaria mudo.
@@ -134,7 +162,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // webhook é preservado para não invalidar o que já está colado do outro lado.
   const token = existente?.webhookPathToken ?? randomBytes(16).toString("hex");
 
-  const { error } = await savePartnerSession(admin, {
+  const { error, errorRaw } = await savePartnerSession(admin, {
     organizationId: orgId,
     existingId: existente?.id ?? null,
     accountId: parsed.data.account_id.trim(),
@@ -144,7 +172,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     phoneNumber: v.phoneNumber ? `+${v.phoneNumber.replace(/\D/g, "")}` : null,
     displayName: v.displayName ?? PARTNER_CHANNEL_LABEL,
   });
-  if (error) return fail("internal_error", error, 500, { requestId });
+  if (error) {
+    // Fase F3, decisão 3: o `podeCriar` acima é só o aviso adiantado — quem
+    // trava de verdade é o gatilho do banco, e é este erro que carrega o
+    // PT402 quando duas conexões correm juntas e passam pelo aviso.
+    const recusa = recusaDoPlano(errorRaw);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    return fail("internal_error", error, 500, { requestId });
+  }
 
   return ok(
     {

@@ -36,7 +36,10 @@ const ALVO = "33333333-3333-4333-8333-333333333333";
 /** O `update` observado, para as asserções. */
 let ultimoUpdate: Record<string, unknown> | null = null;
 
-function bancoCom(linha: unknown, erroUpdate: { message: string } | null = null) {
+function bancoCom(
+  linha: unknown,
+  erroUpdate: { message: string; code?: string; details?: unknown } | null = null,
+) {
   ultimoUpdate = null;
   const update = vi.fn((valores: Record<string, unknown>) => {
     ultimoUpdate = valores;
@@ -136,6 +139,27 @@ describe("reativar membro", () => {
 
     const res = await POST(pedido(), ctx);
     expect(res.status).toBe(403);
+  });
+
+  /**
+   * Fase F3, decisão 4 (item 2): reativar pelo admin é "vínculo direto", sem
+   * as isenções do aceite — bloqueia igual. PT402 pelo `code`, frase fixa.
+   */
+  it("banco recusa por limite do plano (PT402) → 402 com a frase fixa", async () => {
+    bancoCom(
+      { id: "m1", user_id: ALVO, role: "agent", revoked_at: "2026-09-10T22:45:53Z" },
+      { code: "PT402", message: "Limite do plano atingido", details: "membros" },
+    );
+    const { POST } = await import("./route");
+
+    const res = await POST(pedido(), ctx);
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("plano_limite_atingido");
+    expect(body.error.message).toBe(
+      "O plano desta organização chegou ao limite de membros. Fale com o suporte para ampliar.",
+    );
+    expect(body.error.message).not.toContain("Limite do plano atingido");
   });
 
   it("falha do banco não vira sucesso silencioso", async () => {

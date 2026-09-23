@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { encryptWebhookSecret, decryptWebhookSecret } from "@/lib/webhooks/secrets";
 import { metadataInicialDoCanal } from "@/lib/ai/elegibilidade/pre-go-live";
 import { inboxSupported, SOCIAL_PROVIDER } from "./catalog";
@@ -158,11 +159,17 @@ export async function connectSocialInbox(
       })
       .select("id")
       .single();
-    if (error || !data)
+    if (error || !data) {
+      // Fase F3, decisão 3: este INSERT conta contra o teto de conexões
+      // (channel_sessions nasce com archived_at nulo). PT402 pelo `code`,
+      // nunca pelo texto do Postgres.
+      const recusa = recusaDoPlano(error);
+      if (recusa) throw new SocialError(recusa.mensagem, STATUS_RECUSA_DO_PLANO);
       throw new SocialError(
         "Não foi possível criar o canal. Atualize a lista antes de tentar novamente.",
         409,
       );
+    }
     channelId = data.id as string;
   }
   const webhookUrl = `${publicBase}/api/v1/webhooks/channel/${token}`;

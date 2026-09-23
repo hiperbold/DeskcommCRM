@@ -86,6 +86,36 @@ describe("funil arquivado — o caminho de volta (#979)", () => {
     expect(escrita?.filtros).toContainEqual(["organization_id", ORG_ID]);
   });
 
+  /**
+   * Fase F3, decisão 3 e 9: desarquivar conta contra o teto de funis. O
+   * gatilho recusa com PT402, e a rota devolve 402 com a frase fixa, nunca o
+   * texto do Postgres.
+   */
+  it("banco recusa por limite do plano (PT402) → 402 com a frase fixa", async () => {
+    const db = makeDb({
+      pipelines: [
+        funilRow({ id: PIPE, name: "Vendas", is_default: true }),
+        funilRow({ id: ARQUIVADO, name: "GMN antigo", is_archived: true }),
+      ],
+      writeError: (_n, table) => {
+        if (table !== "crm_pipelines") return null;
+        const erro = { code: "PT402", message: "Limite do plano atingido", details: "funis" };
+        return erro;
+      },
+    });
+    vi.mocked(createClient).mockResolvedValue(db.client as never);
+
+    const res = await patch(ARQUIVADO, { is_archived: false });
+
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("plano_limite_atingido");
+    expect(body.error.message).toBe(
+      "O plano desta organização chegou ao limite de funis. Fale com o suporte para ampliar.",
+    );
+    expect(body.error.message).not.toContain("Limite do plano atingido");
+  });
+
   it("o resto continua recusado: editar um funil que sumiu da lista segue 409", async () => {
     const db = makeDb({
       pipelines: [

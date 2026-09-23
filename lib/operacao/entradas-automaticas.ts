@@ -23,7 +23,23 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { autoriaDaMudanca } from "@/lib/operacao/autoria";
+
+/**
+ * Fase F3, decisão 3: o erro PT402 de `webhook_sources` (criar ou ativar
+ * acima do teto de integrações). Reconhecido pelo `code`, nunca pelo texto do
+ * Postgres — compartilhado pelos dois pontos de escrita abaixo.
+ */
+function erroDePlanoOuGenerico(
+  erro: { code?: string; message?: string } | null | undefined,
+  requestId: string,
+  mensagemGenerica: string,
+): ApiError {
+  const recusa = recusaDoPlano(erro);
+  if (recusa) return new ApiError(STATUS_RECUSA_DO_PLANO, "plano_limite_atingido", undefined, requestId, recusa.mensagem);
+  return new ApiError(500, "internal_error", undefined, requestId, erro?.message ?? mensagemGenerica);
+}
 
 type SB = SupabaseClient;
 
@@ -215,13 +231,7 @@ export async function criarEntradaAutomatica(
     .select(COLUNAS)
     .single();
   if (error || !created) {
-    throw new ApiError(
-      500,
-      "internal_error",
-      undefined,
-      deps.requestId,
-      error?.message ?? "webhook_source_insert_failed",
-    );
+    throw erroDePlanoOuGenerico(error, deps.requestId, "webhook_source_insert_failed");
   }
 
   await audit({
@@ -262,13 +272,7 @@ export async function definirEntradaAtiva(
     .select(COLUNAS)
     .single();
   if (error || !updated) {
-    throw new ApiError(
-      500,
-      "internal_error",
-      undefined,
-      deps.requestId,
-      error?.message ?? "webhook_source_update_failed",
-    );
+    throw erroDePlanoOuGenerico(error, deps.requestId, "webhook_source_update_failed");
   }
 
   await audit({

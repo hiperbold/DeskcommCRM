@@ -156,6 +156,61 @@ describe("POST /api/v1/pipelines", () => {
     expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ action: "pipeline.created" }));
   });
 
+  /**
+   * Fase F3, decisão 3 e 9: o gatilho de plano recusa a criação do funil com
+   * PT402. A rota devolve 402 com a frase fixa, nunca o texto do Postgres.
+   */
+  it("banco recusa por limite do plano (PT402) → 402 com a frase fixa, sem o texto do Postgres", async () => {
+    authOk();
+    const db = makeDb({
+      pipelines: umFunil(),
+      writeError: (_n, table) => {
+        if (table !== "crm_pipelines") return null;
+        const erro = { code: "PT402", message: "Limite do plano atingido", details: "funis" };
+        return erro;
+      },
+    });
+    const { POST } = await import("./route");
+    const res = await POST(reqPost({ name: "Clínica" }));
+
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("plano_limite_atingido");
+    expect(body.error.message).toBe(
+      "O plano desta organização chegou ao limite de funis. Fale com o suporte para ampliar.",
+    );
+    expect(body.error.message).not.toContain("Limite do plano atingido");
+    expect(db.escritas.filter((e) => e.tipo === "insert" && e.table === "crm_stages")).toEqual([]);
+  });
+
+  /**
+   * O teto de etapas por funil é POR FUNIL: um funil pode nascer já acima
+   * dele (organização com teto menor que as quatro etapas iniciais). A
+   * compensação (apagar o funil) continua valendo, e a resposta é 402.
+   */
+  it("etapas iniciais recusadas por limite do plano (PT402) → 402, e o funil é desfeito", async () => {
+    authOk();
+    const db = makeDb({
+      pipelines: umFunil(),
+      writeError: (_n, table) => {
+        if (table !== "crm_stages") return null;
+        const erro = { code: "PT402", message: "Limite do plano atingido", details: "etapas_por_funil" };
+        return erro;
+      },
+    });
+    const { POST } = await import("./route");
+    const res = await POST(reqPost({ name: "Clínica" }));
+
+    expect(res.status).toBe(402);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("plano_limite_atingido");
+    expect(body.error.message).toBe(
+      "O plano desta organização chegou ao limite de etapas por funil. Fale com o suporte para ampliar.",
+    );
+    const compensacao = db.escritas.find((e) => e.tipo === "delete");
+    expect(compensacao?.table).toBe("crm_pipelines");
+  });
+
   it("nome em branco → 422, e nenhuma escrita", async () => {
     authOk();
     const db = makeDb({ pipelines: umFunil() });
