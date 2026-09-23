@@ -11590,6 +11590,21 @@ export const DICIONARIO: Traducoes = {
   "Remover ajuste": { es: "Quitar ajuste" },
   "Ajuste salvo.": { es: "Ajuste guardado." },
   "Ajuste removido.": { es: "Ajuste eliminado." },
+
+  // ─── Tarefa 7, fase F2 dos planos de assinatura: a tela "Plano e uso" da
+  // organização (app/app/settings/plano) ───
+  "Plano e uso": { es: "Plan y uso" },
+  "Quanto sua organização usa de cada item do plano contratado.": {
+    es: "Cuánto usa tu organización de cada elemento del plan contratado.",
+  },
+  "Nesta fase nenhum limite bloqueia.": { es: "En esta fase ningún límite bloquea." },
+  "Tokens de IA": { es: "Tokens de IA" },
+  "Medido a partir da próxima fase.": { es: "Se mide a partir de la próxima fase." },
+  "Não foi possível medir agora.": { es: "No se pudo medir ahora." },
+  "O número é do funil com mais etapas ativas.": {
+    es: "El número es del embudo con más etapas activas.",
+  },
+  "No teto": { es: "En el tope" },
 };
 
 /**

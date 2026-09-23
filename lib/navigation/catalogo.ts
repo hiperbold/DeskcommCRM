@@ -856,6 +856,20 @@ export const NAV_CATALOG = [
     minRole: "admin",
   },
   {
+    // Fase F2 dos planos de assinatura (tarefa 7): a tela que mostra, item por
+    // item, quanto a organização usa do que o plano permite. `manager`, e não
+    // `admin` como a vizinha Billing: aqui não se troca cartão nem se vê
+    // cobrança, só se acompanha uso, decisão de desenho 13 da fase (padrão da
+    // pergunta N11, `hiperbold/planos/fase-F2-tarefas.md`).
+    href: "/app/settings/plano",
+    label: "Plano e uso",
+    description: "Quanto sua organização usa de cada item do plano contratado.",
+    icon: "Gauge",
+    group: "organizacao",
+    section: "Sua empresa",
+    minRole: "manager",
+  },
+  {
     href: "/app/lgpd/requests",
     label: "LGPD",
     description: "Pedidos de exportação e exclusão de dados feitos por clientes.",

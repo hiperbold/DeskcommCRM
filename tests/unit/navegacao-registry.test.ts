@@ -203,6 +203,27 @@ describe("hubSections", () => {
     expect(hrefs).toContain("/app/settings/profile");
   });
 
+  it("Plano e uso (F2, tarefa 7) é admin e gerente, não agent nem viewer", () => {
+    // Decisão de desenho 13 da fase F2 dos planos: só admin e gerente veem a
+    // tela, diferente da vizinha Billing, que é admin-only.
+    const hrefsDoGerente = hubSections("organizacao", MANAGER.platform, MANAGER.role).flatMap((s) =>
+      s.items.map((i) => i.href),
+    );
+    const hrefsDoAdmin = hubSections("organizacao", ADMIN.platform, ADMIN.role).flatMap((s) =>
+      s.items.map((i) => i.href),
+    );
+    const hrefsDoAgente = hubSections("organizacao", AGENT.platform, AGENT.role).flatMap((s) =>
+      s.items.map((i) => i.href),
+    );
+    const hrefsDoViewer = hubSections("organizacao", VIEWER.platform, VIEWER.role).flatMap((s) =>
+      s.items.map((i) => i.href),
+    );
+    expect(hrefsDoGerente).toContain("/app/settings/plano");
+    expect(hrefsDoAdmin).toContain("/app/settings/plano");
+    expect(hrefsDoAgente).not.toContain("/app/settings/plano");
+    expect(hrefsDoViewer).not.toContain("/app/settings/plano");
+  });
+
   it("some com a seção que ficou vazia pela permissão", () => {
     /**
      * Esta asserção era `expect(secoes).not.toContain("Dados e acesso")`, e o
