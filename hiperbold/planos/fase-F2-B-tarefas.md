@@ -9,7 +9,7 @@ Plano mestre: `hiperbold/planos/2026-09-22-planos-e-assinatura.md`, seções 6.1
 ## O que já existe e é a base
 
 - `llm_calls`: uma linha por chamada de IA, com `input_tokens` (TOTAL: inclui o lido e o gravado no cache no `run-model-call`; conferido no ai 7 com Anthropic, OpenAI e Google), `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `agent_id`, `contact_id`, `purpose`, `cost_cents` (nulo quando o preço é desconhecido ou por decisão, D-050), `legacy_invocation_id` (linha copiada do histórico antigo pelo bloco da 0130 do baseline, que roda de novo a cada atualização). Inserts: `run-model-call` (dois), `log-invocation`, `telemetria-sem-custo`, o backfill da 0130 e `scripts/smoke-llm.ts`.
-- `billing_plans.limits.tokens_ia_mes`: 1 milhão nos três planos, nulo (sem limite) no Ilimitado. `fn_billing_limites_efetivos(p_org)` já aplica o ajuste.
+- `billing_plans.limits.tokens_ia_mes`: 3 milhões nos três planos (decisão do Filipe, N1), nulo (sem limite) no Ilimitado. `fn_billing_limites_efetivos(p_org)` já aplica o ajuste.
 - `billing_settings` (linha única): `modo` desligado, avisar ou bloquear.
 - Aviso na Central: `agent_inbox_items`, `kind = 'other'`, `ref_kind = 'billing_limite'`, deduplicado; depois da segunda leva de correções da F2, só o banco grava esse tipo.
 - A origem da chave de cada chamada já é conhecida no código (`OrigemDaChaveLlm` em `lib/agent-engine/edge/llm/credentials.ts:152`: `credencial_da_organizacao` ou `chave_da_instalacao`), mas não é gravada.

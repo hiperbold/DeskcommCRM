@@ -40,7 +40,7 @@ const PLANOS_SEMEADOS = [
       membros: 3,
       conexoes: 3,
       integracoes_webhook: 3,
-      tokens_ia_mes: 1000000,
+      tokens_ia_mes: 3000000,
     },
   },
   {
@@ -54,7 +54,7 @@ const PLANOS_SEMEADOS = [
       membros: 15,
       conexoes: 10,
       integracoes_webhook: 10,
-      tokens_ia_mes: 1000000,
+      tokens_ia_mes: 3000000,
     },
   },
   {
@@ -68,7 +68,7 @@ const PLANOS_SEMEADOS = [
       membros: 30,
       conexoes: 20,
       integracoes_webhook: 20,
-      tokens_ia_mes: 1000000,
+      tokens_ia_mes: 3000000,
     },
   },
 ];

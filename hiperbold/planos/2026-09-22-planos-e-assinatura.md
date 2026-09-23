@@ -123,7 +123,7 @@ Estas são as funções essenciais. Limitar qualquer uma delas transforma uma ve
 | Membros | 3 | 15 | 30 |
 | Conexões *(números de WhatsApp conectados)* | 3 | 10 | 20 |
 | Integrações webhook | 3 | 10 | 20 |
-| Tokens de IA por mês | 1 milhão | 1 milhão | 1 milhão |
+| Tokens de IA por mês | 3 milhões | 3 milhões | 3 milhões |
 
 Mais o plano **Ilimitado**, que não está à venda: é onde nascem todas as organizações enquanto a cobrança não existe, e onde ficam as organizações internas da Hiperbold.
 
@@ -143,7 +143,9 @@ Agentes de IA, automações, campanhas, conexões MCP, contatos e capacidades po
 
 O teto de 10 conexões MCP por organização, que já existe no código desde as conexões MCP, continua valendo como proteção técnica, igual para todos.
 
-### O ponto que precisa de atenção antes de vender: 1 milhão de tokens é pouco
+### O ponto que precisa de atenção antes de vender: quanto rende o pacote de tokens
+
+Decisão do Filipe em 23/09/2026, à tarde: **3 milhões por mês nos três planos**. O objetivo declarado é o cliente testar com menos de 100 atendimentos, ver que é bom e contratar pacotes adicionais. A medição abaixo, feita quando o número era 1 milhão, fica como registro de por que ele subiu.
 
 Medido em 23/09/2026 no banco local, nos testes do agente pelo Testar (amostra pequena, com as conexões MCP ligadas):
 
@@ -174,7 +176,7 @@ Isso é a mudança mais importante deste plano, porque transforma um custo em re
 
 ### 6.1 A unidade de venda: tokens
 
-**Decisão do Filipe em 23/09/2026: a unidade é token**, 1 milhão por mês em cada plano, com pacote adicional à venda. Onde este plano fala em "crédito", leia "tokens". O fator de remarcação sai do escopo (o preço do pacote é definido por ele, na mão), e o que fica é o painel de margem, que compara o que a organização pagou com o que ela custou de verdade.
+**Decisão do Filipe em 23/09/2026: a unidade é token**, 3 milhões por mês em cada plano (era 1 milhão; subiu na tarde do mesmo dia, pergunta N1), com pacote adicional à venda. Onde este plano fala em "crédito", leia "tokens". O fator de remarcação sai do escopo (o preço do pacote é definido por ele, na mão), e o que fica é o painel de margem, que compara o que a organização pagou com o que ela custou de verdade.
 
 Regra de contagem, até ele decidir outra (pergunta na seção 12): **conta a entrada sem cache e a saída inteiras, e o token aproveitado do cache a 10%**, que é a proporção do preço dele no fornecedor. Conta todo consumo de IA feito em nome da organização, inclusive as conferências internas. O peso do cache fica em configuração, não no código.
 
@@ -390,12 +392,12 @@ Enquanto o gateway não existe, o cliente compra pacote adicional falando com vo
 
 - **Preço mensal**: Pro R$ 199, Max R$ 399, Escale R$ 599 (pergunta 1, falta o anual).
 - **O que fica em cada plano**: todos os recursos nos três, diferença só de quantidade (pergunta 2, resolvida).
-- **Unidade de venda da IA**: tokens, 1 milhão por mês em cada plano (pergunta 8, resolvida).
+- **Unidade de venda da IA**: tokens, 3 milhões por mês em cada plano (pergunta 8, resolvida; o número subiu de 1 para 3 milhões na N1).
 
 ### Novas, que a matriz dele abriu
 
-- **N1. 1 milhão de tokens é suficiente?** Medido: cerca de 32 mil tokens por resposta da IA, o que dá 30 a 95 respostas por mês (seção 5). É a estratégia de vender pacote, ou o número precisa subir? *Sem resposta: fica 1 milhão, e a tela mostra ao cliente quantas respostas isso rende no consumo real dele.*
-- **N2. O mesmo 1 milhão nos três planos é de propósito?** *Sem resposta: sim.*
+- **N1. 1 milhão de tokens é suficiente?** *Respondida em 23/09/2026: sobe para 3 milhões nos três planos, para o cliente testar com menos de 100 atendimentos e contratar pacote adicional.* A tela mostra ao cliente quantas respostas isso rende no consumo real dele.
+- **N2. O mesmo número nos três planos é de propósito?** *Sim: 3 milhões nos três, pela resposta da N1.*
 - **N3. Como o token se conta:** o aproveitado do cache conta inteiro, a 10%, ou não conta? As conferências internas de segurança contam no saldo do cliente? *Sem resposta: cache a 10%, conferências contam.*
 - **N4. "Conexões" são números de WhatsApp?** *Sem resposta: sim, qualquer tipo.*
 - **N5. "Integrações webhook" são as de entrada (captação de lead) ou as de saída (automação)?** *Sem resposta: a que a tela chama assim.*

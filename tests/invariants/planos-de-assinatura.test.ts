@@ -498,15 +498,15 @@ describe("8. a semeadura rodada duas vezes não duplica nem sobrescreve preço a
         )),
         ('pro', 1, true, 'Pro', false, 19900, null, 7, jsonb_build_object(
           'funis', 5, 'etapas_por_funil', 10, 'leads', 5000, 'membros', 3,
-          'conexoes', 3, 'integracoes_webhook', 3, 'tokens_ia_mes', 1000000
+          'conexoes', 3, 'integracoes_webhook', 3, 'tokens_ia_mes', 3000000
         )),
         ('max', 1, true, 'Max', false, 39900, null, 7, jsonb_build_object(
           'funis', 10, 'etapas_por_funil', 15, 'leads', 50000, 'membros', 15,
-          'conexoes', 10, 'integracoes_webhook', 10, 'tokens_ia_mes', 1000000
+          'conexoes', 10, 'integracoes_webhook', 10, 'tokens_ia_mes', 3000000
         )),
         ('escale', 1, true, 'Escale', false, 59900, null, 7, jsonb_build_object(
           'funis', 25, 'etapas_por_funil', 20, 'leads', 100000, 'membros', 30,
-          'conexoes', 20, 'integracoes_webhook', 20, 'tokens_ia_mes', 1000000
+          'conexoes', 20, 'integracoes_webhook', 20, 'tokens_ia_mes', 3000000
         ))
       on conflict (code, version) do nothing;
 
