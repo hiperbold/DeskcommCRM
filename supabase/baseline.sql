@@ -41140,6 +41140,178 @@ begin
   end if;
 end
 $$;
+
+-- ============================================================================
+-- Parte 3 (Tarefa 3): fn_billing_ia_pode_responder, o gate de tokens do
+-- agente ANTES de responder (decisão 6 da fase).
+-- ============================================================================
+--
+-- Diferença DELIBERADA do texto da decisão 6 do plano da fase
+-- (hiperbold/planos/fase-F3-tarefas.md): aquele texto diz que esta função
+-- "precisa chamar a concessão" (fn_billing_garantir_concessoes, 0906). O
+-- briefing desta tarefa substitui isso: fn_billing_ia_pode_responder é
+-- STABLE e NUNCA chama fn_billing_garantir_concessoes, porque aquela função
+-- GRAVA (insere linha no livro-caixa e na carteira) e esta função roda a
+-- CADA resposta de agente (decisão 6, "uma chamada por resposta"), sem
+-- poder ter efeito colateral nenhum no banco. Sem linha de 'plano' no ciclo
+-- atual (a concessão preguiçosa que ainda não rodou porque nenhum débito
+-- nem leitura de saldo aconteceu neste mês), o teto efetivo de tokens
+-- (fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes') é contado como
+-- se já estivesse creditado, sem gravar nada: nunca bloqueia por falta de
+-- linha de concessão. Mesmo racional do "concessao_pendente" de
+-- fn_billing_saldo_da_carteira (0906), só que incondicional aqui: esta
+-- função nunca tenta pg_try_advisory_xact_lock nem depende de perder uma
+-- trava para cair nesse ramo, porque ela nunca trava (é STABLE, não grava).
+--
+-- Ordem das checagens (decisão 3 da fase, "zero custo a mais"): modo,
+-- depois carência, depois teto efetivo, SÓ ENTÃO lê a carteira
+-- (billing_token_wallets/billing_token_ledger). Sempre que a resposta já é
+-- 'seguir' por um motivo anterior (modo diferente de bloquear, carência
+-- nula ou futura, ou plano Ilimitado), "saldo" volta null: a carteira nem
+-- chega a ser lida, de propósito, para não gastar uma consulta a mais
+-- quando o motivo já está decidido.
+--
+-- Saldo total do mês: soma plano + adicional do ciclo atual (com o
+-- fallback do parágrafo acima quando falta a linha de plano) mais avulso
+-- pela PROPORÇÃO DO MÊS, mesma fórmula de "saldo de abertura do mês" de
+-- fn_billing_saldo_da_carteira/fn_billing_avisar_carteira (0906): creditado
+-- da vida inteira do avulso menos o que já foi consumido em ciclos
+-- ANTERIORES a este entra no disponível do mês; o consumo do avulso NESTE
+-- ciclo entra no consumido do mês. Sem isso, um pacote avulso grande
+-- comprado há meses inflaria o "10% do disponível" de todo mês futuro.
+--
+-- Limiar de 10% (decisão 6, "avisa antes do gate"): o aviso de 50/80/100%
+-- já existe DENTRO da carteira (fn_billing_avisar_carteira, 0906, Central);
+-- este é um aviso DIFERENTE, do próprio gate de resposta, para o agente
+-- sinalizar ao usuário antes do corte de verdade. Partição exaustiva sobre
+-- o saldo total do mês: saldo <= 0 bloqueia; 0 < saldo <= 10% do
+-- disponível do mês avisa e segue; saldo > 10% do disponível segue. NOTA
+-- (registrada também na resposta desta tarefa): o texto da Tarefa 3
+-- descreve a faixa de 'seguir' como "abaixo do limiar de aviso", que bate
+-- ao contrário da faixa de 'avisar_e_seguir' ("menor ou igual a 10%"); para
+-- as três faixas serem exaustivas e mutuamente exclusivas (todo saldo cai
+-- em exatamente uma), implementado aqui como "acima do limiar" para
+-- seguir: é a única leitura consistente com o resto do texto.
+create or replace function public.fn_billing_ia_pode_responder(p_org uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_modo text;
+  v_bloqueio_a_partir_de timestamptz;
+  v_ciclo date := public.fn_billing_ciclo_de(now());
+  v_teto bigint;
+  v_creditado_plano bigint;
+  v_consumido_plano bigint;
+  v_creditado_adicional bigint;
+  v_consumido_adicional bigint;
+  v_avulso_creditado_total bigint;
+  v_avulso_consumido_antes bigint;
+  v_avulso_consumido_mes bigint;
+  v_disponivel bigint;
+  v_saldo bigint;
+begin
+  select modo into v_modo from public.billing_settings where id = 1;
+
+  if v_modo is distinct from 'bloquear' then
+    return jsonb_build_object('acao', 'seguir', 'motivo', 'modo nao bloqueia', 'saldo', null, 'ciclo', v_ciclo);
+  end if;
+
+  select bc.bloqueio_a_partir_de into v_bloqueio_a_partir_de
+    from public.billing_contracts bc
+    where bc.organization_id = p_org;
+
+  if v_bloqueio_a_partir_de is null or v_bloqueio_a_partir_de > now() then
+    return jsonb_build_object('acao', 'seguir', 'motivo', 'carencia nao vencida', 'saldo', null, 'ciclo', v_ciclo);
+  end if;
+
+  v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;
+
+  if v_teto is null then
+    return jsonb_build_object('acao', 'seguir', 'motivo', 'plano sem teto de tokens', 'saldo', null, 'ciclo', v_ciclo);
+  end if;
+
+  -- Só a partir daqui a carteira é lida (decisão 3: zero custo a mais
+  -- quando a resposta já saiu antes por modo, carência ou teto).
+  select creditado, consumido into v_creditado_plano, v_consumido_plano
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'plano' and ciclo = v_ciclo;
+
+  if not found then
+    -- Decisão 6: nunca bloqueia por falta de linha de concessão. Conta o
+    -- teto efetivo como se já estivesse creditado, sem gravar nada (esta
+    -- função é STABLE e não chama fn_billing_garantir_concessoes).
+    v_creditado_plano := v_teto;
+    v_consumido_plano := 0;
+  end if;
+
+  select coalesce(sum(creditado), 0), coalesce(sum(consumido), 0)
+    into v_creditado_adicional, v_consumido_adicional
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'adicional' and ciclo = v_ciclo;
+
+  select coalesce(creditado, 0) into v_avulso_creditado_total
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'avulso' and ciclo is null;
+
+  select coalesce(sum(-tokens), 0) into v_avulso_consumido_antes
+    from public.billing_token_ledger
+    where organization_id = p_org and fonte = 'avulso' and chave like 'consumo:%'
+      and ciclo is not null and ciclo < v_ciclo;
+
+  select coalesce(sum(-tokens), 0) into v_avulso_consumido_mes
+    from public.billing_token_ledger
+    where organization_id = p_org and fonte = 'avulso' and chave like 'consumo:%' and ciclo = v_ciclo;
+
+  v_disponivel := v_creditado_plano + v_creditado_adicional
+    + (coalesce(v_avulso_creditado_total, 0) - v_avulso_consumido_antes);
+
+  v_saldo := v_disponivel
+    - (v_consumido_plano + v_consumido_adicional + v_avulso_consumido_mes);
+
+  if v_saldo <= 0 then
+    return jsonb_build_object('acao', 'bloquear', 'motivo', 'saldo de tokens esgotado', 'saldo', v_saldo, 'ciclo', v_ciclo);
+  end if;
+
+  if v_saldo::numeric <= (v_disponivel::numeric * 0.1) then
+    return jsonb_build_object('acao', 'avisar_e_seguir', 'motivo', 'saldo de tokens abaixo de 10 por cento do mes', 'saldo', v_saldo, 'ciclo', v_ciclo);
+  end if;
+
+  return jsonb_build_object('acao', 'seguir', 'motivo', 'saldo de tokens dentro do normal', 'saldo', v_saldo, 'ciclo', v_ciclo);
+end;
+$$;
+
+comment on function public.fn_billing_ia_pode_responder(uuid) is
+  '0907, Tarefa 3, decisão 6: gate de tokens do agente ANTES de responder. STABLE, não grava nada (nunca chama fn_billing_garantir_concessoes, que escreve): sem linha de plano no ciclo atual, conta o teto efetivo (fn_billing_limites_efetivos ->> tokens_ia_mes) como creditado, nunca bloqueia por falta de linha. Devolve {"acao": seguir|avisar_e_seguir|bloquear, "motivo": texto curto fixo, "saldo": bigint ou null (null quando a resposta já saiu antes de ler a carteira), "ciclo": date}. Partição pelo saldo total do mês (plano+adicional do ciclo, avulso pela proporção do mês): saldo <= 0 bloqueia; saldo positivo <= 10% do disponível do mês avisa e segue; acima disso segue. Esta função NÃO sabe de quem é a chave nem o propósito da chamada: quem decide SE chama (origemDaChave === chave_da_instalacao, propósito fora de PURPOSES_ISENTOS, modo/variável de ambiente permitindo bloquear) e o que fazer com o resultado é o TypeScript de run-model-call (Tarefa 8), não esta função.';
+
+revoke execute on function public.fn_billing_ia_pode_responder(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_ia_pode_responder(uuid) to service_role;
+
+-- IMPORTANTE, NÃO COPIAR ESTE GRANT PARA OUTRA FUNÇÃO POR REFLEXO: esta
+-- função fica DE PROPÓSITO fora de todo bloco de revoke do agent_worker
+-- desta migração (blocos das partes 1 e 2, acima) e de qualquer bloco
+-- futuro que revogue "toda função nova do schema public" dessa role. O
+-- motivo: fn_billing_ia_pode_responder é chamada pelo run-model-call
+-- (lib/agent-engine/edge/llm/run-model-call.ts, decisão 6 da fase), que usa
+-- o pool de conexão do próprio agent_worker (SUPABASE_DB_URL/DB_URL do
+-- worker, não o service_role do servidor Next); é a ÚNICA função desta
+-- faixa que o agente precisa executar em nome próprio antes de responder.
+-- Confirmado em pg_default_acl (banco local) que o "alter default
+-- privileges" do papel dono das migrações já concede este EXECUTE a
+-- agent_worker de fábrica (defaclacl com "agent_worker=X" para objtype 'f'
+-- no schema public): o grant abaixo é redundante com isso, mas fica
+-- EXPLÍCITO de propósito, documentando a intenção e sobrevivendo a uma
+-- reforma futura desse default privilege.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'grant execute on function public.fn_billing_ia_pode_responder(uuid) to agent_worker';
+  end if;
+end
+$$;
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

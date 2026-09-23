@@ -538,10 +538,13 @@ describe("0907 parte 2 (Tarefa 2): padrão de segurança das quatro funções de
       expect(sql).toMatch(
         /revoke execute on function public\.fn_billing_convite_pendente_do_membro\(uuid, uuid\), public\.fn_billing_veio_de_aceite_de_convite\(uuid, timestamptz, uuid, timestamptz, boolean\), public\.fn_billing_dono_do_provisionamento\(uuid, uuid, text\), public\.fn_billing_convite_ja_tem_vinculo_ativo\(uuid\) from agent_worker/,
       );
-      // Dois blocos de agent_worker nesta migração: um da parte 1 (Tarefa 1,
-      // cinco funções), outro da parte 2 (Tarefa 2, quatro funções).
+      // Três blocos de agent_worker nesta migração: um da parte 1 (Tarefa 1,
+      // revoga cinco funções), outro da parte 2 (Tarefa 2, revoga quatro
+      // funções) e um terceiro da parte 3 (Tarefa 3, CONCEDE, não revoga,
+      // a fn_billing_ia_pode_responder, testado à parte no describe da
+      // parte 3, abaixo).
       const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
-      expect(ocorrencias.length).toBe(2);
+      expect(ocorrencias.length).toBe(3);
     }
   });
 });
@@ -695,6 +698,148 @@ describe("0905 (editado NO LUGAR, Tarefa 2): gatilho de user_organizations com a
       // v_novo_ativo and not v_antigo_ativo".
       const posFimIsencoes = corpo.indexOf("end if;\n    end if;\n    perform public.fn_billing_conferir_teto");
       expect(posFimIsencoes).toBeGreaterThan(-1);
+    }
+  });
+});
+
+describe("0907 parte 3 (Tarefa 3): fn_billing_ia_pode_responder, o gate de tokens da IA", () => {
+  it("existe nos dois arquivos, security definer, STABLE, search_path fixo em public, pg_temp", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
+      expect(inicio, "fn_billing_ia_pode_responder não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, inicio + 300);
+      expect(trecho).toMatch(/returns jsonb/);
+      expect(trecho).toMatch(/language plpgsql/);
+      expect(trecho).toMatch(/\bstable\b/);
+      expect(trecho).not.toMatch(/\bvolatile\b/);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/set search_path = public, pg_temp/);
+    }
+  });
+
+  it("revoga execute de public/anon/authenticated e concede a service_role", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_ia_pode_responder\(uuid\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_ia_pode_responder\(uuid\) to service_role;/,
+      );
+    }
+  });
+
+  it("concede execute a agent_worker EXPLICITAMENTE, num bloco próprio (não fica dentro de nenhum bloco de revoke)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_ia_pode_responder\(uuid\) to agent_worker/,
+      );
+    }
+  });
+
+  it("NUNCA aparece em nenhum bloco de revoke de agent_worker desta migração (fica de propósito fora dos dois blocos)", () => {
+    for (const sql of [MIGRATION_0907, extraiBloco0907Baseline()]) {
+      const blocosDeRevoke = [
+        ...sql.matchAll(
+          /revoke execute on function[^;]*from agent_worker'?;/g,
+        ),
+      ].map((m) => m[0]);
+      // As duas migrações desta faixa (partes 1 e 2) têm exatamente dois
+      // blocos de revoke de agent_worker; nenhum dos dois pode citar
+      // fn_billing_ia_pode_responder.
+      expect(blocosDeRevoke.length).toBeGreaterThanOrEqual(2);
+      for (const bloco of blocosDeRevoke) {
+        expect(bloco).not.toMatch(/fn_billing_ia_pode_responder/);
+      }
+    }
+  });
+
+  it("o grant a agent_worker vem comentado como decisão deliberada (para não ser copiado por reflexo)", () => {
+    const inicioFuncao = MIGRATION_0907.indexOf(
+      "create or replace function public.fn_billing_ia_pode_responder(",
+    );
+    const inicioGrantWorker = MIGRATION_0907.indexOf(
+      "grant execute on function public.fn_billing_ia_pode_responder(uuid) to agent_worker",
+      inicioFuncao,
+    );
+    expect(inicioGrantWorker).toBeGreaterThan(inicioFuncao);
+    const comentarioAntes = MIGRATION_0907.slice(inicioGrantWorker - 1800, inicioGrantWorker);
+    expect(comentarioAntes).toMatch(/NÃO COPIAR ESTE GRANT/);
+    expect(comentarioAntes).toMatch(/DE PROPÓSITO fora de todo bloco de revoke do agent_worker/);
+  });
+
+  it("NUNCA chama fn_billing_garantir_concessoes (não grava, sem linha de plano conta o teto efetivo)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      // Regex exige "(" logo em seguida: uma CHAMADA de verdade
+      // (perform/select fn_billing_garantir_concessoes(...)), não a mera
+      // MENÇÃO ao nome dentro de um comentário explicando por que ela não é
+      // chamada (o comentário do "if not found", abaixo, cita o nome dela
+      // de propósito, sem parênteses depois).
+      expect(corpo).not.toMatch(/fn_billing_garantir_concessoes\s*\(/);
+      expect(corpo).toMatch(
+        /if not found then\s*\n(\s*--[^\n]*\n)*\s*v_creditado_plano := v_teto;\s*\n\s*v_consumido_plano := 0;/,
+      );
+    }
+  });
+
+  it("não tem nenhum insert nem update no corpo (leitura pura, STABLE)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      expect(corpo).not.toMatch(/\binsert into\b/i);
+      expect(corpo).not.toMatch(/\bupdate\s+public\./i);
+      expect(corpo).not.toMatch(/\bdelete from\b/i);
+    }
+  });
+
+  it("lê modo, depois carência, depois teto efetivo, nesta ordem, antes de tocar a carteira", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posModo = corpo.indexOf("select modo into v_modo from public.billing_settings where id = 1;");
+      const posCarencia = corpo.indexOf("select bc.bloqueio_a_partir_de into v_bloqueio_a_partir_de");
+      const posTeto = corpo.indexOf(
+        "v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;",
+      );
+      const posCarteira = corpo.indexOf("from public.billing_token_wallets");
+      expect(posModo).toBeGreaterThan(-1);
+      expect(posCarencia).toBeGreaterThan(posModo);
+      expect(posTeto).toBeGreaterThan(posCarencia);
+      expect(posCarteira).toBeGreaterThan(posTeto);
+    }
+  });
+
+  it("devolve jsonb com acao, motivo, saldo e ciclo; saldo nulo nas três saídas antecipadas (modo, carência, ilimitado)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const saidasAntecipadas = [
+        ...corpo.matchAll(
+          /jsonb_build_object\('acao', 'seguir', 'motivo', '[^']+', 'saldo', null, 'ciclo', v_ciclo\)/g,
+        ),
+      ];
+      expect(saidasAntecipadas.length).toBe(3);
+      expect(corpo).toMatch(
+        /jsonb_build_object\('acao', 'bloquear', 'motivo', 'saldo de tokens esgotado', 'saldo', v_saldo, 'ciclo', v_ciclo\)/,
+      );
+      expect(corpo).toMatch(
+        /jsonb_build_object\('acao', 'avisar_e_seguir', 'motivo', '[^']+', 'saldo', v_saldo, 'ciclo', v_ciclo\)/,
+      );
+      expect(corpo).toMatch(
+        /jsonb_build_object\('acao', 'seguir', 'motivo', '[^']+', 'saldo', v_saldo, 'ciclo', v_ciclo\)/,
+      );
+    }
+  });
+
+  it("partição exaustiva do saldo: saldo <= 0 bloqueia, senão compara com 10% do disponível (avisar_e_seguir vs seguir)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_ia_pode_responder(");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posSaldoZero = corpo.indexOf("if v_saldo <= 0 then");
+      const posDezPorCento = corpo.indexOf("if v_saldo::numeric <= (v_disponivel::numeric * 0.1) then");
+      expect(posSaldoZero).toBeGreaterThan(-1);
+      expect(posDezPorCento).toBeGreaterThan(posSaldoZero);
     }
   });
 });
