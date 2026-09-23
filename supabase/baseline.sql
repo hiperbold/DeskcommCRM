@@ -36447,6 +36447,23 @@ create trigger trg_ai_mcp_connections_slug_imutavel
   before update of slug on public.ai_mcp_connections
   for each row execute function public.fn_ai_mcp_connections_slug_imutavel();
 
+-- ---- webhook_events_log exige manager+ para ler (migration 0902, achado 1 da auditoria UAZAPI) ----
+--
+-- Racional completo no arquivo da migration. `raw_body`/`payload_parsed`
+-- guardam o corpo do webhook, e a UAZAPI repete o token da instância nele.
+
+drop policy if exists webhook_events_log_tenant_read on public.webhook_events_log;
+
+create policy webhook_events_log_tenant_read on public.webhook_events_log
+  for select using (
+    public.fn_is_platform_admin()
+    or (
+      organization_id is not null
+      and organization_id in (select public.fn_user_org_ids())
+      and public.fn_role_at_least(organization_id, 'manager')
+    )
+  );
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

@@ -926,6 +926,11 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
     motivo:
       "placeholder do campo de base URL de gateway OpenAI-compatible na tela de provedores: amostra do formato aceito.",
   },
+  "seu-servidor.exemplo.com": {
+    categoria: "AMOSTRA",
+    motivo:
+      "placeholder do campo de URL do servidor UAZAPI em components/connections/CanalInstanciaClient.tsx: amostra do formato de endereço a digitar, não destino que o produto busca. `.exemplo.com` é o domínio reservado para documentação (RFC 2606), a mesma natureza de `tusitio.com` e `meusistema.com` acima.",
+  },
   "000000000000-xxxxxxxx.apps.googleusercontent.com": {
     categoria: "AMOSTRA",
     motivo:
@@ -1102,6 +1107,10 @@ describe("catraca de host de terceiro no código que embarca", () => {
       // protocolo manda. Entrou aqui porque a régua nova do #914 passou a
       // enxergá-lo, e não porque o produto ganhou host novo.
       "s.whatsapp.net",
+      // Placeholder do campo de servidor UAZAPI (CanalInstanciaClient.tsx),
+      // mesma natureza de `tusitio.com`/`meusistema.com`: amostra de formato,
+      // não host que o produto busca. Crescimento escrito, como a regra pede.
+      "seu-servidor.exemplo.com",
       "tusitio.com",
       // Exemplo de link do WhatsApp gerado pela tela de Conversões (#924). Está
       // aqui, e não em FORNECEDOR, porque o produto NÃO fala com esse host: quem

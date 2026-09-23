@@ -32,6 +32,7 @@ import { logger } from "@/lib/logger";
 import type { NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
+import { CHANNEL_SESSION_REF_COLUMNS, resolveSessionRef, type ChannelSessionRef } from "@/lib/channels";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import {
   abrirArquivoDoWebhook,
@@ -60,22 +61,30 @@ export async function POST(
   const rawBody = await req.text();
   const admin = createAdminClient();
 
+  // `CHANNEL_SESSION_REF_COLUMNS` já traz a coluna de ref de TODO canal (a
+  // mesma lista que o resto do repositório usa para rotear envio, ver
+  // `lib/channels/session-ref.ts`): a rota pede o conjunto genérico, nunca
+  // nomeia qual coluna é de qual canal.
   const { data } = await queryTolerantToMissingArchived(
     () =>
       admin
         .from("channel_sessions")
-        .select(`id, organization_id, provider, display_name, phone_number, webhook_secret_encrypted, ${ARCHIVED_AT}`)
+        .select(
+          `id, organization_id, display_name, phone_number, webhook_secret_encrypted, ${CHANNEL_SESSION_REF_COLUMNS}, ${ARCHIVED_AT}`,
+        )
         .eq("webhook_path_token", token)
         .maybeSingle(),
     () =>
       admin
         .from("channel_sessions")
-        .select("id, organization_id, provider, display_name, phone_number, webhook_secret_encrypted")
+        .select(
+          `id, organization_id, display_name, phone_number, webhook_secret_encrypted, ${CHANNEL_SESSION_REF_COLUMNS}`,
+        )
         .eq("webhook_path_token", token)
         .maybeSingle(),
   );
 
-  const sessao = data as {
+  const linha = data as {
     id: string;
     organization_id: string;
     provider: string;
@@ -85,7 +94,13 @@ export async function POST(
     archived_at?: string | null;
   } | null;
 
-  if (!sessao) return fail("not_found", "unknown webhook token", 404, { requestId });
+  if (!linha) return fail("not_found", "unknown webhook token", 404, { requestId });
+
+  // ACHADO 3: o identificador da sessão no provider, resolvido pela MESMA
+  // função que o resto do repositório usa (pergunta a capacidade, não nomeia
+  // a coluna). `handleInboundWebhook`/`inboundPayloadBelongsToSession`, do
+  // lado de dentro do seam, sabem o que fazer com ele por canal.
+  const sessao = { ...linha, session_ref: resolveSessionRef(data as ChannelSessionRef) };
 
   // Canal arquivado não ingere: o usuário mandou excluí-lo, e aceitar evento em
   // voo ressuscitaria a conversa no inbox com o operador sem poder responder.

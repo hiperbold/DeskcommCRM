@@ -74,6 +74,7 @@ function makeDeps(overrides: {
   loadPublishedAgentConfigById?: ReturnType<typeof vi.fn>;
   loadPublishedAgentConfig?: ReturnType<typeof vi.fn>;
   classifyIntent?: ReturnType<typeof vi.fn>;
+  agenteDaCampanha?: ReturnType<typeof vi.fn>;
 }) {
   return {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -81,6 +82,12 @@ function makeDeps(overrides: {
     loadPublishedAgentConfigById: overrides.loadPublishedAgentConfigById ?? vi.fn(),
     loadPublishedAgentConfig: overrides.loadPublishedAgentConfig ?? vi.fn(),
     classifyIntent: overrides.classifyIntent ?? vi.fn(),
+    // Degrau 0 (agente da campanha) é ORTOGONAL ao que este arquivo testa —
+    // roteador e classificador. Sem mock, `resolveTurnAgent` cai na função
+    // REAL (`agenteDaCampanhaDaConversa`), que chama `db.query` sem que
+    // nenhum `fakeDb` daqui espere essa chamada extra — foi o que a #350
+    // mediu: contagem de `db.query` batendo 2 em vez de 1 só de "no router".
+    agenteDaCampanha: overrides.agenteDaCampanha ?? vi.fn().mockResolvedValue(null),
   } as never;
 }
 

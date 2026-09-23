@@ -1,4 +1,9 @@
--- 0261 — quinto transporte de mensagem: instância de WhatsApp num servidor UAZAPI.
+-- 0385 — quinto transporte de mensagem: instância de WhatsApp num servidor UAZAPI.
+-- Renumerada de 0261 durante o merge de 2026-09-22: o autor renumerou #897 para
+-- 0261 no mesmo intervalo (lote 11), e as duas migrations aplicadas com o mesmo
+-- NNNN quebram a identidade que o MANIFEST usa para achar cada uma. O timestamp
+-- (20260916000000) não muda: é a PK real do runner, e mudá-lo reordenaria a
+-- aplicação. Conteúdo desta migration inalterado.
 --
 -- O VOCABULÁRIO antes do transporte, como a 0131 fez com o canal intermediado:
 -- tipo TypeScript, matriz de capabilities e colunas de referência nascem juntos,

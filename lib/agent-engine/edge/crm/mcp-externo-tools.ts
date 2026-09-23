@@ -33,6 +33,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { audit } from "@/lib/audit";
 import { abrirSessao, chamarFerramenta, motivoLegivel, type Sessao } from "@/lib/ai/mcp-externo/cliente";
+import { limparArgumentosExternos } from "@/lib/ai/mcp-externo/sem-dado-de-cliente";
 import { carregarParaOTurno } from "@/lib/ai/mcp-externo/conexoes";
 import { lerIdDaFerramenta } from "@/lib/ai/mcp-externo/ids";
 
@@ -284,9 +285,21 @@ export async function buildExternalMcpTools(
       description: PREFIXO_DESCRICAO + descricaoCrua.slice(0, CORTE_DA_DESCRICAO),
       inputSchema: jsonSchema(esquema as Parameters<typeof jsonSchema>[0]),
       execute: async (args) => {
+        // (D-037) O que o modelo montou passa pela trava ANTES de sair: o
+        // argumento vai inteiro para o servidor de terceiro, e o uso destas
+        // conexões é consulta de catálogo, onde dado de cliente não entra.
+        // Os ids que o turno conhece vão junto para serem recusados por valor.
+        const { limpos, recusados } = limparArgumentosExternos(args, [
+          organizationId,
+          opcoes.contexto?.agentId,
+          opcoes.contexto?.jobId,
+        ]);
+        if (recusados.length > 0) {
+          log.warn("dado de cliente retirado do argumento da ferramenta MCP externa", { tool: id, recusados });
+        }
         try {
           const sessao = await sessaoDe(partes!.apelido);
-          const resultado = await chamarFerramenta(sessao, ferramenta.nome, (args ?? {}) as Record<string, unknown>);
+          const resultado = await chamarFerramenta(sessao, ferramenta.nome, limpos);
           log.info("ferramenta MCP externa chamada", { tool: id, ok: resultado.ok, cortada: resultado.cortada, motivo: resultado.motivo ?? null });
           if (ferramenta.somente_leitura_confirmado === false) {
             await auditarChamadaDeEscrita({
@@ -294,7 +307,7 @@ export async function buildExternalMcpTools(
               agentId: opcoes.contexto?.agentId ?? null,
               jobId: opcoes.contexto?.jobId ?? null,
               toolId: id,
-              args,
+              args: limpos,
               ok: resultado.ok,
             });
           }
@@ -312,7 +325,7 @@ export async function buildExternalMcpTools(
               agentId: opcoes.contexto?.agentId ?? null,
               jobId: opcoes.contexto?.jobId ?? null,
               toolId: id,
-              args,
+              args: limpos,
               ok: false,
             });
           }

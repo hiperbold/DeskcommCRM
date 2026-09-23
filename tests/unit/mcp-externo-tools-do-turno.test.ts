@@ -159,6 +159,38 @@ describe("buildExternalMcpTools", () => {
     await r.cleanup();
   });
 
+  /**
+   * (D-037) A trava tem testes próprios em
+   * `mcp-externo-sem-dado-de-cliente.test.ts`; o que se prova AQUI é que ela
+   * está no caminho real da chamada. O servidor de teste devolve o `bairro`
+   * que recebeu, então o que voltar é o que saiu daqui.
+   */
+  it("dado de cliente não chega ao servidor externo, e o log diz o campo sem dizer o valor", async () => {
+    const f1 = ferramenta("imoveis", "buscar_imoveis");
+    const sessaoDeVerdade = await servidorDeTeste();
+    const carregar = vi.fn(async () => [conexao("imoveis", "https://exemplo.com/mcp", [f1])]);
+    const log = fakeLog();
+
+    const r = await buildExternalMcpTools(
+      {} as never,
+      "org-1",
+      [f1.id!],
+      log,
+      {},
+      { abrir: vi.fn(async () => sessaoDeVerdade), carregar },
+    );
+    const resultado = await r.tools[f1.id!]!.execute!(
+      { bairro: "Centro, cliente 35991485627" },
+      execCtx,
+    );
+    expect((resultado as { dados: string }).dados).toBe("3 imóveis em Centro, cliente [removido]");
+    const aviso = vi.mocked(log.warn).mock.calls.at(-1);
+    expect(aviso?.[0]).toBe("dado de cliente retirado do argumento da ferramenta MCP externa");
+    expect(JSON.stringify(aviso?.[1])).toContain("bairro:sequencia_longa");
+    expect(JSON.stringify(aviso?.[1])).not.toContain("35991485627");
+    await r.cleanup();
+  });
+
   it("cleanup() fecha todas as sessões abertas", async () => {
     const f1 = ferramenta("um", "acao_um");
     const f2 = ferramenta("dois", "acao_dois");

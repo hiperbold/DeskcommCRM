@@ -50,6 +50,12 @@ export interface InboundWebhookInput {
      *  números ligados, "WhatsApp fora do ar" não diz QUAL. */
     display_name?: string | null;
     phone_number?: string | null;
+    /** ACHADO 3: o identificador da sessão NO PROVIDER (`resolveSessionRef`
+     *  da rota), genérico entre canais de propósito. Para a UAZAPI é o id da
+     *  instância. Sem ele, um evento de OUTRA instância da mesma organização
+     *  não tem contra o que ser conferido, e é essa a lacuna que
+     *  `inboundPayloadBelongsToSession` fecha. */
+    session_ref?: string | null;
   };
   rawBody: string;
   /** Todos os headers da requisição — cada canal lê o SEU. */
@@ -85,23 +91,81 @@ export function acceptsInboundWebhook(provider: string): boolean {
 }
 
 /**
- * Authenticate before archiving raw payloads. The handler repeats this guard for non-HTTP callers.
+ * ACHADO 4: antes, este portão devolvia `true` para a UAZAPI sem olhar o
+ * corpo, e a conferência real ficava presa dentro de `uazapiInbound`, que só
+ * roda DEPOIS do arquivo e do desvio por "outra conta". Isso deixava o portão
+ * decorativo para este canal: qualquer corpo passava, e quem barrava era um
+ * degrau mais abaixo na cadeia.
  *
- * A UAZAPI não assina o corpo: quem autentica é o token secreto da URL e,
- * quando o evento traz um, o token repetido no envelope (ver `uazapiInbound`
- * abaixo). Aplicar aqui a assinatura HMAC do canal parceiro recusaria TODO
- * evento da UAZAPI, que nunca manda o header `x-zernio-signature` — por isso
- * este canal passa direto, e a conferência real acontece dentro de
- * `handleInboundWebhook`.
+ * A UAZAPI não assina o corpo, mas repete o token da instância no evento de
+ * MENSAGEM (medido: ausente em `messages_update`, ver `uazapi/status.ts`).
+ * Comparar esse token aqui é o que o portão TEM como prova de posse sem
+ * precisar da sessão inteira, já que ele só recebe corpo cru e segredo. Um
+ * evento `messages` sem token certo já sai com 401 e nunca alcança o seam.
+ *
+ * Eventos que comprovadamente não repetem token (`messages_update`,
+ * `connection`) passam por aqui: a prova deles é o número DONO, e essa
+ * comparação depende do telefone da conexão, dado que este portão não
+ * recebe. Fica com a segunda camada, dentro de `uazapiInbound`.
+ */
+function verificaTokenUazapiNoPortao(raw: string, secret: string | null): boolean {
+  const leitura = lerEnvelopeUazapi(raw);
+  // Corpo malformado não recusa AQUI: `invalid_json`/`contrato_violado` são
+  // desfechos com motivo próprio, montados pelo seam. Recusar cedo trocaria os
+  // dois por um `bad_signature` genérico que não ajuda quem investigar.
+  if (!leitura.ok) return true;
+  if ((leitura.envelope.EventType ?? "") !== "messages") return true;
+  return tokenDoEventoConfere(leitura.envelope.token, secret);
+}
+
+/**
+ * Authenticate before archiving raw payloads. The handler repeats this guard for non-HTTP callers.
  */
 export function verifyInboundWebhookSignature(provider: string, raw: string, headers: Headers, secret: string | null): boolean {
-  if (provider === CHANNEL_PROVIDER_UAZAPI) return true;
+  if (provider === CHANNEL_PROVIDER_UAZAPI) return verificaTokenUazapiNoPortao(raw, secret);
   return acceptsInboundWebhook(provider) && !!secret && secret.length >= MIN_SECRET_LEN &&
     verifyZernioSignature(raw, headers.get("x-zernio-signature"), secret);
 }
 
+/**
+ * ACHADO 3: a UAZAPI deixa o operador colar a MESMA url de webhook em duas
+ * instâncias do painel do servidor, engano de configuração, não ataque. Sem
+ * conferir, o evento da instância B era gravado na sessão da instância A: um
+ * contato de uma conta aparecendo, em silêncio, na conversa da outra.
+ *
+ * A comparação é pelo `owner` (o número dono da instância) contra o telefone
+ * da conexão, na mesma régua de 8 dígitos do resto do arquivo. Só recusa
+ * quando o evento TRAZ o campo e ele diverge: `connection` não tem esquema
+ * publicado (ver `uazapi/conexao-evento.ts`) e pode chegar sem ele, e "não dá
+ * para comparar" não é o mesmo que "é de outra instância".
+ *
+ * NÃO se compara o `instanceName` do evento contra o `session_ref`. Parece o
+ * casamento óbvio e é armadilha: `session_ref` para este canal é o
+ * `uazapi_instance_id`, que guarda o `instance.id` do servidor (opaco, ver
+ * `lib/channels/session-ref.ts`), enquanto `instanceName` é o NOME que o
+ * operador digita no painel (`uazapi/conexao.ts` separa os dois ao ler
+ * `/instance/status`). Como os dois quase nunca são iguais, a comparação
+ * recusaria TODO evento legítimo, e a rota responde 200 a um evento recusado:
+ * a UAZAPI não reentrega, e o canal pararia de receber mensagem em silêncio.
+ * Comparar por nome só volta a existir quando houver coluna com o nome da
+ * instância; até lá o dono é a prova que temos.
+ */
+function uazapiPayloadBelongsToSession(input: InboundWebhookInput): boolean {
+  const leitura = lerEnvelopeUazapi(input.rawBody);
+  if (!leitura.ok) return true;
+  const envelope = leitura.envelope;
+
+  const donoDoEvento = (envelope.owner ?? "").replace(/\D/g, "").slice(-8);
+  const donoDaSessao = (input.session.phone_number ?? "").replace(/\D/g, "").slice(-8);
+  if (donoDoEvento && donoDaSessao && donoDoEvento !== donoDaSessao) {
+    return false;
+  }
+
+  return true;
+}
+
 export async function inboundPayloadBelongsToSession(admin: SupabaseClient, input: InboundWebhookInput): Promise<boolean> {
-  if (input.session.provider === CHANNEL_PROVIDER_UAZAPI) return true;
+  if (input.session.provider === CHANNEL_PROVIDER_UAZAPI) return uazapiPayloadBelongsToSession(input);
   return input.session.provider !== CHANNEL_PROVIDER_SOCIAL || socialPayloadBelongsToSession(
     admin, input.session.organization_id, input.session.id, input.rawBody,
   );
@@ -138,10 +202,13 @@ async function uazapiInbound(
   // campo de segredo, e isso dá a segunda prova.
   //
   // MEDIDO nos eventos reais: o evento de MENSAGEM repete o token da instância
-  // no corpo; o de CONFIRMAÇÃO DE ENTREGA não traz esse campo. Exigir o token do
-  // corpo em tudo faria toda confirmação virar 401 — e o servidor reentregaria
-  // para sempre uma coisa que estava certa. Então: veio token, tem que bater;
-  // não veio, confere-se o número DONO da instância contra o número da conexão.
+  // no corpo; o de CONFIRMAÇÃO DE ENTREGA e o de CONEXÃO não trazem esse campo.
+  // Exigir o token do corpo em tudo faria os dois virarem 401, e o servidor
+  // reentregaria para sempre uma coisa que estava certa. Então: evento de
+  // mensagem, o token tem que bater (achado 2); os outros dois, confere-se o
+  // número DONO da instância contra o número da conexão, e a FALTA do dono
+  // também recusa agora. Antes só o divergente recusava, e omitir os dois
+  // campos passava direto.
   if (!input.secret || input.secret.length < MIN_SECRET_LEN) {
     return { ok: false, code: "unauthorized", message: "webhook_secret_unavailable" };
   }
@@ -161,7 +228,13 @@ async function uazapiInbound(
   }
   const envelope = leitura.envelope;
 
-  if (envelope.token) {
+  // ACHADO 2: a versão anterior só recusava quando o CAMPO vinha e divergia.
+  // Quem omitia `token` e `owner` passava direto, e era exatamente isso que
+  // permitia injetar mensagem forjada sabendo só a URL. O portão
+  // (`verifyInboundWebhookSignature`, achado 4) já barrou o evento `messages`
+  // sem token certo; esta segunda camada repete a conferência, e é aqui que
+  // vive a exigência de `owner`, que depende da sessão e o portão não recebe.
+  if ((envelope.EventType ?? "") === "messages") {
     if (!tokenDoEventoConfere(envelope.token, input.secret)) {
       return { ok: false, code: "unauthorized", message: "bad_token" };
     }
@@ -169,8 +242,19 @@ async function uazapiInbound(
     // Os últimos 8 dígitos bastam e evitam falso negativo: o número da conexão é
     // guardado em E.164 (`+55…`) e o evento manda só dígitos.
     const finalDoEvento = (envelope.owner ?? "").replace(/\D/g, "").slice(-8);
+    if (!finalDoEvento) {
+      // A FALTA do dono é o buraco do achado 2: sem token (este evento não traz)
+      // E sem `owner`, não sobrava prova NENHUMA de que o evento é desta
+      // conexão, e "não dá para verificar" tinha virado "processa assim
+      // mesmo". Agora recusa.
+      return { ok: false, code: "unauthorized", message: "dono_ausente" };
+    }
     const finalDaConexao = (input.session.phone_number ?? "").replace(/\D/g, "").slice(-8);
-    if (finalDoEvento && finalDaConexao && finalDoEvento !== finalDaConexao) {
+    // Sem o número DA CONEXÃO (onboarding: o webhook é registrado no servidor
+    // antes de o QR ser pareado, ver `instancia.ts`) não há com o que comparar.
+    // Recusar aqui bloquearia o próprio evento `connection` que anuncia esse
+    // número pela primeira vez.
+    if (finalDaConexao && finalDoEvento !== finalDaConexao) {
       return { ok: false, code: "unauthorized", message: "dono_divergente" };
     }
   }

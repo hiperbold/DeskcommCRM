@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+// Timestamp deslocado 1s no merge de 2026-09-22: colidia com a migration 0321
+// do autor, que carimba o mesmo instante. Número 0901 (faixa do fork) inalterado.
 const MIGRATION = readFileSync(
-  join(process.cwd(), "supabase/migrations/20260919120000_0901_conexoes_mcp.sql"),
+  join(process.cwd(), "supabase/migrations/20260919120001_0901_conexoes_mcp.sql"),
   "utf8",
 );
 const BASELINE = readFileSync(join(process.cwd(), "supabase/baseline.sql"), "utf8");

@@ -37,6 +37,62 @@ import { logger } from "@/lib/logger";
 const PROIBIDOS = ["authorization", "cookie", "x-api-key"];
 
 /**
+ * ACHADO 1: chaves de CORPO que nunca podem ficar em claro no arquivo.
+ *
+ * A UAZAPI repete o token da instância dentro do próprio corpo do webhook
+ * (`token`, ver `uazapi/envelope.ts`), e a policy de leitura de
+ * `webhook_events_log` (antes do conserto da migration 0902) abria SELECT
+ * para qualquer membro ativo da organização, sem olhar papel. Gravar o corpo
+ * cru sem redigir vazava a credencial da instância para quem só tinha o
+ * privilégio mínimo. A lista cobre o vocabulário genérico de credencial, não
+ * só o que a UAZAPI usa hoje, porque o próximo canal que gravar aqui herda a
+ * mesma proteção sem precisar lembrar de pedir.
+ */
+const CHAVES_SENSIVEIS = new Set([
+  "token",
+  "apikey",
+  "api_key",
+  "authorization",
+  "secret",
+  "password",
+  "admintoken",
+  "admin_token",
+]);
+
+const VALOR_REDIGIDO = "[redigido]";
+
+/**
+ * Troca o VALOR de chaves sensíveis por `[redigido]`, em qualquer
+ * profundidade do objeto (o token pode vir aninhado num evento futuro).
+ * A CHAVE fica visível de propósito: é ela que ajuda a entender o payload na
+ * hora de investigar, e ela não abre nada sozinha.
+ */
+function redigirValoresSensiveis(valor: unknown): unknown {
+  if (Array.isArray(valor)) return valor.map(redigirValoresSensiveis);
+  if (valor && typeof valor === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [chave, v] of Object.entries(valor as Record<string, unknown>)) {
+      out[chave] = CHAVES_SENSIVEIS.has(chave.toLowerCase()) ? VALOR_REDIGIDO : redigirValoresSensiveis(v);
+    }
+    return out;
+  }
+  return valor;
+}
+
+/**
+ * Mesma redação, mas no TEXTO cru: cobre o corpo que não é JSON válido
+ * (proxy devolvendo HTML de erro, por exemplo), onde a redação por objeto não
+ * tem o que percorrer. Troca só o valor de `"chave":"valor"` (aspas simples
+ * ou duplas, com ou sem espaço depois dos dois-pontos); a chave permanece,
+ * pelo mesmo motivo da função acima.
+ */
+function redigirTextoCru(raw: string): string {
+  const chaves = [...CHAVES_SENSIVEIS].join("|");
+  const padrao = new RegExp(`(["'](?:${chaves})["']\\s*:\\s*)["'][^"']*["']`, "gi");
+  return raw.replace(padrao, `$1"${VALOR_REDIGIDO}"`);
+}
+
+/**
  * Cabeçalhos sanitizados.
  *
  * A assinatura FICA: ela é o que permite reconferir depois se um payload
@@ -79,6 +135,13 @@ export async function abrirArquivoDoWebhook(
     parsed = null;
   }
 
+  // ACHADO 1: redige ANTES de gravar, nas duas colunas. `payload_parsed` pela
+  // árvore (alcança qualquer profundidade); `raw_body` por regex, porque o
+  // corpo cru também precisa ficar sem o token quando não é JSON válido, e
+  // a mesma regex funciona igual quando é.
+  const parsedRedigido = parsed ? (redigirValoresSensiveis(parsed) as Record<string, unknown>) : null;
+  const rawBodyRedigido = redigirTextoCru(entrada.rawBody);
+
   try {
     const { data, error } = await admin
       .from("webhook_events_log")
@@ -90,8 +153,8 @@ export async function abrirArquivoDoWebhook(
         provider: entrada.provider,
         http_method: "POST",
         headers: cabecalhosSeguros(entrada.headers),
-        raw_body: entrada.rawBody,
-        payload_parsed: parsed,
+        raw_body: rawBodyRedigido,
+        payload_parsed: parsedRedigido,
         status: "received",
         attempts: 0,
       })

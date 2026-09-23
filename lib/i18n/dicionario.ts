@@ -5695,7 +5695,6 @@ export const DICIONARIO: Traducoes = {
     es: "Se puede conectar y ya enviar, pero las respuestas del cliente no van a llegar hasta que quien administra la instalación registre la App de Meta, en Admin › API Oficial (Meta). Si quieres atender hoy, conectar por tu propia instancia funciona ahora — y se puede cambiar después, sin perder nada.",
   },
   "Leio um código com o celular": { es: "Leo un código con el celular" },
-  "Leio um código com o celular": { es: "Escaneo un código con el celular" },
   "É assim para quase todo mundo. Você abre o WhatsApp no celular que vai atender e aponta para um código que aparece aqui.": {
     es: "Es lo habitual para casi todos. Abres WhatsApp en el celular que va a atender y apuntas al código que aparece aquí.",
   },
@@ -9318,6 +9317,11 @@ export const DICIONARIO: Traducoes = {
   "Não foi possível carregar as ferramentas das conexões MCP.": {
     es: "No se pudieron cargar las herramientas de las conexiones MCP.",
   },
+  // MOTIVO_LIMITE_DE_CONEXAO (lib/ai/mcp-externo/limite-de-conexao.ts) — teto de
+  // tentativas ao criar ou atualizar ferramentas de uma conexão MCP.
+  "Muitas tentativas de conexão. Espere alguns minutos.": {
+    es: "Demasiados intentos de conexión. Espera unos minutos.",
+  },
   "Nenhuma conexão MCP. Conecte um servidor em IA › Conexões MCP para dar ferramentas de outros sistemas ao agente.": {
     es: "Ninguna conexión MCP. Conecta un servidor en IA › Conexiones MCP para darle al agente herramientas de otros sistemas.",
   },
@@ -10956,10 +10960,8 @@ export const DICIONARIO: Traducoes = {
   "Falha no último teste": { es: "Falla en la última prueba" },
   "Não testada": { es: "Sin probar" },
   "Conexão bem-sucedida.": { es: "Conexión exitosa." },
-  "Conexão removida.": { es: "Conexión eliminada." },
   "Explorar": { es: "Explorar" },
   "Testar": { es: "Probar" },
-  "Remover esta conexão?": { es: "¿Eliminar esta conexión?" },
   "A senha guardada é apagada e o agente deixa de enxergar esse banco. O banco de origem não é tocado — só a conexão daqui.": {
     es: "Se elimina la contraseña guardada y el agente deja de ver esa base. La base de origen no se modifica; solo se elimina la conexión desde aquí.",
   },
@@ -11249,7 +11251,6 @@ export const DICIONARIO: Traducoes = {
   "Consulta ao sistema de gestão desativada.": { es: "Consulta al sistema de gestión desactivada." },
   "Não foi possível ativar.": { es: "No fue posible activar." },
   "Não foi possível desativar.": { es: "No fue posible desactivar." },
-  "Não foi possível remover.": { es: "No fue posible eliminar." },
   "Desativar a consulta ao sistema de gestão?": { es: "¿Desactivar la consulta al sistema de gestión?" },
   "O assistente perde as cinco consultas na hora: pergunta sobre fatura, contrato ou bloqueio volta a virar atendimento humano.": {
     es: "El asistente pierde las cinco consultas al instante: una pregunta sobre factura, contrato o bloqueo vuelve a convertirse en atención humana.",
