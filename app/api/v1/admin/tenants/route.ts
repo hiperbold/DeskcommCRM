@@ -191,6 +191,11 @@ export async function POST(req: NextRequest) {
   }
 
   const admin = createAdminClient();
+  // `request.plan` (organizations.settings.plan) é campo legado: aposentado
+  // como fonte de plano na Tarefa 6 da fase F1 dos planos de assinatura. A
+  // fonte de plano é `billing_contracts`, desde a migração 0904. O campo
+  // continua sendo aceito e repassado à função SQL abaixo só para não quebrar
+  // quem ainda chama a API com ele.
   const request = { ...parsed.data, owner_email: parsed.data.owner_email.trim().toLowerCase() };
   const { data: org, error } = await admin.rpc("fn_create_tenant_with_owner", {
     p_actor: adminCtx.user.id,

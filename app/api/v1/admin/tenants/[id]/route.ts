@@ -4,6 +4,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { randomUUID } from "node:crypto";
+import { createLogger } from "@/lib/agent-engine/obs/logger";
+import { planoDaOrganizacao } from "@/lib/billing/planos/plano-da-organizacao";
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/tenants/[id]
@@ -60,6 +62,7 @@ export async function GET(
     aiRes,
     wahaRes,
     integrationRes,
+    planoRes,
   ] = await Promise.all([
     admin
       .from("user_organizations")
@@ -118,6 +121,9 @@ export async function GET(
       .eq("organization_id", id)
       .eq("provider", "nuvemshop")
       .limit(1),
+    // Fonte do "Plano" da Visão Geral desde a Tarefa 6 da fase F1: o contrato
+    // em `billing_contracts`, nunca mais `organizations.settings.plan`.
+    planoDaOrganizacao(admin, id, createLogger()),
   ]);
 
   const counts = {
@@ -143,6 +149,11 @@ export async function GET(
     nuvemshop_connected_at: nuvemshopIntegration?.created_at ?? null,
   };
 
+  const plano = {
+    name: planoRes.plano.name,
+    leituraFalhou: planoRes.leituraFalhou,
+  };
+
   // Audit lightweight — fire-and-forget
   void audit({
     action: "platform_admin.tenant_viewed",
@@ -156,5 +167,5 @@ export async function GET(
     metadata: { tenant_slug: org.slug },
   });
 
-  return ok({ organization: org, counts, integrations }, { requestId });
+  return ok({ organization: org, counts, integrations, plano }, { requestId });
 }

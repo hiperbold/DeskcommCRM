@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useForm, useWatch } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { InterfaceEditor } from "@/components/team/InterfaceEditor";
@@ -16,13 +16,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { type CreateTenantResponse, useCreateTenant } from "@/hooks/useCreateTenant";
 import { ApiError } from "@/lib/api/types";
 import { useT } from "@/hooks/i18n/useT";
@@ -85,7 +78,6 @@ export function NewTenantForm() {
       slug: "",
       legal_name: "",
       cnpj: "",
-      plan: "standard",
       owner_email: "",
     },
   });
@@ -122,7 +114,6 @@ export function NewTenantForm() {
         slug: values.slug,
         legal_name: values.legal_name || undefined,
         cnpj: values.cnpj || undefined,
-        plan: values.plan,
         owner_email: values.owner_email,
         owner_interface_settings: ownerInterface,
       });
@@ -141,8 +132,6 @@ export function NewTenantForm() {
       }
     }
   });
-
-  const planValue = useWatch({ control: form.control, name: "plan" });
 
   if (created)
     return (
@@ -275,27 +264,6 @@ export function NewTenantForm() {
               />
               {errors.cnpj && (
                 <p className="text-xs text-error-fg">{t(errors.cnpj.message ?? "")}</p>
-              )}
-            </div>
-
-            {/* plan */}
-            <div className="space-y-1.5">
-              <Label htmlFor="plan">{t("Plano")}</Label>
-              <Select
-                value={planValue}
-                onValueChange={(v) => setValue("plan", v as "standard" | "pro" | "enterprise")}
-              >
-                <SelectTrigger id="plan" aria-label={t("Plano")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="standard">Standard</SelectItem>
-                  <SelectItem value="pro">Pro</SelectItem>
-                  <SelectItem value="enterprise">Enterprise</SelectItem>
-                </SelectContent>
-              </Select>
-              {errors.plan && (
-                <p className="text-xs text-error-fg">{t(errors.plan.message ?? "")}</p>
               )}
             </div>
 

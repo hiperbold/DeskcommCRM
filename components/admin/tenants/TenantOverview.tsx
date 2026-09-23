@@ -7,6 +7,7 @@ import type {
   TenantOrganization,
   TenantCounts,
   TenantIntegrations,
+  TenantPlano,
 } from "@/hooks/useTenantDetail";
 import { useT } from "@/hooks/i18n/useT";
 
@@ -87,16 +88,21 @@ interface TenantOverviewProps {
   organization: TenantOrganization;
   counts: TenantCounts;
   integrations: TenantIntegrations;
+  plano: TenantPlano;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TenantOverview({ organization, counts, integrations }: TenantOverviewProps) {
+export function TenantOverview({ organization, counts, integrations, plano }: TenantOverviewProps) {
   const tagDoIdioma = useTagDeIdioma();
   const t = useT();
-  const plan = (organization.settings as { plan?: string } | null)?.plan ?? "—";
+  // Fonte do "Plano" desde a Tarefa 6 da fase F1 dos planos de assinatura: o
+  // contrato em `billing_contracts` (lido por `planoDaOrganizacao`), nunca
+  // mais `organizations.settings.plan` (campo legado, aposentado). Erro de
+  // leitura mostra "Plano indisponível" em vez de mentir "Ilimitado".
+  const planLabel = plano.leituraFalhou ? t("Plano indisponível") : plano.name;
 
   const nuvemshopStatus = integrations.nuvemshop_status;
   // Valor fora do vocabulário conhecido continua aparecendo cru de propósito:
@@ -116,7 +122,7 @@ export function TenantOverview({ organization, counts, integrations }: TenantOve
           {t("Informações")}
         </h2>
         <div>
-          <InfoRow label={t("Plano")} value={<Badge variant="neutral" className="capitalize">{plan}</Badge>} />
+          <InfoRow label={t("Plano")} value={<Badge variant="neutral" className="capitalize">{planLabel}</Badge>} />
           <InfoRow label={t("Razão social")} value={organization.legal_name} />
           <InfoRow label="CNPJ" value={organization.cnpj} />
           <InfoRow label={t("Onboarding concluído")} value={formatDate(organization.onboarded_at, tagDoIdioma)} />

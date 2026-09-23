@@ -23,7 +23,7 @@ Etapa da fase: tarefas 4 e 6 de 6, em paralelo (1 em 502a4a8, 3 em 684de89, 2 em
 | 3 | Módulo de leitura de plano | feita (20 testes; embed e RPC provados contra o PostgREST local) |
 | 4 | Ações do admin da plataforma (só escopo full) | feita (17 testes; IP pela régua única do projeto) |
 | 5 | Aba "Plano" no painel do admin da plataforma | pendente |
-| 6 | Aposentar o "Plano" antigo da criação de organização | em andamento |
+| 6 | Aposentar o "Plano" antigo da criação de organização | feita (Visão Geral lê o contrato; formulário sem seletor; API ainda aceita o campo legado) |
 
 ## Decisões tomadas sozinho
 

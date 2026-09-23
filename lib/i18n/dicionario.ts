@@ -11534,6 +11534,10 @@ export const DICIONARIO: Traducoes = {
   "Conecte um banco de dados de outro sistema para o agente consultar em tempo real.": {
     es: "Conecta una base de datos de otro sistema para que el agente la consulte en tiempo real.",
   },
+
+  // ─── Tarefa 6, fase F1 dos planos de assinatura: aposentar o "Plano" antigo
+  // da criação de organização (Visão Geral do tenant no admin da plataforma) ───
+  "Plano indisponível": { es: "Plan no disponible" },
 };
 
 /**

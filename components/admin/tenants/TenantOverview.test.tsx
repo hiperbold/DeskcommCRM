@@ -49,8 +49,14 @@ const ORG: TenantOrganization = {
   onboarded_at: "2026-01-02T12:00:00.000Z",
   suspended_at: null,
   created_at: "2026-01-01T12:00:00.000Z",
+  // `settings.plan` é campo legado: desde a Tarefa 6 da fase F1 dos planos de
+  // assinatura, a tela não lê mais daqui (a fonte é `billing_contracts`, via
+  // a prop `plano`). O valor fica só para provar que a tela IGNORA esta chave.
   settings: { plan: "pro" },
 };
+
+/** O plano do contrato, como a rota `/api/v1/admin/tenants/[id]` devolve hoje. */
+const PLANO_ILIMITADO = { name: "Ilimitado", leituraFalhou: false };
 
 const COUNTS: TenantCounts = {
   user_count: 3,
@@ -76,6 +82,7 @@ function badgeNuvemshop(status: string | null): HTMLElement {
       organization={ORG}
       counts={COUNTS}
       integrations={{ nuvemshop_status: status, nuvemshop_connected_at: null }}
+      plano={PLANO_ILIMITADO}
     />,
   );
   const badge = within(container).getByText("Nuvemshop").nextElementSibling
@@ -144,5 +151,49 @@ describe("TenantOverview — status da Nuvemshop", () => {
     expect(badge).toHaveTextContent("quota_exceeded");
     expect(STATUS_NO_BANCO).not.toContain("quota_exceeded");
     expect(badge.className).not.toBe(classeDaVariante("success"));
+  });
+});
+
+/**
+ * TenantOverview, linha "Plano" (Tarefa 6, fase F1 dos planos de assinatura).
+ *
+ * O campo antigo `organizations.settings.plan` foi aposentado como fonte de
+ * plano (hiperbold/planos/fase-F1-tarefas.md, decisão de desenho 12): a fonte
+ * agora é o contrato em `billing_contracts`, lido no servidor por
+ * `planoDaOrganizacao` e passado a este componente pela prop `plano`. `ORG`
+ * acima ainda traz `settings.plan: "pro"` de propósito, para provar que a
+ * tela IGNORA esse valor.
+ */
+function linhaPlano(plano: { name: string; leituraFalhou: boolean }): HTMLElement {
+  const { container } = render(
+    <TenantOverview
+      organization={ORG}
+      counts={COUNTS}
+      integrations={{ nuvemshop_status: null, nuvemshop_connected_at: null }}
+      plano={plano}
+    />,
+  );
+  const badge = within(container).getByText("Plano").nextElementSibling?.firstElementChild;
+  if (!(badge instanceof HTMLElement)) {
+    throw new Error("a linha 'Plano' não renderizou um badge");
+  }
+  return badge;
+}
+
+describe("TenantOverview, Plano vem do contrato, não de settings.plan", () => {
+  it("mostra o nome do plano do contrato, e não organization.settings.plan", () => {
+    const badge = linhaPlano({ name: "Escale", leituraFalhou: false });
+    expect(badge).toHaveTextContent("Escale");
+    // ORG.settings.plan é "pro": se a tela ainda lesse dali, o texto seria "pro".
+    expect(badge.textContent).not.toContain("pro");
+  });
+
+  it("leitura do plano falhou: mostra 'Plano indisponível', nunca 'Ilimitado'", () => {
+    // O fallback de erro de `planoDaOrganizacao` é o plano Ilimitado com
+    // `leituraFalhou: true`; a tela não pode repetir "Ilimitado" nesse caso,
+    // porque confundiria erro de leitura com plano contratado.
+    const badge = linhaPlano({ name: "Ilimitado", leituraFalhou: true });
+    expect(badge).toHaveTextContent("Plano indisponível");
+    expect(badge.textContent).not.toContain("Ilimitado");
   });
 });

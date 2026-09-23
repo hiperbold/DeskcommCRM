@@ -37,11 +37,22 @@ export interface TenantIntegrations {
   nuvemshop_connected_at: string | null;
 }
 
+/**
+ * O plano do contrato (`billing_contracts`), lido por `planoDaOrganizacao`.
+ * Substitui `organizations.settings.plan` como fonte de "Plano" na Visão
+ * Geral desde a Tarefa 6 da fase F1 dos planos de assinatura.
+ */
+export interface TenantPlano {
+  name: string;
+  leituraFalhou: boolean;
+}
+
 export interface TenantDetailResponse {
   data: {
     organization: TenantOrganization;
     counts: TenantCounts;
     integrations: TenantIntegrations;
+    plano: TenantPlano;
   };
 }
 
