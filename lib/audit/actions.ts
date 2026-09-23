@@ -874,6 +874,15 @@ export const AUDIT_ACTIONS = [
   // fechou para esta pessoa?" —, e ela não precisa de quatro filtros no painel
   // para ser respondida; o que precisa estar separado é a causa, e ela está.
   "auth.google_signin_failed",
+
+  // O plano contratado e o ajuste de tetos da organização, trocados pelo admin
+  // da plataforma (fase F1, tarefa 4, migration 0904). Duas ações porque
+  // respondem a perguntas diferentes: `plan_changed` é "para que plano esta
+  // organização foi movida, e quando", `adjustment_granted` é "quem abriu uma
+  // exceção de teto por cima do plano dela". O `metadata` carrega o antes e o
+  // depois que a função SQL devolveu, nunca uma leitura separada.
+  "billing.plan_changed",
+  "billing.adjustment_granted",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
