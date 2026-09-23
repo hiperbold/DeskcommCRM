@@ -54,6 +54,7 @@ import type { ResultadoPainelDeMargem } from "@/lib/billing/tokens/margem";
 import { FONTES_DA_CARTEIRA, type FonteCarteira, type ResultadoSaldoDaCarteira } from "@/lib/billing/tokens/saldo-da-organizacao";
 import { copyToClipboard } from "@/lib/clipboard";
 import { formatCentsBRL, formatCentsUSD, parseReaisToCents } from "@/lib/money";
+import { randomId } from "@/lib/random-id";
 
 // ---------------------------------------------------------------------------
 // Tipos e tabelas de rótulo
@@ -180,7 +181,7 @@ function IdCurtoCopiavel({ id, t }: { id: string; t: (texto: string) => string }
     <button
       type="button"
       title={id}
-      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-xs text-text-muted hover:bg-surface-elevated"
+      className="inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 font-mono text-xs text-text-muted hover:bg-surface-elevated"
       onClick={async () => {
         const ok = await copyToClipboard(id);
         setCopiado(ok);
@@ -333,12 +334,12 @@ export function TenantPlanoClient({
   // ── Carteira de tokens de IA (fase F2-B, tarefa 7) ──────────────────────
   //
   // As três chaves idempotentes (decisão 16) nascem quando o COMPONENTE
-  // monta (`useState(() => crypto.randomUUID())`, calculado uma vez só) e
+  // monta (`useState(() => randomId())`, calculado uma vez só) e
   // são trocadas por uma nova depois de CADA envio bem-sucedido: reenviar o
   // MESMO formulário sem recarregar a página (duplo clique, erro de rede que
   // o admin tenta de novo) usa a MESMA chave e não credita/contrata/ajusta
   // duas vezes; um envio novo, de propósito, usa uma chave nova.
-  const [chaveCredito, setChaveCredito] = useState(() => crypto.randomUUID());
+  const [chaveCredito, setChaveCredito] = useState(() => randomId());
   const [tokensCredito, setTokensCredito] = useState("");
   const [valorCredito, setValorCredito] = useState("");
   const [notaCredito, setNotaCredito] = useState("");
@@ -371,12 +372,12 @@ export function TenantPlanoClient({
       setTokensCredito("");
       setValorCredito("");
       setNotaCredito("");
-      setChaveCredito(crypto.randomUUID());
+      setChaveCredito(randomId());
       router.refresh();
     });
   }
 
-  const [chaveAdicional, setChaveAdicional] = useState(() => crypto.randomUUID());
+  const [chaveAdicional, setChaveAdicional] = useState(() => randomId());
   const [tokensAdicional, setTokensAdicional] = useState("");
   const [valorAdicional, setValorAdicional] = useState("");
   const [notaAdicional, setNotaAdicional] = useState("");
@@ -409,7 +410,7 @@ export function TenantPlanoClient({
       setTokensAdicional("");
       setValorAdicional("");
       setNotaAdicional("");
-      setChaveAdicional(crypto.randomUUID());
+      setChaveAdicional(randomId());
       router.refresh();
     });
   }
@@ -432,7 +433,7 @@ export function TenantPlanoClient({
     });
   }
 
-  const [chaveAjuste, setChaveAjuste] = useState(() => crypto.randomUUID());
+  const [chaveAjuste, setChaveAjuste] = useState(() => randomId());
   const [fonteAjuste, setFonteAjuste] = useState<FonteCarteira>("plano");
   const [sinalAjuste, setSinalAjuste] = useState<"creditar" | "debitar">("creditar");
   const [tokensAjuste, setTokensAjuste] = useState("");
@@ -468,7 +469,7 @@ export function TenantPlanoClient({
       setTokensAjuste("");
       setCompensaAjuste("");
       setNotaAjuste("");
-      setChaveAjuste(crypto.randomUUID());
+      setChaveAjuste(randomId());
       router.refresh();
     });
   }
