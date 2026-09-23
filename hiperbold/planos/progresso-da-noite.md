@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F1
-Etapa da fase: tarefa 5 de 6, a última (1 em 502a4a8, 3 em 684de89, 2 em d335259, 4 em 80510b8, 6 em ffa92d6)
+Etapa da fase: revisar e auditar (as 6 tarefas commitadas: 1 em 502a4a8, 2 em d335259, 3 em 684de89, 4 em 80510b8, 5 em 7c0e377, 6 em ffa92d6); revisor e auditor rodando em paralelo desde 08:10
 
 ## Fases
 
@@ -22,7 +22,7 @@ Etapa da fase: tarefa 5 de 6, a última (1 em 502a4a8, 3 em 684de89, 2 em d33525
 | 2 | Provas de banco (RLS, gatilho, precedência, troca, semeadura) | feita (49 casos novos; com rls-isolation e a varredura de completude, 224 verdes) |
 | 3 | Módulo de leitura de plano | feita (20 testes; embed e RPC provados contra o PostgREST local) |
 | 4 | Ações do admin da plataforma (só escopo full) | feita (17 testes; IP pela régua única do projeto) |
-| 5 | Aba "Plano" no painel do admin da plataforma | feita (28 testes; o executor levou seis horas porque subiu o servidor de desenvolvimento em primeiro plano e ficou esperando) |
+| 5 | Aba "Plano" no painel do admin da plataforma | feita (28 testes). A tarefa levou cerca de seis horas e a causa NÃO foi identificada: o executor relata que nenhum comando travou, e o servidor na porta 3300 era o que a sessão principal tinha deixado de pé no dia anterior. Primeira hipótese, errada, registrada aqui para não virar fato. |
 | 6 | Aposentar o "Plano" antigo da criação de organização | feita (Visão Geral lê o contrato; formulário sem seletor; API ainda aceita o campo legado) |
 
 ## Decisões tomadas sozinho
