@@ -27,6 +27,24 @@ vi.mock("ai", () => ({
   embed: (args: unknown) => embedSpy(args),
 }));
 
+// Tarefa 8 (Frente 2): `embedText` agora grava telemetria em `llm_calls`.
+// Mockado no nível do client, e não da função: para provar a integração real
+// (o `insert` chega com os campos certos, e uma falha nele não derruba a
+// chamada), não só que `embedText` "chamou algo".
+const insertMock = vi.fn();
+let insertDeveLancar = false;
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({
+    from: (tabela: string) => ({
+      insert: async (row: Record<string, unknown>) => {
+        if (insertDeveLancar) throw new Error("conexão com o banco explodiu");
+        insertMock(tabela, row);
+        return { error: null };
+      },
+    }),
+  }),
+}));
+
 let chaveMock: () => unknown;
 vi.mock("@/lib/ai/embeddings/chave", async () => {
   const real =
@@ -43,6 +61,8 @@ vi.mock("@/lib/ai/embeddings/chave", async () => {
 import { embedText, SemChaveDeEmbeddingError } from "@/lib/ai/embed";
 
 beforeEach(() => {
+  insertMock.mockReset();
+  insertDeveLancar = false;
   embedSpy.mockReset();
   embedSpy.mockResolvedValue({
     // 1536 dimensões: `embedText` assere a dimensão a cada chamada, porque
@@ -141,5 +161,38 @@ describe("embedText", () => {
     embedSpy.mockResolvedValue({ embedding: [0.1, 0.2], usage: { tokens: 1 } });
 
     await expect(embedText("oi", { organizationId: "org-1" })).rejects.toThrow(/1536/);
+  });
+
+  describe("Tarefa 8: telemetria em llm_calls", () => {
+    it("grava com cost_cents SEMPRE nulo, o ponto e os tokens do SDK", async () => {
+      await embedText("oi", { organizationId: "org-1", ponto: "embedding_consultar" });
+
+      expect(insertMock).toHaveBeenCalledTimes(1);
+      const [tabela, row] = insertMock.mock.calls[0]!;
+      expect(tabela).toBe("llm_calls");
+      expect(row).toMatchObject({
+        organization_id: "org-1",
+        purpose: "embedding_consultar",
+        provider: "openai",
+        input_tokens: 7,
+        cost_cents: null,
+      });
+    });
+
+    it("sem `ponto`, usa o padrão de indexar (mesmo default de resolverChaveDeEmbedding)", async () => {
+      await embedText("a", { organizationId: "org-1" });
+
+      const row = insertMock.mock.calls[0]![1] as Record<string, unknown>;
+      expect(row.purpose).toBe("embedding_indexar");
+    });
+
+    it("o INSERT de telemetria lançando NÃO derruba o embedding: o resultado volta normal", async () => {
+      insertDeveLancar = true;
+
+      const r = await embedText("oi", { organizationId: "org-1" });
+
+      expect(r.embedding).toHaveLength(1536);
+      expect(r.promptTokens).toBe(7);
+    });
   });
 });

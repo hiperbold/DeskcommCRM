@@ -15,7 +15,10 @@ export interface TranscriptionCreds {
 }
 
 const DEFAULT_BASE = "https://api.openai.com";
-const DEFAULT_MODEL = "whisper-1";
+// Exportado (Tarefa 8, Frente 2 dos planos): quem grava telemetria da
+// transcrição precisa do mesmo modelo que este provedor usa por padrão, sem
+// repetir a string "whisper-1" num segundo lugar.
+export const DEFAULT_MODEL = "whisper-1";
 
 function extFor(mime: string): string {
   const base = mime.split(";")[0]!.trim().toLowerCase();

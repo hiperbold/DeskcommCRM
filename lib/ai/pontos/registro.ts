@@ -400,11 +400,10 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     },
     sintomaDeFalha:
       "Você sobe um documento e ele nunca fica pronto para uso; o agente responde sem conhecer o seu material.",
-    // `nenhum`, e não `llm_calls`: `lib/ai/embed.ts` não chama `logInvocation`
-    // nem passa pelo seam — não há uma linha de telemetria para este ponto em
-    // lugar nenhum. Declarar a tabela certa seria mentir sobre uma cobertura
-    // que não existe; a dívida fica visível com o nome dela.
-    registraEm: "nenhum",
+    // Tarefa 8 (Frente 2): `embedText` (o mesmo `lib/ai/embed.ts`) agora grava
+    // em `llm_calls` ao fim de cada chamada, com `cost_cents` nulo (D-050).
+    // Ver `lib/ai/telemetria-sem-custo.ts`.
+    registraEm: "llm_calls",
   },
   {
     id: "embedding_consultar",
@@ -413,14 +412,20 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
       "Encontra, entre os seus documentos, os trechos que respondem à pergunta do cliente.",
     papel: "lembrar",
     exige: { embeddingDims: 1536 },
-    emissor: "lib/agent-engine/edge/llm/embed.ts",
+    // Corrigido na Tarefa 8 (Frente 2): apontava para
+    // `lib/agent-engine/edge/llm/embed.ts`, que não tem chamador em produção.
+    // Quem de fato busca no material (`search-knowledge.ts`,
+    // `ai-response-worker.ts`) chama `embedText` do MESMO arquivo que indexa,
+    // `lib/ai/embed.ts`, com `ponto: 'embedding_consultar'`.
+    emissor: "lib/ai/embed.ts",
     fixo: {
       razao:
         "Precisa usar o mesmo modelo com que o material foi indexado. Se divergir, a busca continua funcionando e devolve resultados errados — falha silenciosa, e por isso a troca é feita junto com a reindexação, não aqui.",
     },
     sintomaDeFalha:
       "O agente responde de forma genérica, ignorando o que está escrito nos seus documentos.",
-    registraEm: "nenhum",
+    // Tarefa 8 (Frente 2): mesmo `embedText`, mesma gravação em `llm_calls`.
+    registraEm: "llm_calls",
   },
 
   // ───────────────────────────── Ver e ouvir ───────────────────────────────
@@ -451,7 +456,13 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     },
     sintomaDeFalha:
       "O cliente manda áudio e o agente responde como se não tivesse recebido nada.",
-    registraEm: "nenhum",
+    // Tarefa 8 (Frente 2): `workers/media-derive-worker.ts` embrulha o
+    // provedor REAL de transcrição (padrão OpenAI e serviço próprio) e grava
+    // em `llm_calls` só DEPOIS de a chamada devolver com sucesso, nunca
+    // quando o worker cai no fallback sem chave ou recusa o endereço. Tokens
+    // zerados (cobrança é por minuto, não por token; a duração do áudio não
+    // é medida, D-051 em `hiperbold/DEBITO.md`).
+    registraEm: "llm_calls",
   },
   {
     id: "visao_de_imagem",
@@ -463,7 +474,9 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     emissor: "workers/media-derive-worker.ts",
     sintomaDeFalha:
       "O cliente manda uma foto do produto ou um comprovante e o agente age como se a imagem não existisse.",
-    registraEm: "nenhum",
+    // Tarefa 8 (Frente 2): o `generateText` de `describeImage`, dentro deste
+    // mesmo worker, grava em `llm_calls` com `cost_cents` nulo (D-050).
+    registraEm: "llm_calls",
   },
 
   // ────────────────────────── Melhorar e testar ────────────────────────────

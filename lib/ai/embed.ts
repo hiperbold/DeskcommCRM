@@ -20,6 +20,7 @@ import {
   type PontoDeEmbedding,
 } from "@/lib/ai/embeddings/chave";
 import { gatewayHeaders, type ModelId } from "@/lib/ai/gateway";
+import { registrarTelemetriaSemCusto } from "@/lib/ai/telemetria-sem-custo";
 
 export interface EmbedOptions {
   organizationId: string;
@@ -106,6 +107,21 @@ export async function embedText(
     (result.usage as { tokens?: number; promptTokens?: number } | undefined)?.tokens ??
     (result.usage as { tokens?: number; promptTokens?: number } | undefined)?.promptTokens ??
     0;
+
+  // Telemetria (Tarefa 8, Frente 2 dos planos): este é o ÚNICO lugar que sabe
+  // o modelo e os tokens reais da chamada de embedding. Os chamadores
+  // (`searchKnowledge`, `rag-indexer`, `ai-response-worker`) só sabem o texto
+  // e a organização. `opts.ponto` distingue indexar de consultar; sem ele
+  // (caso do indexador, que resolve a chave uma vez fora do loop) vale o
+  // mesmo padrão de `resolverChaveDeEmbedding`. Nunca lança, ver
+  // `registrarTelemetriaSemCusto`.
+  await registrarTelemetriaSemCusto({
+    organizationId: opts.organizationId,
+    purpose: opts.ponto ?? "embedding_indexar",
+    provider: "openai",
+    model: modelId,
+    inputTokens: promptTokens,
+  });
 
   return { embedding: result.embedding, promptTokens, model: modelId };
 }

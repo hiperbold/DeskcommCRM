@@ -20,6 +20,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const downloadMock = vi.fn();
 const updateEqMock = vi.fn();
 const inboxInsertMock = vi.fn();
+/** Tarefa 8 (Frente 2): a telemetria de `visao_de_imagem` em `llm_calls`. */
+const llmCallsInsertMock = vi.fn();
+/** Um caso faz o INSERT de telemetria explodir, para provar que isso não derruba a leitura. */
+let llmCallsInsertDeveFalhar = false;
 /** O factory do provedor — é o que a issue diz estar sem o endereço do binding. */
 const factoryMock = vi.fn(() => "modelo-de-mentira");
 const transcribeDoSvcMock = vi.fn(async () => "transcrição de mentira");
@@ -84,6 +88,10 @@ vi.mock("@/lib/supabase/admin", () => ({
         single: async () => ({ data: linha, error: null }),
         insert: async (row: Record<string, unknown>) => {
           if (tabela === "agent_inbox_items") inboxInsertMock(row);
+          if (tabela === "llm_calls") {
+            if (llmCallsInsertDeveFalhar) throw new Error("insert de llm_calls explodiu");
+            llmCallsInsertMock(row);
+          }
           return { error: null };
         },
         update: (patch: Record<string, unknown>) => {
@@ -115,18 +123,33 @@ vi.mock("@/lib/messaging/media/derive", () => ({
 // e cada caso a escolhe aqui; o padrão é a credencial da própria organização.
 const credencial = vi.hoisted(() => ({
   origemDaChave: "credencial_da_organizacao" as "credencial_da_organizacao" | "chave_da_instalacao",
+  // Tarefa 8 (Frente 2): faz a resolução da chave OpenAI de transcrição
+  // falhar, sem mexer nas outras chamadas de `resolveOrgLlmConfig` (a de
+  // visão continua resolvendo normal), o caminho que o worker já trata
+  // como "sem chave para transcrever" (`semTranscricao`).
+  semChaveDeTranscricao: false,
 }));
 vi.mock("@/lib/agent-engine/edge/llm/credentials", () => ({
-  resolveOrgLlmConfig: vi.fn(async () => ({
-    provider: "openrouter",
-    apiKey: "chave-do-binding",
-    origemDaChave: credencial.origemDaChave,
-    defaultModel: "gpt-5",
-    params: {},
-    enabledModels: [],
-    orcamento: { modo: "off", tetoCents: 0, efetivoEm: null, limiarPct: 80 },
-    orcamentoIndisponivelPorque: null,
-  })),
+  resolveOrgLlmConfig: vi.fn(async (
+    _pool: unknown,
+    _cfg: unknown,
+    _orgId: string,
+    opts?: { provider?: string },
+  ) => {
+    if (opts?.provider === "openai" && credencial.semChaveDeTranscricao) {
+      throw new Error("organização sem credencial openai");
+    }
+    return {
+      provider: "openrouter",
+      apiKey: "chave-do-binding",
+      origemDaChave: credencial.origemDaChave,
+      defaultModel: "gpt-5",
+      params: {},
+      enabledModels: [],
+      orcamento: { modo: "off", tetoCents: 0, efetivoEm: null, limiarPct: 80 },
+      orcamentoIndisponivelPorque: null,
+    };
+  }),
 }));
 
 // Registro de provedores com um factory espionável em todos os nomes.
@@ -155,6 +178,11 @@ vi.mock("@/lib/messaging/media/transcription", () => ({
   // A referência é resolvida na CHAMADA, não na fábrica: `vi.mock` é içado para
   // o topo do arquivo e um `const` de módulo ainda não existe nesse momento.
   apiTranscriptionProvider: (cfg: unknown) => provedorDeTranscricaoMock(cfg),
+  // Tarefa 8 (Frente 2): o worker importa `DEFAULT_MODEL` deste módulo para
+  // gravar telemetria sem repetir a string "whisper-1". Sem isto aqui, o
+  // mock do módulo inteiro apagaria essa exportação e o modelo gravado
+  // viria `undefined`.
+  DEFAULT_MODEL: "whisper-1",
 }));
 
 // O worker lê o trio da transcrição pelo `env` — a régua do app (`lib/env.ts`)
@@ -193,7 +221,7 @@ function comTranscricaoNoEnv(t: Partial<typeof transcricaoDoEnv> = {}): void {
   Object.assign(transcricaoDoEnv, { apiKey: "", baseUrl: "", model: "" }, t);
 }
 
-import { deriveMessageMedia } from "@/workers/media-derive-worker";
+import { deriveMessageMedia, MARCADOR_NAO_LIDA } from "@/workers/media-derive-worker";
 import { esquecerDestinosInternos } from "@/lib/automation/destinos-internos-autorizados";
 import { deriveMediaText, type DeriveDeps } from "@/lib/messaging/media/derive";
 import type { Env } from "@/lib/env";
@@ -252,6 +280,7 @@ beforeEach(() => {
   dns.erro = null;
   dns.resposta = [{ address: "93.184.216.34", family: 4 }];
   credencial.origemDaChave = "credencial_da_organizacao";
+  credencial.semChaveDeTranscricao = false;
   bindingDaVez = BINDING_COM_ENDPOINT;
   linhaDaMensagem = {
     id: "msg1",
@@ -262,6 +291,7 @@ beforeEach(() => {
     media_derived_status: null,
   };
   downloadMock.mockResolvedValue({ data: { arrayBuffer: async () => new ArrayBuffer(8) }, error: null });
+  llmCallsInsertDeveFalhar = false;
 });
 
 afterEach(() => {
@@ -295,6 +325,29 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
     await depsDaChamada().describeImage(Buffer.from("jpeg"), "image/jpeg");
 
     expect(factoryMock).toHaveBeenCalledWith("chave-do-binding", "acme/visao-1", undefined);
+  });
+
+  it("Tarefa 8: grava telemetria de visão em llm_calls, com cost_cents nulo", async () => {
+    await deriveMessageMedia(eventRow());
+    await depsDaChamada().describeImage(Buffer.from("jpeg"), "image/jpeg");
+
+    expect(llmCallsInsertMock).toHaveBeenCalledTimes(1);
+    expect(llmCallsInsertMock.mock.calls[0]![0]).toMatchObject({
+      organization_id: "org1",
+      purpose: "visao_de_imagem",
+      provider: "openrouter",
+      model: "acme/visao-1",
+      cost_cents: null,
+    });
+  });
+
+  it("Tarefa 8: o INSERT de telemetria falhando não derruba a leitura da imagem", async () => {
+    llmCallsInsertDeveFalhar = true;
+    await deriveMessageMedia(eventRow());
+
+    const descricao = await depsDaChamada().describeImage(Buffer.from("jpeg"), "image/jpeg");
+
+    expect(descricao).toBe("descrição de mentira");
   });
 
   it("usa o serviço de transcrição do .env, quando ele está configurado", async () => {
@@ -422,6 +475,80 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
 
     expect(transcribeDoSvcMock).toHaveBeenCalledTimes(1);
     expect(texto).toBe("transcrição de mentira");
+  });
+
+  describe("Tarefa 8: telemetria da transcrição (só o provedor REAL)", () => {
+    it("transcrição real pelo padrão OpenAI grava uma linha com o modelo certo", async () => {
+      await deriveMessageMedia(eventRow());
+      await depsDaChamada().transcriber.transcribe(Buffer.from("ogg"), "audio/ogg");
+
+      expect(llmCallsInsertMock).toHaveBeenCalledTimes(1);
+      expect(llmCallsInsertMock.mock.calls[0]![0]).toMatchObject({
+        organization_id: "org1",
+        purpose: "transcricao_de_audio",
+        provider: "openai",
+        model: "whisper-1",
+        input_tokens: 0,
+        output_tokens: 0,
+        cost_cents: null,
+      });
+    });
+
+    it("transcrição real pelo serviço próprio grava com o provider e o modelo do .env", async () => {
+      comTranscricaoNoEnv({
+        apiKey: "chave-do-servico",
+        baseUrl: "https://api.groq.com/openai/v1",
+        model: "whisper-large-v3",
+      });
+
+      await deriveMessageMedia(eventRow());
+      await depsDaChamada().transcriber.transcribe(Buffer.from("ogg"), "audio/ogg");
+
+      expect(llmCallsInsertMock).toHaveBeenCalledTimes(1);
+      expect(llmCallsInsertMock.mock.calls[0]![0]).toMatchObject({
+        organization_id: "org1",
+        purpose: "transcricao_de_audio",
+        // Rótulo estável, nunca a `baseUrl`: ela pode levar credencial ou
+        // apontar para um endereço interno.
+        provider: "transcricao_propria",
+        model: "whisper-large-v3",
+        cost_cents: null,
+      });
+    });
+
+    it("sem chave para transcrever (semTranscricao), NÃO grava telemetria nenhuma", async () => {
+      credencial.semChaveDeTranscricao = true;
+
+      await deriveMessageMedia(eventRow());
+      const texto = await depsDaChamada().transcriber.transcribe(Buffer.from("ogg"), "audio/ogg");
+
+      expect(texto).toBe(MARCADOR_NAO_LIDA);
+      expect(transcribeDoSvcMock).not.toHaveBeenCalled();
+      expect(llmCallsInsertMock).not.toHaveBeenCalled();
+    });
+
+    it("endereço do serviço próprio recusado, NÃO grava telemetria nenhuma", async () => {
+      comTranscricaoNoEnv({
+        apiKey: "chave-do-servico",
+        baseUrl: "http://169.254.169.254/v1",
+      });
+
+      await deriveMessageMedia(eventRow());
+      const texto = await depsDaChamada().transcriber.transcribe(Buffer.from("ogg"), "audio/ogg");
+
+      expect(texto).toBe(MARCADOR_NAO_LIDA);
+      expect(transcribeDoSvcMock).not.toHaveBeenCalled();
+      expect(llmCallsInsertMock).not.toHaveBeenCalled();
+    });
+
+    it("o INSERT de telemetria falhando não derruba a transcrição", async () => {
+      llmCallsInsertDeveFalhar = true;
+
+      await deriveMessageMedia(eventRow());
+      const texto = await depsDaChamada().transcriber.transcribe(Buffer.from("ogg"), "audio/ogg");
+
+      expect(texto).toBe("transcrição de mentira");
+    });
   });
 
   it("a chave só no ambiente não liga mais o serviço: a régua é o `env` (#964)", async () => {

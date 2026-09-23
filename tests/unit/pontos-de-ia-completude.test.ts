@@ -94,10 +94,11 @@ const FORA_DO_SEAM: Record<string, { arquivo: string; marcador: string }> = {
     marcador: "resolverModeloDoPonto",
   },
   embedding_indexar: { arquivo: "lib/ai/embed.ts", marcador: "embed(" },
-  embedding_consultar: {
-    arquivo: "lib/agent-engine/edge/llm/embed.ts",
-    marcador: "/v1/embeddings",
-  },
+  // Corrigido na Tarefa 8 (Frente 2): apontava para
+  // `lib/agent-engine/edge/llm/embed.ts`, que não tem chamador em produção.
+  // `search-knowledge.ts` e `ai-response-worker.ts` chamam `embedText`, do
+  // MESMO `lib/ai/embed.ts` que indexa, com `ponto: 'embedding_consultar'`.
+  embedding_consultar: { arquivo: "lib/ai/embed.ts", marcador: "embed(" },
   visao_de_imagem: {
     arquivo: "workers/media-derive-worker.ts",
     marcador: "describeImage",

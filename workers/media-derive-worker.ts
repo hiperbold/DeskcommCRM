@@ -9,6 +9,7 @@ import type pg from "pg";
 
 import { extractPdfText } from "@/lib/ai/rag/extractors/pdf";
 import { visaoEmVigor } from "@/lib/ai/pontos/capacidade-em-vigor";
+import { registrarTelemetriaSemCusto } from "@/lib/ai/telemetria-sem-custo";
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from "@/lib/agent-engine/edge/llm/credentials";
 import { createDefaultRegistry } from "@/lib/agent-engine/edge/llm/providers";
 import { createPool } from "@/lib/agent-engine/db/pool";
@@ -17,7 +18,7 @@ import type { EventRow, HandlerResult } from "@/lib/event-log/dispatcher";
 import { deriveMediaText, type DeriveDeps } from "@/lib/messaging/media/derive";
 import { TIPOS_DERIVAVEIS } from "@/lib/messaging/media/derivable";
 import { deriveVideoText } from "@/lib/messaging/media/video-derive";
-import { apiTranscriptionProvider } from "@/lib/messaging/media/transcription";
+import { apiTranscriptionProvider, DEFAULT_MODEL as MODELO_PADRAO_DE_TRANSCRICAO } from "@/lib/messaging/media/transcription";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { motivoDaRecusaDeDestino } from "@/lib/automation/destinos-internos-autorizados";
@@ -432,8 +433,49 @@ function buildDeriveDeps(
         },
       ],
     });
+    // Telemetria (Tarefa 8, Frente 2 dos planos): este é o ponto de chamada
+    // real de "Ver a imagem do cliente": a organização, o provedor e o
+    // modelo já estão todos resolvidos aqui em cima. Nunca lança.
+    await registrarTelemetriaSemCusto({
+      organizationId: orgId,
+      purpose: "visao_de_imagem",
+      provider: llm.provider,
+      model: llm.defaultModel ?? "",
+      // `?.`: alguns testes deste worker mockam `generateText` sem `usage`,
+      // a produção sempre devolve o objeto, mas nada aqui depende disso.
+      inputTokens: res.usage?.inputTokens ?? 0,
+      outputTokens: res.usage?.outputTokens ?? 0,
+    });
     return res.text;
   };
+  // Telemetria (Tarefa 8, Frente 2 dos planos): embrulha SÓ o provedor REAL
+  // (o que de fato bate em `/v1/audio/transcriptions`), nunca `semTranscricao`
+  // nem o embrulho de recusa de destino (`transcriberDeServico`, abaixo). Se
+  // esses dois devolvem `MARCADOR_NAO_LIDA` sem chamar API nenhuma, a
+  // gravação aqui dentro nunca roda, porque `provider.transcribe` nunca é
+  // chamado. E a gravação só acontece DEPOIS do `await` ter sucesso: se a
+  // chamada lançar, o erro sobe para quem chamou (mesmo comportamento de
+  // antes) e nada é gravado, porque não houve transcrição paga.
+  const comTelemetriaDeTranscricao = (
+    provider: DeriveDeps["transcriber"],
+    meta: { provider: string; model: string },
+  ): DeriveDeps["transcriber"] => ({
+    transcribe: async (audio, mime) => {
+      const texto = await provider.transcribe(audio, mime);
+      await registrarTelemetriaSemCusto({
+        organizationId: orgId,
+        purpose: "transcricao_de_audio",
+        provider: meta.provider,
+        model: meta.model,
+        // Cobrada por MINUTO de áudio, não por token: tokens ficam zerados.
+        // A duração do áudio não é medida em lugar nenhum deste caminho
+        // (D-051, `hiperbold/DEBITO.md`).
+        inputTokens: 0,
+        outputTokens: 0,
+      });
+      return texto;
+    },
+  });
   // Sem chave OpenAI não há como transcrever: devolver string vazia é honesto
   // (o derivado fica vazio e o marcador "[áudio]" continua valendo) e evita o
   // loop de 401 que retentava a cada drain.
@@ -454,7 +496,10 @@ function buildDeriveDeps(
   // continuava batendo em api.openai.com com `whisper-1`. Sem
   // `TRANSCRIPTION_API_KEY` o comportamento é exatamente o de antes.
   const transcricaoPadrao: DeriveDeps["transcriber"] = openaiKey
-    ? apiTranscriptionProvider({ apiKey: openaiKey })
+    ? comTelemetriaDeTranscricao(apiTranscriptionProvider({ apiKey: openaiKey }), {
+        provider: "openai",
+        model: MODELO_PADRAO_DE_TRANSCRICAO,
+      })
     : semTranscricao;
   // O endereço do serviço de transcrição vem do .env da instalação e a chamada
   // leva a chave no cabeçalho: mesma recusa do endereço da visão, e antes de a
@@ -487,13 +532,24 @@ function buildDeriveDeps(
   // worker, não no Next. Não é dependência nova: o worker já carrega o módulo
   // por `lib/supabase/admin`.
   const chaveDeTranscricao = env.TRANSCRIPTION_API_KEY;
+  // Modelo realmente usado pelo serviço próprio: o mesmo default que
+  // `apiTranscriptionProvider` aplica quando `TRANSCRIPTION_MODEL` não vem
+  // preenchido (`creds.model ?? DEFAULT_MODEL`, em `transcription.ts`).
+  const modeloDoServicoProprio = env.TRANSCRIPTION_MODEL || MODELO_PADRAO_DE_TRANSCRICAO;
   const transcriber: DeriveDeps["transcriber"] = chaveDeTranscricao
     ? transcriberDeServico(
-        apiTranscriptionProvider({
-          apiKey: chaveDeTranscricao,
-          baseUrl: env.TRANSCRIPTION_BASE_URL || undefined,
-          model: env.TRANSCRIPTION_MODEL || undefined,
-        }),
+        comTelemetriaDeTranscricao(
+          apiTranscriptionProvider({
+            apiKey: chaveDeTranscricao,
+            baseUrl: env.TRANSCRIPTION_BASE_URL || undefined,
+            model: env.TRANSCRIPTION_MODEL || undefined,
+          }),
+          // `provider` não é a URL: a `base_url` pode levar credencial ou
+          // apontar para um endereço interno, e telemetria não é o lugar
+          // para isso vazar. Um rótulo estável identifica "é o serviço
+          // próprio da instalação, não a OpenAI" sem carregar o endereço.
+          { provider: "transcricao_propria", model: modeloDoServicoProprio },
+        ),
       )
     : transcricaoPadrao;
   return {
