@@ -113,6 +113,17 @@ CRONS="
 15 4 * * *|60|api/v1/cron/sync-model-catalog
 40 4 * * *|120|api/v1/cron/data-retention
 55 4 * * *|60|api/v1/cron/conferir-contadores-de-plano
+# A CARTEIRA DE TOKENS (F2-B, Tarefa 8). 05:25, meia hora depois do conferidor
+# de contadores acima, para as duas rodadas diárias de billing não disputarem
+# a mesma janela de I/O no banco. Teto de 90s (maior que o irmão, 60s): além
+# de conferir o saldo materializado de cada organização (mesma forma do
+# irmão), esta rodada também recupera débito pendente em VOLTAS por
+# organização (até 20 × 500 chamadas, ver lib/billing/tokens/conferir-
+# carteira.ts) antes de conferir a carteira dela, uma rodada normal fica bem
+# abaixo disso (o gatilho já debita quase tudo em tempo real), mas o teto
+# folgado evita o `curl -m` cortar uma rodada que, por algum motivo raro,
+# tenha muito para recuperar.
+25 5 * * *|90|api/v1/cron/conferir-carteira-de-tokens
 # AS RECORRÊNCIAS. Uma vez ao dia é o bastante: o que ela gera é uma conta a
 # pagar, e a diferença entre nascer às 5h ou às 17h não muda nada para quem paga.
 # Barato: uma consulta por instalação, e quem não tem molde nenhum sai na hora.
