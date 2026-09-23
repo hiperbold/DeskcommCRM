@@ -165,6 +165,57 @@ comment on column public.billing_settings.teto_instalacao_tokens_dia is
   '0906, decisão 15 (N14): teto de segurança da INSTALAÇÃO inteira por dia, conferido só pelo conferidor de cron (nunca dentro do gatilho, que serializaria todas as organizações). Nulo = desligado.';
 
 -- ============================================================================
+-- 1b. billing_settings.pesos_alterados_em: revisão da fase (23/09/2026, item
+-- 3), adiantada para AQUI (antes da Parte 4 usar a coluna em
+-- fn_billing_debitos_pendentes, mais abaixo neste mesmo arquivo: a coluna
+-- tem que existir antes de qualquer função que a referencie, o arquivo roda
+-- de cima para baixo numa aplicação só). Gatilho BEFORE UPDATE que marca
+-- now() só quando peso_cache_leitura_pct ou pesos_por_proposito muda de
+-- verdade (IS DISTINCT FROM, cobre NULL): um UPDATE que só mexe noutra
+-- coluna de billing_settings não pode empurrar esta marca para a frente à
+-- toa, ou o pendente (item 3, Parte 4) perdoaria 35 dias de chamada sem
+-- motivo.
+-- ============================================================================
+alter table public.billing_settings add column if not exists pesos_alterados_em timestamptz;
+
+comment on column public.billing_settings.pesos_alterados_em is
+  '0906, item 3 da revisão (23/09/2026): quando peso_cache_leitura_pct ou pesos_por_proposito mudou pela última vez, gravado pelo gatilho fn_billing_trg_pesos_alterados. fn_billing_debitos_pendentes (Parte 4) nunca recalcula chamada anterior a esta marca: o peso vigente NO MOMENTO da chamada era outro, e recalcular com o peso de hoje cobraria (ou perdoaria) histórico que a chamada nunca deveria ter gerado.';
+
+create or replace function public.fn_billing_trg_pesos_alterados()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, pg_temp
+as $$
+begin
+  if new.peso_cache_leitura_pct is distinct from old.peso_cache_leitura_pct
+    or new.pesos_por_proposito is distinct from old.pesos_por_proposito
+  then
+    new.pesos_alterados_em := now();
+  end if;
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trg_pesos_alterados() is
+  '0906, item 3 da revisão: gatilho BEFORE UPDATE em billing_settings que grava pesos_alterados_em = now() só quando peso_cache_leitura_pct ou pesos_por_proposito muda de verdade (IS DISTINCT FROM, cobre NULL). Independente de trg_billing_settings_updated_at (0904, fn_set_updated_at): Postgres roda os dois gatilhos BEFORE UPDATE da tabela, cada um mexendo na sua própria coluna.';
+
+drop trigger if exists trg_billing_settings_pesos_alterados on public.billing_settings;
+create trigger trg_billing_settings_pesos_alterados
+  before update on public.billing_settings
+  for each row execute function public.fn_billing_trg_pesos_alterados();
+
+revoke execute on function public.fn_billing_trg_pesos_alterados() from public, anon, authenticated;
+grant execute on function public.fn_billing_trg_pesos_alterados() to service_role;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_trg_pesos_alterados() from agent_worker';
+  end if;
+end
+$$;
+
+-- ============================================================================
 -- 2. llm_calls.origem_da_chave: só consome carteira o que é pago pela Hiperbold.
 -- ============================================================================
 --
@@ -325,8 +376,24 @@ create table if not exists public.billing_token_consumo_diario (
 
 -- Banco que criou a coluna como bigint antes da correção (só o local, a 0906
 -- não foi para produção): converte no lugar. Sem efeito quando já é numeric.
-alter table public.billing_token_consumo_diario
-  alter column cost_cents_conhecido type numeric(14,4);
+--
+-- Item 7 da revisão (23/09/2026): sem a guarda abaixo, este ALTER pegava
+-- ACCESS EXCLUSIVE em billing_token_consumo_diario TODA VEZ que o apêndice
+-- é reaplicado em produção (update.sh reaplica o baseline inteiro), mesmo
+-- quando o tipo já é numeric. Só altera quando o tipo ATUAL não é numeric.
+do $$
+begin
+  if (
+    select data_type from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'billing_token_consumo_diario'
+      and column_name = 'cost_cents_conhecido'
+  ) <> 'numeric' then
+    alter table public.billing_token_consumo_diario
+      alter column cost_cents_conhecido type numeric(14,4);
+  end if;
+end
+$$;
 
 comment on table public.billing_token_consumo_diario is
   '0906, decisão 13: agregado diário que o extrato lê (organização, dia, agente, contato, propósito). Atualizado DENTRO do débito (Tarefa 2a), só quando a linha do livro-caixa entrou de fato. unique nulls not distinct trata agent_id/contact_id nulos como iguais entre si, para o agregado de uma chamada auxiliar sem agente nem contato não duplicar linha a cada chamada do dia.';
@@ -558,8 +625,12 @@ begin
   -- Ilimitado (teto nulo) não concede nada: o consumo cai direto na fonte
   -- plano sem saldo, e o extrato mostra "sem limite" (decisão 9).
   if v_teto is not null then
+    -- Item 8 da revisão (23/09/2026): to_char, não ::text. O cast de date
+    -- depende do DateStyle da sessão (ISO por padrão, mas não garantido);
+    -- to_char('YYYY-MM-DD') é o MESMO texto que o ::text de sempre produzia
+    -- (DateStyle ISO), então não duplica concessão nenhuma já gravada.
     insert into public.billing_token_ledger (organization_id, fonte, tokens, chave)
-    values (p_org, 'plano', v_teto, 'plano:' || p_ciclo::text)
+    values (p_org, 'plano', v_teto, 'plano:' || to_char(p_ciclo, 'YYYY-MM-DD'))
     on conflict (organization_id, chave) do nothing;
 
     get diagnostics v_linhas = row_count;
@@ -577,8 +648,10 @@ begin
     from public.billing_token_adicionais
     where organization_id = p_org and ativo
   loop
+    -- Item 8 da revisão: to_char no ciclo (ver comentário acima); o id do
+    -- adicional continua ::text (uuid, DateStyle não afeta).
     insert into public.billing_token_ledger (organization_id, fonte, tokens, chave)
-    values (p_org, 'adicional', v_adicional.tokens_por_ciclo, 'adicional:' || v_adicional.id::text || ':' || p_ciclo::text)
+    values (p_org, 'adicional', v_adicional.tokens_por_ciclo, 'adicional:' || v_adicional.id::text || ':' || to_char(p_ciclo, 'YYYY-MM-DD'))
     on conflict (organization_id, chave) do nothing;
 
     get diagnostics v_linhas = row_count;
@@ -618,6 +691,7 @@ declare
   v_dia date;
   v_restante bigint;
   v_saldo bigint;
+  v_teto_efetivo bigint;
   v_debito_plano bigint := 0;
   v_debito_adicional bigint := 0;
   v_debito_avulso bigint := 0;
@@ -703,33 +777,45 @@ begin
   -- garantir_concessoes não faz nada sozinha se esse ciclo já fechou).
   perform public.fn_billing_garantir_concessoes(v_chamada.organization_id, v_ciclo);
 
-  -- Decisão 6: divide pelas fontes, nesta ordem, pelo saldo (creditado -
-  -- consumido) de cada uma. sum() garante uma linha sempre (mesmo sem
-  -- wallet ainda criada, vira 0 pelo coalesce) em vez de "select" simples,
-  -- que sobre zero linhas deixaria a variável com o valor da fonte anterior.
-  select coalesce(sum(creditado - consumido), 0) into v_saldo
-    from public.billing_token_wallets
-    where organization_id = v_chamada.organization_id and fonte = 'plano' and ciclo = v_ciclo;
-  v_restante := v_ponderado;
-  v_debito_plano := least(v_restante, greatest(v_saldo, 0));
-  v_restante := v_restante - v_debito_plano;
+  -- Item 4 da revisão (23/09/2026): Ilimitado (teto efetivo nulo) não pode
+  -- consumir adicional nem avulso, mesmo que a organização tenha saldo de
+  -- sobra nessas duas fontes (por exemplo, um pacote avulso comprado antes
+  -- de virar Ilimitado): o ponderado inteiro cai direto em plano, sem
+  -- fatiar. Sem este desvio, uma organização Ilimitada com avulso sobrando
+  -- via aquele saldo escoar antes de "sem limite" fazer sentido de verdade.
+  v_teto_efetivo := (public.fn_billing_limites_efetivos(v_chamada.organization_id) ->> 'tokens_ia_mes')::bigint;
 
-  select coalesce(sum(creditado - consumido), 0) into v_saldo
-    from public.billing_token_wallets
-    where organization_id = v_chamada.organization_id and fonte = 'adicional' and ciclo = v_ciclo;
-  v_debito_adicional := least(v_restante, greatest(v_saldo, 0));
-  v_restante := v_restante - v_debito_adicional;
+  if v_teto_efetivo is null then
+    v_debito_plano := v_ponderado;
+  else
+    -- Decisão 6: divide pelas fontes, nesta ordem, pelo saldo (creditado -
+    -- consumido) de cada uma. sum() garante uma linha sempre (mesmo sem
+    -- wallet ainda criada, vira 0 pelo coalesce) em vez de "select" simples,
+    -- que sobre zero linhas deixaria a variável com o valor da fonte anterior.
+    select coalesce(sum(creditado - consumido), 0) into v_saldo
+      from public.billing_token_wallets
+      where organization_id = v_chamada.organization_id and fonte = 'plano' and ciclo = v_ciclo;
+    v_restante := v_ponderado;
+    v_debito_plano := least(v_restante, greatest(v_saldo, 0));
+    v_restante := v_restante - v_debito_plano;
 
-  select coalesce(sum(creditado - consumido), 0) into v_saldo
-    from public.billing_token_wallets
-    where organization_id = v_chamada.organization_id and fonte = 'avulso' and ciclo is null;
-  v_debito_avulso := least(v_restante, greatest(v_saldo, 0));
-  v_restante := v_restante - v_debito_avulso;
+    select coalesce(sum(creditado - consumido), 0) into v_saldo
+      from public.billing_token_wallets
+      where organization_id = v_chamada.organization_id and fonte = 'adicional' and ciclo = v_ciclo;
+    v_debito_adicional := least(v_restante, greatest(v_saldo, 0));
+    v_restante := v_restante - v_debito_adicional;
 
-  -- O que sobra depois de zerar as três vai SOMADO na linha de plano
-  -- (decisão 6): nunca uma quarta linha, nunca duas linhas de plano na
-  -- mesma chamada. É o caso que atravessa o fim do saldo.
-  v_debito_plano := v_debito_plano + v_restante;
+    select coalesce(sum(creditado - consumido), 0) into v_saldo
+      from public.billing_token_wallets
+      where organization_id = v_chamada.organization_id and fonte = 'avulso' and ciclo is null;
+    v_debito_avulso := least(v_restante, greatest(v_saldo, 0));
+    v_restante := v_restante - v_debito_avulso;
+
+    -- O que sobra depois de zerar as três vai SOMADO na linha de plano
+    -- (decisão 6): nunca uma quarta linha, nunca duas linhas de plano na
+    -- mesma chamada. É o caso que atravessa o fim do saldo.
+    v_debito_plano := v_debito_plano + v_restante;
+  end if;
 
   if v_debito_plano > 0 then
     -- A1 (auditoria de segurança, item 2, defesa em profundidade): grava o
@@ -963,6 +1049,10 @@ declare
   v_teto_conversa_dia bigint;
   v_teto_total bigint;
   v_consumido_ciclo bigint;
+  v_teto_efetivo bigint;
+  v_avulso_creditado_total bigint;
+  v_avulso_consumido_antes bigint;
+  v_avulso_consumido_mes bigint;
   v_mes_ano text;
   v_limiar int;
   v_titulo text;
@@ -975,19 +1065,44 @@ begin
     from public.billing_settings
     where id = 1;
 
-  -- Decisão 14: total DISPONÍVEL no ciclo é plano + adicional DESTE ciclo
-  -- mais avulso (fonte sem ciclo, decisão 6), contra o consumido das mesmas
-  -- três fontes. Sem teto (Ilimitado: nenhuma concessão, total creditado
-  -- zero) não avisa nada.
-  select
-    coalesce(sum(creditado), 0),
-    coalesce(sum(consumido), 0)
+  -- Item 4 da revisão (23/09/2026): Ilimitado (teto efetivo nulo) nunca
+  -- avisa limiar de porcentagem, mesmo que a organização tenha adicional ou
+  -- avulso creditado (que hoje nem são consumidos por ela, ver item 4 em
+  -- fn_billing_debitar_chamada).
+  v_teto_efetivo := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;
+
+  -- Decisão 14, revisada pelo item 2 (23/09/2026): total DISPONÍVEL no
+  -- ciclo é plano + adicional DESTE ciclo mais avulso, mas o avulso entra
+  -- pela PROPORÇÃO DO MÊS, não da vida inteira: disponível do avulso =
+  -- creditado do avulso (a vida inteira, fonte sem ciclo) MENOS o consumido
+  -- do avulso em ciclos ANTERIORES a este (pelo `ciclo` gravado em cada
+  -- linha de consumo, correção A1 da auditoria de segurança); consumido do
+  -- avulso no mês = só o consumo do avulso com `ciclo` = este ciclo. O saldo
+  -- REAL do avulso (o que de fato pode ser debitado) não muda; só a
+  -- proporção usada aqui, para o aviso de limiar, passa a ser do mês.
+  select coalesce(sum(creditado) filter (where fonte in ('plano', 'adicional')), 0),
+         coalesce(sum(consumido) filter (where fonte in ('plano', 'adicional')), 0)
     into v_teto_total, v_consumido_ciclo
     from public.billing_token_wallets
-    where organization_id = p_org
-      and ((fonte in ('plano', 'adicional') and ciclo = p_ciclo) or (fonte = 'avulso' and ciclo is null));
+    where organization_id = p_org and fonte in ('plano', 'adicional') and ciclo = p_ciclo;
 
-  if v_teto_total > 0 then
+  select coalesce(creditado, 0) into v_avulso_creditado_total
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'avulso' and ciclo is null;
+
+  select coalesce(sum(-tokens), 0) into v_avulso_consumido_antes
+    from public.billing_token_ledger
+    where organization_id = p_org and fonte = 'avulso' and chave like 'consumo:%'
+      and ciclo is not null and ciclo < p_ciclo;
+
+  select coalesce(sum(-tokens), 0) into v_avulso_consumido_mes
+    from public.billing_token_ledger
+    where organization_id = p_org and fonte = 'avulso' and chave like 'consumo:%' and ciclo = p_ciclo;
+
+  v_teto_total := v_teto_total + (coalesce(v_avulso_creditado_total, 0) - v_avulso_consumido_antes);
+  v_consumido_ciclo := v_consumido_ciclo + v_avulso_consumido_mes;
+
+  if v_teto_efetivo is not null and v_teto_total > 0 then
     -- Nome do mês em português, sem depender do locale do servidor (to_char
     -- com 'Month' segue o locale do cluster, que pode não ser pt_BR): array
     -- fixo, indexado por extract(month from ...).
@@ -999,8 +1114,10 @@ begin
       -- v_consumido_ciclo/v_teto_total >= v_limiar/100, em bigint, sem ponto
       -- flutuante.
       if v_consumido_ciclo * 100 >= v_teto_total * v_limiar then
+        -- Item 8 da revisão: to_char no ciclo (não ::text, ver comentário na
+        -- concessão acima); v_limiar é int, ::text não depende de DateStyle.
         insert into public.billing_token_avisos_emitidos (organization_id, chave)
-        values (p_org, 'limiar:' || p_ciclo::text || ':' || v_limiar::text)
+        values (p_org, 'limiar:' || to_char(p_ciclo, 'YYYY-MM-DD') || ':' || v_limiar::text)
         on conflict (organization_id, chave) do nothing;
 
         get diagnostics v_linhas = row_count;
@@ -1034,8 +1151,9 @@ begin
       where organization_id = p_org and dia = p_dia;
 
     if v_tokens_org_dia > v_teto_org_dia then
+      -- Item 8 da revisão: to_char, não ::text.
       insert into public.billing_token_avisos_emitidos (organization_id, chave)
-      values (p_org, 'teto_org_dia:' || p_dia::text)
+      values (p_org, 'teto_org_dia:' || to_char(p_dia, 'YYYY-MM-DD'))
       on conflict (organization_id, chave) do nothing;
 
       get diagnostics v_linhas = row_count;
@@ -1064,8 +1182,10 @@ begin
       where organization_id = p_org and dia = p_dia and contact_id = p_contact_id;
 
     if v_tokens_conversa_dia > v_teto_conversa_dia then
+      -- Item 8 da revisão: to_char no dia (não ::text); p_contact_id é uuid,
+      -- ::text não depende de DateStyle.
       insert into public.billing_token_avisos_emitidos (organization_id, chave)
-      values (p_org, 'teto_conversa_dia:' || p_dia::text || ':' || p_contact_id::text)
+      values (p_org, 'teto_conversa_dia:' || to_char(p_dia, 'YYYY-MM-DD') || ':' || p_contact_id::text)
       on conflict (organization_id, chave) do nothing;
 
       get diagnostics v_linhas = row_count;
@@ -1522,6 +1642,12 @@ declare
   v_por_fonte jsonb;
   v_disponivel bigint;
   v_consumido bigint;
+  v_obteve_trava boolean;
+  v_tem_linha_plano boolean;
+  v_concessao_pendente boolean;
+  v_avulso_creditado_total bigint;
+  v_avulso_consumido_antes bigint;
+  v_avulso_consumido_mes bigint;
 begin
   -- pg_try_advisory_xact_lock (NÃO a variante bloqueante do item 18 a 21 e
   -- do item 23, abaixo): é o que o comentário de fn_billing_garantir_
@@ -1531,20 +1657,40 @@ begin
   -- organização não teria propósito. Sem a trava agora, só pula a concessão
   -- preguiçosa desta vez (o próximo consumo ou a próxima leitura concede) e
   -- devolve o retrato com o que já existe.
-  if pg_try_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0)) then
+  v_obteve_trava := pg_try_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
+  if v_obteve_trava then
     perform public.fn_billing_garantir_concessoes(p_org, v_ciclo);
   end if;
 
   v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;
 
+  select exists(
+    select 1 from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'plano' and ciclo = v_ciclo
+  ) into v_tem_linha_plano;
+
+  -- Item 6 da revisão (23/09/2026): não conseguir a trava (outra sessão já
+  -- está debitando esta organização) e ainda não existir linha de plano no
+  -- ciclo NÃO é "sem saldo": é concessão que ainda não rodou. Sem este
+  -- desvio a tela mostrava creditado 0 (e portanto "estourou") no primeiro
+  -- segundo do mês, ou sempre que a trava está ocupada. Só se aplica quando
+  -- existe teto: Ilimitado nunca tem linha de plano, por desenho (decisão
+  -- 9), e isso nunca é pendência.
+  v_concessao_pendente := (not v_obteve_trava) and (not v_tem_linha_plano) and (v_teto is not null);
+
   -- por_fonte sempre com as três chaves (plano, adicional, avulso), mesmo
   -- quando a fonte não tem linha em billing_token_wallets ainda (Ilimitado
   -- nunca cria linha de plano, decisão 9): left join contra os três nomes
-  -- fixos, nunca jsonb_object_agg cru sobre o que existir.
+  -- fixos, nunca jsonb_object_agg cru sobre o que existir. Quando a
+  -- concessão está pendente (acima), a linha de plano mostra o TETO EFETIVO
+  -- como creditado (sem gravar nada), para a tela nunca ler "0 disponível".
   select jsonb_object_agg(f.fonte, jsonb_build_object(
-      'creditado', coalesce(w.creditado, 0),
+      'creditado', case when f.fonte = 'plano' and v_concessao_pendente then v_teto else coalesce(w.creditado, 0) end,
       'consumido', coalesce(w.consumido, 0),
-      'saldo', coalesce(w.creditado, 0) - coalesce(w.consumido, 0)
+      'saldo', case
+        when f.fonte = 'plano' and v_concessao_pendente then v_teto - coalesce(w.consumido, 0)
+        else coalesce(w.creditado, 0) - coalesce(w.consumido, 0)
+      end
     ))
     into v_por_fonte
     from (values ('plano'), ('adicional'), ('avulso')) as f(fonte)
@@ -1553,20 +1699,47 @@ begin
       and w.fonte = f.fonte
       and ((f.fonte in ('plano', 'adicional') and w.ciclo = v_ciclo) or (f.fonte = 'avulso' and w.ciclo is null));
 
-  -- Total disponível/consumido do ciclo (decisão 14): plano + adicional
-  -- DESTE ciclo, mais avulso inteiro (fonte sem ciclo).
-  select coalesce(sum(creditado), 0), coalesce(sum(consumido), 0)
+  -- Total disponível/consumido do ciclo (decisão 14), revisado pelo item 2
+  -- (23/09/2026): plano + adicional DESTE ciclo, mais avulso pela PROPORÇÃO
+  -- DO MÊS (mesma fórmula de fn_billing_avisar_carteira, ver comentário lá):
+  -- disponível do avulso = creditado da vida inteira menos consumido do
+  -- avulso em ciclos ANTERIORES; consumido do avulso no mês = só o consumo
+  -- do avulso com `ciclo` = este ciclo. por_fonte.avulso (acima) continua
+  -- mostrando o saldo REAL da vida inteira (o que de fato é debitado); só
+  -- este total, usado pela tela para calcular a porcentagem do mês, muda.
+  select coalesce(sum(creditado) filter (where fonte in ('plano', 'adicional')), 0),
+         coalesce(sum(consumido) filter (where fonte in ('plano', 'adicional')), 0)
     into v_disponivel, v_consumido
     from public.billing_token_wallets
-    where organization_id = p_org
-      and ((fonte in ('plano', 'adicional') and ciclo = v_ciclo) or (fonte = 'avulso' and ciclo is null));
+    where organization_id = p_org and fonte in ('plano', 'adicional') and ciclo = v_ciclo;
+
+  select coalesce(creditado, 0) into v_avulso_creditado_total
+    from public.billing_token_wallets
+    where organization_id = p_org and fonte = 'avulso' and ciclo is null;
+
+  select coalesce(sum(-tokens), 0) into v_avulso_consumido_antes
+    from public.billing_token_ledger
+    where organization_id = p_org and fonte = 'avulso' and chave like 'consumo:%'
+      and ciclo is not null and ciclo < v_ciclo;
+
+  select coalesce(sum(-tokens), 0) into v_avulso_consumido_mes
+    from public.billing_token_ledger
+    where organization_id = p_org and fonte = 'avulso' and chave like 'consumo:%' and ciclo = v_ciclo;
+
+  v_disponivel := v_disponivel + (coalesce(v_avulso_creditado_total, 0) - v_avulso_consumido_antes);
+  v_consumido := v_consumido + v_avulso_consumido_mes;
+
+  if v_concessao_pendente then
+    v_disponivel := v_disponivel + v_teto;
+  end if;
 
   return jsonb_build_object(
     'ciclo', v_ciclo,
     'por_fonte', coalesce(v_por_fonte, '{}'::jsonb),
     'sem_limite', v_teto is null,
     'total_disponivel', v_disponivel,
-    'total_consumido', v_consumido
+    'total_consumido', v_consumido,
+    'concessao_pendente', v_concessao_pendente
   );
 end;
 $$;
@@ -1593,6 +1766,16 @@ declare
   v_linha record;
   v_creditado_real bigint;
   v_consumido_real bigint;
+  -- Item 5 da revisão (23/09/2026): o conferidor rodava sobre TODA a
+  -- carteira da organização, ciclo por ciclo, desde carteira_desde: o custo
+  -- cresce com o histórico e nunca diminui. Ciclo fechado não recebe linha
+  -- nova (concessão só concede para o ciclo atual, decisão 9; consumo,
+  -- crédito e ajuste do admin sempre usam o ciclo atual, exceto o consumo
+  -- tardio de fn_billing_debitar_chamada, que ainda pode gravar no ciclo
+  -- ANTERIOR se uma chamada demorou a debitar); confere só o ciclo
+  -- atual, o anterior e o avulso (que nunca tem ciclo e nunca "fecha").
+  v_ciclo_atual date := public.fn_billing_ciclo_de(now());
+  v_ciclo_anterior date := (public.fn_billing_ciclo_de(now()) - interval '1 month')::date;
 begin
   perform pg_advisory_xact_lock(hashtextextended('billing_tokens:' || p_org::text, 0));
 
@@ -1600,6 +1783,7 @@ begin
     select id, fonte, ciclo, creditado, consumido
     from public.billing_token_wallets
     where organization_id = p_org
+      and (ciclo in (v_ciclo_atual, v_ciclo_anterior) or fonte = 'avulso')
     for update
   loop
     -- creditado real: concessão (chave carrega o ciclo: 'plano:<ciclo>' ou
@@ -1613,8 +1797,11 @@ begin
       where l.organization_id = p_org
         and l.fonte = v_linha.fonte
         and (
-          (v_linha.fonte = 'plano' and l.chave = 'plano:' || v_linha.ciclo::text)
-          or (v_linha.fonte = 'adicional' and l.chave like 'adicional:%:' || v_linha.ciclo::text)
+          -- Item 8 da revisão: to_char, não ::text (ver comentário na
+          -- concessão, Parte 2): a chave foi gravada com to_char, a
+          -- comparação tem que usar a mesma conversão.
+          (v_linha.fonte = 'plano' and l.chave = 'plano:' || to_char(v_linha.ciclo, 'YYYY-MM-DD'))
+          or (v_linha.fonte = 'adicional' and l.chave like 'adicional:%:' || to_char(v_linha.ciclo, 'YYYY-MM-DD'))
           or (v_linha.fonte = 'avulso' and l.chave like 'credito:%')
           or (l.chave like 'ajuste:%' and l.ciclo is not distinct from v_linha.ciclo)
         );
@@ -1678,7 +1865,13 @@ as $$
   from public.llm_calls c, public.billing_settings s
   where s.id = 1
     and c.organization_id = p_org
-    and c.created_at >= greatest(s.carteira_desde, now() - interval '35 days')
+    -- Item 3 da revisão (23/09/2026): sem s.pesos_alterados_em aqui, trocar
+    -- um peso de 0 para um valor maior (ex.: embedding_indexar) faria este
+    -- conferidor recalcular com o peso NOVO até 35 dias de chamada ANTIGA
+    -- que nunca deveriam ter debitado nada (o peso vigente no momento da
+    -- chamada era 0). greatest() ignora NULL sozinho (pesos_alterados_em
+    -- nunca mudou = coluna nula = sem efeito nesta comparação).
+    and c.created_at >= greatest(s.carteira_desde, s.pesos_alterados_em, now() - interval '35 days')
     and c.legacy_invocation_id is null
     and c.origem_da_chave = 'chave_da_instalacao'
     and public.fn_billing_tokens_ponderados(
@@ -1817,6 +2010,366 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke select on public.billing_token_ledger, public.billing_token_wallets, public.billing_token_adicionais, public.billing_token_consumo_diario, public.billing_token_avisos_emitidos from agent_worker';
+  end if;
+end
+$$;
+
+-- ── Parte 6: revisão da fase F2-B (23/09/2026), peças NOVAS ──
+--
+-- As partes 1 a 5 (acima) são o texto entregue mais as correções da
+-- auditoria de segurança. Esta parte 6 traz o que a REVISÃO pediu de NOVO:
+-- as quatro RPCs de agregação no banco (item 1, corrige o ALTO da revisão:
+-- as leituras em TypeScript traziam linha crua, cortada em 1000 pelo
+-- max_rows do PostgREST, e somavam no Node: os totais saíam menores que o
+-- real), a coluna e o gatilho de `pesos_alterados_em` (infraestrutura do
+-- item 3) e o índice que o item 5 pede para o conferidor não fazer `like
+-- 'consumo:%'` sem apoio de índice. As correções NO LUGAR das oito funções
+-- originais (itens 2 a 8) já foram feitas acima, nas partes 1 a 4 onde cada
+-- função nasceu; só o que é estrutural/aditivo por natureza fica aqui,
+-- mesmo molde das partes 1 a 5.
+--
+-- Trava e transação: as quatro RPCs são STABLE (só leem, nunca escrevem:
+-- mesmo fn_billing_livro_caixa_do_ciclo e fn_billing_margem_do_ciclo, que
+-- usam PL/pgSQL para um `select ... into` antes do jsonb_build_object, não
+-- gravam nada). Nenhuma trava advisory: leitura pura não disputa a carteira
+-- com o débito.
+--
+-- Idempotente: add column if not exists, create index if not exists, create
+-- or replace function, drop trigger if exists antes de recriar, bloco final
+-- de agent_worker igual ao das partes 1 a 5.
+
+-- ============================================================================
+-- 28. Índice de apoio ao conferidor (item 5 da revisão): sem ele, o `like
+-- 'consumo:%'` dentro do loop de fn_billing_conferir_carteira (Parte 4, já
+-- editada acima para varrer só o ciclo atual/anterior/avulso) varreria a
+-- fatia (organização, fonte) inteira por sequential scan a cada linha da
+-- carteira conferida.
+-- ============================================================================
+create index if not exists billing_token_ledger_org_fonte_ciclo_idx
+  on public.billing_token_ledger (organization_id, fonte, ciclo);
+
+-- ============================================================================
+-- 29. fn_billing_extrato_do_ciclo: por dia e por agente, agregados NO BANCO
+-- (item 1a da revisão). Substitui a leitura crua de
+-- `lib/billing/tokens/extrato-do-ciclo.ts` (Tarefa 9), que trazia linha a
+-- linha e cortava em max_rows = 1000 do PostgREST.
+-- ============================================================================
+create or replace function public.fn_billing_extrato_do_ciclo(p_org uuid, p_ciclo date)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select jsonb_build_object(
+    'por_dia', coalesce((
+      select jsonb_agg(jsonb_build_object(
+          'dia', to_char(d.dia, 'YYYY-MM-DD'),
+          'tokens_ponderados', d.tokens_ponderados,
+          'chamadas', d.chamadas
+        ) order by d.dia)
+      from (
+        select dia, sum(tokens_ponderados) as tokens_ponderados, sum(chamadas) as chamadas
+        from public.billing_token_consumo_diario
+        where organization_id = p_org
+          and dia >= p_ciclo and dia < (p_ciclo + interval '1 month')::date
+        group by dia
+      ) d
+    ), '[]'::jsonb),
+    'por_agente', coalesce((
+      select jsonb_agg(jsonb_build_object(
+          'agent_id', a.agent_id,
+          'tokens_ponderados', a.tokens_ponderados,
+          'chamadas', a.chamadas
+        ) order by a.tokens_ponderados desc)
+      from (
+        select agent_id, sum(tokens_ponderados) as tokens_ponderados, sum(chamadas) as chamadas
+        from public.billing_token_consumo_diario
+        where organization_id = p_org
+          and dia >= p_ciclo and dia < (p_ciclo + interval '1 month')::date
+        group by agent_id
+      ) a
+    ), '[]'::jsonb)
+  )
+$$;
+
+comment on function public.fn_billing_extrato_do_ciclo(uuid, date) is
+  '0906, Parte 6, item 1a da revisão (23/09/2026): extrato do ciclo agregado NO BANCO, {"por_dia": [{dia, tokens_ponderados, chamadas}], "por_agente": [{agent_id, tokens_ponderados, chamadas}]}, a partir de billing_token_consumo_diario (dia >= p_ciclo e < mês seguinte). agent_id nulo é o grupo "sem agente" (a tela junta o nome do agente depois, tarefa 9). STABLE, security definer, execute só service_role.';
+
+revoke execute on function public.fn_billing_extrato_do_ciclo(uuid, date) from public, anon, authenticated;
+grant execute on function public.fn_billing_extrato_do_ciclo(uuid, date) to service_role;
+
+-- ============================================================================
+-- 30. fn_billing_livro_caixa_do_ciclo: linhas não-consumo (concessão,
+-- crédito, ajuste) mais o consumo agrupado por dia e fonte (item 1b da
+-- revisão).
+-- ============================================================================
+create or replace function public.fn_billing_livro_caixa_do_ciclo(p_org uuid, p_ciclo date)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_total_nao_consumo int;
+begin
+  -- Filtro do ciclo (item 1b): pelo `ciclo` GRAVADO na linha quando não é
+  -- nulo (ajuste de plano/adicional); para o que nunca tem ciclo gravado
+  -- (concessão: o ciclo já está na chave, nunca na coluna; e crédito/
+  -- ajuste avulso), pelo `created_at` convertido para ciclo NO BANCO
+  -- (fn_billing_ciclo_de, fuso America/Sao_Paulo), nunca com um offset fixo
+  -- tipo "-03:00" calculado no TypeScript.
+  select count(*) into v_total_nao_consumo
+    from public.billing_token_ledger l
+    where l.organization_id = p_org
+      and l.chave not like 'consumo:%'
+      and (
+        (l.ciclo is not null and l.ciclo = p_ciclo)
+        or (l.ciclo is null and public.fn_billing_ciclo_de(l.created_at) = p_ciclo)
+      );
+
+  return jsonb_build_object(
+    'linhas', coalesce((
+      select jsonb_agg(jsonb_build_object(
+          'id', x.id,
+          'created_at', x.created_at,
+          'fonte', x.fonte,
+          'tipo', x.tipo,
+          'tokens', x.tokens,
+          'valor_cents', x.valor_cents,
+          'nota', x.nota,
+          'criado_por', x.criado_por,
+          'compensa_id', x.compensa_id
+        ) order by x.created_at desc)
+      from (
+        select l.id, l.created_at, l.fonte, l.tokens, l.valor_cents, l.nota, l.criado_por, l.compensa_id,
+          case
+            when l.chave like 'credito:%' then 'credito'
+            when l.chave like 'ajuste:%' then 'ajuste'
+            else 'concessao'
+          end as tipo
+        from public.billing_token_ledger l
+        where l.organization_id = p_org
+          and l.chave not like 'consumo:%'
+          and (
+            (l.ciclo is not null and l.ciclo = p_ciclo)
+            or (l.ciclo is null and public.fn_billing_ciclo_de(l.created_at) = p_ciclo)
+          )
+        order by l.created_at desc
+        -- Item 1b: limite de 500 linhas não-consumo; `truncado`, abaixo,
+        -- avisa quando o corte de fato tirou linha.
+        limit 500
+      ) x
+    ), '[]'::jsonb),
+    'consumo_por_dia_fonte', coalesce((
+      select jsonb_agg(jsonb_build_object(
+          'dia', to_char(c.dia, 'YYYY-MM-DD'),
+          'fonte', c.fonte,
+          'tokens', c.tokens,
+          'chamadas', c.chamadas
+        ) order by c.dia desc, c.fonte)
+      from (
+        -- Consumo sempre tem `ciclo` gravado na própria linha desde a
+        -- correção A1 (Parte 2, defesa em profundidade), inclusive avulso
+        -- (informativo lá, usado aqui de verdade): sem depender de
+        -- created_at nem de llm_calls continuar viva.
+        select (l.created_at at time zone 'America/Sao_Paulo')::date as dia, l.fonte,
+          sum(l.tokens) as tokens, count(*) as chamadas
+        from public.billing_token_ledger l
+        where l.organization_id = p_org and l.chave like 'consumo:%' and l.ciclo = p_ciclo
+        group by 1, 2
+      ) c
+    ), '[]'::jsonb),
+    'truncado', v_total_nao_consumo > 500
+  );
+end;
+$$;
+
+comment on function public.fn_billing_livro_caixa_do_ciclo(uuid, date) is
+  '0906, Parte 6, item 1b da revisão (23/09/2026): livro-caixa do ciclo agregado NO BANCO. "linhas": até 500 linhas não-consumo (concessão/crédito/ajuste), mais recente primeiro, cada uma com id, created_at, fonte, tipo (pela chave), tokens, valor_cents, nota, criado_por, compensa_id; "truncado" avisa quando havia mais de 500. "consumo_por_dia_fonte": consumo agrupado por dia (fuso America/Sao_Paulo) e fonte, tokens negativo. STABLE, security definer, execute só service_role.';
+
+revoke execute on function public.fn_billing_livro_caixa_do_ciclo(uuid, date) from public, anon, authenticated;
+grant execute on function public.fn_billing_livro_caixa_do_ciclo(uuid, date) to service_role;
+
+-- ============================================================================
+-- 31. fn_billing_margem_do_ciclo: receita e custo do ciclo (item 1c da
+-- revisão), com estimativa de custo pelo catálogo para chamada sem
+-- cost_cents.
+-- ============================================================================
+create or replace function public.fn_billing_margem_do_ciclo(p_org uuid, p_ciclo date)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_receita_plano_cents bigint := 0;
+  v_receita_adicionais_cents bigint := 0;
+  v_receita_creditos_cents bigint := 0;
+  v_custo_conhecido_cents numeric := 0;
+  v_custo_estimado_cents numeric := 0;
+  v_chamadas_estimadas int := 0;
+  v_chamadas_sem_preco int := 0;
+begin
+  select coalesce(bp.price_monthly_cents, 0) into v_receita_plano_cents
+    from public.billing_contracts bc
+    join public.billing_plans bp on bp.id = bc.plan_id
+    where bc.organization_id = p_org;
+
+  select coalesce(sum(valor_cents), 0) into v_receita_adicionais_cents
+    from public.billing_token_adicionais
+    where organization_id = p_org and ativo;
+
+  select coalesce(sum(l.valor_cents), 0) into v_receita_creditos_cents
+    from public.billing_token_ledger l
+    where l.organization_id = p_org
+      and l.chave like 'credito:%'
+      and (
+        (l.ciclo is not null and l.ciclo = p_ciclo)
+        or (l.ciclo is null and public.fn_billing_ciclo_de(l.created_at) = p_ciclo)
+      );
+
+  -- Custo CONHECIDO: tudo que a Hiperbold paga (origem NÃO
+  -- credencial_da_organizacao, inclusive nula), com cost_cents gravado,
+  -- inclusive peso ponderado 0 (llm_calls não sabe de peso; a carteira, sim,
+  -- mas o painel de margem é sobre DINHEIRO gasto com o fornecedor de IA,
+  -- não sobre token debitado da carteira). Usa idx_llm_calls_org_time
+  -- (organization_id, created_at), já existente.
+  select coalesce(sum(c.cost_cents), 0) into v_custo_conhecido_cents
+    from public.llm_calls c
+    where c.organization_id = p_org
+      and c.origem_da_chave is distinct from 'credencial_da_organizacao'
+      and public.fn_billing_ciclo_de(c.created_at) = p_ciclo
+      and c.cost_cents is not null;
+
+  -- Custo ESTIMADO: as chamadas do ciclo com cost_cents nulo, casando o
+  -- modelo com o catálogo ai_models pela MESMA ordem de busca da correção do
+  -- item 10 (lib/ai/runtime/cost.ts): (provider, modelo exato), (provider,
+  -- sem prefixo), (openrouter, modelo com prefixo), qualquer provider com
+  -- model_id igual. Ignora deprecated_at (linha que saiu do catálogo não é
+  -- preço de hoje) e preço parcialmente nulo (metade do preço não é preço).
+  with sem_custo as (
+    select c.id, c.provider, c.model, c.input_tokens, c.output_tokens,
+      case when c.model like c.provider || '/%' then substring(c.model from length(c.provider) + 2) else c.model end as modelo_sem_prefixo
+    from public.llm_calls c
+    where c.organization_id = p_org
+      and c.origem_da_chave is distinct from 'credencial_da_organizacao'
+      and public.fn_billing_ciclo_de(c.created_at) = p_ciclo
+      and c.cost_cents is null
+  ),
+  com_preco as (
+    select s.input_tokens, s.output_tokens, mc.input_price_per_million_cents, mc.output_price_per_million_cents
+    from sem_custo s
+    left join lateral (
+      select m.input_price_per_million_cents, m.output_price_per_million_cents
+      from public.ai_models m
+      where m.deprecated_at is null
+        and m.input_price_per_million_cents is not null
+        and m.output_price_per_million_cents is not null
+        and (
+          (m.provider = s.provider and m.model_id = s.model)
+          or (m.provider = s.provider and m.model_id = s.modelo_sem_prefixo)
+          or (m.provider = 'openrouter' and m.model_id = s.model)
+          or m.model_id = s.model
+          or m.model_id = s.modelo_sem_prefixo
+        )
+      order by (case
+        when m.provider = s.provider and m.model_id = s.model then 1
+        when m.provider = s.provider and m.model_id = s.modelo_sem_prefixo then 2
+        when m.provider = 'openrouter' and m.model_id = s.model then 3
+        else 4
+      end)
+      limit 1
+    ) mc on true
+  )
+  select
+    coalesce(sum(ceil((coalesce(input_tokens, 0) * input_price_per_million_cents + coalesce(output_tokens, 0) * output_price_per_million_cents)::numeric / 1000000)) filter (where input_price_per_million_cents is not null), 0),
+    count(*) filter (where input_price_per_million_cents is not null),
+    count(*) filter (where input_price_per_million_cents is null)
+    into v_custo_estimado_cents, v_chamadas_estimadas, v_chamadas_sem_preco
+  from com_preco;
+
+  return jsonb_build_object(
+    'receita_plano_cents', v_receita_plano_cents,
+    'receita_adicionais_cents', v_receita_adicionais_cents,
+    'receita_creditos_cents', v_receita_creditos_cents,
+    'receita_total_cents', v_receita_plano_cents + v_receita_adicionais_cents + v_receita_creditos_cents,
+    'custo_conhecido_cents', v_custo_conhecido_cents,
+    'custo_estimado_cents', v_custo_estimado_cents,
+    'chamadas_estimadas', v_chamadas_estimadas,
+    'chamadas_sem_preco', v_chamadas_sem_preco
+  );
+end;
+$$;
+
+comment on function public.fn_billing_margem_do_ciclo(uuid, date) is
+  '0906, Parte 6, item 1c da revisão (23/09/2026): receita (preço mensal do contrato + valor_cents dos adicionais ativos + valor_cents dos créditos avulsos do ciclo, tudo em CENTAVOS DE REAL) e custo do ciclo (soma de cost_cents CONHECIDO de llm_calls que a Hiperbold paga, origem distinta de credencial_da_organizacao, inclusive nula, inclusive peso 0, mais ESTIMATIVA pelo catálogo ai_models para o que tem cost_cents nulo, e a contagem do que nem o catálogo sabe precificar). Devolve {"receita_plano_cents", "receita_adicionais_cents", "receita_creditos_cents", "receita_total_cents", "custo_conhecido_cents", "custo_estimado_cents" (CENTAVOS DE DÓLAR, nunca convertidos), "chamadas_estimadas", "chamadas_sem_preco"}. STABLE, security definer, execute só service_role.';
+
+revoke execute on function public.fn_billing_margem_do_ciclo(uuid, date) from public, anon, authenticated;
+grant execute on function public.fn_billing_margem_do_ciclo(uuid, date) to service_role;
+
+-- ============================================================================
+-- 32. fn_billing_consumo_para_estimativa: tokens e respostas dos últimos
+-- p_dias, para a estimativa de quanto vai durar o saldo (item 1d da
+-- revisão).
+-- ============================================================================
+create or replace function public.fn_billing_consumo_para_estimativa(p_org uuid, p_dias int)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_tokens_ponderados bigint;
+  v_respostas bigint;
+  v_carteira_desde timestamptz;
+  v_desde timestamptz := now() - (p_dias || ' days')::interval;
+begin
+  select carteira_desde into v_carteira_desde from public.billing_settings where id = 1;
+
+  -- Tokens: do livro-caixa (consumo), não de llm_calls: é o token PONDERADO
+  -- que a carteira debita, não o token cru do fornecedor.
+  select coalesce(sum(-l.tokens), 0) into v_tokens_ponderados
+    from public.billing_token_ledger l
+    where l.organization_id = p_org and l.chave like 'consumo:%' and l.created_at >= v_desde;
+
+  -- Respostas: chamadas purpose = agent_turn, status = ok, origem =
+  -- chave_da_instalacao, created_at >= greatest(carteira_desde, v_desde).
+  -- Uma resposta pode gerar VÁRIAS chamadas (uso de ferramenta no meio do
+  -- turno, mesmo job_id): count(distinct ...) com coalesce(job_id, id) conta
+  -- uma por job_id quando houver, uma por linha quando job_id for nulo (cada
+  -- id é único, nunca colide com outro job_id nem com outro id).
+  select count(distinct coalesce(c.job_id::text, c.id::text)) into v_respostas
+    from public.llm_calls c
+    where c.organization_id = p_org
+      and c.purpose = 'agent_turn'
+      and c.status = 'ok'
+      and c.origem_da_chave = 'chave_da_instalacao'
+      and c.created_at >= greatest(v_carteira_desde, v_desde);
+
+  return jsonb_build_object('tokens_ponderados', v_tokens_ponderados, 'respostas', v_respostas);
+end;
+$$;
+
+comment on function public.fn_billing_consumo_para_estimativa(uuid, int) is
+  '0906, Parte 6, item 1d da revisão (23/09/2026): {"tokens_ponderados", "respostas"} dos últimos p_dias. tokens_ponderados vem do livro-caixa (consumo); respostas conta chamadas purpose=agent_turn, status=ok, origem_da_chave=chave_da_instalacao, created_at >= greatest(carteira_desde, hoje - p_dias), uma por job_id quando houver (várias chamadas de ferramenta no mesmo turno), uma por linha quando job_id é nulo. STABLE, security definer, execute só service_role.';
+
+revoke execute on function public.fn_billing_consumo_para_estimativa(uuid, int) from public, anon, authenticated;
+grant execute on function public.fn_billing_consumo_para_estimativa(uuid, int) to service_role;
+
+-- ============================================================================
+-- 33. agent_worker não executa nem escreve nas peças novas desta parte 6
+-- (mesmo racional dos blocos de revoke das partes 1 a 5, acima): por alter
+-- default privileges ela ganharia execute em toda função nova do schema
+-- public, e tem bypassrls.
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_extrato_do_ciclo(uuid, date), public.fn_billing_livro_caixa_do_ciclo(uuid, date), public.fn_billing_margem_do_ciclo(uuid, date), public.fn_billing_consumo_para_estimativa(uuid, int) from agent_worker';
   end if;
 end
 $$;

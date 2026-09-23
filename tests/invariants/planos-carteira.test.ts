@@ -116,6 +116,13 @@ const ORG_B1_ADICIONAL_OUTRA_ORG_A = "09060003-0000-4000-8000-000000000022";
 const ORG_B1_ADICIONAL_OUTRA_ORG_B = "09060003-0000-4000-8000-000000000023";
 const ORG_B2_AJUSTE_DUPLO = "09060003-0000-4000-8000-000000000024";
 
+// Casos 35 a 39: revisão da fase F2-B (23/09/2026), itens 1 a 6.
+const ORG_RPC_MIL_LINHAS = "09060003-0000-4000-8000-000000000025";
+const ORG_AVULSO_ANTIGO = "09060003-0000-4000-8000-000000000026";
+const ORG_PESO_TROCADO = "09060003-0000-4000-8000-000000000027";
+const ORG_ILIMITADO_AVULSO = "09060003-0000-4000-8000-000000000028";
+const ORG_CONCESSAO_PENDENTE = "09060003-0000-4000-8000-000000000029";
+
 /** Marcador das linhas de resultado, o psql também imprime SET, INSERT 0 1 etc. */
 const MARCA = "SONDA|";
 
@@ -603,7 +610,6 @@ describe("13. Concorrência real: duas sessões psql inserindo na MESMA organiza
   // espera, sai sem debitar (confirmado abaixo pelas asserções de
   // corretude). O sub-caso de TEMPO fica marcado como DEFEITO CONHECIDO, fora
   // do 0906: ver o comentário no `it` de baixo.
-  let duracaoB = 0;
   let resultadoB: { ok: boolean; erro: string | null } = { ok: false, erro: null };
 
   beforeAll(async () => {
@@ -623,14 +629,7 @@ describe("13. Concorrência real: duas sessões psql inserindo na MESMA organiza
       ${sqlChamada(ORG_CONCORRENCIA, "concorrencia-b", 15)}
     `;
 
-    const inicioB = Date.now();
-    const [, resB] = await Promise.all([
-      sqlAsync(sessaoA),
-      sqlAsync(sessaoB).then((r) => {
-        duracaoB = Date.now() - inicioB;
-        return r;
-      }),
-    ]);
+    const [, resB] = await Promise.all([sqlAsync(sessaoA), sqlAsync(sessaoB)]);
     resultadoB = resB;
 
     // O "conferidor" (Tarefa 8): acha quem ficou pendente (a sessão B, cujo
@@ -649,8 +648,10 @@ describe("13. Concorrência real: duas sessões psql inserindo na MESMA organiza
   // como D-058. A promessa da decisão 11 (a trava da CARTEIRA não faz esperar)
   // é provada no caso 13b, que segura só o advisory lock da carteira.
   it("a sessão B termina sem erro (o insert em llm_calls nunca é recusado)", () => {
+    // Item 14 da revisão (23/09/2026): `duracaoB > 0` não prova nada (é
+    // Date.now() depois de Date.now(), sempre verdadeiro por construção); o
+    // caso 13b, logo abaixo, é quem prova tempo de verdade.
     expect(resultadoB.ok, resultadoB.erro ?? "").toBe(true);
-    expect(duracaoB).toBeGreaterThan(0);
   });
 
   it("as duas chamadas da organização têm exatamente uma linha de consumo cada (nenhuma duplicou, nenhuma ficou sem debitar)", () => {
@@ -1323,5 +1324,161 @@ describe("34. B2 (auditoria de segurança): a mesma linha compensada não pode s
     );
     expect(erro).not.toBeNull();
     expect(erro).toContain("ajuste_compensa_ja_usado");
+  });
+});
+
+describe("35. Item 1 da revisão (23/09/2026): as quatro RPCs agregam NO BANCO, sem cortar em 1000 linhas", () => {
+  it("fn_billing_extrato_do_ciclo soma 1200 linhas de agregado diário (acima do max_rows do PostgREST)", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_RPC_MIL_LINHAS, "carteira-rpc-mil-linhas")}
+      insert into public.billing_token_consumo_diario (organization_id, dia, agent_id, contact_id, purpose, tokens_ponderados, chamadas)
+      select '${ORG_RPC_MIL_LINHAS}'::uuid, ('2026-09-01'::date + (g % 30)), null,
+        ('cccccccc-3500-4000-8000-' || lpad(g::text, 12, '0'))::uuid, 'agent_turn', 10, 1
+      from generate_series(1, 1200) as g;
+    `);
+    const somaPorDia = comoServico(
+      `select 'SONDA|' || sum((v->>'tokens_ponderados')::bigint) from jsonb_array_elements(public.fn_billing_extrato_do_ciclo('${ORG_RPC_MIL_LINHAS}'::uuid, '2026-09-01'::date) -> 'por_dia') v;`,
+    );
+    expect(somaPorDia).toEqual(["12000"]);
+  });
+
+  it("fn_billing_livro_caixa_do_ciclo trunca em 500 linhas não-consumo e agrupa 1500 linhas de consumo por dia/fonte", () => {
+    comoServico(`
+      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo, nota)
+      select '${ORG_RPC_MIL_LINHAS}'::uuid, 'avulso', 1, 'ajuste:' || ('dddddddd-3500-4000-8000-' || lpad(g::text, 12, '0'))::uuid, null, 'caso 35'
+      from generate_series(1, 600) as g;
+      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo)
+      select '${ORG_RPC_MIL_LINHAS}'::uuid, 'plano', -1, 'consumo:' || ('eeeeeeee-3500-4000-8000-' || lpad(g::text, 12, '0'))::uuid || ':plano', '2026-09-01'::date
+      from generate_series(1, 1500) as g;
+    `);
+    const livroCaixa = comoServico(
+      `select 'SONDA|' || (public.fn_billing_livro_caixa_do_ciclo('${ORG_RPC_MIL_LINHAS}'::uuid, '2026-09-01'::date) ->> 'truncado');`,
+    );
+    expect(livroCaixa).toEqual(["true"]);
+    const linhas = comoServico(
+      `select 'SONDA|' || jsonb_array_length(public.fn_billing_livro_caixa_do_ciclo('${ORG_RPC_MIL_LINHAS}'::uuid, '2026-09-01'::date) -> 'linhas');`,
+    );
+    expect(linhas).toEqual(["500"]);
+    const consumoTotal = comoServico(
+      `select 'SONDA|' || (select sum((c->>'tokens')::bigint) from jsonb_array_elements(public.fn_billing_livro_caixa_do_ciclo('${ORG_RPC_MIL_LINHAS}'::uuid, '2026-09-01'::date) -> 'consumo_por_dia_fonte') c);`,
+    );
+    expect(consumoTotal).toEqual(["-1500"]);
+  });
+});
+
+describe("36. Item 2 da revisão: avulso na porcentagem do mês (não a vida inteira)", () => {
+  it("crédito avulso consumido em ciclo ANTERIOR não conta como consumido do mês atual", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_AVULSO_ANTIGO, "carteira-avulso-antigo")}
+      ${ajustarTeto(ORG_AVULSO_ANTIGO, 1000)}
+      select public.fn_billing_creditar_tokens('${ORG_AVULSO_ANTIGO}'::uuid, 1000, 'ffffffff-3600-4000-8000-000000000001'::uuid, null, 'avulso antigo', null);
+      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo, llm_call_id)
+      values ('${ORG_AVULSO_ANTIGO}'::uuid, 'avulso', -900, 'consumo:ffffffff-3600-4000-8000-000000000002:avulso', public.fn_billing_ciclo_de(now() - interval '1 month'), 'ffffffff-3600-4000-8000-000000000002');
+      update public.billing_token_wallets set consumido = consumido + 900
+        where organization_id = '${ORG_AVULSO_ANTIGO}'::uuid and fonte = 'avulso' and ciclo is null;
+    `);
+
+    // Saldo REAL do avulso (por_fonte) continua a vida inteira: 1000 - 900 = 100.
+    const saldoReal = comoServico(
+      `select 'SONDA|' || (public.fn_billing_saldo_da_carteira('${ORG_AVULSO_ANTIGO}'::uuid) -> 'por_fonte' -> 'avulso' ->> 'saldo');`,
+    );
+    expect(saldoReal).toEqual(["100"]);
+
+    // total_consumido do MÊS não inclui os 900 gastos no ciclo passado.
+    const consumidoDoMes = comoServico(
+      `select 'SONDA|' || (public.fn_billing_saldo_da_carteira('${ORG_AVULSO_ANTIGO}'::uuid) ->> 'total_consumido');`,
+    );
+    expect(consumidoDoMes).toEqual(["0"]);
+
+    // total_disponivel do mês = 1000 (teto do plano) + 100 (avulso de abertura do mês).
+    const disponivelDoMes = comoServico(
+      `select 'SONDA|' || (public.fn_billing_saldo_da_carteira('${ORG_AVULSO_ANTIGO}'::uuid) ->> 'total_disponivel');`,
+    );
+    expect(disponivelDoMes).toEqual(["1100"]);
+  });
+});
+
+describe("37. Item 3 da revisão: pendente depois de trocar o peso não cobra histórico anterior à troca", () => {
+  it("chamada de embedding (peso 0) de 40 dias atrás continua fora de fn_billing_debitos_pendentes depois do peso subir", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_PESO_TROCADO, "carteira-peso-trocado")}
+      ${sqlChamada(ORG_PESO_TROCADO, "peso-trocado-embedding", 0, { purpose: "embedding_indexar", createdAtExpr: "now() - interval '40 days'" })}
+    `);
+
+    const antes = comoServico(`select 'SONDA|' || count(*) from public.fn_billing_debitos_pendentes('${ORG_PESO_TROCADO}'::uuid);`);
+    expect(antes).toEqual(["0"]);
+
+    comoServico(`update public.billing_settings set pesos_por_proposito = pesos_por_proposito || '{"embedding_indexar": 50}'::jsonb where id = 1;`);
+    try {
+      const marcaGravada = comoServico(`select 'SONDA|' || (pesos_alterados_em is not null) from public.billing_settings where id = 1;`);
+      expect(marcaGravada).toEqual(["true"]);
+
+      const depois = comoServico(`select 'SONDA|' || count(*) from public.fn_billing_debitos_pendentes('${ORG_PESO_TROCADO}'::uuid);`);
+      expect(depois).toEqual(["0"]);
+    } finally {
+      comoServico(`update public.billing_settings set pesos_por_proposito = pesos_por_proposito || '{"embedding_indexar": 0}'::jsonb where id = 1;`);
+    }
+  });
+});
+
+describe("38. Item 4 da revisão: Ilimitado não consome adicional nem avulso, e nunca avisa limiar", () => {
+  it("chamada de organização Ilimitada com avulso sobrando cai inteira em plano, avulso fica intocado, sem aviso", () => {
+    comoServico(`
+      ${criarOrgSql(ORG_ILIMITADO_AVULSO, "carteira-ilimitado-avulso")}
+      select public.fn_billing_creditar_tokens('${ORG_ILIMITADO_AVULSO}'::uuid, 500, 'ffffffff-3800-4000-8000-000000000001'::uuid, null, 'avulso do ilimitado', null);
+      ${sqlChamada(ORG_ILIMITADO_AVULSO, "ilimitado-avulso-chamada", 300)}
+    `);
+
+    const debitoPlano = comoServico(
+      `select 'SONDA|' || sum(-tokens) from public.billing_token_ledger where organization_id = '${ORG_ILIMITADO_AVULSO}' and chave like 'consumo:%' and fonte = 'plano';`,
+    );
+    expect(debitoPlano).toEqual(["300"]);
+
+    const debitoAvulso = comoServico(
+      `select 'SONDA|' || coalesce(sum(-tokens), 0) from public.billing_token_ledger where organization_id = '${ORG_ILIMITADO_AVULSO}' and chave like 'consumo:%' and fonte = 'avulso';`,
+    );
+    expect(debitoAvulso).toEqual(["0"]);
+
+    const saldoAvulso = comoServico(
+      `select 'SONDA|' || (creditado - consumido) from public.billing_token_wallets where organization_id = '${ORG_ILIMITADO_AVULSO}' and fonte = 'avulso';`,
+    );
+    expect(saldoAvulso).toEqual(["500"]);
+
+    const avisos = comoServico(`select 'SONDA|' || count(*) from public.billing_token_avisos_emitidos where organization_id = '${ORG_ILIMITADO_AVULSO}';`);
+    expect(avisos).toEqual(["0"]);
+  });
+});
+
+describe("39. Item 6 da revisão: concessão pulada (trava ocupada) vira concessao_pendente, não '0 disponível'", () => {
+  it("fn_billing_saldo_da_carteira, com a trava ocupada por OUTRA sessão e sem linha de plano no ciclo, devolve o teto como creditado e concessao_pendente true", async () => {
+    comoServico(`
+      ${criarOrgSql(ORG_CONCESSAO_PENDENTE, "carteira-concessao-pendente")}
+      ${ajustarTeto(ORG_CONCESSAO_PENDENTE, 2000)}
+    `);
+
+    const sessaoQueSeguraATrava = `
+      begin;
+      select pg_advisory_xact_lock(hashtextextended('billing_tokens:${ORG_CONCESSAO_PENDENTE}', 0));
+      select pg_sleep(1.5);
+      rollback;
+    `;
+    const travaPromise = sqlAsync(sessaoQueSeguraATrava);
+    await new Promise((r) => setTimeout(r, 300));
+
+    const saldoComTravaOcupada = comoServico(
+      `select 'SONDA|' || (public.fn_billing_saldo_da_carteira('${ORG_CONCESSAO_PENDENTE}'::uuid))::text;`,
+    )[0]!;
+    const parsed = JSON.parse(saldoComTravaOcupada);
+    expect(parsed.concessao_pendente).toBe(true);
+    expect(parsed.por_fonte.plano.creditado).toBe(2000);
+    expect(parsed.total_disponivel).toBe(2000);
+
+    await travaPromise;
+
+    const saldoDepois = comoServico(
+      `select 'SONDA|' || (public.fn_billing_saldo_da_carteira('${ORG_CONCESSAO_PENDENTE}'::uuid))::text;`,
+    )[0]!;
+    const parsedDepois = JSON.parse(saldoDepois);
+    expect(parsedDepois.concessao_pendente).toBe(false);
   });
 });
