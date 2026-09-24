@@ -2,8 +2,8 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: F4 (autorizada pelo Filipe em 24/09; F5 e F6 depois)
-Etapa da fase: F4, tarefas 1 a 7 commitadas (a0bbc02 provas de banco, a7ad236 follow-ups); tarefa 8 (telas) em execução; plano da F5 em rascunho. Para a revisão da F4 olhar: `lib/followup/aplicar-inbound.ts` enfileira `followup_turn` sem o portão de modo leitura (o turno passa pelo `run-model-call`, que barra a IA, conferir se há passo de texto fixo por esse caminho).
+Fase atual: F5 (F4 fechada em 24/09/2026 às 16:51; F6 com 3 modelos de página em design)
+Etapa da fase: F5 em implementação pelo plano revisado (`hiperbold/planos/fase-F5-tarefas.md`): tarefas 1 a 4, 10, 11 e 12 commitadas (ce99bf7, b04bfba, 8487304, 97e7be9, 73973bc); tarefa 5 (aplicar pagamento) e 14 (serviço de compra) em execução.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
 
@@ -19,7 +19,7 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 | F2 | **feita**: 8 tarefas, revisão e auditoria sem achado alto (médios corrigidos em duas levas), todos os portões verdes | 28d21a3 | 23/09/2026 15:20 |
 | F2-B | **feita**: 8 tarefas, revisão (2 altos) e auditoria (1 alto) corrigidas; portões no commit 3898b63 com os vermelhos abaixo, todos corrigidos e reconferidos | a0f7d60 | 23/09/2026 21:05 |
 | F3 | **feita**: 10 tarefas; auditoria (3 altos) e revisão (3 médios) corrigidas e provadas no banco; portões no commit 2f4bcc3 com 2 vermelhos de teste do autor, corrigidos e reconferidos | ver abaixo | 24/09/2026 04:05 |
-| F4 | em andamento: autorizada pelo Filipe em 24/09 ("anote todas as dúvidas mas avance sem parar"); plano em `hiperbold/planos/fase-F4-tarefas.md` | | |
+| F4 | fechada em 24/09/2026: 8 tarefas, revisão, auditoria, duas rodadas de correção, portões completos verdes em de8ed83 (só o vermelho de ambiente do Redis) | de8ed83 | 24/09 |
 | F5 | pendente (Asaas: construir contra o manual, com dublês; nenhuma chamada real, nem sandbox, sem autorização explícita) | | |
 | F6 | registrada (pedido do Filipe, 23/09 à tarde): site de vendas, `/precos`, Termos e Privacidade. Fica depois das fases do loop; não começa sem confirmação | ff34e69 | |
 
@@ -149,3 +149,19 @@ Em andamento quando a sessão parou (mudanças NÃO commitadas na árvore de tra
 3. **Plano da F5 reescrito** com as 22 correções da revisão do plano (em `hiperbold/planos/fase-F5-tarefas.md`; perguntas N30 a N43).
 
 Depois disso, na ordem: commit de cada frente (só os arquivos dela), revisão curta das correções, portões completos da F4 no worktree `~/projects/deskcommcrm-portoes` (`F:	emp6-09-23\planos-noite\portoes-f3.sh` com COMMIT novo), fechar F4 aqui, registrar no DEBITO: N29 (MFA aal2 nas escritas de cobrança), D-047 (TRUNCATE de authenticated em `agent_inbox_items`), N27/N28 (envio por API key/MCP e IA que não responde ao cliente continuam na suspensão). Então F5 pelas tarefas do plano revisado e F6 (site de vendas em `F:\github-projects\`).
+
+## F4 fechada (24/09/2026)
+
+Portões completos na cópia separada, commit de8ed83 (logs em `F:	emp6-09-24\planos\logs4b-*.log`):
+
+| Portão | Resultado |
+|---|---|
+| install | ok |
+| test:db | ok |
+| typecheck | ok |
+| lint | ok |
+| lint:channels | ok |
+| build | ok |
+| unitários | 14.065 verdes; 1 vermelho de ambiente aceito (`e2e-parte-4-fala-com-os-servicos-do-runner`, Redis) |
+
+F6: 3 modelos da página de vendas no canvas https://claude.ai/artifact/5dXN2LREhJNpTpmEm3QiE2 (A Clareza azul, B Editorial creme, C Produto em blocos), 3 seções claras para cada escura por pedido do Filipe; aguardando a escolha dele.
