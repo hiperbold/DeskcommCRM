@@ -97,6 +97,7 @@ export default async function Page() {
             usuario.idioma,
           )}
         </p>
+        <Link className="text-sm text-primary underline-offset-4 hover:underline" href="/admin/sistema/cobranca">{t("Cobrança (Asaas)")}</Link>
       </div>
       <FormularioDeComportamento inicial={comportamento} />
       <FormularioDeBloqueioDosPlanos inicial={bloqueio} />

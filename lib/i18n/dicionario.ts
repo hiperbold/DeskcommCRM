@@ -11924,6 +11924,67 @@ export const DICIONARIO: Traducoes = {
   // Exemplo de formato do código do pacote (placeholder), não prosa: mesmo
   // valor nos dois idiomas.
   "pacote_100k": { es: "pacote_100k" },
+
+  // Fase F5, Tarefa 18: telas de leitura do Asaas (sistema/cobranca e a
+  // seção "Asaas" da aba tenants/[id]/plano).
+  "Cobrança (Asaas)": { es: "Cobro (Asaas)" },
+  "Voltar para Comportamento da instalação": { es: "Volver a Comportamiento de la instalación" },
+  "Estado da integração, planos à venda, pedidos, eventos do webhook e alarmes. Só leitura: as ações chegam numa tarefa seguinte.": {
+    es: "Estado de la integración, planes a la venta, pedidos, eventos del webhook y alarmas. Solo lectura: las acciones llegan en una tarea siguiente.",
+  },
+  Chaves: { es: "Claves" },
+  "ASAAS_ENABLED ligada": { es: "ASAAS_ENABLED activada" },
+  "ASAAS_ENABLED desligada": { es: "ASAAS_ENABLED desactivada" },
+  "Compra pelo cliente ligada": { es: "Compra por el cliente activada" },
+  "Compra pelo cliente desligada": { es: "Compra por el cliente desactivada" },
+  "Ambiente: produção": { es: "Entorno: producción" },
+  "Ambiente: sandbox": { es: "Entorno: sandbox" },
+  "Erro de configuração": { es: "Error de configuración" },
+  "As duas chaves precisam estar ligadas ao mesmo tempo para o cliente comprar pela tela.": {
+    es: "Las dos claves deben estar activadas al mismo tiempo para que el cliente compre por la pantalla.",
+  },
+  Alarmes: { es: "Alarmas" },
+  "Não foi possível ler os alarmes agora.": { es: "No se pudieron leer las alarmas ahora." },
+  "Pendente há mais de 1 hora": { es: "Pendiente hace más de 1 hora" },
+  "Erro nas últimas 24h": { es: "Error en las últimas 24h" },
+  "Divergente nas últimas 24h": { es: "Divergente en las últimas 24h" },
+  "Sem vínculo nas últimas 24h": { es: "Sin vínculo en las últimas 24h" },
+  "Sem evento há 3 dias, assinatura ativa": { es: "Sin evento hace 3 días, suscripción activa" },
+  Planos: { es: "Planes" },
+  "Não foi possível ler os planos agora.": { es: "No se pudieron leer los planes ahora." },
+  "À venda": { es: "A la venta" },
+  "Preço mensal": { es: "Precio mensual" },
+  "Preço anual": { es: "Precio anual" },
+  "Filtre por organização e por status.": { es: "Filtra por organización y por estado." },
+  "Organização (id)": { es: "Organización (id)" },
+  "uuid da organização": { es: "uuid de la organización" },
+  Filtrar: { es: "Filtrar" },
+  "Limpar filtro": { es: "Limpiar filtro" },
+  "Não foi possível ler os pedidos agora.": { es: "No se pudieron leer los pedidos ahora." },
+  "Nenhum pedido encontrado.": { es: "Ningún pedido encontrado." },
+  Método: { es: "Método" },
+  "Pacote de tokens": { es: "Paquete de tokens" },
+  Sandbox: { es: "Sandbox" },
+  "Eventos do webhook": { es: "Eventos del webhook" },
+  "Sem o corpo cru do evento por padrão. Filtre por resultado.": {
+    es: "Sin el cuerpo crudo del evento por defecto. Filtra por resultado.",
+  },
+  "Não foi possível ler os eventos agora.": { es: "No se pudieron leer los eventos ahora." },
+  "Nenhum evento encontrado.": { es: "Ningún evento encontrado." },
+  Alarme: { es: "Alarma" },
+  "Processado em": { es: "Procesado el" },
+  "Não foi possível ler os dados do Asaas agora.": { es: "No se pudieron leer los datos de Asaas ahora." },
+  "Esta organização está suspensa pelo admin, mas ainda tem uma assinatura Asaas ativa. Suspender aqui não cancela a cobrança no Asaas.": {
+    es: "Esta organización está suspendida por el admin, pero todavía tiene una suscripción Asaas activa. Suspender aquí no cancela el cobro en Asaas.",
+  },
+  "Esta organização tem assinatura Asaas ativa: registrar pagamento na mão duplica o período.": {
+    es: "Esta organización tiene suscripción Asaas activa: registrar un pago manualmente duplica el período.",
+  },
+  "Nenhum cliente vinculado.": { es: "Ningún cliente vinculado." },
+  Encerrada: { es: "Finalizada" },
+  "Nenhuma assinatura Asaas.": { es: "Ninguna suscripción Asaas." },
+  "Nenhum pedido registrado.": { es: "Ningún pedido registrado." },
+  "Pagamentos (com origem)": { es: "Pagos (con origen)" },
 };
 
 /**

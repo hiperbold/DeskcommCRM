@@ -4,6 +4,7 @@ import {
   estadoDaAssinatura,
   pagamentosDaAssinatura,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
+import { asaasDaOrganizacao } from "@/lib/billing/asaas/leitura";
 import { estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   CHAVES_DE_LIMITE,
@@ -77,6 +78,8 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
     assinatura,
     pagamentosResultado,
     pacotesAtivosRes,
+    organizacaoRes,
+    asaas,
   ] = await Promise.all([
     planoDaOrganizacao(admin, id, log),
     // Os limites CRUS do plano CONTRATADO (coluna "do plano" da tabela),
@@ -124,6 +127,15 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
       .select("id, codigo, nome, tokens, preco_cents")
       .eq("ativo", true)
       .order("nome", { ascending: true }),
+    // Fase F5, Tarefa 18, decisão 22 (aviso de organização suspensa pelo
+    // admin com assinatura Asaas ativa): só o `status`, mesmo namespace de
+    // `organizations_status_check` (active/suspended/redacted/archived),
+    // DIFERENTE do `billing_contracts.status` (avaliacao/ativa/atrasada/
+    // suspensa/cancelada) que `assinatura` acima já traz.
+    admin.from("organizations").select("status").eq("id", id).maybeSingle(),
+    // Fase F5, Tarefa 18: cliente, assinatura, pedidos e pagamentos com
+    // origem do Asaas para esta organização (lib/billing/asaas/leitura.ts).
+    asaasDaOrganizacao(admin, id, log),
   ]);
 
   const cicloDoSaldo =
@@ -230,6 +242,21 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
         preco_cents: number | null;
       }[]);
 
+  // Fase F5, Tarefa 18, decisão 22: mesma régua ADITIVA das demais leituras
+  // próprias desta aba (não entra em `leituras`/`podeEscrever`): uma falha
+  // aqui só esconde o aviso de organização suspensa, nunca tira a escrita do
+  // resto da aba.
+  if (organizacaoRes.error) {
+    log.error("alarme_planos_leitura", {
+      organization_id: id,
+      etapa: "status_da_organizacao",
+      error: organizacaoRes.error.message.slice(0, 300),
+    });
+  }
+  const organizacaoStatus = organizacaoRes.error
+    ? null
+    : ((organizacaoRes.data as { status: string } | null)?.status ?? null);
+
   return (
     <TenantPlanoClient
       organizationId={id}
@@ -254,6 +281,8 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
       margem={margemResultado}
       adicionaisAtivos={adicionaisAtivos}
       leituraDosAdicionaisFalhou={leituraDosAdicionaisFalhou}
+      organizacaoStatus={organizacaoStatus}
+      asaas={asaas}
     />
   );
 }

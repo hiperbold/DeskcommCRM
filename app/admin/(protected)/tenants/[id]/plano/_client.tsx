@@ -52,6 +52,7 @@ import {
   type PagamentoDaAssinatura,
   type ResultadoEstadoDaAssinatura,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
+import type { ResultadoAsaasDaOrganizacao } from "@/lib/billing/asaas/leitura";
 import type { EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   ajusteDoFormulario,
@@ -128,6 +129,10 @@ interface TenantPlanoClientProps {
   leituraDosPagamentosFalhou: boolean;
   pacotesAtivos: PacoteAtivo[];
   leituraDosPacotesFalhou: boolean;
+  /** Fase F5, Tarefa 18, decisão 22: `organizations.status`. `null` quando a leitura falhou. */
+  organizacaoStatus: string | null;
+  /** Fase F5, Tarefa 18: cliente, assinatura, pedidos e pagamentos com origem do Asaas. */
+  asaas: ResultadoAsaasDaOrganizacao;
 }
 
 /** Nome legível de cada fonte da carteira, na mesma ordem de `FONTES_DA_CARTEIRA`. */
@@ -274,6 +279,8 @@ export function TenantPlanoClient({
   leituraDosPagamentosFalhou,
   pacotesAtivos,
   leituraDosPacotesFalhou,
+  organizacaoStatus,
+  asaas,
 }: TenantPlanoClientProps) {
   const t = useT();
   const router = useRouter();
@@ -979,6 +986,136 @@ export function TenantPlanoClient({
                 </Button>
               </div>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Asaas (fase F5, Tarefa 18) ─────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Asaas")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {asaas.leituraFalhou ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler os dados do Asaas agora.")}</p>
+          ) : (
+            <>
+              {organizacaoStatus === "suspended" && asaas.assinatura && !asaas.assinatura.encerradaEm && (
+                <p className="text-sm text-warning-fg">
+                  {t(
+                    "Esta organização está suspensa pelo admin, mas ainda tem uma assinatura Asaas ativa. Suspender aqui não cancela a cobrança no Asaas.",
+                  )}
+                </p>
+              )}
+              {asaas.assinatura && !asaas.assinatura.encerradaEm && (
+                <p className="text-sm text-warning-fg">
+                  {t(
+                    "Esta organização tem assinatura Asaas ativa: registrar pagamento na mão duplica o período.",
+                  )}
+                </p>
+              )}
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-text-muted">{t("Cliente")}</p>
+                  {asaas.cliente ? (
+                    <p className="flex items-center gap-2 font-mono text-sm">
+                      {asaas.cliente.asaasCustomerId}
+                      <Badge variant="neutral">
+                        {asaas.cliente.ambiente === "producao" ? t("Produção") : t("Sandbox")}
+                      </Badge>
+                    </p>
+                  ) : (
+                    <p className="text-sm text-text-muted">{t("Nenhum cliente vinculado.")}</p>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-text-muted">{t("Assinatura")}</p>
+                  {asaas.assinatura ? (
+                    <p className="flex items-center gap-2 font-mono text-sm">
+                      {asaas.assinatura.asaasSubscriptionId}
+                      <Badge variant={asaas.assinatura.encerradaEm ? "neutral" : "success"}>
+                        {asaas.assinatura.encerradaEm ? t("Encerrada") : t("Ativa")}
+                      </Badge>
+                    </p>
+                  ) : (
+                    <p className="text-sm text-text-muted">{t("Nenhuma assinatura Asaas.")}</p>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-text-muted">{t("Pedidos")}</p>
+                {asaas.pedidos.length === 0 ? (
+                  <p className="text-sm text-text-muted">{t("Nenhum pedido registrado.")}</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t("Tipo")}</TableHead>
+                        <TableHead>{t("Método")}</TableHead>
+                        <TableHead>{t("Valor")}</TableHead>
+                        <TableHead>{t("Status")}</TableHead>
+                        <TableHead>{t("Criado em")}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {asaas.pedidos.map((pedido) => (
+                        <TableRow key={pedido.id}>
+                          <TableCell>
+                            {pedido.tipo === "assinatura" ? t("Assinatura") : t("Pacote de tokens")}
+                          </TableCell>
+                          <TableCell>{pedido.metodo}</TableCell>
+                          <TableCell>{formatCentsBRL(pedido.amountCents)}</TableCell>
+                          <TableCell>
+                            <Badge variant="neutral">{pedido.status}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            {new Date(pedido.criadoEm).toLocaleDateString(tagDoIdioma, { timeZone: FUSO_SP })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-text-muted">{t("Pagamentos (com origem)")}</p>
+                {asaas.pagamentos.length === 0 ? (
+                  <p className="text-sm text-text-muted">{t("Nenhum pagamento registrado.")}</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>{t("Status")}</TableHead>
+                        <TableHead>{t("Valor")}</TableHead>
+                        <TableHead>{t("Origem")}</TableHead>
+                        <TableHead>{t("Data")}</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {asaas.pagamentos.map((pagamento) => (
+                        <TableRow key={pagamento.id}>
+                          <TableCell>
+                            <Badge variant="neutral">{pagamento.status}</Badge>
+                          </TableCell>
+                          <TableCell>{formatCentsBRL(pagamento.grossCents)}</TableCell>
+                          <TableCell>
+                            <Badge variant={pagamento.origem === "asaas" ? "info" : "neutral"}>
+                              {pagamento.origem === "asaas" ? t("Asaas") : t("Manual")}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {new Date(pagamento.createdAt).toLocaleDateString(tagDoIdioma, { timeZone: FUSO_SP })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
