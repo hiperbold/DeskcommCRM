@@ -15,6 +15,7 @@ import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { resolveOwnerPatch } from "@/lib/leads/owner-patch";
@@ -204,7 +205,12 @@ export async function POST(req: NextRequest): Promise<Response> {
       const etapaDeDestinoEstaAberta = !etapaDeDestino.is_won && !etapaDeDestino.is_lost;
       if (etapaDeDestinoEstaAberta) {
         const reabrindo = visible.filter((linha) => linha.status !== "open").length;
-        if (reabrindo > 0) {
+        // Correção do defeito achado na sessão principal: `podeCriar` não
+        // perguntava antes se o bloqueio VALE para a organização. No modo
+        // `avisar` de hoje isso recusava uma reabertura que o modo atual
+        // deixaria passar. `bloqueioValeParaOrganizacao` é o portão; só então
+        // vale o custo de `podeCriar`.
+        if (reabrindo > 0 && (await bloqueioValeParaOrganizacao(createAdminClient(), organizationId))) {
           // `createAdminClient()` (service_role): `fn_billing_pode_criar` só
           // executa como service_role (revoke de authenticated na migration
           // 0905) — o cliente da sessão do usuário não teria como chamá-la.

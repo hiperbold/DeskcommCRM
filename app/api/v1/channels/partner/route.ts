@@ -25,6 +25,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
 import {
   PARTNER_CHANNEL_LABEL,
   findPartnerSession,
@@ -121,7 +122,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // banco (ver fn_billing_trava_channel_sessions, 0905), então não vale a
   // pena barrar aqui. `podeCriar` é só um AVISO adiantado: quem trava de
   // verdade continua sendo o gatilho no INSERT/UPDATE abaixo.
-  if (!existenteAntes || existenteAntes.archivedAt) {
+  //
+  // Correção do defeito achado na sessão principal: `podeCriar` só responde
+  // "cabe ou não cabe", sem saber se o bloqueio VALE para a organização. No
+  // modo `avisar` de hoje (o único em produção) o bloqueio nunca vale, e
+  // chamar `podeCriar` sem perguntar antes recusava uma conexão que o modo
+  // atual deixaria passar. `bloqueioValeParaOrganizacao` é o portão.
+  if ((!existenteAntes || existenteAntes.archivedAt) && (await bloqueioValeParaOrganizacao(admin, orgId))) {
     const veredito = await podeCriar(admin, orgId, "conexoes");
     if (!veredito.pode && veredito.motivo === "teto_atingido") {
       return fail(

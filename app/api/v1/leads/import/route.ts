@@ -30,6 +30,7 @@ import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
 import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
@@ -38,6 +39,7 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { lerPlanilhaDeLeads, type ErroDaLinha } from "@/lib/leads/planilha";
 import { createLeadHandler } from "@/app/api/v1/leads/_handler";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -186,21 +188,33 @@ export async function POST(req: NextRequest): Promise<Response> {
   // PT402 repetido em cada linha. `podeCriar` (fail-open em leitura falha,
   // mesma regra de sempre): teto nulo = sem limite, e leitura que falhou
   // libera em vez de travar a importação por um alarme de leitura.
-  const capacidade = await podeCriar(supabase, orgId, "leads");
-  if (
-    capacidade.teto !== null &&
-    capacidade.atual !== null &&
-    capacidade.atual + lido.leads.length > capacidade.teto
-  ) {
-    const restam = Math.max(0, capacidade.teto - capacidade.atual);
-    return fail(
-      "plano_limite_atingido",
-      restam > 0
-        ? `${t("O plano desta organização só tem espaço para mais")} ${restam} ${t("lead(s), e esta planilha tem")} ${lido.leads.length}. ${t("Fale com o suporte para ampliar o limite, ou reduza a planilha.")}`
-        : t("O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar."),
-      STATUS_RECUSA_DO_PLANO,
-      { requestId },
-    );
+  //
+  // Correção do defeito achado na sessão principal, dois problemas na mesma
+  // linha: (1) `podeCriar` não perguntava antes se o bloqueio VALE para a
+  // organização: no modo `avisar` de hoje isso recusava planilha que o modo
+  // atual deixaria passar; (2) o cliente era o da SESSÃO do usuário, e
+  // `fn_billing_pode_criar` só executa como `service_role` (revoke de
+  // `authenticated` na migration 0905), então toda leitura caía em
+  // "leitura_falhou" por 403/RPC ausente, mascarado pelo fail-open. As duas
+  // funções agora usam o cliente de serviço.
+  const admin = createAdminClient();
+  if (await bloqueioValeParaOrganizacao(admin, orgId)) {
+    const capacidade = await podeCriar(admin, orgId, "leads");
+    if (
+      capacidade.teto !== null &&
+      capacidade.atual !== null &&
+      capacidade.atual + lido.leads.length > capacidade.teto
+    ) {
+      const restam = Math.max(0, capacidade.teto - capacidade.atual);
+      return fail(
+        "plano_limite_atingido",
+        restam > 0
+          ? `${t("O plano desta organização só tem espaço para mais")} ${restam} ${t("lead(s), e esta planilha tem")} ${lido.leads.length}. ${t("Fale com o suporte para ampliar o limite, ou reduza a planilha.")}`
+          : t("O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar."),
+        STATUS_RECUSA_DO_PLANO,
+        { requestId },
+      );
+    }
   }
 
   const resumo: ResumoDaImportacao = {

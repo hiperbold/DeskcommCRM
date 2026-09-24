@@ -36,11 +36,58 @@ import { requireRole } from "@/lib/auth/require-role";
 import { ROLE_RANK, type AuthUser, type Role } from "@/lib/auth/types";
 import { createLeadHandler } from "@/app/api/v1/leads/_handler";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+vi.mock("@/lib/billing/planos/pode-criar", () => ({ podeCriar: vi.fn() }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/app/api/v1/leads/_handler", () => ({ createLeadHandler: vi.fn() }));
+
+/**
+ * Dublê do client de SERVIÇO, só responde o que `bloqueioValeParaOrganizacao`
+ * lê (`billing_settings`, `billing_contracts`). F3, defeito da sessão
+ * principal: a rota usava o client da SESSÃO (RLS) para `podeCriar`, e
+ * `fn_billing_pode_criar` só executa como `service_role`: todo teste
+ * ANTERIOR a este fix já convivia com "leitura_falhou" por baixo do capô sem
+ * medir isso (fail-open escondia o defeito). Por padrão aqui o modo é
+ * 'avisar': o bloqueio nunca vale, `podeCriar` nem é chamado, e todos os
+ * testes de importação acima continuam medindo só o que sempre mediram.
+ */
+function adminStub(opts: { modo?: string | null; bloqueioAPartirDe?: string | null; falhaSettings?: boolean } = {}) {
+  const modo = opts.modo ?? "avisar";
+  return {
+    from: (tabela: string) => {
+      if (tabela === "billing_settings") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () =>
+                opts.falhaSettings
+                  ? { data: null, error: { message: "conexão recusada" } }
+                  : { data: { modo }, error: null },
+            }),
+          }),
+        };
+      }
+      if (tabela === "billing_contracts") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({
+                data: { bloqueio_a_partir_de: opts.bloqueioAPartirDe ?? null },
+                error: null,
+              }),
+            }),
+          }),
+        };
+      }
+      throw new Error(`tabela inesperada no dublê admin: ${tabela}`);
+    },
+  };
+}
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const ANA = "11111111-1111-4111-8111-111111111111";
@@ -204,6 +251,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   sessao("agent");
   vi.mocked(createLeadHandler).mockResolvedValue({ id: "lead" } as never);
+  // Default: modo 'avisar', o bloqueio nunca vale, `podeCriar` nem é
+  // chamado. É o comportamento de TODA instalação hoje (F3, linha 5 do
+  // plano: no modo avisar nada pode mudar).
+  vi.mocked(createAdminClient).mockReturnValue(adminStub() as never);
 });
 
 describe("POST /api/v1/leads/import", () => {
@@ -405,6 +456,77 @@ describe("POST /api/v1/leads/import", () => {
     const { POST } = await import("@/app/api/v1/leads/import/route");
     const res = await POST(pedido("nome\nAna"));
     expect(res.status).toBe(403);
+  });
+});
+
+describe("POST /api/v1/leads/import: pré-checagem de quantidade (F3, Tarefa 7)", () => {
+  it("bloqueio NÃO vale (modo avisar): podeCriar nem é chamado, planilha passa mesmo acima do teto", async () => {
+    fazerSupabase(null);
+    vi.mocked(createAdminClient).mockReturnValue(adminStub({ modo: "avisar" }) as never);
+    const { POST } = await import("@/app/api/v1/leads/import/route");
+
+    const res = await POST(pedido("nome\nAna\nBruno\nCarla"));
+
+    expect(vi.mocked(podeCriar)).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+  });
+
+  it("bloqueio VALE e a planilha estoura o teto: 402 plano_limite_atingido, nenhuma linha criada", async () => {
+    fazerSupabase(null);
+    vi.mocked(createAdminClient).mockReturnValue(
+      adminStub({ modo: "bloquear", bloqueioAPartirDe: "2020-01-01T00:00:00.000Z" }) as never,
+    );
+    vi.mocked(podeCriar).mockResolvedValue({
+      pode: false,
+      motivo: "teto_atingido",
+      atual: 998,
+      teto: 1000,
+      leituraFalhou: false,
+    });
+    const { POST } = await import("@/app/api/v1/leads/import/route");
+
+    // 3 linhas, e só sobram 2 vagas (1000 - 998).
+    const res = await POST(pedido("nome\nAna\nBruno\nCarla"));
+
+    expect(vi.mocked(podeCriar)).toHaveBeenCalledWith(expect.anything(), ORG, "leads");
+    expect(res.status).toBe(402);
+    const corpo = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(corpo.error?.code).toBe("plano_limite_atingido");
+    expect(corpo.error?.message ?? "").toContain("2");
+    expect(vi.mocked(createLeadHandler)).not.toHaveBeenCalled();
+  });
+
+  it("bloqueio VALE mas a planilha cabe no espaço restante: segue normal", async () => {
+    fazerSupabase(null);
+    vi.mocked(createAdminClient).mockReturnValue(
+      adminStub({ modo: "bloquear", bloqueioAPartirDe: "2020-01-01T00:00:00.000Z" }) as never,
+    );
+    vi.mocked(podeCriar).mockResolvedValue({
+      pode: true,
+      motivo: "ok",
+      atual: 10,
+      teto: 1000,
+      leituraFalhou: false,
+    });
+    const { POST } = await import("@/app/api/v1/leads/import/route");
+
+    const res = await POST(pedido("nome\nAna"));
+
+    expect(res.status).toBe(200);
+    expect(vi.mocked(createLeadHandler)).toHaveBeenCalledTimes(1);
+  });
+
+  it("leitura de billing_settings falha: fail-open, a importação segue, nunca 500", async () => {
+    fazerSupabase(null);
+    vi.mocked(createAdminClient).mockReturnValue(
+      adminStub({ modo: "bloquear", falhaSettings: true }) as never,
+    );
+    const { POST } = await import("@/app/api/v1/leads/import/route");
+
+    const res = await POST(pedido("nome\nAna"));
+
+    expect(vi.mocked(podeCriar)).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
   });
 });
 
