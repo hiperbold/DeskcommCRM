@@ -509,6 +509,15 @@ begin
       -- de crm_pipelines acontece durante a aplicação das migrations. No
       -- modo avisar/desligado, fn_billing_bloqueia sai sem travar (lê o modo
       -- antes do lock): zero custo a mais enquanto a F3 não for ligada.
+      --
+      -- Fase F4 (migration 0908, decisão 7, editado NO LUGAR aqui): recusa
+      -- por modo leitura, ANTES do bloqueio de teto, na MESMA transição.
+      -- fn_billing_modo_leitura só nasce na 0908, depois desta 0905 (mesma
+      -- resolução em tempo de EXECUÇÃO de fn_billing_bloqueia, acima). PT402
+      -- com detail='assinatura_suspensa', FORA de qualquer bloco exception.
+      if public.fn_billing_modo_leitura(new.organization_id) then
+        raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+      end if;
       if public.fn_billing_bloqueia(new.organization_id, 'funis', null) then
         raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'funis';
       end if;
@@ -519,11 +528,19 @@ begin
     -- ativas deste funil, que não passaram por nenhum insert agora (elas já
     -- existiam, arquivadas junto do funil), sem esta linha etapas_por_funil
     -- nunca era conferido nesta transição.
+    --
+    -- Fase F4 (migration 0908, decisão 7): mesmo padrão acima.
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
     if public.fn_billing_bloqueia(new.organization_id, 'funis', null) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'funis';
     end if;
     perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
 
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
     if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.id) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
     end if;
@@ -535,7 +552,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_pipelines() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update. Achado B4.1 (revisão fase F2): a transição de desarquivar TAMBÉM confere etapas_por_funil do próprio funil, porque as etapas ativas dele reaparecem sem passar por nenhum insert em crm_stages. Fase F3 (migration 0907): antes de cada conferência de aviso, fn_billing_bloqueia decide o bloqueio de verdade; PT402 fora de qualquer bloco exception.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update. Achado B4.1 (revisão fase F2): a transição de desarquivar TAMBÉM confere etapas_por_funil do próprio funil, porque as etapas ativas dele reaparecem sem passar por nenhum insert em crm_stages. Fase F3 (migration 0907): antes de cada conferência de aviso, fn_billing_bloqueia decide o bloqueio de verdade; PT402 fora de qualquer bloco exception. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura.';
 
 revoke execute on function public.fn_billing_trava_crm_pipelines() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_pipelines() to service_role;
@@ -557,12 +574,20 @@ begin
   if tg_op = 'INSERT' then
     if new.is_archived = false then
       -- Fase F3 (migration 0907): mesmo padrão de fn_billing_trava_crm_pipelines.
+      -- Fase F4 (migration 0908, decisão 7): recusa por modo leitura ANTES do
+      -- bloqueio de teto, mesmo padrão de fn_billing_trava_crm_pipelines.
+      if public.fn_billing_modo_leitura(new.organization_id) then
+        raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+      end if;
       if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
         raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
       end if;
       perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
     end if;
   elsif old.is_archived = true and new.is_archived = false then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
     if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
     end if;
@@ -573,6 +598,9 @@ begin
     -- insert nem por is_archived, sem este ramo a transição não disparava
     -- conferência nenhuma. Etapa arquivada mudando de funil não conta (não
     -- está ativa em nenhum dos dois).
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
     if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
     end if;
@@ -584,7 +612,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_stages() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) na transição de is_archived para false (insert ou update) e, achado B4.2 (revisão fase F2), quando uma etapa ATIVA muda de pipeline_id (confere o funil de DESTINO). Um INSERT com várias etapas dispara este gatilho uma vez por linha, e cada chamada conta as etapas já commitadas antes dela no mesmo comando (prova do VOLATILE, decisão 9). Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) na transição de is_archived para false (insert ou update) e, achado B4.2 (revisão fase F2), quando uma etapa ATIVA muda de pipeline_id (confere o funil de DESTINO). Um INSERT com várias etapas dispara este gatilho uma vez por linha, e cada chamada conta as etapas já commitadas antes dela no mesmo comando (prova do VOLATILE, decisão 9). Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura.';
 
 revoke execute on function public.fn_billing_trava_crm_stages() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_stages() to service_role;
@@ -645,12 +673,20 @@ begin
   if tg_op = 'INSERT' then
     if new.is_active = true then
       -- Fase F3 (migration 0907): mesmo padrão de fn_billing_trava_crm_pipelines.
+      -- Fase F4 (migration 0908, decisão 7): recusa por modo leitura ANTES do
+      -- bloqueio de teto, mesmo padrão de fn_billing_trava_crm_pipelines.
+      if public.fn_billing_modo_leitura(new.organization_id) then
+        raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+      end if;
       if public.fn_billing_bloqueia(new.organization_id, 'integracoes_webhook', null) then
         raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'integracoes_webhook';
       end if;
       perform public.fn_billing_conferir_teto(new.organization_id, 'integracoes_webhook', null);
     end if;
   elsif old.is_active = false and new.is_active = true then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
     if public.fn_billing_bloqueia(new.organization_id, 'integracoes_webhook', null) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'integracoes_webhook';
     end if;
@@ -662,7 +698,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_webhook_sources() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(integracoes_webhook) só na transição de is_active para true, em insert ou update. Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(integracoes_webhook) só na transição de is_active para true, em insert ou update. Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura.';
 
 revoke execute on function public.fn_billing_trava_webhook_sources() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_webhook_sources() to service_role;
@@ -716,6 +752,15 @@ begin
     -- (as isenções da decisão 4 são só para o ACEITE, em user_organizations,
     -- abaixo). "Aceite de convite nunca bloqueia" não é "emitir convite nunca
     -- bloqueia": o convite em si é quem cria a vaga a ocupar.
+    --
+    -- Fase F4 (migration 0908, decisão 7, editado NO LUGAR aqui): recusa por
+    -- modo leitura ANTES do bloqueio de teto, mesmo padrão dos outros três
+    -- gatilhos (funis, etapas, integrações webhook). Convite novo é criação,
+    -- não aceite: a isenção de aceite (decisão 4, em user_organizations) não
+    -- vale aqui.
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
     if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';
     end if;
@@ -727,7 +772,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_team_invites() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente). Fase F3 (migration 0907, decisão 4, item 1): fn_billing_bloqueia antes da conferência de aviso, sem isenção nenhuma (as isenções são só no ACEITE); PT402 fora de qualquer bloco exception. Correção A3 pós-auditoria (achado alto): a lista de colunas do GATILHO ganhou email e organization_id, e o corpo trata a troca de qualquer um dos dois num convite que continua pendente como convite NOVO (força v_antigo_pendente a false), senão trocar o e-mail de um convite pendente reciclava a vaga sem bloqueio nem aviso.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente). Fase F3 (migration 0907, decisão 4, item 1): fn_billing_bloqueia antes da conferência de aviso, sem isenção nenhuma (as isenções são só no ACEITE); PT402 fora de qualquer bloco exception. Correção A3 pós-auditoria (achado alto): a lista de colunas do GATILHO ganhou email e organization_id, e o corpo trata a troca de qualquer um dos dois num convite que continua pendente como convite NOVO (força v_antigo_pendente a false), senão trocar o e-mail de um convite pendente reciclava a vaga sem bloqueio nem aviso. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura (o convite em si, não o aceite).';
 
 revoke execute on function public.fn_billing_trava_team_invites() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_team_invites() to service_role;
@@ -1206,13 +1251,17 @@ drop policy if exists billing_agent_inbox_items_insert on public.agent_inbox_ite
 create policy billing_agent_inbox_items_insert on public.agent_inbox_items
   as restrictive for insert
   to authenticated
-  with check (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira'));
+  -- Fase F4 (migration 0908, decisão 9, editado NO LUGAR aqui): billing_assinatura
+  -- (o aviso de estado da assinatura) entra na MESMA proteção de billing_limite/
+  -- billing_carteira, mesmo vetor do M2 original (membro forjando/apagando/
+  -- reescrevendo um aviso que não é dele para dar).
+  with check (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira', 'billing_assinatura'));
 
 drop policy if exists billing_agent_inbox_items_delete on public.agent_inbox_items;
 create policy billing_agent_inbox_items_delete on public.agent_inbox_items
   as restrictive for delete
   to authenticated
-  using (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira'));
+  using (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira', 'billing_assinatura'));
 
 -- O UPDATE não dá para travar só com RESTRICTIVE (não há coluna para
 -- comparar old x new numa USING/WITH CHECK), por isso é gatilho: recusa
@@ -1232,8 +1281,11 @@ security invoker
 set search_path = public, pg_temp
 as $$
 begin
+  -- Fase F4 (migration 0908, decisão 9, editado NO LUGAR aqui): billing_assinatura
+  -- entra na MESMA proteção de billing_limite/billing_carteira, mesmo vetor
+  -- do M2 original.
   if current_user not in ('postgres', 'service_role', 'supabase_admin')
-     and (old.ref_kind in ('billing_limite', 'billing_carteira') or new.ref_kind in ('billing_limite', 'billing_carteira'))
+     and (old.ref_kind in ('billing_limite', 'billing_carteira', 'billing_assinatura') or new.ref_kind in ('billing_limite', 'billing_carteira', 'billing_assinatura'))
      and (to_jsonb(old) - array['status', 'resolved_at']) is distinct from (to_jsonb(new) - array['status', 'resolved_at'])
   then
     raise exception 'aviso de plano: só status e resolved_at podem mudar fora do servidor' using errcode = '42501';
@@ -1244,7 +1296,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_agent_inbox_items_update() is
-  'M2 (revisão fase F2), estendida na revisão da F3 (achado baixo 9): quando old.ref_kind ou new.ref_kind é billing_limite OU billing_carteira, recusa update de QUALQUER coluna fora de status e resolved_at (as duas que o app grava ao encerrar um item, app/api/v1/ai/inbox/[id]/route.ts e .../resolve-all/route.ts), fora do servidor. security invoker de propósito (mesmo racional do M1): precisa ver a role real de quem grava. Compara to_jsonb(old)/to_jsonb(new) menos as duas colunas permitidas, para nenhuma coluna nova do futuro escapar despercebida desta trava.';
+  'M2 (revisão fase F2), estendida na revisão da F3 (achado baixo 9) e na F4 (migration 0908, decisão 9): quando old.ref_kind ou new.ref_kind é billing_limite, billing_carteira OU billing_assinatura, recusa update de QUALQUER coluna fora de status e resolved_at (as duas que o app grava ao encerrar um item, app/api/v1/ai/inbox/[id]/route.ts e .../resolve-all/route.ts), fora do servidor. security invoker de propósito (mesmo racional do M1): precisa ver a role real de quem grava. Compara to_jsonb(old)/to_jsonb(new) menos as duas colunas permitidas, para nenhuma coluna nova do futuro escapar despercebida desta trava.';
 
 revoke execute on function public.fn_billing_trava_agent_inbox_items_update() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_agent_inbox_items_update() to service_role;

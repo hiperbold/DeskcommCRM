@@ -655,24 +655,24 @@ describe("0905 parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segura
     }
   });
 
-  it("M2 (revisão pós-auditoria da F3, achado baixo 9): duas policies RESTRICTIVE em agent_inbox_items (insert e delete), prefixo billing_, vetando ref_kind em (billing_limite, billing_carteira)", () => {
+  it("M2 (revisão pós-auditoria da F3, achado baixo 9) e F4 (0908, decisão 9): duas policies RESTRICTIVE em agent_inbox_items (insert e delete), prefixo billing_, vetando ref_kind em (billing_limite, billing_carteira, billing_assinatura)", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       expect(sql).toMatch(
-        /create policy billing_agent_inbox_items_insert on public\.agent_inbox_items\s+as restrictive for insert\s+to authenticated\s+with check \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira'\)\);/,
+        /create policy billing_agent_inbox_items_insert on public\.agent_inbox_items\s+as restrictive for insert\s+to authenticated\s+[\s\S]*?with check \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira', 'billing_assinatura'\)\);/,
       );
       expect(sql).toMatch(
-        /create policy billing_agent_inbox_items_delete on public\.agent_inbox_items\s+as restrictive for delete\s+to authenticated\s+using \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira'\)\);/,
+        /create policy billing_agent_inbox_items_delete on public\.agent_inbox_items\s+as restrictive for delete\s+to authenticated\s+using \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira', 'billing_assinatura'\)\);/,
       );
     }
   });
 
-  it("M2: o gatilho de update em agent_inbox_items é before update, sem lista de colunas (compara to_jsonb menos status/resolved_at), cobrindo billing_limite E billing_carteira", () => {
+  it("M2: o gatilho de update em agent_inbox_items é before update, sem lista de colunas (compara to_jsonb menos status/resolved_at), cobrindo billing_limite, billing_carteira E (F4, 0908) billing_assinatura", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       expect(sql).toMatch(
         /create trigger\s+trg_billing_trava_agent_inbox_items_update\s+before update on public\.agent_inbox_items/,
       );
       expect(sql).toMatch(
-        /\(old\.ref_kind in \('billing_limite', 'billing_carteira'\) or new\.ref_kind in \('billing_limite', 'billing_carteira'\)\)/,
+        /\(old\.ref_kind in \('billing_limite', 'billing_carteira', 'billing_assinatura'\) or new\.ref_kind in \('billing_limite', 'billing_carteira', 'billing_assinatura'\)\)/,
       );
       expect(sql).toMatch(
         /\(to_jsonb\(old\) - array\['status', 'resolved_at'\]\) is distinct from \(to_jsonb\(new\) - array\['status', 'resolved_at'\]\)/,

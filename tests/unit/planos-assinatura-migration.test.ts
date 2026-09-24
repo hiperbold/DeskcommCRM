@@ -6,7 +6,19 @@ const MIGRATION_0908 = readFileSync(
   join(process.cwd(), "supabase/migrations/20260923130000_0908_planos_assinatura_estados.sql"),
   "utf8",
 );
+const MIGRATION_0905 = readFileSync(
+  join(process.cwd(), "supabase/migrations/20260923100000_0905_planos_uso_e_trava.sql"),
+  "utf8",
+);
 const BASELINE = readFileSync(join(process.cwd(), "supabase", "baseline.sql"), "utf8");
+
+/** Bloco 0905 do baseline (mesmo extrator de tests/unit/planos-uso-migration.test.ts). */
+function extraiBloco0905Baseline(): string {
+  const marcadorInicio = "-- ---- uso dos planos e trava (migration 0905";
+  const posicaoMarcador = BASELINE.indexOf(marcadorInicio);
+  const fim = BASELINE.indexOf("\n-- ---- ", posicaoMarcador);
+  return BASELINE.slice(posicaoMarcador, fim + 1);
+}
 
 /**
  * Extrai o bloco 0908 do baseline: do marcador de início até (sem incluir) o
@@ -391,9 +403,23 @@ describe("0908: fn_billing_conferir_vencimento (decisão 4, o conferidor)", () =
       /where organization_id = p_org\s*\n\s*and status = 'atrasada'\s*\n\s*and current_period_end \+ \(v_grace_days \|\| ' days'\)::interval <= now\(\)\s*\n\s*returning status into v_estado_novo;/,
     );
 
-    // Cada UPDATE é seguido de "if found then return" antes do próximo passo.
-    const ocorrencias = [...corpo.matchAll(/returning status into v_estado_novo;\s*\n\s*if found then\s*\n\s*return v_estado_novo;\s*\n\s*end if;/g)];
+    // Cada UPDATE é seguido de "if found then ... return" antes do próximo
+    // passo. Tarefa 2, decisão 9: cada um dos três chama
+    // fn_billing_avisar_assinatura ANTES de devolver (aviso depois de CADA
+    // mudança de estado); o teste exige a chamada, não só permite.
+    const ocorrencias = [
+      ...corpo.matchAll(
+        /returning status into v_estado_novo;\s*\n\s*if found then\s*\n(?:\s*--[^\n]*\n)*\s*perform public\.fn_billing_avisar_assinatura\(p_org\);\s*\n\s*return v_estado_novo;\s*\n\s*end if;/g,
+      ),
+    ];
     expect(ocorrencias.length).toBe(3);
+  });
+
+  it("Tarefa 2, decisão 9: o passo diário sem mudança de estado nenhuma TAMBÉM chama fn_billing_avisar_assinatura, antes do return null final", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_conferir_vencimento");
+    expect(corpo).toMatch(
+      /perform public\.fn_billing_avisar_assinatura\(p_org\);\s*\n\s*return null;\s*\nexception/,
+    );
   });
 
   it("grace_days vem do plano (join com billing_plans), não de um valor fixo", () => {
@@ -419,5 +445,266 @@ describe("0908: modo continua 'avisar' por padrão, esta migração não liga na
     expect(MIGRATION_0908).not.toMatch(/set modo\s*=/);
     expect(MIGRATION_0908).not.toMatch(/insert into public\.billing_settings/);
     expect(MIGRATION_0908).not.toMatch(/update public\.billing_settings/);
+  });
+});
+
+// ============================================================================
+// Tarefa 2: modo leitura da conta suspensa.
+// ============================================================================
+
+describe("0908 Tarefa 2: fn_billing_modo_leitura (decisão 5)", () => {
+  it("é security definer, stable, com search_path fixo, revoga de public/anon/authenticated e concede a service_role", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_modo_leitura(");
+      expect(inicio, "fn_billing_modo_leitura não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, inicio + 400);
+      expect(trecho).toMatch(/returns boolean/);
+      expect(trecho).toMatch(/\bstable\b/);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_modo_leitura\(uuid\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_modo_leitura\(uuid\) to service_role;/,
+      );
+    }
+  });
+
+  it("também concede execute a agent_worker, DE PROPÓSITO fora do bloco de revoke (mesmo padrão de fn_billing_ia_pode_responder, 0907)", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_modo_leitura\(uuid\) to agent_worker/,
+      );
+    }
+    // A prova de que fica FORA: nenhum bloco "revoke execute ... from
+    // agent_worker" desta migração lista fn_billing_modo_leitura.
+    const blocosRevokeAgentWorker = [
+      ...MIGRATION_0908.matchAll(/revoke execute on function ([^;]+) from agent_worker/g),
+    ].map((m) => m[1]);
+    for (const lista of blocosRevokeAgentWorker) {
+      expect(lista).not.toMatch(/fn_billing_modo_leitura/);
+    }
+  });
+
+  it("lê o modo ANTES de qualquer outra coisa: devolve false sem tocar billing_contracts quando o modo não é bloquear", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_modo_leitura");
+    const posLeituraModo = corpo.indexOf("select modo into v_modo from public.billing_settings where id = 1;");
+    const posSaidaCedo = corpo.indexOf("if v_modo is distinct from 'bloquear' then");
+    const posLeituraContrato = corpo.indexOf("from public.billing_contracts bc");
+    expect(posLeituraModo).toBeGreaterThan(-1);
+    expect(posSaidaCedo).toBeGreaterThan(posLeituraModo);
+    expect(posLeituraContrato).toBeGreaterThan(posSaidaCedo);
+  });
+
+  it("a condição final é coalesce(..., false): carência preenchida e vencida E status in (suspensa, cancelada)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_modo_leitura");
+    expect(corpo).toMatch(
+      /return coalesce\(\s*\n\s*v_bloqueio_a_partir_de is not null\s*\n\s*and v_bloqueio_a_partir_de <= now\(\)\s*\n\s*and v_status in \('suspensa', 'cancelada'\),\s*\n\s*false\s*\n\s*\);/,
+    );
+  });
+});
+
+describe("0908 Tarefa 2: recusa por modo leitura nos quatro gatilhos de criação (decisão 7), idêntica em 0905 e no baseline", () => {
+  const GATILHOS = [
+    "fn_billing_trava_crm_pipelines",
+    "fn_billing_trava_crm_stages",
+    "fn_billing_trava_webhook_sources",
+    "fn_billing_trava_team_invites",
+  ] as const;
+  // Quantas vezes cada gatilho chama fn_billing_bloqueia (decisão 3/0907):
+  // funis tem 3 (insert + desarquivar-funil + desarquivar-etapas), etapas tem
+  // 3 (insert + desarquivar + mover de pipeline), webhook tem 2 (insert +
+  // ativar), convites tem 1 (transição para pendente). A recusa por modo
+  // leitura (decisão 7) acompanha CADA uma dessas chamadas, na mesma
+  // transição.
+  const OCORRENCIAS_ESPERADAS: Record<(typeof GATILHOS)[number], number> = {
+    fn_billing_trava_crm_pipelines: 3,
+    fn_billing_trava_crm_stages: 3,
+    fn_billing_trava_webhook_sources: 2,
+    fn_billing_trava_team_invites: 1,
+  };
+
+  it("cada gatilho tem o número certo de checagens de modo leitura, nenhuma delas dentro de bloco exception (nenhuma das quatro funções tem 'exception when others')", () => {
+    for (const sql of [MIGRATION_0905, extraiBloco0905Baseline()]) {
+      for (const nome of GATILHOS) {
+        const corpo = corpoDaFuncao(sql, nome);
+        expect(corpo, `${nome}: não pode ter bloco exception (o PT402 precisa propagar)`).not.toMatch(
+          /exception\s*\n\s*when others/,
+        );
+        const ocorrencias = [
+          ...corpo.matchAll(
+            /if public\.fn_billing_modo_leitura\(new\.organization_id\) then\s*\n\s*raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';\s*\n\s*end if;/g,
+          ),
+        ];
+        expect(ocorrencias.length, `${nome}: número de checagens de modo leitura`).toBe(
+          OCORRENCIAS_ESPERADAS[nome],
+        );
+      }
+    }
+  });
+
+  it("cada checagem de modo leitura vem IMEDIATAMENTE antes da checagem de bloqueio de teto, na mesma transição (mesmo número de ocorrências das duas)", () => {
+    for (const sql of [MIGRATION_0905, extraiBloco0905Baseline()]) {
+      for (const nome of GATILHOS) {
+        const corpo = corpoDaFuncao(sql, nome);
+        const modoLeitura = [...corpo.matchAll(/fn_billing_modo_leitura\(new\.organization_id\)/g)].length;
+        const bloqueio = [...corpo.matchAll(/fn_billing_bloqueia\(new\.organization_id,/g)].length;
+        expect(modoLeitura, `${nome}: modo leitura x bloqueio de teto`).toBe(bloqueio);
+      }
+    }
+  });
+
+  it("o SQL dos quatro gatilhos é idêntico entre a migração 0905 e o bloco do baseline (ignorando comentários e linhas em branco)", () => {
+    for (const nome of GATILHOS) {
+      const corpoMigracao = removeComentariosEBrancas(corpoDaFuncao(MIGRATION_0905, nome));
+      const corpoBaseline = removeComentariosEBrancas(corpoDaFuncao(extraiBloco0905Baseline(), nome));
+      expect(corpoBaseline).toBe(corpoMigracao);
+    }
+  });
+});
+
+describe("0908 Tarefa 2: ausência da recusa por modo leitura em leads, aceite de convite e conexões (decisão 7)", () => {
+  const MIGRATION_0907 = readFileSync(
+    join(process.cwd(), "supabase/migrations/20260923120000_0907_planos_bloqueio.sql"),
+    "utf8",
+  );
+
+  it("fn_billing_bloqueia_crm_leads (0907): criar/reabrir lead NUNCA chama fn_billing_modo_leitura (N23)", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const corpo = corpoDaFuncao(sql, "fn_billing_bloqueia_crm_leads");
+      expect(corpo).not.toMatch(/fn_billing_modo_leitura/);
+    }
+  });
+
+  it("fn_billing_trava_user_organizations (0905): o ACEITE de convite (transição para ativo) NUNCA chama fn_billing_modo_leitura", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const corpo = corpoDaFuncao(sql, "fn_billing_trava_user_organizations");
+      expect(corpo).not.toMatch(/fn_billing_modo_leitura/);
+    }
+  });
+
+  it("fn_billing_trava_channel_sessions (0905): conectar/reconectar NUNCA chama fn_billing_modo_leitura (o chat nunca para)", () => {
+    for (const sql of [MIGRATION_0905, BASELINE]) {
+      const corpo = corpoDaFuncao(sql, "fn_billing_trava_channel_sessions");
+      expect(corpo).not.toMatch(/fn_billing_modo_leitura/);
+    }
+  });
+});
+
+describe("0908 Tarefa 2: billing_assinatura nas três proteções de agent_inbox_items (decisão 9), idêntico em 0905 e no baseline", () => {
+  it("as duas policies RESTRICTIVE (insert/delete) vetam ref_kind = billing_assinatura, ao lado de billing_limite/billing_carteira", () => {
+    for (const sql of [MIGRATION_0905, extraiBloco0905Baseline()]) {
+      expect(sql).toMatch(
+        /create policy billing_agent_inbox_items_insert on public\.agent_inbox_items[\s\S]*?with check \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira', 'billing_assinatura'\)\);/,
+      );
+      expect(sql).toMatch(
+        /create policy billing_agent_inbox_items_delete on public\.agent_inbox_items[\s\S]*?using \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira', 'billing_assinatura'\)\);/,
+      );
+    }
+  });
+
+  it("o gatilho de update (fn_billing_trava_agent_inbox_items_update) trava billing_assinatura junto com billing_limite/billing_carteira", () => {
+    for (const sql of [MIGRATION_0905, extraiBloco0905Baseline()]) {
+      const corpo = corpoDaFuncao(sql, "fn_billing_trava_agent_inbox_items_update");
+      expect(corpo).toMatch(
+        /old\.ref_kind in \('billing_limite', 'billing_carteira', 'billing_assinatura'\) or new\.ref_kind in \('billing_limite', 'billing_carteira', 'billing_assinatura'\)/,
+      );
+    }
+  });
+});
+
+describe("0908 Tarefa 2: fn_billing_avisar_assinatura (decisão 9)", () => {
+  it("é volatile, security definer, com search_path fixo, revoga de public/anon/authenticated e concede só a service_role (fora do bloco de execute do agent_worker)", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_avisar_assinatura(");
+      expect(inicio, "fn_billing_avisar_assinatura não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, inicio + 300);
+      expect(trecho).toMatch(/returns void/);
+      expect(trecho).toMatch(/\bvolatile\b/);
+      expect(trecho).toMatch(/security definer/);
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_avisar_assinatura\(uuid\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_avisar_assinatura\(uuid\) to service_role;/,
+      );
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_avisar_assinatura\(uuid\) from agent_worker/,
+      );
+    }
+  });
+
+  it("nunca lança: begin/exception PRÓPRIO devolve sem propagar (raise warning)", () => {
+    const corpoCompleto = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpoCompleto).toMatch(/exception\s*\n\s*when others then/);
+    expect(corpoCompleto).toMatch(/raise warning 'billing_avisar_assinatura_falhou: organizacao=%, sqlerrm=%', p_org, sqlerrm;/);
+  });
+
+  it("aviso de entrada em atrasada: dedup 'assinatura:atrasada:<período>', kind=other, ref_kind=billing_assinatura, ref_id=organization_id", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpo).toMatch(/values \(p_org, 'assinatura:atrasada:' \|\| v_periodo_fmt\)/);
+    expect(corpo).toMatch(/on conflict \(organization_id, chave\) do nothing;/);
+    expect(corpo).toMatch(/get diagnostics v_linhas = row_count;/);
+    expect(corpo).toMatch(
+      /values \(p_org, 'other', 'warn', v_titulo, v_corpo, 'billing_assinatura', p_org\);/,
+    );
+  });
+
+  it("aviso de três dias antes: chave própria 'atrasada_aviso_3_dias', SÓ quando grace_days > 3", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpo).toMatch(/if v_grace_days > 3 and now\(\) >= v_data_suspensao - interval '3 days' then/);
+    expect(corpo).toMatch(/'assinatura:atrasada_aviso_3_dias:' \|\| v_periodo_fmt/);
+  });
+
+  it("aviso de suspensão: chave 'assinatura:suspensa:<período>'; aviso de cancelamento: chave 'assinatura:cancelada:<período>'", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpo).toMatch(/'assinatura:suspensa:' \|\| v_periodo_fmt/);
+    expect(corpo).toMatch(/'assinatura:cancelada:' \|\| v_periodo_fmt/);
+  });
+
+  it("a data prevista da suspensão é formatada em America/Sao_Paulo, DD/MM/YYYY (sem nome de mês)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpo).toMatch(
+      /to_char\(v_data_suspensao at time zone 'America\/Sao_Paulo', 'DD\/MM\/YYYY'\)/,
+    );
+    expect(corpo).not.toMatch(/'Month'|janeiro|fevereiro/);
+  });
+
+  it("chamada só por fn_billing_conferir_vencimento (é volatile, sem gatilho nenhum apontando para ela)", () => {
+    expect(MIGRATION_0908).not.toMatch(/execute function public\.fn_billing_avisar_assinatura/);
+  });
+});
+
+describe("0908 Tarefa 2 (achado da Tarefa 1): estorno duplo fechado por estorna_pagamento_id", () => {
+  it("billing_payments ganha a coluna estorna_pagamento_id, sem chave estrangeira, com índice único parcial", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      expect(sql).toMatch(/alter table public\.billing_payments add column if not exists estorna_pagamento_id uuid;/);
+      expect(sql).not.toMatch(/estorna_pagamento_id uuid references/);
+      expect(sql).toMatch(
+        /create unique index if not exists billing_payments_estorna_pagamento_id_unique\s*\n\s*on public\.billing_payments \(estorna_pagamento_id\)\s*\n\s*where estorna_pagamento_id is not null;/,
+      );
+    }
+  });
+
+  it("fn_billing_estornar_pagamento recusa 22023 quando o pagamento original já foi estornado por QUALQUER chave", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_estornar_pagamento");
+    expect(corpo).toMatch(
+      /if exists \(\s*\n\s*select 1 from public\.billing_payments\s*\n\s*where organization_id = p_org and estorna_pagamento_id = p_pagamento\s*\n\s*\) then\s*\n\s*raise exception 'billing_pagamento_ja_estornado' using errcode = '22023';\s*\n\s*end if;/,
+    );
+  });
+
+  it("esta checagem vem ANTES da checagem de status RECEIVED_IN_CASH (que sozinha não detecta o segundo estorno, pois o status ORIGINAL nunca muda)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_estornar_pagamento");
+    const posEstornoDuplo = corpo.indexOf("billing_pagamento_ja_estornado");
+    const posStatusCheck = corpo.indexOf("billing_pagamento_nao_pode_ser_estornado");
+    expect(posEstornoDuplo).toBeGreaterThan(-1);
+    expect(posStatusCheck).toBeGreaterThan(posEstornoDuplo);
+  });
+
+  it("grava estorna_pagamento_id = p_pagamento na linha REFUNDED", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_estornar_pagamento");
+    expect(corpo).toMatch(/chave, nota, criado_por,\s*\n\s*estorna_pagamento_id/);
+    expect(corpo).toMatch(/p_chave, p_nota, p_actor,\s*\n\s*p_pagamento\s*\n\s*\)/);
   });
 });
