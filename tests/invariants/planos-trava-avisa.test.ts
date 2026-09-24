@@ -106,12 +106,14 @@ const USER_PROVISORIO_ALVO = "09050001-1111-4000-8000-000000000016";
 const USER_AVISO_FORJA = "09050001-1111-4000-8000-000000000017";
 const USER_PROVISORIO_NOVO = "09050001-1111-4000-8000-000000000018";
 const USER_REENVIO_CONVITE = "09050001-1111-4000-8000-000000000019";
+const USER_AVISO_CARTEIRA = "09050001-1111-4000-8000-00000000001a";
 
 const ORG_PROVISORIO = "09050001-0000-4000-8000-00000000001a";
 const ORG_AVISO_FORJA = "09050001-0000-4000-8000-00000000001b";
 const ORG_REENVIO_CONVITE = "09050001-0000-4000-8000-00000000001c";
 const ORG_DESARQUIVAR_ETAPAS = "09050001-0000-4000-8000-00000000001d";
 const ORG_MOVER_ETAPA = "09050001-0000-4000-8000-00000000001e";
+const ORG_AVISO_CARTEIRA = "09050001-0000-4000-8000-00000000001f";
 
 /** Marcador das linhas de resultado, o psql também imprime SET, INSERT 0 1 etc. */
 const MARCA = "SONDA|";
@@ -1377,5 +1379,109 @@ describe("25. B4: transições que mudam a contagem de etapas sem aviso", () => 
     // nada (não estava na lista de colunas do gatilho). Agora confere
     // etapas_por_funil do funil de DESTINO (2 etapas ativas ali, teto 1) e avisa.
     expect(avisosDe(ORG_MOVER_ETAPA)).toBe(1);
+  });
+});
+
+describe("26. billing_carteira (achado baixo 9, revisão F3): a mesma proteção do M2 (caso 23) cobre o aviso de carteira zerada", () => {
+  // Molde EXATO do caso 23 (M2), só trocando o ref_kind: a revisão pós-
+  // auditoria da F3 estendeu as duas policies restrictive (insert e delete) e
+  // o gatilho de update de ref_kind = 'billing_limite' para também cobrir
+  // ref_kind = 'billing_carteira' (0905 parte 4, achado baixo 9), o aviso
+  // crítico que `run-model-call.ts` grava quando a carteira de tokens de IA
+  // do mês zera. Diferença do caso 23: nenhum gatilho de trava cria este
+  // aviso sozinho (billing_carteira não nasce de nenhum teto de funil/etapa/
+  // membro/webhook), então o aviso "real" nasce aqui por um insert direto,
+  // no mesmo formato de `run-model-call.ts` (kind='other', severity='critical',
+  // ref_kind='billing_carteira', ref_id=organization_id), simulando o
+  // servidor gravando.
+  let avisoRealId = "";
+
+  beforeAll(() => {
+    comoServico(`
+      insert into auth.users (id, email) values ('${USER_AVISO_CARTEIRA}', 'carteira-viewer@invariant.test')
+        on conflict (id) do nothing;
+      insert into public.organizations (id, slug, legal_name, display_name)
+        values ('${ORG_AVISO_CARTEIRA}', 'trava-carteira-forja', 'Trava Carteira LTDA', 'Trava Carteira')
+        on conflict (id) do nothing;
+      insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+        values ('${USER_AVISO_CARTEIRA}', '${ORG_AVISO_CARTEIRA}', 'viewer', now())
+        on conflict do nothing;
+      -- o aviso REAL que os casos abaixo tentam forjar, apagar e reescrever,
+      -- gravado aqui como o SERVIDOR faria (run-model-call.ts).
+      insert into public.agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+        values ('${ORG_AVISO_CARTEIRA}', 'other', 'critical', 'Saldo de tokens de IA esgotado', 'carteira zerada', 'billing_carteira', '${ORG_AVISO_CARTEIRA}');
+    `);
+    const linhas = comoServico(
+      `select 'SONDA|' || id from public.agent_inbox_items where organization_id = '${ORG_AVISO_CARTEIRA}' and ref_kind = 'billing_carteira' and status = 'open';`,
+    );
+    avisoRealId = linhas[0] ?? "";
+  });
+
+  it("o aviso real nasceu (controle)", () => {
+    const linhas = comoServico(
+      `select 'SONDA|' || count(*) from public.agent_inbox_items where organization_id = '${ORG_AVISO_CARTEIRA}' and kind = 'other' and ref_kind = 'billing_carteira' and status = 'open';`,
+    );
+    expect(linhas).toEqual(["1"]);
+    expect(avisoRealId).not.toBe("");
+  });
+
+  it("um viewer NÃO insere um aviso billing_carteira forjado (policy restrictive de insert)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_CARTEIRA)}
+      insert into public.agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+        values ('${ORG_AVISO_CARTEIRA}', 'other', 'critical', 'Saldo de tokens de IA esgotado', 'forjado', 'billing_carteira', '${ORG_AVISO_CARTEIRA}');
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("row-level security");
+  });
+
+  it("um viewer NÃO apaga o aviso real (policy restrictive de delete: filtra a linha, sem erro, sem apagar)", () => {
+    membro(USER_AVISO_CARTEIRA, `delete from public.agent_inbox_items where id = '${avisoRealId}';`);
+    const linhas = comoServico(
+      `select 'SONDA|' || count(*) from public.agent_inbox_items where id = '${avisoRealId}';`,
+    );
+    expect(linhas).toEqual(["1"]);
+  });
+
+  it("um viewer NÃO reescreve título, corpo nem ref_kind do aviso real (gatilho de update)", () => {
+    const erroTitulo = erroDe(`
+      ${comoMembro(USER_AVISO_CARTEIRA)}
+      update public.agent_inbox_items set title = 'hackeado' where id = '${avisoRealId}';
+    `);
+    expect(erroTitulo).not.toBeNull();
+    expect(erroTitulo).toContain("só status e resolved_at podem mudar");
+
+    const erroCorpo = erroDe(`
+      ${comoMembro(USER_AVISO_CARTEIRA)}
+      update public.agent_inbox_items set body = 'hackeado' where id = '${avisoRealId}';
+    `);
+    expect(erroCorpo).not.toBeNull();
+    expect(erroCorpo).toContain("só status e resolved_at podem mudar");
+
+    const erroRefKind = erroDe(`
+      ${comoMembro(USER_AVISO_CARTEIRA)}
+      update public.agent_inbox_items set ref_kind = 'other' where id = '${avisoRealId}';
+    `);
+    expect(erroRefKind).not.toBeNull();
+    expect(erroRefKind).toContain("só status e resolved_at podem mudar");
+  });
+
+  it("um viewer CONSEGUE encerrar o aviso real (status é coluna de estado permitida)", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_CARTEIRA)}
+      update public.agent_inbox_items set status = 'resolved' where id = '${avisoRealId}';
+    `);
+    expect(erro).toBeNull();
+    const linhas = comoServico(`select 'SONDA|' || status from public.agent_inbox_items where id = '${avisoRealId}';`);
+    expect(linhas).toEqual(["resolved"]);
+  });
+
+  it("um item de OUTRO tipo (não billing_carteira) continua gravável pelo membro como antes", () => {
+    const erro = erroDe(`
+      ${comoMembro(USER_AVISO_CARTEIRA)}
+      insert into public.agent_inbox_items (organization_id, kind, severity, title, ref_kind)
+        values ('${ORG_AVISO_CARTEIRA}', 'other', 'info', 'Aviso comum do membro', null);
+    `);
+    expect(erro).toBeNull();
   });
 });
