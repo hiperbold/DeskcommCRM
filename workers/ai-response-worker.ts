@@ -32,6 +32,14 @@ import {
   decidirOrcamento,
   HANDOFF_REASON_ORCAMENTO,
 } from "@/lib/agent-engine/edge/llm/orcamento";
+import {
+  corpoDaSuspensaoDeAssinatura,
+  deveConsultarAssinatura,
+  HANDOFF_REASON_ASSINATURA,
+  TITULO_ASSINATURA_SUSPENSA,
+} from "@/lib/agent-engine/edge/llm/assinatura";
+import { normalizarChaveDePlanosBloqueio, normalizarModoDeBilling } from "@/lib/agent-engine/edge/llm/carteira";
+import { modoDeBillingCacheado } from "@/lib/billing/planos/modo-cacheado";
 import { computeCost } from "@/lib/ai/cost";
 import { silencioVigente } from "@/lib/inbox/comando-da-conversa";
 import { logInvocation } from "@/lib/ai/log-invocation";
@@ -195,6 +203,26 @@ export async function processMessageReceived(row: EventRow): Promise<ProcessResu
       message_id: messageId,
     });
     return { status: "skipped", reason: veto.reason, detail: veto.detail };
+  }
+
+  // ── Assinatura suspensa / modo leitura (fase F4, Tarefa 6) — MESMA posição
+  // do teto acima, e pela mesma razão: depois de G1/G4 (pedido explícito e
+  // menção legal custam zero token e não podem ser calados por um veto de
+  // cobrança), antes do resto do pipeline.
+  const vetoDeAssinatura = await vetoPorAssinaturaSuspensa({
+    orgId: ctx.organization_id,
+    conversationId: ctx.conversation_id,
+    serviceBoundary: ctx.serviceBoundary,
+    leadId,
+  });
+  if (vetoDeAssinatura !== null) {
+    logger.info("[ai-response-worker] skip", {
+      reason: vetoDeAssinatura.reason,
+      detail: vetoDeAssinatura.detail,
+      conversation_id: conversationId,
+      message_id: messageId,
+    });
+    return { status: "skipped", reason: vetoDeAssinatura.reason, detail: vetoDeAssinatura.detail };
   }
 
   // Mesma armadilha que quebrava o ai-sentiment-worker, e aqui ela é mais cara:
@@ -571,6 +599,148 @@ async function abrirItemDeOrcamento(
     logger.warn("[ai-response] item de orçamento não pôde ser aberto na Central", {
       organization_id: orgId,
       kind: item.kind,
+      causa: error.message,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ASSINATURA SUSPENSA (MODO LEITURA) — fase F4, decisões 5 e 6 da fase
+// (`hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Irmão de `vetoPorTetoDeGasto` acima: MESMO padrão (guard que devolve
+ * `SkipDecision | null`, handoff pelo `triggerHandoff` local, porque este
+ * worker não pode importar o engine sem arrastar `pg` e o SDK para o bundle do
+ * Next), mas veto DIFERENTE e independente — a carteira de tokens (F3) nunca
+ * chegou a ser ligada a este caminho legado; aqui só entra a suspensão da
+ * assinatura.
+ *
+ * "Zero consulta a mais" no modo avisar/desligado (decisão 6): `PLANOS_BLOQUEIO`
+ * decide primeiro (em memória), e só então `modoDeBillingCacheado` (cache de
+ * 60s por client, `lib/billing/planos/modo-cacheado.ts`, o MESMO usado pelas
+ * telas de plano) é lida. `fn_billing_modo_leitura`, a única consulta não
+ * cacheada, só roda quando `deveConsultarAssinatura` (a mesma decisão pura do
+ * engine) já confirmou que vale a pena.
+ *
+ * Este caminho fala com o banco por PostgREST (`admin`, Supabase HTTP), nunca
+ * por `pg.Pool`: este worker não faz parte do invariante de zero `fetch`
+ * (`tests/invariants/autonomia-preview-core.test.ts`), que cobre só o ensaio
+ * do agent-engine.
+ */
+async function vetoPorAssinaturaSuspensa(alvo: {
+  serviceBoundary?: ServiceBoundary;
+  orgId: string;
+  conversationId: string;
+  leadId: string | null;
+}): Promise<SkipDecision | null> {
+  const orgId = alvo.orgId;
+  const chave = normalizarChaveDePlanosBloqueio(process.env.PLANOS_BLOQUEIO);
+  if (chave === "off") return null;
+
+  const admin = createAdminClient();
+  const { modo: modoBruto, error: erroDoModo } = await modoDeBillingCacheado(admin);
+  if (erroDoModo !== null) {
+    logger.warn("[ai-response] billing_settings.modo não pôde ser lido (gate de assinatura) — a resposta SEGUE", {
+      organization_id: orgId,
+      causa: erroDoModo,
+    });
+    return null;
+  }
+  const modo = normalizarModoDeBilling(modoBruto);
+  if (!deveConsultarAssinatura({ chave, modoDoBanco: modo, purpose: "bot_respond" })) {
+    return null;
+  }
+
+  let leitura = false;
+  try {
+    const { data, error } = await admin.rpc("fn_billing_modo_leitura", { p_org: orgId });
+    if (error) throw new Error(error.message);
+    leitura = data === true;
+  } catch (err) {
+    logger.warn("[ai-response] fn_billing_modo_leitura falhou — a resposta SEGUE sem checagem de assinatura", {
+      organization_id: orgId,
+      causa: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  if (!leitura) return null;
+
+  if (chave === "avisar") {
+    // A chave de emergência só sabe AFROUXAR (mesma doutrina do orçamento).
+    logger.warn("[ai-response] conta suspensa (modo leitura) — resposta SEGUE por PLANOS_BLOQUEIO=avisar", {
+      organization_id: orgId,
+    });
+    return null;
+  }
+
+  await abrirItemDeAssinatura(admin, orgId);
+
+  // Mesmo racional de `vetoPorTetoDeGasto`: sem handoff, o lead fica no vácuo
+  // (nem IA, nem humano) — o `triggerHandoff` local devolve a conversa à fila
+  // humana, igual ao engine faz pela escolta `comHandoffSeOrcamentoAcabar`.
+  await triggerHandoff({
+    conversationId: alvo.conversationId,
+    serviceBoundary: alvo.serviceBoundary,
+    organizationId: orgId,
+    reason: HANDOFF_REASON_ASSINATURA,
+    // "legado_teto" é o valor mais próximo do vocabulário FECHADO de
+    // `ORIGENS_DA_PASSAGEM` (CHECK do banco): sem migração nesta tarefa, não
+    // há como acrescentar "legado_assinatura". `reason`, acima, é quem de
+    // fato distingue este motivo do teto de gasto em dólar.
+    origem: "legado_teto",
+    leadId: alvo.leadId,
+    metadata: { source: "assinatura_suspensa" },
+  });
+
+  logger.warn("[ai-response] resposta recusada: conta suspensa (modo leitura) — conversa na fila humana", {
+    organization_id: orgId,
+    conversation_id: alvo.conversationId,
+  });
+  return skip("assinatura_suspensa");
+}
+
+/**
+ * Abre o aviso crítico na Central, deduplicado por TÍTULO ABERTO — mesmo
+ * padrão de `abrirItemDeOrcamento` logo acima, e mesmo motivo documentado no
+ * cabeçalho de `TITULO_ASSINATURA_SUSPENSA` (`./assinatura.ts`): a tabela de
+ * dedup que sobrevive ao encerramento (`billing_token_avisos_emitidos`) não é
+ * concedida ao papel deste caminho.
+ */
+async function abrirItemDeAssinatura(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+): Promise<void> {
+  const { count, error: erroDaBusca } = await admin
+    .from("agent_inbox_items")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", orgId)
+    .eq("kind", "other")
+    .eq("ref_kind", "billing_assinatura")
+    .eq("title", TITULO_ASSINATURA_SUSPENSA)
+    .eq("status", "open");
+  if (erroDaBusca) {
+    logger.warn("[ai-response] dedupe do aviso de assinatura falhou — item não aberto", {
+      organization_id: orgId,
+      causa: erroDaBusca.message,
+    });
+    return;
+  }
+  if ((count ?? 0) > 0) return;
+
+  const { error } = await admin.from("agent_inbox_items").insert({
+    organization_id: orgId,
+    kind: "other",
+    severity: "critical",
+    title: TITULO_ASSINATURA_SUSPENSA,
+    body: corpoDaSuspensaoDeAssinatura(),
+    ref_kind: "billing_assinatura",
+    ref_id: orgId,
+  });
+  if (error) {
+    logger.warn("[ai-response] aviso de assinatura suspensa não pôde ser aberto na Central", {
+      organization_id: orgId,
       causa: error.message,
     });
   }

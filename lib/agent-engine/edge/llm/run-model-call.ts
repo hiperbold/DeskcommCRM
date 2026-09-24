@@ -50,6 +50,12 @@ import {
   type ModoDeBilling,
   type VeredictoDaCarteira,
 } from './carteira';
+import {
+  corpoDaSuspensaoDeAssinatura,
+  deveConsultarAssinatura,
+  PURPOSES_ISENTOS_DA_ASSINATURA,
+  TITULO_ASSINATURA_SUSPENSA,
+} from './assinatura';
 import { custoCentsComCatalogo } from './pricing';
 import { chaveDeOrcamentoDaInstalacao } from '../../../instalacao/comportamento';
 import { createDefaultRegistry, type ProviderRegistry } from './providers';
@@ -113,6 +119,29 @@ export class LlmCarteiraEsgotadaError extends LlmBudgetExceededError {
       (saldoTokens === null ? '' : ` (saldo: ${saldoTokens} tokens)`) +
       ': chamada recusada antes de sair byte para o provedor; contrate mais tokens em ' +
       'Configurações › Plano e uso (agent_inbox_items ref_kind=billing_carteira)';
+  }
+}
+
+/**
+ * Conta em MODO LEITURA (assinatura suspensa/cancelada, bloqueio ligado e
+ * carência vencida): decisões 5 e 6 da fase F4 (`hiperbold/planos/fase-F4-
+ * tarefas.md`, Tarefa 6). SUBCLASSE de propósito, IRMÃ de
+ * `LlmCarteiraEsgotadaError` (as duas estendem `LlmBudgetExceededError`
+ * diretamente, nunca uma a outra): a fila lê `terminal` por herança e cancela
+ * em vez de repetir, e a escolta de handoff (`comHandoffSeOrcamentoAcabar`,
+ * `inbound-turn.ts`) reconhece pela classe-mãe. `name` e `message` são
+ * sobrescritos porque este é um veto de NEGÓCIO diferente dos outros dois
+ * (mensalidade não paga, não gasto nem carteira do plano) — confundir os três
+ * mandaria quem lê consertar o campo errado.
+ */
+export class LlmAssinaturaSuspensaError extends LlmBudgetExceededError {
+  override readonly name = 'llm_assinatura_suspensa';
+  constructor() {
+    super();
+    this.message =
+      'a assinatura desta organização está suspensa (modo leitura, pagamento em atraso além da ' +
+      'carência): chamada recusada antes de sair byte para o provedor; regularize o pagamento em ' +
+      'Configurações › Plano e uso (agent_inbox_items ref_kind=billing_assinatura)';
   }
 }
 
@@ -471,6 +500,121 @@ async function modoDeBillingPeloDb(db: pg.Pool): Promise<ModoDeBilling> {
   const modo = normalizarModoDeBilling(rows[0]?.modo ?? null);
   modoDeBillingPorPool.set(db, { modo, expiraEm: Date.now() + CACHE_MODO_DE_BILLING_TTL_MS });
   return modo;
+}
+
+/**
+ * O GATE DA ASSINATURA SUSPENSA (MODO LEITURA): decisões 5 e 6 da fase F4
+ * (`hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6). Roda ANTES de
+ * `aplicarCarteira` no seam (chamado primeiro em `runModelCall`, logo abaixo) e
+ * ANTES dos atalhos de origem de chave e de propósito que `aplicarCarteira` tem
+ * — aqui a isenção é a estreita de `./assinatura.ts` (só os dois guardrails de
+ * segurança), sem o atalho de `origemDaChave` (a suspensão vale para BYOK e
+ * chave da instalação igual, decisão 6).
+ *
+ * "Zero consulta a mais" no modo avisar/desligado: usa a MESMA leitura cacheada
+ * de `billing_settings.modo` que a carteira (`modoDeBillingPeloDb`, 60s por
+ * pool) — as duas nunca pagam duas leituras da mesma linha na mesma janela de
+ * 60s. `fn_billing_modo_leitura`, a única consulta não cacheada, só roda quando
+ * `deveConsultarAssinatura` (a decisão pura, sem I/O) já confirmou que vale a
+ * pena.
+ */
+async function aplicarAssinatura(d: {
+  db: pg.Pool;
+  organizationId: string;
+  chave: ChaveDeOrcamento;
+  purpose: string;
+  provider: string;
+  model: string;
+  origem: string;
+  origemDaChave: OrigemDaChaveLlm;
+  input: RunModelCallInput;
+  log?: Logger;
+}): Promise<void> {
+  const comum = { organization_id: d.organizationId, purpose: d.purpose };
+
+  // Atalhos de custo #1 e #2: SÓ a chave de emergência e o propósito (ambos já
+  // em memória) decidem SE vale a pena ler o modo cacheado — nenhum toca o
+  // banco. Decisão 6: aqui NÃO há atalho de `origemDaChave` (o terceiro atalho
+  // que `aplicarCarteira` tem) — é a diferença que separa este gate do dela,
+  // ver o cabeçalho de `./assinatura.ts`.
+  if (d.chave === 'off') return;
+  if ((PURPOSES_ISENTOS_DA_ASSINATURA as readonly string[]).includes(d.purpose)) return;
+
+  let modo: ModoDeBilling;
+  try {
+    modo = await modoDeBillingPeloDb(d.db);
+  } catch (err) {
+    d.log?.warn('llm: leitura de billing_settings.modo falhou (gate de assinatura) — a chamada SEGUE', {
+      ...comum,
+      ...normalizarErro(err),
+    });
+    return;
+  }
+
+  if (!deveConsultarAssinatura({ chave: d.chave, modoDoBanco: modo, purpose: d.purpose })) {
+    return;
+  }
+
+  let leitura = false;
+  try {
+    const { rows } = await d.db.query<{ leitura: boolean | null }>(
+      'select public.fn_billing_modo_leitura($1) as leitura',
+      [d.organizationId],
+    );
+    leitura = rows[0]?.leitura === true;
+  } catch (err) {
+    d.log?.warn('llm: consulta de fn_billing_modo_leitura falhou — a chamada SEGUE sem checagem de assinatura', {
+      ...comum,
+      ...normalizarErro(err),
+    });
+    return;
+  }
+
+  if (!leitura) return;
+
+  if (d.chave === 'avisar') {
+    // A chave de emergência só sabe AFROUXAR (mesma doutrina do orçamento e da
+    // carteira): 'avisar' rebaixa o bloqueio para um log, nunca para um throw.
+    d.log?.warn('llm: conta suspensa (modo leitura) — chamada SEGUE por PLANOS_BLOQUEIO=avisar', comum);
+    return;
+  }
+
+  const erro = new LlmAssinaturaSuspensaError();
+  // Mesmo molde de `aplicarCarteira`: dedup por TÍTULO ABERTO (sem período
+  // embutido, ver o cabeçalho de `TITULO_ASSINATURA_SUSPENSA` sobre por que —
+  // `billing_token_avisos_emitidos` não é concedida ao papel que executa este
+  // seam). `ref_kind = 'billing_assinatura'` é o que entra nas três proteções
+  // contra o membro (migration 0908 parte 2).
+  await d.db
+    .query(
+      `insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+       select $1, 'other', 'critical', $2, $3, 'billing_assinatura', $1
+       where not exists (
+         select 1 from agent_inbox_items
+         where organization_id = $1 and kind = 'other' and ref_kind = 'billing_assinatura' and title = $2 and status = 'open'
+       )`,
+      [d.organizationId, TITULO_ASSINATURA_SUSPENSA, corpoDaSuspensaoDeAssinatura()],
+    )
+    .catch((err: unknown) => {
+      d.log?.warn('llm: aviso de assinatura suspensa não pôde ser aberto na Central — a recusa segue', {
+        ...comum,
+        ...normalizarErro(err),
+      });
+    });
+  await registrarFalha(d.db, {
+    input: d.input,
+    purpose: d.purpose,
+    provider: d.provider,
+    model: d.model,
+    origem: d.origem,
+    origemDaChave: d.origemDaChave,
+    latencyMs: 0,
+    erro,
+  }).catch(() => {
+    // Gravar a recusa não pode impedir a recusa.
+  });
+  d.log?.warn('llm: chamada recusada: conta suspensa (modo leitura)', comum);
+  throw erro;
 }
 
 /**
@@ -896,6 +1040,27 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     ...(deps.log ? { log: deps.log } : {}),
   });
 
+  // ═══ A ASSINATURA SUSPENSA (MODO LEITURA), ANTES DA CARTEIRA ═══
+  //
+  // Decisões 5 e 6 da fase F4 (`hiperbold/planos/fase-F4-tarefas.md`, Tarefa
+  // 6): veto de NEGÓCIO diferente e ANTERIOR aos dois abaixo — uma conta que
+  // não paga a mensalidade não tem carteira nem orçamento que a salve. Mesma
+  // chave `PLANOS_BLOQUEIO` (`cfg.bloqueioDePlanos`) da carteira, e pelo mesmo
+  // motivo dela: `billing_settings.modo` (não a chave sozinha) é quem de fato
+  // manda, lido dentro de `aplicarAssinatura` (mesmo cache, 60s por pool).
+  await aplicarAssinatura({
+    db,
+    organizationId: input.tenantId,
+    chave: cfg.bloqueioDePlanos ?? 'on',
+    purpose,
+    provider: config.provider,
+    model,
+    origem: decisao.origem,
+    origemDaChave: config.origemDaChave,
+    input,
+    ...(deps.log ? { log: deps.log } : {}),
+  });
+
   // ═══ A CARTEIRA DE TOKENS, LOGO EM SEGUIDA ═══
   //
   // Mesmo ponto (antes de qualquer byte ao provedor), mesma razão. É um veto
@@ -1121,6 +1286,18 @@ export function normalizarErro(err: unknown): {
   if (err instanceof LlmCarteiraEsgotadaError) {
     return {
       error_code: 'carteira_de_tokens_esgotada',
+      error_message: redigirMensagemDoProvedor(bruto),
+      http_status: null,
+    };
+  }
+  // Mesma doutrina do ramo acima, IRMÃ (não mãe/filha) de `LlmCarteiraEsgotadaError`:
+  // as duas estendem `LlmBudgetExceededError` diretamente, então o `instanceof`
+  // de uma nunca casa a outra — mas as duas precisam vir ANTES do ramo genérico
+  // logo abaixo, senão a assinatura suspensa gravaria em `llm_calls.error_code`
+  // o código do orçamento em dólar (fase F4, decisão 6, Tarefa 6).
+  if (err instanceof LlmAssinaturaSuspensaError) {
+    return {
+      error_code: 'assinatura_suspensa',
       error_message: redigirMensagemDoProvedor(bruto),
       http_status: null,
     };

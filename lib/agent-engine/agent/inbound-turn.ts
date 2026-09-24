@@ -55,6 +55,7 @@ import { WahaChannelAdapter } from '../edge/channel/waha-adapter';
 // egress de canal — o envio em si vai pelo adapter (ChannelAdapter). Ver F2-25.
 import { applySendOutcome } from '../edge/crm/send-message';
 import {
+  LlmAssinaturaSuspensaError,
   LlmBudgetExceededError,
   LlmCarteiraEsgotadaError,
   runModelCall,
@@ -65,6 +66,7 @@ import {
 } from '../edge/llm/run-model-call';
 import type { ProviderRegistry } from '../edge/llm/providers';
 import { HANDOFF_REASON_ORCAMENTO } from '../edge/llm/orcamento';
+import { HANDOFF_REASON_ASSINATURA } from '../edge/llm/assinatura';
 import { abreAvisoDoEspelhoRecusado, mirrorLeadStageToCrm } from '../edge/crm/move-lead-stage';
 import { insertInboxItem } from '../db/repository';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -634,6 +636,31 @@ export const RESUMO_DO_HANDOFF_POR_CARTEIRA =
 export const TITULO_DO_HANDOFF_POR_CARTEIRA = 'Carteira de tokens de IA esgotada: assumir a conversa';
 
 /**
+ * Os mesmos dois textos, para a assinatura suspensa (fase F4, decisões 5 e 6,
+ * `hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6). `LlmAssinaturaSuspensaError
+ * extends LlmBudgetExceededError` (IRMÃ de `LlmCarteiraEsgotadaError`, não filha
+ * dela), então `comHandoffSeOrcamentoAcabar` cai no MESMO `catch`: quem assume
+ * não pode ler "teto de gasto" nem "carteira de tokens do plano" quando o que
+ * parou foi a MENSALIDADE em atraso — e ir procurar o conserto em Uso de IA ›
+ * Orçamento em vez de Configurações › Plano e uso › Assinatura.
+ */
+export const RESUMO_DO_HANDOFF_POR_ASSINATURA =
+  'A IA parou de responder porque a assinatura desta organização está suspensa (pagamento em atraso ' +
+  'além da carência): o lead NÃO pediu atendimento humano. Assuma a conversa; para a IA voltar a ' +
+  'responder, regularize o pagamento em Configurações › Plano e uso.';
+
+export const TITULO_DO_HANDOFF_POR_ASSINATURA = 'Conta suspensa: assumir a conversa';
+
+/**
+ * `conversations.last_handoff_reason` — valor PRÓPRIO, importado de
+ * `./assinatura.ts` (ver o import no topo do arquivo) para ser a MESMA
+ * constante que o worker legado (`workers/ai-response-worker.ts`) grava,
+ * evitando duas grafias do mesmo motivo (mesma doutrina de
+ * `HANDOFF_REASON_ORCAMENTO`, reexportada acima).
+ */
+export { HANDOFF_REASON_ASSINATURA };
+
+/**
  * `conversations.last_handoff_reason` (coluna `text`, sem CHECK, ao contrário de
  * `passagens_de_atendimento.motivo_codigo`, vocabulário FECHADO conferido por
  * `tests/invariants/vocabulario-banco-x-typescript.test.ts`): aqui o "vocabulário
@@ -728,8 +755,15 @@ export async function comHandoffSeOrcamentoAcabar<T>(
     return await chamada();
   } catch (err) {
     if (!(err instanceof LlmBudgetExceededError)) throw err;
-    // Subclasse (fase F3, decisão 7): mesma escolta, textos próprios; ver o
-    // cabeçalho de HANDOFF_REASON_CARTEIRA sobre por que só `reason` diverge.
+    // Subclasses (fase F3, decisão 7 e fase F4, decisão 6): mesma escolta,
+    // textos próprios; ver o cabeçalho de HANDOFF_REASON_CARTEIRA/
+    // HANDOFF_REASON_ASSINATURA sobre por que só `reason` (e os textos abaixo)
+    // divergem. `LlmAssinaturaSuspensaError` e `LlmCarteiraEsgotadaError` são
+    // IRMÃS (as duas estendem `LlmBudgetExceededError` diretamente, nunca uma a
+    // outra), então checar `ehAssinatura` não precisa vir "antes" por causa de
+    // hierarquia — só precisa ser o SEGUNDO teste (`instanceof` já resolveu),
+    // e os dois ternários abaixo tratam os três casos em cascata.
+    const ehAssinatura = err instanceof LlmAssinaturaSuspensaError;
     const ehCarteira = err instanceof LlmCarteiraEsgotadaError;
     const doCheckpoint = await ctx.briefingDoCheckpoint();
     // AVISA antes de silenciar — ver a nota de ORDEM no gatilho determinístico:
@@ -756,34 +790,48 @@ export async function comHandoffSeOrcamentoAcabar<T>(
     // diz a quem assume que o cliente NÃO pediu uma pessoa — sem isso o
     // atendente responde a um pedido que não houve. Nenhum modelo é chamado
     // aqui, e é o ponto: o motivo do desvio é justamente não haver orçamento.
+    const resumoDoDesvio = ehAssinatura
+      ? RESUMO_DO_HANDOFF_POR_ASSINATURA
+      : ehCarteira
+        ? RESUMO_DO_HANDOFF_POR_CARTEIRA
+        : RESUMO_DO_HANDOFF_POR_ORCAMENTO;
     const briefing: BriefingDaPassagem = {
       ...doCheckpoint,
-      body: `${ehCarteira ? RESUMO_DO_HANDOFF_POR_CARTEIRA : RESUMO_DO_HANDOFF_POR_ORCAMENTO}\n\n${doCheckpoint.body}`,
+      body: `${resumoDoDesvio}\n\n${doCheckpoint.body}`,
     };
     await performHumanHandoff(
       ctx.pool,
       { tenantId: ctx.tenantId, leadId: ctx.leadId, conversationId: ctx.conversationId },
       {
         // `reason` grava em `conversations.last_handoff_reason` (coluna livre,
-        // sem CHECK): ganha valor PRÓPRIO para a carteira (decisão 7).
-        reason: ehCarteira ? HANDOFF_REASON_CARTEIRA : HANDOFF_REASON_ORCAMENTO,
+        // sem CHECK): ganha valor PRÓPRIO para a carteira (decisão 7) e para a
+        // assinatura suspensa (fase F4, decisão 6).
+        reason: ehAssinatura ? HANDOFF_REASON_ASSINATURA : ehCarteira ? HANDOFF_REASON_CARTEIRA : HANDOFF_REASON_ORCAMENTO,
         conversationSummary: briefing.body,
-        inboxTitle: ehCarteira ? TITULO_DO_HANDOFF_POR_CARTEIRA : TITULO_DO_HANDOFF_POR_ORCAMENTO,
+        inboxTitle: ehAssinatura
+          ? TITULO_DO_HANDOFF_POR_ASSINATURA
+          : ehCarteira
+            ? TITULO_DO_HANDOFF_POR_CARTEIRA
+            : TITULO_DO_HANDOFF_POR_ORCAMENTO,
         // `motivoCodigo`/`origem` são o vocabulário FECHADO de
         // `passagens_de_atendimento` (CHECK + tests/invariants/vocabulario-banco-
         // x-typescript.test.ts): sem migração nesta tarefa, os dois continuam
         // reaproveitando 'orcamento_de_ia'/'teto_de_gasto' também para a
-        // carteira: é o próprio "senão reaproveita e o registro diz por quê"
-        // da decisão 7, e o "porquê" é este comentário.
+        // carteira (decisão 7 da F3) E para a assinatura suspensa (decisão 6 da
+        // F4) — é o próprio "senão reaproveita e o registro diz por quê", e o
+        // "porquê" é este comentário. `reason`, acima, é quem de fato distingue
+        // os três motivos para quem lê a conversa.
         passagem: { origem: 'teto_de_gasto', motivoCodigo: 'orcamento_de_ia', briefing },
         avisoAoLead: aviso,
         log: ctx.log,
       },
     );
     ctx.log.warn(
-      ehCarteira
-        ? 'turno interrompido pela carteira de tokens esgotada: conversa devolvida à fila humana'
-        : 'turno interrompido pelo teto de gasto: conversa devolvida à fila humana',
+      ehAssinatura
+        ? 'turno interrompido pela assinatura suspensa: conversa devolvida à fila humana'
+        : ehCarteira
+          ? 'turno interrompido pela carteira de tokens esgotada: conversa devolvida à fila humana'
+          : 'turno interrompido pelo teto de gasto: conversa devolvida à fila humana',
       { lead_avisado: aviso.avisado },
     );
     throw err;

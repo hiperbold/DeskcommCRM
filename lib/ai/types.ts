@@ -47,6 +47,14 @@ export type SkipReason =
    * coisa tenha um nome só nos dois caminhos.
    */
   | "budget_exceeded"
+  /**
+   * A assinatura da organização está suspensa (modo leitura, fase F4, decisões
+   * 5 e 6, `hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6): pagamento em
+   * atraso além da carência. Mesmo nome do `error_code` da classe
+   * `LlmAssinaturaSuspensaError` do engine e do `agent_inbox_items.title`
+   * (`TITULO_ASSINATURA_SUSPENSA`) — mesma doutrina de `budget_exceeded` acima.
+   */
+  | "assinatura_suspensa"
   | "silenced_post_handoff"
   | "handoff_recent"
   | "conversation_not_found"

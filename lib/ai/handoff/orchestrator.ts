@@ -68,7 +68,16 @@ export type HandoffReason =
    * a MESMA constante que o engine grava: dois caminhos param a IA pelo mesmo
    * motivo, e duas grafias fariam quem filtra por uma achar metade das conversas.
    */
-  | "orcamento_de_ia";
+  | "orcamento_de_ia"
+  /**
+   * A assinatura da organização está suspensa (modo leitura, fase F4, decisões
+   * 5 e 6, `hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6): pagamento em
+   * atraso além da carência — veto de negócio diferente do teto de gasto
+   * acima. O literal vem de `HANDOFF_REASON_ASSINATURA`
+   * (`lib/agent-engine/edge/llm/assinatura.ts`), a MESMA constante que o
+   * engine grava, pelo mesmo motivo de `orcamento_de_ia`.
+   */
+  | "assinatura_suspensa";
 
 export interface TriggerHandoffInput {
   serviceBoundary?: ServiceBoundary;
@@ -129,6 +138,16 @@ const MOTIVO_DA_PASSAGEM = {
   legal_mention: "legal_mention",
   refund_mention: "refund_mention",
   orcamento_de_ia: "orcamento_de_ia",
+  // Reaproveita 'orcamento_de_ia' também para a assinatura suspensa (fase F4,
+  // decisão 6, Tarefa 6): `motivoCodigo` é vocabulário FECHADO
+  // (passagens_de_atendimento, CHECK do banco) e esta tarefa não abre migração
+  // para acrescentar um valor novo — mesma doutrina do engine em
+  // `comHandoffSeOrcamentoAcabar` (lib/agent-engine/agent/inbound-turn.ts),
+  // que faz o mesmo reaproveitamento para a carteira de tokens (fase F3).
+  // `last_handoff_reason` (coluna livre) segue com o valor PRÓPRIO
+  // ('assinatura_suspensa'), então quem lê a conversa ainda distingue os
+  // motivos; só o código fechado é compartilhado.
+  assinatura_suspensa: "orcamento_de_ia",
 } satisfies Record<HandoffReason, MotivoDaPassagem>;
 
 function motivoDaPassagem(reason: HandoffReason): MotivoDaPassagem {

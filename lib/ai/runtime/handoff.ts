@@ -10,7 +10,15 @@ import { triggerHandoff, type HandoffReason } from "@/lib/ai/handoff/orchestrato
 import { createAdminClient } from "@/lib/supabase/admin";
 import { finalizeRun, type FinalizeRunInput } from "./finalize";
 
-export type HandoffSource = "sentinel" | "tool";
+export type HandoffSource =
+  | "sentinel"
+  | "tool"
+  /**
+   * Assinatura suspensa (modo leitura, fase F4, decisões 5 e 6, Tarefa 6):
+   * mesmo racional de "sentinel" — sem chamada de LLM, custo zero — mas veto
+   * de negócio, não sinal do texto do lead.
+   */
+  | "billing";
 
 export interface FinalizeHandoffInput {
   runId: string;

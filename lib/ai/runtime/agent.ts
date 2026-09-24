@@ -35,6 +35,12 @@ import {
   OPENROUTER_ENDPOINT,
 } from "@/lib/agent-engine/edge/llm/providers";
 import { CredentialUnavailableError, loadCredential } from "@/lib/ai/credentials";
+import {
+  deveConsultarAssinatura,
+  HANDOFF_REASON_ASSINATURA,
+} from "@/lib/agent-engine/edge/llm/assinatura";
+import { normalizarChaveDePlanosBloqueio, normalizarModoDeBilling } from "@/lib/agent-engine/edge/llm/carteira";
+import { modoDeBillingCacheado } from "@/lib/billing/planos/modo-cacheado";
 import { decidirElegibilidadeDaConversaViaSupabase } from "@/lib/ai/elegibilidade/consulta-supabase";
 import { ttlDaAutorizacaoMs } from "@/lib/ai/elegibilidade/gate";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -534,6 +540,68 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ...history.map((m) => ({ role: m.role, content: m.content })),
       { role: "user" as const, content: inboundBody },
     ];
+
+    // ═══ ASSINATURA SUSPENSA (MODO LEITURA) — fase F4, decisões 5 e 6 ═══
+    //
+    // (`hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6). Mesmo racional do
+    // engine (`run-model-call.ts`) e do worker legado
+    // (`ai-response-worker.ts`): conta suspensa não gera resposta nenhuma, em
+    // NENHUM propósito que fale com o cliente — este runtime (mesmo
+    // `@deprecated`) é um deles. Fica AQUI, logo antes do único `generateText`
+    // do arquivo, para cobrir TANTO o run real quanto o `is_dry_run` (ensaio):
+    // as duas simulam resposta ao cliente, e a decisão 6 não abre exceção para
+    // ensaio. "Zero consulta a mais" no modo avisar/desligado: só lê o modo
+    // cacheado quando `PLANOS_BLOQUEIO` permite bloquear, e só chama
+    // `fn_billing_modo_leitura` quando o modo também é 'bloquear'.
+    const chaveDeAssinatura = normalizarChaveDePlanosBloqueio(process.env.PLANOS_BLOQUEIO);
+    if (chaveDeAssinatura !== "off") {
+      const { modo: modoBrutoDeAssinatura, error: erroDoModoDeAssinatura } = await modoDeBillingCacheado(admin);
+      if (erroDoModoDeAssinatura !== null) {
+        // Fail-open: soluço de leitura NUNCA cala a IA de quem paga.
+      } else if (
+        deveConsultarAssinatura({
+          chave: chaveDeAssinatura,
+          modoDoBanco: normalizarModoDeBilling(modoBrutoDeAssinatura),
+          purpose: "agent_turn",
+        })
+      ) {
+        let contaEmLeitura = false;
+        try {
+          const { data, error } = await admin.rpc("fn_billing_modo_leitura", {
+            p_org: run.organization_id,
+          });
+          if (error) throw new Error(error.message);
+          contaEmLeitura = data === true;
+        } catch {
+          // Fail-open: soluço de leitura NUNCA cala a IA de quem paga.
+        }
+        if (contaEmLeitura && chaveDeAssinatura !== "avisar") {
+          // A chave de emergência só sabe AFROUXAR (mesma doutrina do engine e
+          // do worker legado): 'avisar' rebaixa o bloqueio para nada (o run
+          // segue), nunca vira handoff.
+          await finalizeHandoff({
+            runId: run.id,
+            organizationId: run.organization_id,
+            conversationId: conversationIdForHandoff,
+            reason: HANDOFF_REASON_ASSINATURA,
+            source: "billing",
+            latencyMs: Date.now() - startedAt,
+            isDryRun: run.is_dry_run,
+          });
+          return {
+            run_id: run.id,
+            status: "handoff",
+            abort_reason: `billing:${HANDOFF_REASON_ASSINATURA}`,
+            latency_ms: Date.now() - startedAt,
+            tokens_in: 0,
+            tokens_out: 0,
+            cost_cents: 0,
+            steps_count: 0,
+            would_send_to: { session: waSessionName, chat_id: chatId },
+          };
+        }
+      }
+    }
 
     const result = await generateText({
       model,
