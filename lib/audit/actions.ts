@@ -965,6 +965,20 @@ export const AUDIT_ACTIONS = [
   // só `ativo` muda).
   "billing.token_pack_created",
   "billing.token_pack_deactivated",
+
+  // A compra pelo PRÓPRIO CLIENTE, atrás da chave (fase F5, tarefa 15,
+  // `app/actions/settings/compraDoPlano.ts`), diferente das ações do admin
+  // da plataforma acima (que mexem na assinatura de QUALQUER organização):
+  // aqui é o admin da PRÓPRIA organização, comprando ou cancelando a sua.
+  // `order_created` é "que pedido essa organização abriu, e o que a compra
+  // devolveu" (assinatura mensal/anual no cartão, anual no Pix, ou pacote de
+  // tokens); `subscription_cancel_requested` é "quem pediu para cancelar, e
+  // se ficou para o fim do período". O `metadata` das duas NUNCA carrega
+  // CPF/CNPJ, e-mail, telefone (decisão 16 da fase: dado do pagador só via
+  // ao Asaas, nunca ao log) nem o valor da cobrança: só o código do
+  // plano/pacote, o ciclo, o método e o resultado da operação.
+  "billing.order_created",
+  "billing.subscription_cancel_requested",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

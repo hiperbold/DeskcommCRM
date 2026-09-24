@@ -1,0 +1,286 @@
+import "server-only";
+
+/**
+ * A implementação REAL de `DbCompra` (`lib/billing/asaas/compra.ts`) contra
+ * o Supabase de verdade: fase F5, Tarefa 15 (`hiperbold/planos/fase-F5-
+ * tarefas.md`). `compra.ts` deixou isto explicitamente fora da Tarefa 14
+ * (comentário do próprio arquivo): este módulo é só a PONTE, um método por
+ * RPC/leitura, no mesmo molde de `conferidorDeCarteiraSobre`
+ * (`lib/billing/tokens/conferir-carteira.ts`): nenhuma regra de negócio
+ * mora aqui, só tradução de nomes (`snake_case` do Postgres para
+ * `camelCase` do TypeScript) e o `join` com `billing_plans`/
+ * `billing_token_pacotes` para a `description` sem dado pessoal (decisão 4
+ * do plano da fase).
+ *
+ * As sete funções chamadas por RPC (`fn_billing_criar_pedido`,
+ * `fn_billing_pedido_tomar`, `fn_billing_vincular_cliente_asaas`,
+ * `fn_billing_pedido_registrar_cobranca`, `fn_billing_pedido_marcar` da
+ * migração 0909, e `fn_billing_cancelar_no_fim_do_periodo` da migração
+ * 0908) ainda não estão em `lib/database.types.ts` (tabelas/funções novas
+ * desta fase): os nomes de RPC e os argumentos levam `as never`, o mesmo
+ * tratamento que `conferidorDeCarteiraSobre` já dá às funções novas da fase
+ * F2-B.
+ *
+ * `SupabaseClient` (de `createAdminClient()`, `lib/supabase/admin.ts`) BYPASSA
+ * RLS: toda leitura aqui é filtrada por `organization_id`, sempre recebido
+ * por parâmetro (nunca lido de outro lugar): quem resolve esse valor da
+ * sessão é o CHAMADOR (`app/actions/settings/compraDoPlano.ts`, Tarefa 15),
+ * nunca este arquivo.
+ */
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+import type { AmbienteAsaas } from "./config";
+import type {
+  CicloPedido,
+  ContratoAsaas,
+  DbCompra,
+  MetodoPedido,
+  PedidoCriado,
+  PedidoLinha,
+  PedidoTomado,
+  RpcErro,
+  StatusPedido,
+  TipoPedido,
+  VinculoClienteAsaas,
+} from "./compra";
+
+/** Mesma lista de `billing_orders_aberto_por_tipo_unique` (migração 0909, decisão 11/25). */
+const ESTADOS_ABERTOS: StatusPedido[] = ["criado", "aguardando_pagamento", "inconclusivo", "processando"];
+
+const COLUNAS_PEDIDO =
+  "id, status, tipo, ambiente, metodo, amount_cents, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, ciclo, plan_id, pacote_id";
+
+interface LinhaBillingOrders {
+  id: string;
+  status: string;
+  tipo: string;
+  ambiente: string;
+  metodo: string;
+  amount_cents: number;
+  external_reference: string;
+  asaas_payment_id: string | null;
+  asaas_subscription_id: string | null;
+  invoice_url: string | null;
+  ciclo: string | null;
+  plan_id: string | null;
+  pacote_id: string | null;
+}
+
+/**
+ * Nomes do plano (`billing_plans.name`) e do pacote (`billing_token_pacotes.
+ * nome`), só quando o pedido carrega um dos dois ids (checks de coerência da
+ * migração 0909 garantem que nunca os dois ao mesmo tempo). Usado por
+ * `montarDescricao` em `compra.ts` para a `description` sem dado pessoal
+ * (decisão 4).
+ */
+async function nomesDoPedido(
+  admin: SupabaseClient,
+  planId: string | null,
+  pacoteId: string | null,
+): Promise<{ planoNome: string | null; pacoteNome: string | null }> {
+  let planoNome: string | null = null;
+  let pacoteNome: string | null = null;
+
+  if (planId) {
+    const { data } = await admin.from("billing_plans").select("name").eq("id", planId).maybeSingle();
+    planoNome = (data as { name: string } | null)?.name ?? null;
+  }
+  if (pacoteId) {
+    const { data } = await admin.from("billing_token_pacotes").select("nome").eq("id", pacoteId).maybeSingle();
+    pacoteNome = (data as { nome: string } | null)?.nome ?? null;
+  }
+
+  return { planoNome, pacoteNome };
+}
+
+function paraPedidoLinha(row: LinhaBillingOrders, planoNome: string | null, pacoteNome: string | null): PedidoLinha {
+  return {
+    id: row.id,
+    status: row.status as StatusPedido,
+    tipo: row.tipo as TipoPedido,
+    ambiente: row.ambiente as AmbienteAsaas,
+    metodo: row.metodo as MetodoPedido,
+    amountCents: row.amount_cents,
+    externalReference: row.external_reference,
+    asaasPaymentId: row.asaas_payment_id,
+    asaasSubscriptionId: row.asaas_subscription_id,
+    invoiceUrl: row.invoice_url,
+    ciclo: row.ciclo as CicloPedido | null,
+    planoNome,
+    pacoteNome,
+  };
+}
+
+/**
+ * Monta o `DbCompra` (`lib/billing/asaas/compra.ts`) sobre um `SupabaseClient`
+ * de verdade (`createAdminClient()`). Cada método é um RPC ou uma leitura
+ * pura; nenhum aqui decide regra de negócio, isso é `compra.ts`.
+ */
+export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
+  return {
+    async criarPedido(args) {
+      const { data, error } = await admin.rpc("fn_billing_criar_pedido" as never, {
+        p_org: args.org,
+        p_tipo: args.tipo,
+        p_plan_code: args.planCode,
+        p_ciclo: args.ciclo,
+        p_pacote: args.pacote,
+        p_metodo: args.metodo,
+        p_ambiente: args.ambiente,
+        p_chave: args.chave,
+        p_actor: args.actor,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as {
+        pedido_id: string;
+        external_reference: string;
+        amount_cents: number;
+        ja_existia: boolean;
+        proxima_cobranca_em: string | null;
+      } | null;
+      if (!d) return { data: null, error: null };
+      const criado: PedidoCriado = {
+        pedidoId: d.pedido_id,
+        externalReference: d.external_reference,
+        amountCents: d.amount_cents,
+        jaExistia: d.ja_existia,
+        proximaCobrancaEm: d.proxima_cobranca_em,
+      };
+      return { data: criado, error: null };
+    },
+
+    async buscarPedidoAbertoPorTipo(org, tipo) {
+      const { data, error } = await admin
+        .from("billing_orders")
+        .select(COLUNAS_PEDIDO)
+        .eq("organization_id", org)
+        .eq("tipo", tipo)
+        .in("status", ESTADOS_ABERTOS)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) return { data: null, error: error as RpcErro };
+      const row = data as LinhaBillingOrders | null;
+      if (!row) return { data: null, error: null };
+      const { planoNome, pacoteNome } = await nomesDoPedido(admin, row.plan_id, row.pacote_id);
+      return { data: paraPedidoLinha(row, planoNome, pacoteNome), error: null };
+    },
+
+    async tomarPedido(org, pedidoId) {
+      const { data, error } = await admin.rpc("fn_billing_pedido_tomar" as never, {
+        p_org: org,
+        p_pedido: pedidoId,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { tomado: boolean; pedido_id: string; status: string } | null;
+      if (!d) return { data: null, error: null };
+      const tomado: PedidoTomado = { tomado: d.tomado, pedidoId: d.pedido_id, status: d.status as StatusPedido };
+      return { data: tomado, error: null };
+    },
+
+    async lerPedido(org, pedidoId) {
+      const { data, error } = await admin
+        .from("billing_orders")
+        .select(COLUNAS_PEDIDO)
+        .eq("organization_id", org)
+        .eq("id", pedidoId)
+        .maybeSingle();
+      if (error) return { data: null, error: error as RpcErro };
+      const row = data as LinhaBillingOrders | null;
+      if (!row) return { data: null, error: null };
+      const { planoNome, pacoteNome } = await nomesDoPedido(admin, row.plan_id, row.pacote_id);
+      return { data: paraPedidoLinha(row, planoNome, pacoteNome), error: null };
+    },
+
+    async buscarVinculoClienteAsaas(org, ambiente) {
+      const { data, error } = await admin
+        .from("billing_customers")
+        .select("asaas_customer_id")
+        .eq("organization_id", org)
+        .eq("ambiente", ambiente)
+        .maybeSingle();
+      if (error) return { data: null, error: error as RpcErro };
+      const row = data as { asaas_customer_id: string } | null;
+      if (!row) return { data: null, error: null };
+      const vinculo: VinculoClienteAsaas = { asaasCustomerId: row.asaas_customer_id };
+      return { data: vinculo, error: null };
+    },
+
+    async vincularClienteAsaas(org, ambiente, asaasCustomerId) {
+      const { data, error } = await admin.rpc("fn_billing_vincular_cliente_asaas" as never, {
+        p_org: org,
+        p_ambiente: ambiente,
+        p_asaas_customer_id: asaasCustomerId,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { ja_existia: boolean; asaas_customer_id: string } | null;
+      if (!d) return { data: null, error: null };
+      return { data: { jaExistia: d.ja_existia, asaasCustomerId: d.asaas_customer_id }, error: null };
+    },
+
+    async registrarCobranca(args) {
+      const { data, error } = await admin.rpc("fn_billing_pedido_registrar_cobranca" as never, {
+        p_org: args.org,
+        p_pedido: args.pedidoId,
+        p_asaas_payment_id: args.asaasPaymentId,
+        p_asaas_subscription_id: args.asaasSubscriptionId,
+        p_invoice_url: args.invoiceUrl,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { ja_registrado: boolean; pedido_id: string; status: string } | null;
+      if (!d) return { data: null, error: null };
+      return {
+        data: { jaRegistrado: d.ja_registrado, pedidoId: d.pedido_id, status: d.status as StatusPedido },
+        error: null,
+      };
+    },
+
+    async marcarPedido(org, pedidoId, status, motivo) {
+      const { data, error } = await admin.rpc("fn_billing_pedido_marcar" as never, {
+        p_org: org,
+        p_pedido: pedidoId,
+        p_status: status,
+        p_motivo: motivo,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { pedido_id: string; status_anterior: string; status_novo: string } | null;
+      if (!d) return { data: null, error: null };
+      return {
+        data: {
+          pedidoId: d.pedido_id,
+          statusAnterior: d.status_anterior as StatusPedido,
+          statusNovo: d.status_novo as StatusPedido,
+        },
+        error: null,
+      };
+    },
+
+    async lerContrato(org) {
+      const { data, error } = await admin
+        .from("billing_contracts")
+        .select("asaas_subscription_id, asaas_assinatura_encerrada_em")
+        .eq("organization_id", org)
+        .maybeSingle();
+      if (error) return { data: null, error: error as RpcErro };
+      const row = data as { asaas_subscription_id: string | null; asaas_assinatura_encerrada_em: string | null } | null;
+      if (!row) return { data: null, error: null };
+      const contrato: ContratoAsaas = {
+        asaasSubscriptionId: row.asaas_subscription_id,
+        asaasAssinaturaEncerradaEm: row.asaas_assinatura_encerrada_em,
+      };
+      return { data: contrato, error: null };
+    },
+
+    async cancelarNoFimDoPeriodo(org, sim, actor) {
+      const { data, error } = await admin.rpc("fn_billing_cancelar_no_fim_do_periodo" as never, {
+        p_org: org,
+        p_sim: sim,
+        p_actor: actor,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { cancel_at_period_end: boolean } | null;
+      if (!d) return { data: null, error: null };
+      return { data: { cancelAtPeriodEnd: d.cancel_at_period_end }, error: null };
+    },
+  };
+}
