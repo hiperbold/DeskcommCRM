@@ -378,9 +378,12 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
       // Achado B1 (revisão fase F2): team_invites ganhou "or update of
       // expires_at, revoked_at, accepted_at", reenviar (emitirConvite /
       // reenviarConvite) faz UPDATE na mesma linha, inclusive vencida, e o
-      // convite volta a pendente sem passar por nenhum insert.
+      // convite volta a pendente sem passar por nenhum insert. Correção A3
+      // pós-auditoria da F3: email e organization_id entraram na lista
+      // também (trocar qualquer um dos dois num convite pendente reciclava a
+      // vaga sem disparar o gatilho nenhuma vez).
       expect(sql).toMatch(
-        /create trigger\s+trg_billing_trava_team_invites\s+before insert or update of expires_at, revoked_at, accepted_at on public\.team_invites/,
+        /create trigger trg_billing_trava_team_invites\n(?:\s*--[^\n]*\n)*\s*before insert or update of expires_at, revoked_at, accepted_at, email, organization_id on public\.team_invites/,
       );
       // crm_stages ganhou pipeline_id na lista (achado B4.2: mover uma etapa
       // ATIVA de funil não disparava nada).
@@ -419,24 +422,43 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     }
   });
 
-  it("o gatilho de crm_leads soma por upsert ao entrar em open e subtrai por update simples (greatest) ao sair", () => {
+  it("o AFTER de crm_leads (0905) só subtrai por update simples (greatest) ao fechar/apagar; a soma saiu daqui (correção A1, foi para o BEFORE da 0907)", () => {
+    // Correção A1 pós-auditoria da F3 (achado alto): a soma da transição PARA
+    // aberto SAIU deste AFTER (AFTER ROW só dispara no FIM do comando
+    // inteiro, o furo que deixava lote passar por cima do teto) e foi para o
+    // BEFORE (fn_billing_bloqueia_crm_leads, 0907, conferido em
+    // tests/unit/planos-bloqueio-migration.test.ts). Este AFTER (0905, só
+    // ele) não pode mais ter "if v_status_novo = 'open'" nem o upsert +1: só
+    // a subtração ao sair de open (fechamento ou exclusão) continua aqui.
+    const inicioMigracao = MIGRATION.indexOf("create or replace function public.fn_billing_trava_crm_leads(");
+    const corpoMigracao = MIGRATION.slice(inicioMigracao, MIGRATION.indexOf("$$;", inicioMigracao));
+    expect(corpoMigracao).not.toMatch(/if v_status_novo = 'open' then/);
+    expect(corpoMigracao).not.toMatch(/set valor = public\.billing_usage_counters\.valor \+ 1,/);
+    expect(corpoMigracao).toMatch(
+      /if v_status_antigo = 'open' and v_status_novo is distinct from 'open' then/,
+    );
+    expect(corpoMigracao).toMatch(/set valor = greatest\(valor - 1, 0\),/);
+    expect(corpoMigracao).not.toMatch(/insert into public\.billing_usage_counters/);
+
     for (const sql of [MIGRATION, BASELINE]) {
-      expect(sql).toMatch(/if v_status_novo = 'open' then/);
-      expect(sql).toMatch(/on conflict \(organization_id, item\) do update/);
-      expect(sql).toMatch(/set valor = public\.billing_usage_counters\.valor \+ 1,/);
-      expect(sql).toMatch(/elsif v_status_antigo = 'open' then/);
-      expect(sql).toMatch(/set valor = greatest\(valor - 1, 0\),/);
       // A subtração é só update: não pode existir um "insert into
       // billing_usage_counters" no ramo de subtração (senão recriaria a
       // linha no meio de uma exclusão em cascata de organização).
       const ocorrenciasDeInsert = [
         ...sql.matchAll(/insert into public\.billing_usage_counters/g),
       ].length;
-      // Uma no preenchimento inicial da parte 1, uma no ramo de soma do
-      // gatilho de leads da parte 2, uma no ramo "sem linha" de
-      // fn_billing_conferir_contador (achado 3, cria a linha que falta).
-      // Nenhuma no ramo de subtração do gatilho de leads.
-      expect(ocorrenciasDeInsert).toBe(3);
+      if (sql === MIGRATION) {
+        // Só o preenchimento inicial da parte 1 e o ramo "sem linha" de
+        // fn_billing_conferir_contador (achado 3): a soma do gatilho de
+        // leads não mora mais na 0905 (foi para a 0907, correção A1).
+        expect(ocorrenciasDeInsert).toBe(2);
+      } else {
+        // BASELINE é o arquivo INTEIRO: soma as duas ocorrências da 0905
+        // acima com a soma nova do BEFORE de crm_leads na 0907 (correção
+        // A1, conferida em planos-bloqueio-migration.test.ts). O TOTAL não
+        // mudou (só mudou de bloco): 3.
+        expect(ocorrenciasDeInsert).toBe(3);
+      }
     }
   });
 
@@ -670,10 +692,29 @@ describe("0905 parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segura
   it("B1: fn_billing_trava_team_invites confere na transição de NÃO pendente para pendente, não em toda linha nova", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       const inicio = sql.indexOf("create or replace function public.fn_billing_trava_team_invites(");
-      const trecho = sql.slice(inicio, inicio + 900);
+      // Corpo inteiro (até o fechamento "$$;"), não uma janela fixa de
+      // caracteres: a correção A3 pós-auditoria (abaixo) acrescentou um bloco
+      // ANTES deste "if", e um comprimento fixo quebraria de novo a cada
+      // comentário novo (mesmo racional já registrado para B4.1, acima).
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
       expect(trecho).toMatch(/v_novo_pendente boolean;/);
       expect(trecho).toMatch(/v_antigo_pendente boolean;/);
       expect(trecho).toMatch(/if v_novo_pendente and not v_antigo_pendente then/);
+    }
+  });
+
+  it("correção A3 pós-auditoria: trocar email OU organization_id de um convite JÁ pendente força v_antigo_pendente a false (trata como convite novo)", () => {
+    for (const sql of [MIGRATION, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_trava_team_invites(");
+      const trecho = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posForca = trecho.indexOf(
+        "if tg_op = 'UPDATE' and v_novo_pendente and v_antigo_pendente\n    and (new.email is distinct from old.email or new.organization_id is distinct from old.organization_id)\n  then",
+      );
+      const posAntigoFalse = trecho.indexOf("v_antigo_pendente := false;", posForca);
+      const posIfPrincipal = trecho.indexOf("if v_novo_pendente and not v_antigo_pendente then");
+      expect(posForca, "bloco de forçar convite novo por troca de email/organization_id ausente").toBeGreaterThan(-1);
+      expect(posAntigoFalse).toBeGreaterThan(posForca);
+      expect(posIfPrincipal).toBeGreaterThan(posAntigoFalse);
     }
   });
 

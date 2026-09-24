@@ -506,7 +506,11 @@ describe("0907 parte 2 (Tarefa 2): padrão de segurança das quatro funções de
         const nome = assinatura.slice(0, assinatura.indexOf("("));
         const inicio = sql.indexOf(`create or replace function public.${nome}(`);
         expect(inicio, `${nome} não encontrada`).toBeGreaterThan(-1);
-        const trecho = sql.slice(inicio, inicio + 400);
+        // Janela larga (não fixa em 400): fn_billing_veio_de_aceite_de_convite
+        // ganhou um comentário de várias linhas ANTES de "language sql"
+        // explicando a correção A2 pós-auditoria (STABLE em vez de
+        // IMMUTABLE), e um comprimento curto quebraria por causa disso.
+        const trecho = sql.slice(inicio, inicio + 900);
         expect(trecho).toMatch(/security definer/);
         expect(trecho).toMatch(/set search_path = public, pg_temp/);
       }
@@ -538,14 +542,18 @@ describe("0907 parte 2 (Tarefa 2): padrão de segurança das quatro funções de
       expect(sql).toMatch(
         /revoke execute on function public\.fn_billing_convite_pendente_do_membro\(uuid, uuid\), public\.fn_billing_veio_de_aceite_de_convite\(uuid, timestamptz, uuid, timestamptz, boolean\), public\.fn_billing_dono_do_provisionamento\(uuid, uuid, text\), public\.fn_billing_convite_ja_tem_vinculo_ativo\(uuid\) from agent_worker/,
       );
-      // Quatro blocos de agent_worker nesta migração: um da parte 1 (Tarefa
-      // 1, revoga cinco funções), outro da parte 2 (Tarefa 2, revoga quatro
-      // funções), um da parte 3 (Tarefa 3, CONCEDE, não revoga, a
-      // fn_billing_ia_pode_responder, testado à parte no describe da parte
-      // 3, abaixo) e um da parte 4 (Tarefa 7, revoga fn_billing_bloqueia_
-      // crm_leads, testado no describe da parte 4, mais abaixo).
+      // Seis blocos de agent_worker nesta migração (eram quatro antes da
+      // correção pós-auditoria): um da parte 1 (Tarefa 1, revoga cinco
+      // funções), um de fn_billing_e_servidor (correção A2, logo depois dela
+      // própria, acima das isenções), outro da parte 2 (Tarefa 2, revoga
+      // quatro funções de isenção), um da parte 3 (Tarefa 3, CONCEDE, não
+      // revoga, a fn_billing_ia_pode_responder, testado à parte no describe
+      // da parte 3, abaixo), um da parte 4 (Tarefa 7, revoga
+      // fn_billing_bloqueia_crm_leads, testado no describe da parte 4, mais
+      // abaixo) e um da parte 5 (correção M/D-054, revoga
+      // fn_billing_trava_organization_id, testado no describe da parte 5).
       const ocorrencias = [...sql.matchAll(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/g)];
-      expect(ocorrencias.length).toBe(4);
+      expect(ocorrencias.length).toBe(6);
     }
   });
 });
@@ -947,9 +955,18 @@ describe("0907 parte 4 (Tarefa 7, banco): o gatilho de bloqueio em crm_leads", (
         "create or replace function public.fn_billing_bloqueia_crm_leads()",
       );
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
-      // Esta função inteira não tem "exception when others" nenhum: o raise
-      // sempre propaga (decisão 3 da fase, herdada pela decisão 5).
-      expect(corpo).not.toMatch(/exception\s*\n\s*when others/);
+      // Correção A1 pós-auditoria: esta função GANHOU um begin/exception
+      // (só em volta da soma do contador, testado à parte acima), então não
+      // dá mais para exigir "nenhum exception no corpo inteiro". O que
+      // continua valendo, e é o que a decisão 3/5 da fase exige de verdade:
+      // o raise do PT402 não pode estar DENTRO de nenhum bloco que o engula.
+      // O begin/exception da soma só começa DEPOIS do "end if" do raise.
+      const posRaise = corpo.indexOf("raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';");
+      const posEndIfRaise = corpo.indexOf("end if;", posRaise);
+      const posBeginSoma = corpo.indexOf("\n    begin\n");
+      expect(posRaise).toBeGreaterThan(-1);
+      expect(posEndIfRaise).toBeGreaterThan(posRaise);
+      expect(posBeginSoma, "begin/exception da soma tem que vir DEPOIS do end if do raise PT402").toBeGreaterThan(posEndIfRaise);
       expect(corpo).toMatch(
         /if public\.fn_billing_bloqueia\(new\.organization_id, 'leads', null\) then\s*\n\s*raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';\s*\n\s*end if;/,
       );
@@ -974,13 +991,38 @@ describe("0907 parte 4 (Tarefa 7, banco): o gatilho de bloqueio em crm_leads", (
     }
   });
 
-  it("não chama fn_billing_conferir_teto (leads já tem o próprio AFTER, 0905, cuidando do aviso e do contador)", () => {
+  it("correção A1 pós-auditoria: depois de aprovar, chama fn_billing_conferir_teto e SOMA o contador (não é mais o AFTER quem soma)", () => {
+    // A1 (achado alto): AFTER ROW só dispara no fim do comando inteiro, então
+    // um lote de várias linhas passava inteiro por cima do teto (todas liam o
+    // mesmo contador ainda não somado). A soma (e a conferência do aviso, com
+    // a mesma semântica "antes de somar") mudou para este BEFORE, logo depois
+    // do raise de bloqueio.
     for (const sql of [MIGRATION_0907, BASELINE]) {
-      const inicio = sql.indexOf(
-        "create or replace function public.fn_billing_bloqueia_crm_leads()",
-      );
+      const inicio = sql.indexOf("create or replace function public.fn_billing_bloqueia_crm_leads()");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
-      expect(corpo).not.toMatch(/fn_billing_conferir_teto/);
+      const posBloqueia = corpo.indexOf("if public.fn_billing_bloqueia(new.organization_id, 'leads', null) then");
+      const posConferir = corpo.indexOf("perform public.fn_billing_conferir_teto(new.organization_id, 'leads', null);");
+      const posInsert = corpo.indexOf("insert into public.billing_usage_counters (organization_id, item, valor)");
+      const posSoma = corpo.indexOf("set valor = public.billing_usage_counters.valor + 1,");
+      expect(posBloqueia).toBeGreaterThan(-1);
+      expect(posConferir, "fn_billing_conferir_teto ausente (correção A1)").toBeGreaterThan(posBloqueia);
+      expect(posInsert, "upsert do contador ausente (correção A1)").toBeGreaterThan(posConferir);
+      expect(posSoma).toBeGreaterThan(posInsert);
+    }
+  });
+
+  it("correção A1: a soma roda dentro de begin/exception PRÓPRIO, que nunca derruba o lead nem esconde o PT402 do bloqueio", () => {
+    for (const sql of [MIGRATION_0907, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_bloqueia_crm_leads()");
+      const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
+      const posRaisePT402 = corpo.indexOf("raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';");
+      const posBeginSoma = corpo.indexOf("\n    begin\n", posRaisePT402);
+      const posExceptionSoma = corpo.indexOf("exception\n      when others then", posBeginSoma);
+      const posWarningSoma = corpo.indexOf("raise warning 'billing_bloqueia_crm_leads_somar_falhou", posExceptionSoma);
+      expect(posRaisePT402).toBeGreaterThan(-1);
+      expect(posBeginSoma, "begin da soma tem que vir DEPOIS do raise PT402 (fora do bloco que engole)").toBeGreaterThan(posRaisePT402);
+      expect(posExceptionSoma).toBeGreaterThan(posBeginSoma);
+      expect(posWarningSoma).toBeGreaterThan(posExceptionSoma);
     }
   });
 });

@@ -538,6 +538,73 @@ $$;
 -- revoke de public/anon/authenticated, grant só para service_role, bloco
 -- próprio revogando de agent_worker.
 
+-- Correção A2 pós-auditoria (achado alto): o admin da organização furava o
+-- teto de membros gravando invited_at/invited_by (ou só se apoiando num
+-- convite pendente, isenção 1) diretamente pelo PostgREST, porque as duas
+-- isenções abaixo valiam para QUALQUER sessão, não só para o servidor. O
+-- aceite REAL de convite (lib/auth/aplicar-convite.ts) sempre chama
+-- fn_accept_team_invite pelo cliente de SERVIÇO (createAdminClient,
+-- service_role); nenhum usuário legítimo aceita convite pela própria sessão
+-- authenticated. fn_billing_e_servidor decide isso.
+--
+-- current_user NÃO SERVE: as duas isenções (e a própria
+-- fn_billing_trava_user_organizations que as chama, 0905) são security
+-- definer, e dentro de uma função security definer current_user já É o dono
+-- (postgres) pela duração INTEIRA da execução, independente de quem fez a
+-- requisição: checar current_user aqui sempre devolveria "é o dono",
+-- sempre isento, o mesmo furo que M1/M2 (fase F2) evitaram só porque
+-- aqueles dois gatilhos são security invoker (não podem ser: são chamados
+-- de DENTRO de uma cadeia que já é security definer).
+--
+-- current_setting('role', true) é outra coisa: reflete o SET ROLE que o
+-- PostgREST faz por requisição (authenticated, service_role, ...), e essa
+-- configuração de SESSÃO sobrevive à troca de current_user de um security
+-- definer. Provado no banco local (sonda em pg_temp, três origens, todas
+-- executadas de DENTRO de uma função security definer): sessão direta como
+-- postgres sem SET ROLE nenhum devolve current_setting('role', true) =
+-- 'none'; SET ROLE authenticated devolve 'authenticated'; SET ROLE
+-- service_role devolve 'service_role'.
+--
+-- Critério: servidor é 'none' (sem SET ROLE nenhum, conexão direta como
+-- postgres: migrações, testes, o pool do worker) ou 'service_role'
+-- (PostgREST com a chave de serviço). Qualquer outro valor (authenticated,
+-- anon, um papel customizado) não é servidor. O fallback por
+-- request.jwt.claims->>'role' cobre uma configuração futura do PostgREST que
+-- carregue o papel só na claim sem fazer SET ROLE (não é o caso hoje neste
+-- repositório); current_setting é leitura de GUC, não custa uma consulta.
+create or replace function public.fn_billing_e_servidor()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  -- A AUSÊNCIA de request.jwt.claims (o caso comum: PostgREST decide o papel
+  -- só pelo SET ROLE, sem duplicar em claim nenhuma) NÃO PODE contar como
+  -- servidor: um "coalesce(..., 'none')" do lado da claim faria TODO
+  -- authenticated sem claims (a maioria) cair no 'none' igual a servidor,
+  -- sempre isento. Bug real, encontrado na prova A2 (sonda no banco local:
+  -- com essa forma, fn_billing_e_servidor() devolvia true também para
+  -- authenticated). Por isso o fallback só soma quando a claim existe E diz
+  -- service_role explicitamente; ausência de claim não decide nada aqui.
+  select coalesce(current_setting('role', true), 'none') in ('none', 'service_role')
+    or current_setting('request.jwt.claims', true)::jsonb ->> 'role' = 'service_role';
+$$;
+
+comment on function public.fn_billing_e_servidor() is
+  '0907, correção A2/A3/M pós-auditoria: true quando quem está gravando é o SERVIDOR (conexão direta sem SET ROLE nenhum, postgres, migrações ou worker, ou PostgREST com service_role), false para authenticated/anon/outro papel. current_setting(''role'', true) sobrevive à troca de current_user de dentro de uma função security definer (current_user não serve para isso: virou sempre o dono da função). Usada pelas isenções 1 e 2 de membro (abaixo) e pelo gatilho de organization_id (fn_billing_trava_organization_id, parte 5).';
+
+revoke execute on function public.fn_billing_e_servidor() from public, anon, authenticated;
+grant execute on function public.fn_billing_e_servidor() to service_role;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_e_servidor() from agent_worker';
+  end if;
+end
+$$;
+
 create or replace function public.fn_billing_convite_pendente_do_membro(p_org uuid, p_user uuid)
 returns boolean
 language sql
@@ -545,7 +612,12 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select exists (
+  -- Correção A2 pós-auditoria: a isenção só vale quando quem grava é o
+  -- SERVIDOR (fn_billing_e_servidor, acima). Sem esta condição, o próprio
+  -- admin da organização furava o teto de membros pelo PostgREST: bastava um
+  -- convite pendente esperando no e-mail certo, sem precisar nem tocar em
+  -- invited_at/invited_by.
+  select public.fn_billing_e_servidor() and exists (
     select 1
     from public.team_invites ti
     join auth.users au on au.id = p_user
@@ -558,7 +630,7 @@ as $$
 $$;
 
 comment on function public.fn_billing_convite_pendente_do_membro(uuid, uuid) is
-  '0907, decisão 4, isenção 1: existe convite pendente e válido para o e-mail deste usuário nesta organização (auth.users.email x team_invites.email, sem diferença de maiúsculas; accepted_at e revoked_at nulos, expires_at no futuro). O convite já ocupava a vaga (aplicar-convite.ts só marca accepted_at DEPOIS do aceite). Cobre o aceite comum e a readmissão de um revogado com convite pendente (a rota de reativação não toca invited_by/invited_at).';
+  '0907, decisão 4, isenção 1: existe convite pendente e válido para o e-mail deste usuário nesta organização (auth.users.email x team_invites.email, sem diferença de maiúsculas; accepted_at e revoked_at nulos, expires_at no futuro). O convite já ocupava a vaga (aplicar-convite.ts só marca accepted_at DEPOIS do aceite). Cobre o aceite comum e a readmissão de um revogado com convite pendente (a rota de reativação não toca invited_by/invited_at). Correção A2 pós-auditoria (achado alto): só vale quando fn_billing_e_servidor() é true, senão o admin da própria organização isentava o aceite direto pelo PostgREST.';
 
 revoke execute on function public.fn_billing_convite_pendente_do_membro(uuid, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_convite_pendente_do_membro(uuid, uuid) to service_role;
@@ -571,12 +643,21 @@ create or replace function public.fn_billing_veio_de_aceite_de_convite(
   p_insercao boolean
 )
 returns boolean
+-- Correção A2 pós-auditoria: STABLE em vez de IMMUTABLE (mudou nesta
+-- correção). fn_billing_e_servidor lê current_setting (estado de sessão),
+-- então este corpo deixou de ser puro nos argumentos; IMMUTABLE com uma
+-- leitura de sessão por dentro arriscaria o planner reaproveitar um
+-- resultado cacheado da chamada anterior, com outra sessão/papel.
 language sql
-immutable
+stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select case
+  -- Correção A2 pós-auditoria: mesma condição de servidor da isenção 1,
+  -- acima. Sem ela, o admin da organização gravava invited_at/invited_by
+  -- pelo PostgREST (sem nunca ter passado por fn_accept_team_invite) e
+  -- isentava o próprio aceite acima do teto de membros.
+  select public.fn_billing_e_servidor() and case
     when p_insercao then p_invited_by_novo is not null or p_invited_at_novo is not null
     else p_invited_by_novo is distinct from p_invited_by_antigo
       or p_invited_at_novo is distinct from p_invited_at_antigo
@@ -584,7 +665,7 @@ as $$
 $$;
 
 comment on function public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean) is
-  '0907, decisão 4, isenção 2: o vínculo nasceu dentro de fn_accept_team_invite mesmo sem linha de convite (token antigo). Critério sem editar fn_accept_team_invite (proibido): ela é a única escrita de user_organizations.invited_by/invited_at do repositório, e aplicarConvite (lib/auth/aplicar-convite.ts) sempre passa p_invited_at não nulo. Em INSERT, invited_by ou invited_at preenchido já é a marca. Em UPDATE (readmissão), compara NOVO x ANTIGO: fn_accept_team_invite reescreve as duas colunas a cada aceite, e nenhum outro caminho as toca depois de gravadas (a reativação por admin só grava revoked_at); checar só "preenchido" ficaria true para sempre depois do primeiro aceite de alguém, inclusive numa readmissão direta sem convite. Na dúvida, isenta (decisão 4).';
+  '0907, decisão 4, isenção 2: o vínculo nasceu dentro de fn_accept_team_invite mesmo sem linha de convite (token antigo). Critério sem editar fn_accept_team_invite (proibido): ela é a única escrita de user_organizations.invited_by/invited_at do repositório, e aplicarConvite (lib/auth/aplicar-convite.ts) sempre passa p_invited_at não nulo. Em INSERT, invited_by ou invited_at preenchido já é a marca. Em UPDATE (readmissão), compara NOVO x ANTIGO: fn_accept_team_invite reescreve as duas colunas a cada aceite, e nenhum outro caminho as toca depois de gravadas (a reativação por admin só grava revoked_at); checar só "preenchido" ficaria true para sempre depois do primeiro aceite de alguém, inclusive numa readmissão direta sem convite. Na dúvida, isenta (decisão 4). Correção A2 pós-auditoria (achado alto): só vale quando fn_billing_e_servidor() é true (STABLE, não mais IMMUTABLE, por causa dessa leitura de sessão), senão o admin gravava invited_at pelo PostgREST sem nunca ter passado por fn_accept_team_invite.';
 
 revoke execute on function public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean) from public, anon, authenticated;
 grant execute on function public.fn_billing_veio_de_aceite_de_convite(uuid, timestamptz, uuid, timestamptz, boolean) to service_role;
@@ -930,6 +1011,35 @@ begin
     if public.fn_billing_bloqueia(new.organization_id, 'leads', null) then
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';
     end if;
+
+    -- Correção A1 pós-auditoria (achado alto): a soma do contador (e a
+    -- conferência do AVISO, que precisa da mesma semântica "antes de somar"
+    -- que fn_billing_trava_crm_leads, 0905, já usa) SAEM do AFTER e entram
+    -- aqui, no BEFORE, logo depois de aprovar esta linha. Motivo: AFTER ROW
+    -- só dispara no FIM do comando inteiro, não linha a linha: um insert de
+    -- 50 linhas, um PATCH em massa reabrindo lead, ou fn_mover_leads_em_lote
+    -- com vários leads faziam TODAS as 50 checagens de fn_billing_bloqueia
+    -- lerem o MESMO contador ainda não somado (o AFTER só rodaria depois) e
+    -- passavam juntas por cima do teto (provado: teto 9, contador 8, 50
+    -- inseridos, os 50 entravam). BEFORE ROW dispara imediatamente por
+    -- linha, então somar AQUI faz a linha seguinte do MESMO comando já
+    -- enxergar o valor somado por esta. Roda incondicional de modo (decisão
+    -- 11, 0905: o contador tem que ficar certo sempre, mesmo em avisar ou
+    -- desligado); fn_billing_conferir_teto e o próprio upsert já são seguros
+    -- por si (idempotentes, capturados), mas um erro aqui não pode derrubar
+    -- a criação do lead, por isso o begin/exception próprio.
+    begin
+      perform public.fn_billing_conferir_teto(new.organization_id, 'leads', null);
+
+      insert into public.billing_usage_counters (organization_id, item, valor)
+      values (new.organization_id, 'leads', 1)
+      on conflict (organization_id, item) do update
+        set valor = public.billing_usage_counters.valor + 1,
+            updated_at = now();
+    exception
+      when others then
+        raise warning 'billing_bloqueia_crm_leads_somar_falhou: organizacao=%, sqlerrm=%', new.organization_id, sqlerrm;
+    end;
   end if;
 
   return new;
@@ -937,7 +1047,7 @@ end;
 $$;
 
 comment on function public.fn_billing_bloqueia_crm_leads() is
-  '0907, Tarefa 7 (decisão 5): gatilho BEFORE de bloqueio de verdade em crm_leads, na transição para aberto (insert com status open, ou reabertura de won/lost para open). Roda DEPOIS de trg_crm_lead_close_on_stage na ordem alfabética dos BEFORE (ver o cabeçalho desta parte 4 para a conta byte a byte), então enxerga new.status já resolvido pelo autor. Chama fn_billing_bloqueia(org, leads, null) e levanta PT402 FORA de qualquer bloco exception quando ela diz true; o contador de billing_usage_counters ainda não somou este lead (quem soma é o AFTER fn_billing_trava_crm_leads, 0905), então "não pode" no teto exato é a semântica certa (o N-ésimo passa, o N+1-ésimo não). Fechar (aberto -> ganho/perdido) nunca bloqueia. Modos avisar/desligado não mudam nada: fn_billing_bloqueia já lê o modo antes de qualquer lock.';
+  '0907, Tarefa 7 (decisão 5): gatilho BEFORE de bloqueio de verdade em crm_leads, na transição para aberto (insert com status open, ou reabertura de won/lost para open). Roda DEPOIS de trg_crm_lead_close_on_stage na ordem alfabética dos BEFORE (ver o cabeçalho desta parte 4 para a conta byte a byte), então enxerga new.status já resolvido pelo autor. Chama fn_billing_bloqueia(org, leads, null) e levanta PT402 FORA de qualquer bloco exception quando ela diz true. Correção A1 pós-auditoria (achado alto): depois de aprovar a linha, este BEFORE também confere o aviso (fn_billing_conferir_teto) e SOMA o contador (billing_usage_counters), sob um begin/exception próprio que nunca derruba o lead. Antes, quem somava era o AFTER (fn_billing_trava_crm_leads, 0905), que só dispara no FIM do comando inteiro: um lote de várias linhas via insert, PATCH em massa ou fn_mover_leads_em_lote fazia toda linha ler o MESMO contador desatualizado e passar por cima do teto. Fechar (aberto -> ganho/perdido) nunca bloqueia nem soma aqui (continua só no AFTER, subtraindo). Modos avisar/desligado não mudam nada: fn_billing_bloqueia e fn_billing_conferir_teto já leem o modo antes de qualquer lock, e o upsert do contador roda sempre, no mesmo custo de hoje (só mudou de trigger, não de trabalho).';
 
 revoke execute on function public.fn_billing_bloqueia_crm_leads() from public, anon, authenticated;
 grant execute on function public.fn_billing_bloqueia_crm_leads() to service_role;
@@ -958,6 +1068,156 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
     execute 'revoke execute on function public.fn_billing_bloqueia_crm_leads() from agent_worker';
+  end if;
+end
+$$;
+
+-- ============================================================================
+-- Parte 5 (revisão de segurança pós-auditoria da F3): três achados ALTOS e
+-- um MÉDIO na trava de bloqueio construída acima.
+-- ============================================================================
+--
+-- A1 (alto, corrigido NO LUGAR nesta 0907 e na 0905, ver os dois arquivos):
+-- vários leads num comando só passavam por cima do teto. O BEFORE
+-- (fn_billing_bloqueia_crm_leads, parte 4 acima) decidia o bloqueio lendo
+-- billing_usage_counters, mas quem somava era o AFTER ROW
+-- (fn_billing_trava_crm_leads, 0905), e AFTER ROW só dispara no FIM do
+-- comando inteiro, não linha a linha. Um insert de 50 linhas, um PATCH em
+-- massa reabrindo lead (status=eq.lost com {"status":"open"}), ou
+-- fn_mover_leads_em_lote com vários leads faziam TODAS as checagens lerem o
+-- MESMO contador ainda não somado e passavam juntas (provado: teto 9,
+-- contador 8, os 50 entravam). Correção: a soma (e a conferência do aviso)
+-- mudaram do AFTER para o BEFORE, rodando logo depois de aprovar CADA linha,
+-- sob a mesma trava (fn_billing_bloqueia já pega o advisory lock bloqueante
+-- quando o modo é bloquear); BEFORE ROW dispara imediatamente por linha, e
+-- por isso a linha seguinte do MESMO comando já enxerga o valor somado. O
+-- AFTER continua só subtraindo no fechamento e na exclusão. Vale em todo
+-- modo: o contador tem que ficar certo sempre (avisar/desligado só deixam de
+-- criar o aviso e de bloquear, nunca de contar).
+--
+-- A2 (alto, corrigido NO LUGAR na parte 2 desta migração, acima): o admin da
+-- organização furava o teto de membros gravando invited_at/invited_by (ou só
+-- se apoiando num convite pendente) diretamente pelo PostgREST, porque as
+-- isenções 1 e 2 de fn_billing_trava_user_organizations (0905) valiam para
+-- QUALQUER sessão, não só para o servidor. Correção: as duas isenções agora
+-- exigem fn_billing_e_servidor() (definida acima, antes da isenção 1, por
+-- ordem de dependência: função LANGUAGE SQL confere a existência da função
+-- chamada já na hora de CRIAR, diferente de plpgsql). Critério de "servidor"
+-- e as três provas (authenticated/service_role/postgres direto) estão no
+-- comentário de fn_billing_e_servidor, acima. A isenção 3 (dono do
+-- provisionamento) NÃO muda: só o admin da plataforma escreve em
+-- organizations.created_by, o vetor de A2 não alcança ela.
+--
+-- A3 (alto, corrigido NO LUGAR na 0905, ver aquele arquivo): trocar o e-mail
+-- de um convite pendente reciclava a vaga. O gatilho de team_invites só
+-- vigiava expires_at/revoked_at/accepted_at; um "update team_invites set
+-- email = ..." num convite pendente passava sem conferência nenhuma, e
+-- somado à isenção 1 (antes da correção A2) dava membros sem fim. Correção:
+-- email e organization_id entraram na lista de colunas do GATILHO, e o corpo
+-- trata a troca de qualquer um dos dois, num convite que continua pendente
+-- antes e depois, como convite NOVO (a mesma conferência de bloqueio e
+-- aviso). A correção de A2 também fecha esse caminho pelo REST (a isenção 1
+-- deixou de valer para authenticated).
+--
+-- M / D-054 (médio, achado da auditoria da F2, virou escape com o bloqueio
+-- ligado): quem é membro de duas organizações movia funil, etapa, conexão,
+-- integração webhook ou lead aberto de uma organização para outra por UPDATE
+-- de organization_id, sem passar por gatilho nenhum (todos os gatilhos de
+-- plano só olham a coluna de ESTADO, nunca organization_id). Com o bloqueio
+-- ligado (F3), isso vira um jeito de fugir do teto: mover um lead de uma
+-- organização cheia para uma organização vazia, e depois de volta. Conferido
+-- por grep (abaixo) que nenhum fluxo do autor faz "set organization_id = "
+-- em app/, lib/ nem workers/, nem em nenhuma migration: zero exceção de
+-- servidor a preservar além do próprio critério de fn_billing_e_servidor.
+--
+--   $ grep -rn "set organization_id\s*=" app lib workers supabase/migrations
+--   (nenhuma ocorrência)
+--
+-- Correção: gatilho BEFORE UPDATE OF organization_id nas sete tabelas que a
+-- decisão do D-054 lista (crm_pipelines, crm_stages, channel_sessions,
+-- webhook_sources, crm_leads, team_invites, user_organizations), recusando a
+-- troca (errcode 42501, mensagem fixa sem dado do banco) quando quem grava
+-- não é o servidor (mesmo critério de fn_billing_e_servidor). D-054 marcado
+-- resolvido em hiperbold/DEBITO.md.
+--
+-- security definer só por convenção do arquivo (mesmo padrão de todo o
+-- resto): fn_billing_e_servidor não depende de current_user, current_setting
+-- de sessão atravessa a troca de dono sem problema (provado no comentário
+-- dela). search_path fixo, revoke de public/anon/authenticated, grant só
+-- para service_role, bloco final revogando de agent_worker (se existir).
+create or replace function public.fn_billing_trava_organization_id()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.organization_id is distinct from old.organization_id
+    and not public.fn_billing_e_servidor()
+  then
+    raise exception 'organization_id só pode ser alterado pelo servidor' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_organization_id() is
+  'Correção M/D-054 pós-auditoria (achado médio): recusa trocar organization_id fora do servidor (fn_billing_e_servidor), nas sete tabelas que um membro de duas organizações usava para mover registro de uma para outra por baixo dos gatilhos de plano (que só vigiam a coluna de estado). errcode 42501 (mesma família de permission denied das políticas), mensagem fixa sem dado do banco. Nenhum fluxo do autor troca organization_id (conferido por grep, sem ocorrência em app/lib/workers/migrations), então não há exceção de servidor real a preservar além do próprio critério.';
+
+revoke execute on function public.fn_billing_trava_organization_id() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_organization_id() to service_role;
+
+drop trigger if exists trg_billing_trava_organization_id_crm_pipelines on public.crm_pipelines;
+create trigger trg_billing_trava_organization_id_crm_pipelines
+  before update of organization_id on public.crm_pipelines
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+drop trigger if exists trg_billing_trava_organization_id_crm_stages on public.crm_stages;
+create trigger trg_billing_trava_organization_id_crm_stages
+  before update of organization_id on public.crm_stages
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+drop trigger if exists trg_billing_trava_organization_id_channel_sessions on public.channel_sessions;
+create trigger trg_billing_trava_organization_id_channel_sessions
+  before update of organization_id on public.channel_sessions
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+drop trigger if exists trg_billing_trava_organization_id_webhook_sources on public.webhook_sources;
+create trigger trg_billing_trava_organization_id_webhook_sources
+  before update of organization_id on public.webhook_sources
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+drop trigger if exists trg_billing_trava_organization_id_crm_leads on public.crm_leads;
+create trigger trg_billing_trava_organization_id_crm_leads
+  before update of organization_id on public.crm_leads
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+drop trigger if exists trg_billing_trava_organization_id_team_invites on public.team_invites;
+create trigger trg_billing_trava_organization_id_team_invites
+  before update of organization_id on public.team_invites
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+drop trigger if exists trg_billing_trava_organization_id_user_organizations on public.user_organizations;
+create trigger trg_billing_trava_organization_id_user_organizations
+  before update of organization_id on public.user_organizations
+  for each row
+  execute function public.fn_billing_trava_organization_id();
+
+-- agent_worker não decide a troca de organization_id pela peça nova desta
+-- parte 5 (mesmo racional de todo bloco análogo acima): por alter default
+-- privileges ela ganharia execute em toda função nova do schema public, e
+-- tem bypassrls.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_trava_organization_id() from agent_worker';
   end if;
 end
 $$;

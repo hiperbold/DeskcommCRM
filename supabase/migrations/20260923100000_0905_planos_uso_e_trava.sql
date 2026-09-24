@@ -678,12 +678,28 @@ begin
     v_antigo_pendente := old.accepted_at is null and old.revoked_at is null and old.expires_at > now();
   end if;
 
+  -- Fase F3 (migration 0907, correção A3 pós-auditoria, achado alto): trocar
+  -- o e-mail OU a organização de um convite JÁ pendente reciclava a vaga sem
+  -- passar por conferência nenhuma, porque só expires_at/revoked_at/
+  -- accepted_at eram vigiados (e nenhum dos três muda numa simples troca de
+  -- e-mail). Pendente ANTES e DEPOIS, mas e-mail ou organização mudou: trata
+  -- como convite NOVO, forçando v_antigo_pendente a false para cair no MESMO
+  -- ramo de bloqueio e aviso do "if" abaixo (a organização de destino é
+  -- sempre new.organization_id, então uma troca de organização também
+  -- confere o teto da organização certa).
+  if tg_op = 'UPDATE' and v_novo_pendente and v_antigo_pendente
+    and (new.email is distinct from old.email or new.organization_id is distinct from old.organization_id)
+  then
+    v_antigo_pendente := false;
+  end if;
+
   if v_novo_pendente and not v_antigo_pendente then
     -- Fase F3 (migration 0907, editado NO LUGAR aqui, decisão 4, item 1):
     -- mesmo padrão dos quatro gatilhos da decisão 3 (funis, etapas, conexões,
-    -- webhooks). Convite novo pendente, ou renovado que volta a pendente,
-    -- ocupa uma vaga de membro: bloqueia igual, SEM isenção nenhuma (as
-    -- isenções da decisão 4 são só para o ACEITE, em user_organizations,
+    -- webhooks). Convite novo pendente, ou renovado que volta a pendente, ou
+    -- que teve e-mail/organização trocados enquanto pendente (correção A3,
+    -- acima), ocupa uma vaga de membro: bloqueia igual, SEM isenção nenhuma
+    -- (as isenções da decisão 4 são só para o ACEITE, em user_organizations,
     -- abaixo). "Aceite de convite nunca bloqueia" não é "emitir convite nunca
     -- bloqueia": o convite em si é quem cria a vaga a ocupar.
     if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then
@@ -697,14 +713,18 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_team_invites() is
-  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente). Fase F3 (migration 0907, decisão 4, item 1): fn_billing_bloqueia antes da conferência de aviso, sem isenção nenhuma (as isenções são só no ACEITE); PT402 fora de qualquer bloco exception.';
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2): reenviar um convite (emitirConvite/reenviarConvite, lib/team/convites.ts) faz UPDATE de expires_at/revoked_at/accepted_at na MESMA linha, inclusive vencida, o comentário antigo ("nunca volta a ficar pendente depois") estava errado, e por isso o gatilho passou a ser before insert or update dessas três colunas, conferindo só na transição de NÃO pendente para pendente (nunca ao só renovar um convite que já estava pendente). Fase F3 (migration 0907, decisão 4, item 1): fn_billing_bloqueia antes da conferência de aviso, sem isenção nenhuma (as isenções são só no ACEITE); PT402 fora de qualquer bloco exception. Correção A3 pós-auditoria (achado alto): a lista de colunas do GATILHO ganhou email e organization_id, e o corpo trata a troca de qualquer um dos dois num convite que continua pendente como convite NOVO (força v_antigo_pendente a false), senão trocar o e-mail de um convite pendente reciclava a vaga sem bloqueio nem aviso.';
 
 revoke execute on function public.fn_billing_trava_team_invites() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_team_invites() to service_role;
 
 drop trigger if exists trg_billing_trava_team_invites on public.team_invites;
 create trigger trg_billing_trava_team_invites
-  before insert or update of expires_at, revoked_at, accepted_at on public.team_invites
+  -- Correção A3 pós-auditoria: email e organization_id entraram na lista (o
+  -- corpo da função, acima, é quem decide se a troca de qualquer um dos dois
+  -- conta como convite novo; um "of" mais curto deixava a troca passar sem
+  -- disparar o gatilho nenhuma vez).
+  before insert or update of expires_at, revoked_at, accepted_at, email, organization_id on public.team_invites
   for each row
   execute function public.fn_billing_trava_team_invites();
 
@@ -819,22 +839,22 @@ begin
     return null;
   end if;
 
-  if v_status_novo = 'open' then
-    -- Achado 2 (revisão fase F2): CONFERE antes de SOMAR. fn_billing_pode_criar
-    -- lê o CONTADOR materializado (billing_usage_counters.valor), não um
-    -- count(*) da tabela: então chamar fn_billing_conferir_teto aqui, antes do
-    -- upsert abaixo, faz a leitura enxergar o valor de ANTES deste lead, a
-    -- mesma semântica dos seis gatilhos BEFORE (que avisam no teto + 1, não no
-    -- teto). Na ordem antiga o 100º lead de um teto de 100 já via o contador
-    -- somado e avisava um lead cedo demais.
-    perform public.fn_billing_conferir_teto(v_org, 'leads', null);
-
-    insert into public.billing_usage_counters (organization_id, item, valor)
-    values (v_org, 'leads', 1)
-    on conflict (organization_id, item) do update
-      set valor = public.billing_usage_counters.valor + 1,
-          updated_at = now();
-  elsif v_status_antigo = 'open' then
+  -- Fase F3 (migration 0907, correção A1 pós-auditoria): a soma da transição
+  -- PARA aberto SAIU DAQUI. AFTER ROW só dispara no FIM DO COMANDO inteiro,
+  -- não linha a linha (racional completo no cabeçalho da parte 5 da 0907):
+  -- um insert de 50 linhas, um PATCH em massa reabrindo lead, ou
+  -- fn_mover_leads_em_lote com vários leads faziam TODAS as linhas lerem o
+  -- MESMO contador ainda não somado (o AFTER só rodaria depois, no fim do
+  -- comando inteiro) e passavam juntas por cima do teto, mesmo no modo
+  -- bloquear. Quem soma agora é fn_billing_bloqueia_crm_leads (0907), no
+  -- BEFORE, imediatamente após aprovar CADA linha: BEFORE ROW dispara
+  -- imediatamente por linha (diferente de AFTER ROW), então a PRÓXIMA linha
+  -- do mesmo comando já enxerga o valor somado pela anterior. Este AFTER
+  -- continua tratando só o FECHAMENTO (aberto -> ganho ou perdido) e a
+  -- EXCLUSÃO, que nunca precisam da ordem estrita por linha: fechar sempre
+  -- LIBERA vaga, nunca ocupa, então não há teto para burlar fechando várias
+  -- linhas juntas.
+  if v_status_antigo = 'open' and v_status_novo is distinct from 'open' then
     update public.billing_usage_counters
       set valor = greatest(valor - 1, 0),
           updated_at = now()
@@ -850,7 +870,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_leads() is
-  'Gatilho de plano (Tarefa 3, decisão 6): after insert/update/delete SEM lista de colunas em crm_leads, porque trg_crm_lead_close_on_stage (before, do autor) muda o status na troca de etapa e um gatilho com lista de colunas não veria essa mudança; só o valor final da linha resolve. Confere o teto ANTES de somar (achado 2 da revisão fase F2): fn_billing_pode_criar lê o CONTADOR materializado, então conferir antes do upsert faz a leitura enxergar o valor sem o lead novo, a mesma semântica dos seis gatilhos BEFORE: na ordem antiga o 100º lead de um teto de 100 já avisava, um lead cedo demais. Mantém billing_usage_counters (item leads) por upsert ao somar e update simples (greatest(valor - 1, 0)) ao subtrair, nunca recriando a linha na subtração (decisão 11, exclusão em cascata de organização). Captura qualquer erro (decisão 11).';
+  'Gatilho de plano (Tarefa 3, decisão 6): after insert/update/delete SEM lista de colunas em crm_leads, porque trg_crm_lead_close_on_stage (before, do autor) muda o status na troca de etapa e um gatilho com lista de colunas não veria essa mudança; só o valor final da linha resolve. Fase F3 (migration 0907, correção A1 pós-auditoria, achado alto): a soma da transição PARA aberto SAIU DAQUI (foi para o BEFORE, fn_billing_bloqueia_crm_leads, que soma imediatamente após aprovar cada linha, sem esperar o fim do comando inteiro como um AFTER ROW faz). Este AFTER só subtrai (greatest(valor - 1, 0)) no FECHAMENTO (aberto -> ganho/perdido) e na EXCLUSÃO, nunca recriando a linha (decisão 11, exclusão em cascata de organização). Captura qualquer erro (decisão 11).';
 
 revoke execute on function public.fn_billing_trava_crm_leads() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_leads() to service_role;
