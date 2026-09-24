@@ -18,6 +18,8 @@ import { logger } from "@/lib/logger";
 import { runRoutingWorker } from "@/lib/routing/worker";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { encerrarEnrollmentPorAssinaturaSuspensa } from "@/lib/followup/encerrar-por-assinatura-suspensa";
 
 export type ResultadoDeTarefa = {
   id: string;
@@ -25,8 +27,28 @@ export type ResultadoDeTarefa = {
   detalhe?: string;
 };
 
+/**
+ * Achado 1 da revisão (F4): o relógio HTTP tem o próprio `enqueueJob`, sem o
+ * portão que o cron (`app/api/v1/cron/followup-flow-worker/route.ts`) já tem.
+ * Mesmo portão aqui: organização em modo leitura não enfileira o turno, e o
+ * enrollment é encerrado (`cancelled`/`assinatura_suspensa`), achado 3, em
+ * vez de ficar esperando um turno que nunca chega.
+ */
 async function enfileirarFollowup(job: FollowupJobRequest): Promise<void> {
   const admin = createAdminClient();
+  if (await contaEmModoLeitura(admin, job.organization_id)) {
+    logger.info("[relogio] turno não enfileirado: organização em modo leitura", {
+      organization_id: job.organization_id,
+      contact_id: job.contact_id,
+      followup_enrollment_id: job.payload.followup_enrollment_id,
+    });
+    await encerrarEnrollmentPorAssinaturaSuspensa(
+      admin,
+      job.organization_id,
+      job.payload.followup_enrollment_id,
+    );
+    return;
+  }
   const { error } = await admin.from("job_queue").insert({
     organization_id: job.organization_id,
     contact_id: job.contact_id,
@@ -133,6 +155,10 @@ export async function executarTickDoRelogio(): Promise<{
         db: createSupabaseSilenceSweepDb(admin),
         gateDb: createSupabaseFollowupGateDb(admin),
         clock: () => new Date(),
+        // Achado 1 da revisão (F4): faltava aqui, e só existia no cron
+        // (app/api/v1/cron/followup-flow-worker/route.ts). Sem isto, o
+        // relógio HTTP enrollava contato silencioso de organização suspensa.
+        contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
       });
       if (sweep.enrolled || sweep.pointers_gated_out || sweep.skipped_existing) mexeu = true;
     } catch (err) {

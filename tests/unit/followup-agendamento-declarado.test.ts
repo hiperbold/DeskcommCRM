@@ -116,6 +116,13 @@ const ESCRITORES: Record<string, { agenda: "agora" | "futuro" | "nenhum"; nota: 
     agenda: "nenhum",
     nota: "traduz o campo para a timeline do dossiê; não escreve.",
   },
+  "encerrar-por-assinatura-suspensa.ts": {
+    agenda: "nenhum",
+    nota:
+      "achado 3 da revisão F4: `next_eval_at: null` no encerramento do enrollment por conta " +
+      "suspensa, mesmo caso de gatilho-caso.ts. Desagendar não é agendar, e `null` não tem " +
+      "relógio para escolher errado.",
+  },
 };
 
 function modulosQueMencionam(): string[] {

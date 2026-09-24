@@ -38,6 +38,7 @@ import { enviarTextoFixoPendente } from "@/lib/followup/enviar-texto-fixo";
 import { createSupabaseSilenceSweepDb, runSilenceSweep } from "@/lib/followup/silence-sweep";
 import { autorizaCron } from "@/lib/auth/cron-auth";
 import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { encerrarEnrollmentPorAssinaturaSuspensa } from "@/lib/followup/encerrar-por-assinatura-suspensa";
 
 export const dynamic = "force-dynamic";
 
@@ -48,12 +49,11 @@ export const dynamic = "force-dynamic";
  *  o turno, nem o de IA (`purpose` ai) nem o de texto fixo. `applyResult`
  *  (lib/followup/engine.ts) já gravou o evento do passo ANTES desta chamada
  *  (idempotency_key = node:steps_taken), então este `return` silencioso não
- *  perde o registro: o enrollment avança para `wake_status`/`next_eval_at`
- *  como se o turno tivesse sido enfileirado, e o dead-man's switch do próprio
- *  motor (rechecksOciososDaAcao / MAX_ACTION_RECHECKS) o encerra sozinho
- *  quando o turno nunca completa, sem reenviar em massa na reativação, e
- *  sem precisar ensinar o engine.ts a conhecer billing (o gate fica só aqui,
- *  na borda que decide se o job chega a existir). */
+ *  perde o registro. Achado 3 da revisão (F4): o enrollment não fica só
+ *  esperando um turno que nunca chega até o dead-man de MAX_ACTION_RECHECKS
+ *  decretar `action_turn_never_completed` sozinho ~11h depois com um aviso
+ *  falso na Central; ele é ENCERRADO aqui mesmo, `cancelled`/`assinatura_suspensa`,
+ *  sem abrir `followup_dead`. */
 async function enqueueJob(job: FollowupJobRequest): Promise<void> {
   const admin = createAdminClient();
   if (await contaEmModoLeitura(admin, job.organization_id)) {
@@ -62,6 +62,11 @@ async function enqueueJob(job: FollowupJobRequest): Promise<void> {
       contact_id: job.contact_id,
       followup_enrollment_id: job.payload.followup_enrollment_id,
     });
+    await encerrarEnrollmentPorAssinaturaSuspensa(
+      admin,
+      job.organization_id,
+      job.payload.followup_enrollment_id,
+    );
     return;
   }
   const { error } = await admin.from("job_queue").insert({

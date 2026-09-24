@@ -52,6 +52,7 @@ import {
   type EsperaParaPlanejar,
   type PropostaDeEsperaBruta,
 } from './followup-flow-classify';
+import { contaEmModoLeituraPeloPool } from '@/lib/billing/assinatura/modo-leitura';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -240,6 +241,37 @@ function lastInboundSinceLastOutbound(context: LeadContext): string | null {
 }
 
 /**
+ * Achado 2 da revisão (F4): CONSUMIDOR do job `followup_turn`, o texto fixo
+ * (`fixedBody`, via `runFlowDrivenTurn`) e a re-entrada por template
+ * (`runDeterministicReentry`) enviam SEM passar pelo `run-model-call`
+ * (que já tem a checagem própria da Tarefa 6), então o gate de assinatura
+ * suspensa precisa estar aqui também, defesa em profundidade, valendo pra
+ * TODA origem de job que chega neste consumidor (fluxo, retorno de
+ * `cron_jobs`, o dreno de texto fixo inline).
+ *
+ * `pg.Pool` porque `lib/agent-engine/*` não importa `lib/followup/*`
+ * (regra dura de dependência numa direção só): SQL direto no lugar do
+ * helper por `SupabaseClient` que o cron/relógio/dreno de texto fixo usam.
+ * Achado 3: encerra o enrollment (`cancelled`/`assinatura_suspensa`) em vez
+ * de deixá-lo esperando um turno que nunca mais chega até o dead-man de
+ * MAX_ACTION_RECHECKS decretar `dead` sozinho com um aviso falso.
+ */
+async function encerrarEnrollmentPorAssinaturaSuspensaViaPool(
+  pool: pg.Pool,
+  organizationId: string,
+  enrollmentId: string,
+): Promise<void> {
+  await pool.query(
+    `update followup_enrollments
+     set status = 'cancelled', cancel_reason = 'assinatura_suspensa',
+         next_eval_at = null, claimed_until = null, completed_at = now()
+     where organization_id = $1 and id = $2
+       and status not in ('completed','cancelled','dead')`,
+    [organizationId, enrollmentId],
+  );
+}
+
+/**
  * Handler de `followup_turn` para o registry do daemon (main.ts). Resolve os ids de
  * envio da row do lead (nunca do payload) e injeta o bloco temporal no sufixo antes
  * de delegar ao núcleo compartilhado do run (runAgentTurn).
@@ -252,6 +284,23 @@ export function createFollowupTurnHandler(deps: FollowupTurnDeps) {
       throw new Error('job followup_turn sem contact_id — o CHECK da fila deveria impedir');
     }
     const payload = followupTurnPayloadSchema.parse(job.payload);
+
+    // Achados 2 e 3 da revisão (F4), ANTES de qualquer envio (texto fixo,
+    // template ou o turno do agente): organização em modo leitura não manda
+    // follow-up nenhum. Quando o job é dirigido por fluxo
+    // (`followup_enrollment_id` presente), o enrollment é encerrado aqui;
+    // a re-entrada legada (schedule_followup, sem enrollment) só é pulada,
+    // não há enrollment para encerrar.
+    if (await contaEmModoLeituraPeloPool(pool, tenantId)) {
+      withFields(deps.log, { job_id: job.id, tenant_id: tenantId, lead_id: leadId }).info(
+        'followup_turn não processado: organização em modo leitura',
+        { enrollment_id: payload.followup_enrollment_id ?? null },
+      );
+      if (payload.followup_enrollment_id !== undefined) {
+        await encerrarEnrollmentPorAssinaturaSuspensaViaPool(pool, tenantId, payload.followup_enrollment_id);
+      }
+      return;
+    }
 
     const boundary = parseServiceBoundary(job.payload.service_boundary);
     await requireCurrentServiceBoundary(pool, boundary);

@@ -42,6 +42,7 @@ import { decidePacing, dayStartInTz } from "@/lib/agent-engine/pacing/engine";
 import { loadChannelKnobs, loadPacingState, recordSend } from "@/lib/agent-engine/pacing/store";
 import { beginServiceAtOrigin } from "@/lib/atendimento/origem";
 import { logger } from "@/lib/logger";
+import { audit } from "@/lib/audit";
 import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 
 import { motivoParaExcluir, recusouMarketing } from "./elegibilidade";
@@ -135,14 +136,38 @@ export async function rodarUmaRodadaDeCampanha(
     if (numerosAtendidos.size >= NUMEROS_POR_RODADA) break;
 
     // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
-    // dispara campanha. A campanha fica EXATAMENTE como está (sem avançar,
-    // sem marcar destinatário como enviado, não chama `rodarUmaCampanha`),
-    // porque reativar a conta não pode disparar uma mensagem que ficou
-    // represada durante a suspensão (perda declarada, decisão 8/N26). Não
-    // ocupa o número: nenhuma tentativa de fato aconteceu, e a campanha
-    // seguinte do mesmo número pode ser de outra organização.
+    // dispara campanha. Achado 4 da revisão: em vez de só represar (a
+    // campanha ficava "running" esperando, e voltava a enviar sozinha,
+    // com mensagem atrasada, assim que a conta reativasse), a campanha é
+    // PAUSADA aqui, com o status que já existe no CHECK (`campaigns_status_check`)
+    // e o motivo em `failure_code`, a mesma coluna que `voltarAoRascunho`
+    // (lib/campanhas/acoes.ts) já usa para registrar por que uma campanha
+    // parou. Retomar exige alguém clicar em "Iniciar" de novo (a ação já
+    // existe, `iniciarAcao` aceita retomar de `paused`). Não ocupa o
+    // número: nenhuma tentativa de fato aconteceu, e a campanha seguinte do
+    // mesmo número pode ser de outra organização.
     if (await contaEmModoLeitura(admin, campanha.organization_id)) {
-      logger.info("[campanha] rodada não enviou: organização em modo leitura", {
+      const { data: pausada } = await admin
+        .from("campaigns")
+        .update({
+          status: "paused",
+          paused_at: agora.toISOString(),
+          failure_code: "assinatura_suspensa",
+        })
+        .eq("id", campanha.id)
+        .eq("status", "running")
+        .select("id");
+      if ((pausada ?? []).length > 0) {
+        void audit({
+          action: "campaign.paused",
+          organizationId: campanha.organization_id,
+          bypassedRls: true,
+          resourceType: "campaign",
+          resourceId: campanha.id,
+          metadata: { reason: "assinatura_suspensa" },
+        });
+      }
+      logger.info("[campanha] rodada não enviou: organização em modo leitura, campanha pausada", {
         campanha: campanha.id,
         organization_id: campanha.organization_id,
       });

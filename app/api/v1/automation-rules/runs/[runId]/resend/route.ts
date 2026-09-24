@@ -18,6 +18,12 @@ import { executeCallWebhook } from "@/lib/automation/actions/call-webhook";
 import type { ActionCtx, ActionResultDetail } from "@/lib/automation/types";
 import type { EventRow } from "@/lib/event-log/dispatcher";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import {
+  CODIGO_RECUSA_DO_PLANO,
+  recusaDoPlano,
+  STATUS_RECUSA_DO_PLANO,
+} from "@/lib/billing/planos/recusa-do-plano";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +48,18 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
   const { user, org: activeOrg } = authz;
 
   const supabase = await createClient();
+
+  // Achado 5 da revisão (F4): este reenvio dispara um webhook de verdade
+  // (`executeCallWebhook`), sem passar pelo `run-model-call` nem pelos
+  // portões dos produtores (automação/campanha/prospecção/follow-up).
+  // Organização em modo leitura recusa com o mesmo código/status de recusa
+  // do plano (PT402 detail='assinatura_suspensa'), reaproveitando a frase
+  // fixa que `recusaDoPlano` já sabe montar para este motivo.
+  const adminParaModoLeitura = createAdminClient();
+  if (await contaEmModoLeitura(adminParaModoLeitura, activeOrg.orgId)) {
+    const recusa = recusaDoPlano({ code: "PT402", detail: "assinatura_suspensa" });
+    return fail(CODIGO_RECUSA_DO_PLANO, t(recusa!.mensagem), STATUS_RECUSA_DO_PLANO, { requestId });
+  }
 
   const { data: run, error: runErr } = await supabase
     .from("automation_rule_runs")

@@ -1,10 +1,13 @@
 /**
  * Tarefa 7, fase F4: `tickProspecting` não chama `sendNextCandidate` quando a
- * organização está em modo leitura: a campanha fica exatamente como está
- * (nenhum candidato reservado, nenhuma abordagem represada para a
- * reativação). Molde de `tests/unit/prospecting-worker.test.ts` (mocks das
- * dependências de envio) mais o mock de `contaEmModoLeituraPeloPool`
- * (`lib/billing/assinatura/modo-leitura.ts`).
+ * organização está em modo leitura: nenhum candidato é reservado, nenhuma
+ * abordagem fica represada para a reativação. Molde de
+ * `tests/unit/prospecting-worker.test.ts` (mocks das dependências de envio)
+ * mais o mock de `contaEmModoLeituraPeloPool` (`lib/billing/assinatura/modo-leitura.ts`).
+ *
+ * Achado 4 da revisão (F4): a campanha é PAUSADA (status='paused',
+ * error='assinatura_suspensa'), não só represada, para não voltar a abordar
+ * sozinha com atraso quando a conta reativar.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -161,6 +164,10 @@ describe("tickProspecting × modo leitura (Tarefa 7)", () => {
     expect(dbCalls.some((s) => s.startsWith("update prospecting_campaigns set updated_at=now()"))).toBe(
       true,
     );
+    // Achado 4: a campanha é PAUSADA (não só represada) com o motivo.
+    expect(
+      dbCalls.some((s) => s.startsWith("update prospecting_campaigns set status='paused',error=$3")),
+    ).toBe(true);
   });
 
   it("fora do modo leitura: chama sendNextCandidate normalmente e aborda o candidato", async () => {

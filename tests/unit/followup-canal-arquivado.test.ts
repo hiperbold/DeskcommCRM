@@ -164,7 +164,10 @@ describe("followup_turn — canal arquivado", () => {
     await run(job(), pool, ctx);
     expect(runAgentTurn).toHaveBeenCalledTimes(1);
     // Não-vacuidade: a consulta que rodou é mesmo a que resolve a conversa.
-    expect(consultas[0]).toMatch(/from conversations/);
+    // Por índice fixo (`consultas[0]`) até a revisão F4: o gate de modo
+    // leitura (achado 2) passou a rodar uma consulta própria ANTES desta,
+    // então a busca agora é por conteúdo, não por posição.
+    expect(consultas.some((sql) => /from conversations/.test(sql))).toBe(true);
   });
 
   it("contato sem conversa e sem número na org: dead-letter, não turno contra o vazio", async () => {

@@ -54,6 +54,7 @@ import { getActiveVoiceAgent } from "@/lib/ai/agents";
 import { resolveOrCreateCallerContact } from "@/lib/voip/resolve-caller";
 import { garantirLeadDaConversa } from "@/lib/leads/nascimento-do-lead";
 import { buscarConhecimento, resolverAcervoDoAgente } from "@/lib/ai/knowledge/busca";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 
 const supabaseAdmin = createAdminClient();
 
@@ -236,6 +237,17 @@ async function handleAudioSocketConnection(socket: net.Socket, uuid: string, lef
 
   if (error || !callRow) {
     console.error(`[audiosocket] uuid ${uuid} não corresponde a nenhuma voice_calls — encerrando`);
+    socket.end();
+    return;
+  }
+
+  // Achado 6 da revisão (F4): organização em modo leitura não abre sessão de
+  // IA (Realtime WS, `AudioSocketCallBridge`), o mesmo caminho de "sem
+  // agente ativo" logo abaixo. O worker de voz não tem fila nem transferência
+  // pra humano hoje; encerrar a chamada É o fallback que já existe pra
+  // "não posso atender com IA agora".
+  if (await contaEmModoLeitura(supabaseAdmin, callRow.organization_id)) {
+    console.error(`[audiosocket] organização ${callRow.organization_id} em modo leitura, chamada não atendida por IA`);
     socket.end();
     return;
   }

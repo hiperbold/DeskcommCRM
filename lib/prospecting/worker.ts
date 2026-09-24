@@ -383,14 +383,21 @@ export async function tickProspecting(pool: pg.Pool, admin: SupabaseClient) {
           )
         ).rows[0];
         // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
-        // dispara abordagem. A campanha de prospecção fica exatamente como
-        // está (parada, sem marcar candidato); reativar a conta não pode
-        // disparar uma abordagem represada durante a suspensão. Checado
-        // ANTES de `sendNextCandidate` (não dentro dela): o candidato só é
-        // reservado (status='sending') depois deste ponto, então pular aqui
-        // não deixa candidato "preso" a meio caminho.
+        // dispara abordagem. Achado 4 da revisão: em vez de só represar
+        // (a campanha ficava "running" e voltava a abordar sozinha, com
+        // atraso, assim que a conta reativasse), a campanha é PAUSADA aqui,
+        // no mesmo status/coluna de motivo que a linha de baixo já usa para
+        // erro sistêmico ('paused'/`error`). Retomar exige alguém reabrir a
+        // campanha à mão. Checado ANTES de `sendNextCandidate` (não dentro
+        // dela): o candidato só é reservado (status='sending') depois deste
+        // ponto, então pausar aqui não deixa candidato "preso" a meio
+        // caminho.
         if (c && (await contaEmModoLeituraPeloPool(pool, org))) {
-          logger.info("[prospecting] tick não enviou: organização em modo leitura", {
+          await db.query(
+            "update prospecting_campaigns set status='paused',error=$3,updated_at=now() where organization_id=$1 and id=$2 and status='running'",
+            [org, c.id, "assinatura_suspensa"],
+          );
+          logger.info("[prospecting] tick não enviou: organização em modo leitura, campanha pausada", {
             organization_id: org,
             campaign_id: c.id,
           });

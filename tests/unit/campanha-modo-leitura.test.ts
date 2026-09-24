@@ -3,12 +3,19 @@
  * modo leitura. A campanha fica exatamente como está (não chama
  * `rodarUmaCampanha`, não marca destinatário, não ocupa o número).
  *
+ * Achado 4 da revisão (F4): a campanha é PAUSADA (status='paused',
+ * failure_code='assinatura_suspensa'), não só represada, para não voltar a
+ * enviar sozinha com mensagem atrasada quando a conta reativar.
+ *
  * Molde de `suspensao-nao-dispara-campanha.test.ts` (Supabase falso que
  * registra as chamadas), com `.rpc()` a mais para `fn_billing_modo_leitura`.
  */
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/audit", () => ({ audit: vi.fn() }));
+
 import { rodarUmaRodadaDeCampanha } from "@/lib/campanhas/rodada";
+import { audit } from "@/lib/audit";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const CAMPANHA = {
@@ -29,12 +36,16 @@ const CAMPANHA = {
  *  mais `billing_settings` (modo) e `.rpc` (fn_billing_modo_leitura). */
 function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
   let chamadasRpc = 0;
+  const updatesDeCampanha: Array<Record<string, unknown>> = [];
   const builder = (tabela: string) => {
-    const estado: { operacao: "select" | "update" } = { operacao: "select" };
+    const estado: { operacao: "select" | "update"; payload?: Record<string, unknown> } = {
+      operacao: "select",
+    };
     const b: Record<string, unknown> = {
       select: () => b,
-      update: () => {
+      update: (payload: Record<string, unknown>) => {
         estado.operacao = "update";
+        estado.payload = payload;
         return b;
       },
       eq: () => b,
@@ -48,12 +59,15 @@ function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
         return { data: null, error: null };
       },
       then: (resolve: (v: unknown) => unknown) => {
+        if (tabela === "campaigns" && estado.operacao === "update" && estado.payload) {
+          updatesDeCampanha.push(estado.payload);
+        }
         const data =
           tabela === "organizations"
             ? []
             : tabela === "campaigns"
               ? estado.operacao === "update"
-                ? []
+                ? [{ id: CAMPANHA.id }]
                 : [CAMPANHA]
               : [];
         return Promise.resolve({ data, error: null }).then(resolve);
@@ -71,7 +85,7 @@ function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
       throw new Error(`rpc não esperada: ${nome}`);
     },
   };
-  return { admin: admin as never, contarRpc: () => chamadasRpc };
+  return { admin: admin as never, contarRpc: () => chamadasRpc, updatesDeCampanha };
 }
 
 describe("campanha × modo leitura (Tarefa 7)", () => {
@@ -80,6 +94,27 @@ describe("campanha × modo leitura (Tarefa 7)", () => {
     const r = await rodarUmaRodadaDeCampanha(admin);
     expect(r.enviadas).toBe(0);
     expect(r.detalhe).toContain("modo_leitura");
+  });
+
+  it("organização em modo leitura: a campanha é PAUSADA (achado 4), com o motivo registrado e auditada", async () => {
+    vi.mocked(audit).mockClear();
+    const { admin, updatesDeCampanha } = fakeAdmin({ modo: "bloquear", modoLeitura: true });
+
+    await rodarUmaRodadaDeCampanha(admin);
+
+    // Filtra pela atualização de PAUSA: a rodada também roda
+    // `promoverAgendadas` (scheduled -> running) todo tique, que é outro
+    // update na mesma tabela e não tem relação com o modo leitura.
+    const pausas = updatesDeCampanha.filter((u) => u.status === "paused");
+    expect(pausas).toHaveLength(1);
+    expect(pausas[0]).toMatchObject({ status: "paused", failure_code: "assinatura_suspensa" });
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "campaign.paused",
+        resourceId: CAMPANHA.id,
+        metadata: expect.objectContaining({ reason: "assinatura_suspensa" }),
+      }),
+    );
   });
 
   it("modo avisar: nenhuma consulta a mais, a RPC de modo leitura nunca é chamada", async () => {
