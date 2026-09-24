@@ -196,7 +196,7 @@ describe("conectar", () => {
 describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Conectar»", () => {
   it("desconectado, com o bloqueio valendo, o botão fica desabilitado e mostra o motivo", async () => {
     getMock.mockResolvedValue(desconectado);
-    render(<CanalParceiroClient bloqueio={{ desabilitado: true, motivo: "2 de 2 conexões do plano Starter" }} />);
+    render(<CanalParceiroClient bloqueio={{ desabilitado: true, motivo: "2 de 2 conexões do plano Starter", suspensa: false }} />);
 
     const botao = await screen.findByRole("button", { name: /conectar/i });
     fireEvent.change(screen.getByLabelText("Conta"), { target: { value: "acc_1" } });
@@ -221,7 +221,7 @@ describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Conectar»", () =>
 
   it("já conectado, o bloqueio NÃO trava «Reconectar» (reconectar não conta contra o teto)", async () => {
     getMock.mockResolvedValue(conectado);
-    render(<CanalParceiroClient bloqueio={{ desabilitado: true, motivo: "2 de 2 conexões do plano Starter" }} />);
+    render(<CanalParceiroClient bloqueio={{ desabilitado: true, motivo: "2 de 2 conexões do plano Starter", suspensa: false }} />);
 
     const botao = await screen.findByRole("button", { name: /reconectar/i });
     // A conta já vem preenchida do estado carregado; a chave é a única coisa

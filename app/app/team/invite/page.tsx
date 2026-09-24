@@ -2,7 +2,11 @@ import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
-import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
+import {
+  bloqueioDoBotao,
+  estadoDoBloqueio,
+  MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+} from "@/lib/billing/planos/estado-do-bloqueio";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -24,7 +28,13 @@ export default async function TeamInvitePage() {
   // vínculo direto aqui), e a decisão 4 da fase bloqueia justamente convite
   // novo, convite renovado e vínculo direto — nunca o aceite.
   const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
-  const bloqueio = bloqueioDoBotao(estado, "membros");
+  const bloqueioCru = bloqueioDoBotao(estado, "membros");
+  // Tarefa 2, fase F4: "membros" (convite) é uma das quatro chaves paradas
+  // pela conta suspensa (ver estado-do-bloqueio.ts), motivo traduzido aqui,
+  // no servidor, antes de atravessar para o componente `use client`.
+  const bloqueio = bloqueioCru.suspensa
+    ? { ...bloqueioCru, motivo: t(MOTIVO_CONTA_SUSPENSA_ASSINATURA) }
+    : bloqueioCru;
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">

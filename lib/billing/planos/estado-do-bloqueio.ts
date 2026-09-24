@@ -54,6 +54,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Logger } from "@/lib/agent-engine/obs/logger";
 
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+
 import {
   CHAVES_DA_TELA_DE_PLANO,
   linhasDaTelaDePlano,
@@ -89,6 +91,21 @@ export interface EstadoDoBloqueio {
   /** Vazio sempre que `vale` é falso, ou quando a leitura de uso/limites falhou. */
   itensNoTeto: ItemNoTetoDeBloqueio[];
   leituraFalhou: boolean;
+  /**
+   * Tarefa 2, decisão 5 da fase F4 (`fn_billing_modo_leitura`, migração
+   * 0908 parte 2): a conta está em modo leitura de verdade AGORA (modo
+   * `bloquear`, carência vencida E `billing_contracts.status` em
+   * `suspensa`/`cancelada`). Campo SEPARADO de `vale`/`itensNoTeto` DE
+   * PROPÓSITO: `vale` é o bloqueio de TETO do plano (carência vencida, sem
+   * olhar `status`), `suspensa` é a conta parada por falta de pagamento;
+   * são causas e remédios diferentes (pagar o atrasado vs. contratar mais).
+   * Só é lida quando o modo cacheado já é `bloquear` (zero consulta a mais
+   * no modo avisar/desligado, os dois early returns abaixo nem chegam a
+   * calculá-la), reusando `contaEmModoLeitura`
+   * (`lib/billing/assinatura/modo-leitura.ts`), a MESMA leitura
+   * fail-open/cacheada que os produtores da Tarefa 7 usam.
+   */
+  suspensa: boolean;
 }
 
 /** O rótulo plural de cada item, para compor "N de M <rótulo> do plano X". */
@@ -120,16 +137,54 @@ export function motivoDoItemNoTeto(
 }
 
 /**
+ * Tarefa 2, decisão 7 da fase F4 (migração 0908 parte 2): os QUATRO gatilhos
+ * de criação que `fn_billing_modo_leitura` para: funis, etapas por funil,
+ * integrações webhook e convites (`membros`, o único nome que diverge do
+ * gatilho: é o item da matriz do plano para "convidar membro"). `conexoes` e
+ * `leads` ficam de fora DE PROPÓSITO: a decisão 5 da fase lista canal/conexão
+ * e lead como o que CONTINUA na conta suspensa (o chat nunca para, N23).
+ */
+const CHAVES_PARADAS_NA_CONTA_SUSPENSA: readonly ChaveDaTelaDePlano[] = [
+  "funis",
+  "etapas_por_funil",
+  "integracoes_webhook",
+  "membros",
+];
+
+/**
+ * Frase fixa para os botões parados pela conta suspensa (Tarefa 2, decisão 7
+ * da fase F4): texto próprio, nunca a frase de teto de `motivoDoItemNoTeto`
+ * (a causa e o remédio são outros: pagar o atrasado, não contratar mais).
+ * Exportada para quem for traduzir para espanhol no servidor (`traduzir()`,
+ * `lib/i18n/dicionario.ts`) antes de repassar ao componente cliente.
+ */
+export const MOTIVO_CONTA_SUSPENSA_ASSINATURA =
+  "Conta suspensa por falta de pagamento. Fale com o suporte.";
+
+/**
  * O item no teto que casa com `chave` (e, para `etapas_por_funil`, com
  * `pipelineId`), ou `null` quando não há motivo para desabilitar nada. É a
  * função que todo componente de UI chama para decidir `disabled` e o texto do
  * motivo; nenhum componente lê `itensNoTeto` na unha.
+ *
+ * Tarefa 2, decisão 7 da F4: `estado.suspensa` é conferido ANTES de
+ * `estado.vale` para as quatro chaves de `CHAVES_PARADAS_NA_CONTA_SUSPENSA`,
+ * mesma ordem do banco (`fn_billing_modo_leitura` roda antes do bloqueio de
+ * teto no gatilho, migração 0908). A conta suspensa é motivo suficiente por
+ * si só, com ou sem teto de plano estourado.
  */
 export function itemNoTeto(
-  estado: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto">,
+  estado: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa">,
   chave: ChaveDaTelaDePlano,
   pipelineId?: string,
 ): ItemNoTetoDeBloqueio | null {
+  if (estado.suspensa && CHAVES_PARADAS_NA_CONTA_SUSPENSA.includes(chave)) {
+    return {
+      chave,
+      pipelineId: chave === "etapas_por_funil" ? (pipelineId ?? null) : null,
+      motivo: MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+    };
+  }
   if (!estado.vale) return null;
   return (
     estado.itensNoTeto.find(
@@ -151,6 +206,7 @@ const ESTADO_EM_FALHA: EstadoDoBloqueio = {
   emCarencia: false,
   itensNoTeto: [],
   leituraFalhou: true,
+  suspensa: false,
 };
 
 export interface OpcoesDoEstadoDoBloqueio {
@@ -184,7 +240,19 @@ export async function estadoDoBloqueio(
     if (modo !== "bloquear") {
       // Mesma saída antecipada de `bloqueioValeParaOrganizacao`: modo que não
       // bloqueia não precisa ler `billing_contracts`, e não tem itens no teto.
-      return { vale: false, modo, carenciaAte: null, emCarencia: false, itensNoTeto: [], leituraFalhou: false };
+      // `suspensa` é sempre falso aqui SEM chamar `fn_billing_modo_leitura`
+      // nenhuma: ela exige modo='bloquear' (decisão 5, F4), então não há RPC
+      // para pagar neste ramo. O "zero consulta a mais no modo avisar" da
+      // decisão 8 vale também para esta leitura nova.
+      return {
+        vale: false,
+        modo,
+        carenciaAte: null,
+        emCarencia: false,
+        itensNoTeto: [],
+        leituraFalhou: false,
+        suspensa: false,
+      };
     }
 
     const { data: contrato, error: erroContrato } = await admin
@@ -211,8 +279,18 @@ export async function estadoDoBloqueio(
   const vale = carenciaAte !== null && venceu;
   const emCarencia = carenciaAte !== null && !venceu;
 
+  // Tarefa 2, decisão 5 e 8 da F4: só chega aqui com modo já 'bloquear' (o
+  // early return acima cobre avisar/desligado), então `contaEmModoLeitura`
+  // paga no máximo UMA consulta a mais: a RPC `fn_billing_modo_leitura`,
+  // que ela mesma decide chamar por já ver o modo cacheado em 'bloquear' (a
+  // leitura de billing_settings é cache hit, mesmo cliente admin). Fail-open
+  // por conta própria (nunca lança, grita alarme_planos_leitura sozinha):
+  // fica FORA do try/catch acima de propósito, para uma falha aqui nunca
+  // virar `ESTADO_EM_FALHA` (vale/itensNoTeto) por tabela.
+  const suspensa = await contaEmModoLeitura(admin, organizationId);
+
   if (!vale) {
-    return { vale: false, modo, carenciaAte, emCarencia, itensNoTeto: [], leituraFalhou: false };
+    return { vale: false, modo, carenciaAte, emCarencia, itensNoTeto: [], leituraFalhou: false, suspensa };
   }
 
   // Só a partir daqui o bloqueio VALE: as leituras de uso e limites só
@@ -277,6 +355,7 @@ export async function estadoDoBloqueio(
     emCarencia,
     itensNoTeto,
     leituraFalhou: leituraDoUsoOuPlanoFalhou,
+    suspensa,
   };
 }
 
@@ -294,14 +373,27 @@ export interface BloqueioDoBotao {
   desabilitado: boolean;
   /** `null` quando `desabilitado` é falso, nunca um texto vazio. */
   motivo: string | null;
+  /**
+   * Tarefa 2, decisão 7 da F4: `true` quando `motivo` é
+   * `MOTIVO_CONTA_SUSPENSA_ASSINATURA` (conta suspensa), não um teto de
+   * plano. A página server component pode usar este sinal para trocar
+   * `motivo` pela versão traduzida (`traduzir(MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+   * idioma)`) antes de repassar ao componente `use client`: o mesmo padrão
+   * que ela já usa para o resto do texto da tela.
+   */
+  suspensa: boolean;
 }
 
 /** Atalho de `itemNoTeto` no formato de prop de botão (ver `BloqueioDoBotao`). */
 export function bloqueioDoBotao(
-  estado: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto">,
+  estado: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa">,
   chave: ChaveDaTelaDePlano,
   pipelineId?: string,
 ): BloqueioDoBotao {
   const item = itemNoTeto(estado, chave, pipelineId);
-  return { desabilitado: item !== null, motivo: item?.motivo ?? null };
+  return {
+    desabilitado: item !== null,
+    motivo: item?.motivo ?? null,
+    suspensa: item?.motivo === MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+  };
 }

@@ -51,7 +51,7 @@ describe("bloqueio do plano ao ligar uma fonte pausada", () => {
         source={FONTE_PAUSADA}
         open
         onOpenChange={() => {}}
-        bloqueio={{ desabilitado: true, motivo: "2 de 2 integrações de webhook do plano Starter" }}
+        bloqueio={{ desabilitado: true, motivo: "2 de 2 integrações de webhook do plano Starter", suspensa: false }}
       />,
     );
 

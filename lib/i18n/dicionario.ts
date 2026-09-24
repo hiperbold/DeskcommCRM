@@ -4078,6 +4078,12 @@ export const DICIONARIO: Traducoes = {
   "A conta está suspensa: a IA e as automações estão paradas até o pagamento ser regularizado.": {
     es: "La cuenta está suspendida: la IA y las automatizaciones están detenidas hasta regularizar el pago.",
   },
+  // Tarefa 2, fase F4: MOTIVO_CONTA_SUSPENSA_ASSINATURA (lib/billing/planos/
+  // estado-do-bloqueio.ts), motivo dos botões de criar funil/etapa/webhook/
+  // convite quando a conta está em modo leitura.
+  "Conta suspensa por falta de pagamento. Fale com o suporte.": {
+    es: "Cuenta suspendida por falta de pago. Habla con soporte.",
+  },
   "Falta preencher alguma configuração desta ação — abra a automação e revise.": {
     es: "Falta completar algún ajuste de esta acción. Abre la automatización y revísala.",
   },

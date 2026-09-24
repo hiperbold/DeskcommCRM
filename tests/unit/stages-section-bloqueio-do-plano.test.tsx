@@ -47,7 +47,7 @@ describe("bloqueio do plano no botão «Acrescentar etapa ao fim»", () => {
       <StagesSection
         pipelineId="pipeline-1"
         ancoraMapeamento="mapeamento-pipeline-1"
-        bloqueio={{ desabilitado: true, motivo: "5 de 5 etapas neste funil do plano Starter" }}
+        bloqueio={{ desabilitado: true, motivo: "5 de 5 etapas neste funil do plano Starter", suspensa: false }}
       />,
     );
 

@@ -57,7 +57,7 @@ describe("bloqueio do plano no botão «Receber no atendimento»", () => {
     getMock.mockResolvedValue(ESTADO);
     render(
       comQuery(
-        <RedesSociaisClient bloqueio={{ desabilitado: true, motivo: "3 de 3 conexões do plano Starter" }} />,
+        <RedesSociaisClient bloqueio={{ desabilitado: true, motivo: "3 de 3 conexões do plano Starter", suspensa: false }} />,
       ),
     );
 

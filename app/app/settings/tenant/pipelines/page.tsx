@@ -5,6 +5,7 @@ import { ROLE_RANK } from "@/lib/auth/types";
 import {
   bloqueioDoBotao,
   estadoDoBloqueio,
+  MOTIVO_CONTA_SUSPENSA_ASSINATURA,
   type BloqueioDoBotao,
 } from "@/lib/billing/planos/estado-do-bloqueio";
 import { createClient } from "@/lib/supabase/server";
@@ -58,8 +59,22 @@ export default async function PipelinesSettingsPage() {
     { pipelineIds: pipelines.map((p) => p.id) },
     logger,
   );
+  // Tarefa 2, fase F4: "etapas_por_funil" é uma das quatro chaves paradas
+  // pela conta suspensa (ver estado-do-bloqueio.ts). O motivo fixo sai em
+  // português da função de billing; aqui, no servidor, com `idioma` já
+  // resolvido, ele ganha a tradução antes de atravessar para o componente
+  // `use client`, igual para todo funil desta organização (a suspensão não
+  // é por funil).
   const bloqueioPorFunil: Record<string, BloqueioDoBotao> = Object.fromEntries(
-    pipelines.map((p) => [p.id, bloqueioDoBotao(estado, "etapas_por_funil", p.id)]),
+    pipelines.map((p) => {
+      const bloqueio = bloqueioDoBotao(estado, "etapas_por_funil", p.id);
+      return [
+        p.id,
+        bloqueio.suspensa
+          ? { ...bloqueio, motivo: traduzir(MOTIVO_CONTA_SUSPENSA_ASSINATURA, idioma) }
+          : bloqueio,
+      ];
+    }),
   );
 
   return (

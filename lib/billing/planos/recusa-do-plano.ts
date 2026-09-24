@@ -65,9 +65,32 @@ const MENSAGEM_POR_ITEM: Record<ItemRecusadoPeloPlano, string> = {
 const MENSAGEM_GENERICA =
   "O plano desta organização chegou a um limite contratado. Fale com o suporte para ampliar.";
 
+/**
+ * Fase F4, tarefa 2, decisão 7: `detail = 'assinatura_suspensa'`. Os quatro
+ * gatilhos de criação (funis, etapas, integrações webhook, convites, migração
+ * 0908 parte 2) levantam o MESMO PT402, mas o motivo não é um teto do plano
+ * contratado, é a conta suspensa por falta de pagamento. Frase própria, nunca
+ * a genérica de teto (que diria "aumente seu plano" para quem não tem o que
+ * aumentar).
+ */
+const MENSAGEM_ASSINATURA_SUSPENSA =
+  "A conta está suspensa por falta de pagamento: criar funis, etapas, integrações e convites fica parado até a assinatura ser regularizada. Fale com o suporte.";
+
 export interface RecusaDoPlano {
-  /** O item do teto, quando reconhecido; `null` se o `detail` não bateu com nenhum. */
+  /**
+   * O item do teto, quando reconhecido; `null` se o `detail` não bateu com
+   * nenhum item de teto, inclusive quando `suspensa` é `true` (a conta
+   * suspensa NÃO é um item de teto do plano, ver `suspensa` abaixo).
+   */
   item: ItemRecusadoPeloPlano | null;
+  /**
+   * `true` só para `detail = 'assinatura_suspensa'`. Campo separado de
+   * `item` DE PROPÓSITO (fase F4, tarefa 2): quem lê `item` para decidir uma
+   * tela de "aumente seu plano" ou um contador de uso não pode confundir a
+   * conta suspensa com um teto do plano contratado: são causas e remédios
+   * diferentes (pagar o que está atrasado vs. contratar mais).
+   */
+  suspensa: boolean;
   /** Frase fixa em português, pronta para a tela — nunca o texto do Postgres. */
   mensagem: string;
 }
@@ -97,10 +120,16 @@ export function recusaDoPlano(erro: unknown): RecusaDoPlano | null {
   // supabase-js: `details` (com "s"); pg: `detail` (sem "s"). Nunca repassar
   // o valor cru na mensagem — só usar para ESCOLHER a frase fixa.
   const detalhe = registro.details ?? registro.detail;
+
+  if (detalhe === "assinatura_suspensa") {
+    return { item: null, suspensa: true, mensagem: MENSAGEM_ASSINATURA_SUSPENSA };
+  }
+
   const item = ehItemConhecido(detalhe) ? detalhe : null;
 
   return {
     item,
+    suspensa: false,
     mensagem: item ? MENSAGEM_POR_ITEM[item] : MENSAGEM_GENERICA,
   };
 }

@@ -32,7 +32,7 @@ describe("bloqueio do plano no botão «Criar fonte»", () => {
         open
         onOpenChange={() => {}}
         onCreated={() => {}}
-        bloqueio={{ desabilitado: true, motivo: "2 de 2 integrações de webhook do plano Starter" }}
+        bloqueio={{ desabilitado: true, motivo: "2 de 2 integrações de webhook do plano Starter", suspensa: false }}
       />,
     );
 

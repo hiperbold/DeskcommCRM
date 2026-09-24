@@ -158,7 +158,7 @@ describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Novo funil»", () 
           arquivados={[]}
           podeGerenciar
           podeImportar
-          bloqueio={{ desabilitado: true, motivo: "3 de 3 funis do plano Starter" }}
+          bloqueio={{ desabilitado: true, motivo: "3 de 3 funis do plano Starter", suspensa: false }}
         />,
       ),
     );

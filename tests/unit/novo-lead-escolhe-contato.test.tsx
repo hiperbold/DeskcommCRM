@@ -188,7 +188,7 @@ describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Criar lead»", () 
         pipelineId="33333333-3333-4333-8333-333333333333"
         stages={ETAPAS}
         contactId={MICHELLE.id}
-        bloqueio={{ desabilitado: true, motivo: "3 de 3 leads do plano Starter" }}
+        bloqueio={{ desabilitado: true, motivo: "3 de 3 leads do plano Starter", suspensa: false }}
       />,
     );
 

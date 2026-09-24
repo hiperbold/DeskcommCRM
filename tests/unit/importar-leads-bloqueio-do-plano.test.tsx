@@ -33,7 +33,7 @@ describe("bloqueio do plano no botão de importar", () => {
     render(
       <ImportarLeads
         funis={FUNIS}
-        bloqueio={{ desabilitado: true, motivo: "3 de 3 leads do plano Starter" }}
+        bloqueio={{ desabilitado: true, motivo: "3 de 3 leads do plano Starter", suspensa: false }}
       />,
     );
 

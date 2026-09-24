@@ -23,7 +23,7 @@ afterEach(() => {
 describe("bloqueio do plano no botão «Enviar convites»", () => {
   it("com o bloqueio valendo, o botão fica desabilitado e mostra o motivo", () => {
     render(
-      <InviteForm bloqueio={{ desabilitado: true, motivo: "5 de 5 membros do plano Starter" }} />,
+      <InviteForm bloqueio={{ desabilitado: true, motivo: "5 de 5 membros do plano Starter", suspensa: false }} />,
     );
 
     const botao = screen.getByRole("button", { name: "Enviar convites" });

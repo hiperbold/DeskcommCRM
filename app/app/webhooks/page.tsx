@@ -2,7 +2,11 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
-import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
+import {
+  bloqueioDoBotao,
+  estadoDoBloqueio,
+  MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+} from "@/lib/billing/planos/estado-do-bloqueio";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -21,7 +25,13 @@ export default async function WebhooksPage() {
   // Fase F3, tarefa 9: item "integracoes_webhook" para "Nova fonte"/"Criar
   // primeira fonte" e para reativar uma fonte pausada.
   const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
-  const bloqueio = bloqueioDoBotao(estado, "integracoes_webhook");
+  const bloqueioCru = bloqueioDoBotao(estado, "integracoes_webhook");
+  // Tarefa 2, fase F4: "integracoes_webhook" é uma das quatro chaves paradas
+  // pela conta suspensa (ver estado-do-bloqueio.ts), motivo traduzido aqui,
+  // no servidor, antes de atravessar para o componente `use client`.
+  const bloqueio = bloqueioCru.suspensa
+    ? { ...bloqueioCru, motivo: traduzir(MOTIVO_CONTA_SUSPENSA_ASSINATURA, idioma) }
+    : bloqueioCru;
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">

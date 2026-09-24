@@ -4,7 +4,11 @@ import { redirect } from "next/navigation";
 import { Kanban } from "@/lib/ui/icons";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
-import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
+import {
+  bloqueioDoBotao,
+  estadoDoBloqueio,
+  MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+} from "@/lib/billing/planos/estado-do-bloqueio";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -71,8 +75,15 @@ export default async function KanbanPickerPage() {
   // tela; "leads" trava o botão de importar planilha (ImportarLeads), que
   // cria leads em lote. Uma leitura só, os dois itens saem do mesmo estado.
   const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
-  const bloqueioFunis = bloqueioDoBotao(estado, "funis");
+  const bloqueioFunisCru = bloqueioDoBotao(estado, "funis");
   const bloqueioLeads = bloqueioDoBotao(estado, "leads");
+  // Tarefa 2, fase F4: "funis" é uma das quatro chaves paradas pela conta
+  // suspensa (ver estado-do-bloqueio.ts). O motivo fixo sai em português da
+  // função de billing; aqui, no servidor, com `idioma` já resolvido, ele
+  // ganha a tradução antes de atravessar para o componente `use client`.
+  const bloqueioFunis = bloqueioFunisCru.suspensa
+    ? { ...bloqueioFunisCru, motivo: t(MOTIVO_CONTA_SUSPENSA_ASSINATURA) }
+    : bloqueioFunisCru;
 
   return (
     <div className="flex h-full flex-col gap-4 p-6">

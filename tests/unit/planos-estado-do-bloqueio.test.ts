@@ -12,6 +12,7 @@ import {
   estadoDoBloqueio,
   itemNoTeto,
   motivoDoItemNoTeto,
+  MOTIVO_CONTA_SUSPENSA_ASSINATURA,
   type EstadoDoBloqueio,
 } from "@/lib/billing/planos/estado-do-bloqueio";
 
@@ -51,6 +52,8 @@ interface OpcoesDoAdminFalso {
   limitesData?: unknown;
   limitesErro?: string;
   podeCriarPorFunil?: Record<string, { pode: boolean; motivo: string; atual: number | null; teto: number | null } | "erro">;
+  /** Tarefa 2, fase F4: resposta de `fn_billing_modo_leitura`. Padrão `false`. */
+  modoLeitura?: boolean;
 }
 
 function criarAdminFalso(opts: OpcoesDoAdminFalso) {
@@ -104,6 +107,12 @@ function criarAdminFalso(opts: OpcoesDoAdminFalso) {
         error: null,
       };
     }
+    // Tarefa 2, fase F4: `contaEmModoLeitura` (lib/billing/assinatura/modo-leitura.ts)
+    // chama esta RPC quando o modo cacheado já é 'bloquear'. Padrão `false`,
+    // sem opção de erro: `contaEmModoLeitura` é fail-open por conta própria.
+    if (nome === "fn_billing_modo_leitura") {
+      return { data: opts.modoLeitura ?? false, error: null };
+    }
     throw new Error(`rpc desconhecida no dublê: ${nome}`);
   }
 
@@ -128,6 +137,7 @@ describe("estadoDoBloqueio", () => {
       emCarencia: false,
       itensNoTeto: [],
       leituraFalhou: false,
+      suspensa: false,
     });
     expect(chamadas).toEqual(["from:billing_settings"]);
   });
@@ -174,8 +184,15 @@ describe("estadoDoBloqueio", () => {
       expect(r.emCarencia).toBe(true);
       expect(r.carenciaAte).toBe(futuro);
       expect(r.itensNoTeto).toEqual([]);
-      // Carência ainda correndo não lê uso nem limites: nenhuma RPC chamada.
-      expect(chamadas.some((c) => c.startsWith("rpc:"))).toBe(false);
+      expect(r.suspensa).toBe(false);
+      // Carência ainda correndo não lê uso nem limites (teto): nenhuma dessas
+      // duas RPCs chamada. `fn_billing_modo_leitura` (Tarefa 2, F4) É chamada
+      // aqui, porque ela só depende do modo já estar em cache como 'bloquear'
+      // (decisão 8), não da carência de teto desta organização.
+      expect(
+        chamadas.filter((c) => c === "rpc:fn_billing_uso" || c === "rpc:fn_billing_limites_efetivos"),
+      ).toEqual([]);
+      expect(chamadas).toContain("rpc:fn_billing_modo_leitura");
     } finally {
       vi.useRealTimers();
     }
@@ -198,6 +215,9 @@ describe("estadoDoBloqueio", () => {
       expect(r.vale).toBe(true);
       expect(r.emCarencia).toBe(false);
       expect(r.leituraFalhou).toBe(false);
+      // fn_billing_modo_leitura não foi mockada para devolver true neste
+      // teste (padrão false do dublê): a organização não está suspensa.
+      expect(r.suspensa).toBe(false);
       expect(r.itensNoTeto).toEqual(
         expect.arrayContaining([
           { chave: "conexoes", pipelineId: null, motivo: "3 de 3 conexões do plano Pro" },
@@ -227,6 +247,7 @@ describe("estadoDoBloqueio", () => {
       emCarencia: false,
       itensNoTeto: [],
       leituraFalhou: true,
+      suspensa: false,
     });
     expect(log.error).toHaveBeenCalledWith("alarme_planos_leitura", expect.objectContaining({ organization_id: ORG }));
   });
@@ -328,6 +349,56 @@ describe("estadoDoBloqueio", () => {
     const { admin } = criarAdminFalso({ modo: "avisar" });
     await expect(estadoDoBloqueio(admin, ORG)).resolves.toMatchObject({ vale: false });
   });
+
+  // Tarefa 2, decisão 5 da fase F4: fn_billing_modo_leitura (via contaEmModoLeitura).
+  describe("suspensa (Tarefa 2, fase F4)", () => {
+    it("modo bloquear, carência vencida, fn_billing_modo_leitura=true: suspensa=true", async () => {
+      vi.useFakeTimers().setSystemTime(AGORA);
+      try {
+        const passado = new Date(AGORA - 3 * 86_400_000).toISOString();
+        const { admin } = criarAdminFalso({
+          modo: "bloquear",
+          bloqueioAPartirDe: passado,
+          modoLeitura: true,
+        });
+
+        const r = await estadoDoBloqueio(admin, ORG);
+
+        expect(r.vale).toBe(true);
+        expect(r.suspensa).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("modo bloquear, carência vencida, fn_billing_modo_leitura=false: suspensa=false (teto e suspensão são independentes)", async () => {
+      vi.useFakeTimers().setSystemTime(AGORA);
+      try {
+        const passado = new Date(AGORA - 3 * 86_400_000).toISOString();
+        const { admin } = criarAdminFalso({
+          modo: "bloquear",
+          bloqueioAPartirDe: passado,
+          modoLeitura: false,
+        });
+
+        const r = await estadoDoBloqueio(admin, ORG);
+
+        expect(r.vale).toBe(true);
+        expect(r.suspensa).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("modo desligado: suspensa=false sem chamar fn_billing_modo_leitura, mesmo mockada como true", async () => {
+      const { admin, chamadas } = criarAdminFalso({ modo: "desligado", modoLeitura: true });
+
+      const r = await estadoDoBloqueio(admin, ORG);
+
+      expect(r.suspensa).toBe(false);
+      expect(chamadas).toEqual(["from:billing_settings"]);
+    });
+  });
 });
 
 describe("motivoDoItemNoTeto", () => {
@@ -347,8 +418,9 @@ describe("motivoDoItemNoTeto", () => {
 });
 
 describe("itemNoTeto", () => {
-  const BASE: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto"> = {
+  const BASE: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa"> = {
     vale: true,
+    suspensa: false,
     itensNoTeto: [
       { chave: "conexoes", pipelineId: null, motivo: "3 de 3 conexões do plano Pro" },
       { chave: "etapas_por_funil", pipelineId: FUNIL_A, motivo: "10 de 10 etapas neste funil do plano Pro" },
@@ -356,7 +428,7 @@ describe("itemNoTeto", () => {
   };
 
   it("bloqueio não vale: null mesmo com item na lista", () => {
-    expect(itemNoTeto({ vale: false, itensNoTeto: BASE.itensNoTeto }, "conexoes")).toBeNull();
+    expect(itemNoTeto({ vale: false, suspensa: false, itensNoTeto: BASE.itensNoTeto }, "conexoes")).toBeNull();
   });
 
   it("item org-wide no teto: devolve o item", () => {
@@ -374,29 +446,89 @@ describe("itemNoTeto", () => {
   it("etapas_por_funil de OUTRO funil: null, mesmo havendo item para outro pipelineId", () => {
     expect(itemNoTeto(BASE, "etapas_por_funil", FUNIL_B)).toBeNull();
   });
+
+  // Tarefa 2, decisão 7 da fase F4: conta suspensa, as quatro chaves paradas.
+  describe("conta suspensa (Tarefa 2, decisão 7 da F4)", () => {
+    const SUSPENSA: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa"> = {
+      vale: false,
+      suspensa: true,
+      itensNoTeto: [],
+    };
+
+    it.each(["funis", "etapas_por_funil", "integracoes_webhook", "membros"] as const)(
+      "%s: motivo próprio, mesmo com vale=false e itensNoTeto vazio",
+      (chave) => {
+        expect(itemNoTeto(SUSPENSA, chave)).toEqual({
+          chave,
+          pipelineId: null,
+          motivo: MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+        });
+      },
+    );
+
+    it("etapas_por_funil: carrega o pipelineId pedido", () => {
+      expect(itemNoTeto(SUSPENSA, "etapas_por_funil", FUNIL_A)).toEqual({
+        chave: "etapas_por_funil",
+        pipelineId: FUNIL_A,
+        motivo: MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+      });
+    });
+
+    it("conexoes e leads NÃO param pela conta suspensa (decisão 5: canal e lead continuam)", () => {
+      expect(itemNoTeto(SUSPENSA, "conexoes")).toBeNull();
+      expect(itemNoTeto(SUSPENSA, "leads")).toBeNull();
+    });
+
+    it("suspensa=true mas vale=true e a chave também está no teto: a conta suspensa ganha (mesma ordem do gatilho do banco)", () => {
+      const estado: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa"> = {
+        vale: true,
+        suspensa: true,
+        itensNoTeto: [{ chave: "funis", pipelineId: null, motivo: "5 de 5 funis do plano Pro" }],
+      };
+      expect(itemNoTeto(estado, "funis")).toEqual({
+        chave: "funis",
+        pipelineId: null,
+        motivo: MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+      });
+    });
+  });
 });
 
 describe("bloqueioDoBotao", () => {
-  const BASE: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto"> = {
+  const BASE: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa"> = {
     vale: true,
+    suspensa: false,
     itensNoTeto: [{ chave: "conexoes", pipelineId: null, motivo: "3 de 3 conexões do plano Pro" }],
   };
 
-  it("item no teto: desabilitado true, com o motivo", () => {
+  it("item no teto: desabilitado true, com o motivo, suspensa false", () => {
     expect(bloqueioDoBotao(BASE, "conexoes")).toEqual({
       desabilitado: true,
       motivo: "3 de 3 conexões do plano Pro",
+      suspensa: false,
     });
   });
 
-  it("item fora do teto: desabilitado false, motivo null", () => {
-    expect(bloqueioDoBotao(BASE, "leads")).toEqual({ desabilitado: false, motivo: null });
+  it("item fora do teto: desabilitado false, motivo null, suspensa false", () => {
+    expect(bloqueioDoBotao(BASE, "leads")).toEqual({ desabilitado: false, motivo: null, suspensa: false });
   });
 
   it("bloqueio não vale: desabilitado false mesmo com item na lista", () => {
-    expect(bloqueioDoBotao({ vale: false, itensNoTeto: BASE.itensNoTeto }, "conexoes")).toEqual({
-      desabilitado: false,
-      motivo: null,
+    expect(
+      bloqueioDoBotao({ vale: false, suspensa: false, itensNoTeto: BASE.itensNoTeto }, "conexoes"),
+    ).toEqual({ desabilitado: false, motivo: null, suspensa: false });
+  });
+
+  it("conta suspensa: desabilitado true, motivo próprio, suspensa true", () => {
+    const estado: Pick<EstadoDoBloqueio, "vale" | "itensNoTeto" | "suspensa"> = {
+      vale: false,
+      suspensa: true,
+      itensNoTeto: [],
+    };
+    expect(bloqueioDoBotao(estado, "membros")).toEqual({
+      desabilitado: true,
+      motivo: MOTIVO_CONTA_SUSPENSA_ASSINATURA,
+      suspensa: true,
     });
   });
 });

@@ -60,7 +60,33 @@ describe("recusaDoPlano", () => {
     const recusa = recusaDoPlano({ code: "PT402", detail: "algo_futuro" });
     expect(recusa).not.toBeNull();
     expect(recusa?.item).toBeNull();
+    expect(recusa?.suspensa).toBe(false);
     expect(recusa?.mensagem).toMatch(/limite contratado/);
+  });
+
+  it("reconhece 'assinatura_suspensa' (fase F4, tarefa 2, decisão 7): suspensa=true, item=null, frase própria", () => {
+    const recusa = recusaDoPlano({ code: "PT402", detail: "assinatura_suspensa" });
+    expect(recusa).not.toBeNull();
+    expect(recusa?.item).toBeNull();
+    expect(recusa?.suspensa).toBe(true);
+    expect(recusa?.mensagem).toBe(
+      "A conta está suspensa por falta de pagamento: criar funis, etapas, integrações e convites fica parado até a assinatura ser regularizada. Fale com o suporte.",
+    );
+    // Nunca a frase genérica de teto do plano: suspensão não é "aumente seu plano".
+    expect(recusa?.mensagem).not.toMatch(/limite contratado/);
+  });
+
+  it("'assinatura_suspensa' também no formato do pg (detail sem 's')", () => {
+    const recusa = recusaDoPlano({ code: "PT402", message: "assinatura suspensa", detail: "assinatura_suspensa" });
+    expect(recusa?.suspensa).toBe(true);
+    expect(recusa?.item).toBeNull();
+  });
+
+  it("nenhum dos seis itens de teto marca suspensa=true", () => {
+    for (const item of ITENS_RECUSADOS_PELO_PLANO) {
+      const recusa = recusaDoPlano({ code: "PT402", detail: item });
+      expect(recusa?.suspensa).toBe(false);
+    }
   });
 
   it("nunca repassa o texto cru do Postgres na mensagem", () => {
