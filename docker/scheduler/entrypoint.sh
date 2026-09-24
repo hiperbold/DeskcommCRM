@@ -70,6 +70,14 @@ CRONS="
 # número: é o cron que dá a cadência base, e o ritmo da campanha e do canal
 # (channel_knobs + pacing_ledger) só sabem torná-la mais lenta.
 * * * * *|45|api/v1/cron/campaign-worker
+# O PROCESSADOR DE EVENTOS DO ASAAS (F5, Tarefa 13, decisão 20). Minuto a
+# minuto porque o evento confirma dinheiro ou contrato: uma cadência mais
+# lenta atrasaria a liberação de acesso de quem já pagou. Timeout de 45s
+# (igual à campanha, acima): o orçamento interno do processador
+# (lib/billing/asaas/processar-eventos.ts) já para perto de 30s mesmo com
+# eventos sobrando (o lease de 5 min garante que nada se perde entre
+# rodadas). Sem ASAAS_ENABLED a rodada não reserva nada e é barata.
+* * * * *|45|api/v1/cron/processar-eventos-asaas
 */5 * * * *|60|api/v1/cron/webhook-log-retention
 */5 * * * *|45|api/v1/cron/channel-health
 */10 * * * *|60|api/v1/cron/contact-avatars
