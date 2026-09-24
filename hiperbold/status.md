@@ -49,18 +49,30 @@ Os 8 novos vieram da junção, e a maioria é colisão com escolhas nossas, não
 
 **Por que isso importa**: CI permanentemente vermelho é CI que ninguém lê, e o próximo defeito de verdade entra sem alarme.
 
-## Planos e assinatura: planejado, nada implementado
+## Planos e assinatura: F1, F2, F2-B e F3 implementadas, nada em produção
 
-Pedido do Filipe em 22/09/2026: transformar o CRM em produto com planos, começando com tudo liberado e já com as regras de limite prontas. O plano está em `hiperbold/planos/2026-09-22-planos-e-assinatura.md`. **Nenhuma linha de código foi escrita, por instrução dele.**
+Branch `feat/planos-assinatura`, criada de `fix/debitos-pequenos-2026-09-22` (commit e5231de). Tudo em commit local, sem push e sem nada em produção. Migrações novas: 0904 (planos), 0905 (uso e trava), 0906 (carteira de tokens), 0907 (bloqueio). O banco local de desenvolvimento está no modo `avisar`. Faltam as fases F4 (planos à venda), F5 (Asaas) e F6 (site de vendas, pedido do Filipe em 23/09).
 
-O que já está decidido:
+O que o módulo faz hoje:
+
+- Catálogo com os planos Pro (R$ 199), Max (R$ 399) e Escale (R$ 599), mais o Ilimitado. Todas as organizações estão no Ilimitado. Os três planos têm 3 milhões de tokens de IA por mês (decisão do Filipe em 23/09).
+- O admin da plataforma troca o plano de uma organização e dá ajuste de limite na aba "Plano" do painel.
+- O CRM conta o uso de cada item (funis, etapas por funil, leads abertos, membros, conexões, integrações webhook) e avisa na Central quando passa do teto.
+- Carteira de tokens de IA: toda chamada paga pela chave da Hiperbold debita da carteira da organização (plano, depois adicional, depois pacote avulso), com livro-caixa que ninguém consegue alterar; avisos a 50, 80 e 100% do mês; o admin credita pacote, contrata adicional e faz ajuste; painel de margem (receita em reais contra custo em dólares, sem converter câmbio); o cliente vê saldo, estimativa de respostas e extrato na tela "Plano e uso".
+- Bloqueio: pronto e desligado. Quando o admin ligar na tela da instalação (`/admin/sistema`), cada organização ganha carência (padrão 7 dias) e, vencida a carência, criar acima do teto é recusado com mensagem clara, os botões ficam desabilitados com o motivo e a IA para quando os tokens do mês acabam (a conversa passa para humano). O chat ao vivo nunca para; um lead recusado não derruba a mensagem.
+- Chave de emergência: voltar o modo para `avisar` na mesma tela solta todas as travas do banco na hora. A variável `PLANOS_BLOQUEIO` do servidor só alcança a IA.
+- O custo das chamadas de IA passou a vir do catálogo de preços `ai_models` (antes só a Anthropic tinha preço; D-050). Isso faz o orçamento de IA existente passar a contar os modelos baratos (GPT Luna etc.) quando publicado.
+
+O que já estava decidido desde 22/09:
 
 - **O plano é da organização**, não da instalação. Um lugar só decide se algo pode ser criado, com trava no banco por baixo.
 - **Cliente que cai de plano nunca perde dado**: o que existe continua, o que trava é criar mais.
 - **A chave de IA é da Hiperbold** e o consumo é vendido: cada plano inclui crédito, e o cliente pode comprar pacote adicional. O cliente não traz chave própria.
 - **Gateway: Asaas**, escolhido em 22/09/2026, com contrato de integração comum aos três produtos da Hiperbold em `F:\github-projects\hiper-track\docs\manual-api-asaas-saas.md`. Esse manual manda em nomes de tabela, eventos e prefixo de referência (o CRM é `HC:`).
 
-O que falta para começar: **18 decisões de produto do Filipe**, na seção 12 do plano. Elas não travam a primeira fase, e 12 delas têm um padrão meu declarado caso ele não responda. As que travam de verdade são as três que decidem margem e trabalho de cobrança: quanto de crédito entra em cada plano, qual a remarcação sobre o custo, e onde o cliente digita o cartão.
+Achados de segurança desta rodada, todos corrigidos e provados no banco local: qualquer membro escrevia em `llm_calls` e podia devolver os próprios tokens ou travar a IA da organização; o admin da organização furava o teto de membros gravando `invited_at`; um comando com vários leads passava por cima do teto; trocar o e-mail de um convite pendente reciclava a vaga; `organization_id` podia ser trocado entre organizações (D-054, resolvido); a função `fn_billing_e_servidor` devolvia NULL para a sessão comum e desarmava duas travas (achado pelos testes).
+
+**O que depende do Filipe antes de publicar** e **o que fazer em seguida**: ver `hiperbold/HANDOFF.md`.
 
 **O aviso que vale repetir**: colocar campo de cartão dentro do CRM põe a Hiperbold no escopo de PCI DSS, e a certificação do Asaas não cobre a gente. A recomendação é usar a página hospedada do Asaas para cartão e manter o Pix com QR dentro do app.
 
