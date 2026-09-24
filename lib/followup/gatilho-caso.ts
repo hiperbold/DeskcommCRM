@@ -135,12 +135,26 @@ export interface GatilhoCasoSummary {
   cancelados: number;
   /** Evento além do teto de idade: descartado, e o descarte APARECE. */
   vencidos: number;
+  /** Tarefa 7, fase F4: caso ABERTO sem enrollment porque a organização está
+   *  em modo leitura. Nunca vale para o FECHAMENTO: cancelar não dispara
+   *  mensagem nenhuma, e parar de cobrar quem já resolveu não é o que a
+   *  suspensão deveria barrar. */
+  modo_leitura: number;
 }
 
 export interface GatilhoCasoDeps {
   db: GatilhoCasoDb;
   gateDb: FollowupGateDb;
   clock: () => Date;
+  /**
+   * Tarefa 7, decisão 8 da fase F4: organização em modo leitura não abre
+   * sequência nova por caso ABERTO (o evento é CONSUMIDO, não volta para a
+   * fila, decisão 8/N26). NÃO se aplica ao caso FECHADO (cancelamento
+   * segue). Opcional e com fail-open embutido em `contaEmModoLeitura`:
+   * omitir a dependência (como os testes existentes fazem) mantém o
+   * gatilho de sempre, sem gate nenhum.
+   */
+  contaEmModoLeitura?: (organizationId: string) => Promise<boolean>;
 }
 
 function textoOuNulo(v: unknown): string | null {
@@ -157,6 +171,7 @@ function vazio(): GatilhoCasoSummary {
     sem_contato: 0,
     cancelados: 0,
     vencidos: 0,
+    modo_leitura: 0,
   };
 }
 
@@ -236,6 +251,16 @@ export async function aplicaGatilhoDeCaso(
     // Contado, jamais `return` mudo: o invariante 6 do Sistema Vivo proíbe que
     // um mecanismo desista em silêncio de estado configurável.
     summary.vencidos = armados.length;
+    return summary;
+  }
+
+  // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não abre
+  // enrollment nenhum aqui (o evento é CONSUMIDO, matched:true, sem retry).
+  // Só se aplica ao ABRIU (este bloco); o FECHOU, acima, já retornou antes de
+  // chegar aqui. Depois do teto de idade (mais barato) e antes da consulta
+  // de contato (a próxima mais cara).
+  if (deps.contaEmModoLeitura && (await deps.contaEmModoLeitura(row.organization_id))) {
+    summary.modo_leitura = armados.length;
     return summary;
   }
 

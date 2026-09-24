@@ -118,12 +118,23 @@ export interface GatilhoEtapaSummary {
   skipped_stale_origin?: number;
   /** Negócio entrou na etapa mas não tem contato — não há a quem escrever. Contado, nunca calado. */
   sem_contato: number;
+  /** Tarefa 7, fase F4: evento consumido sem enrollment porque a organização está em modo leitura. */
+  modo_leitura: number;
 }
 
 export interface GatilhoEtapaDeps {
   db: GatilhoEtapaDb;
   gateDb: FollowupGateDb;
   clock: () => Date;
+  /**
+   * Tarefa 7, decisão 8 da fase F4: organização em modo leitura não abre
+   * sequência nova por mudança de etapa (o evento é CONSUMIDO, não volta
+   * para a fila, decisão 8/N26: reativar a conta não pode disparar um
+   * follow-up que ficou represado durante a suspensão). Opcional e com
+   * fail-open embutido em `contaEmModoLeitura`: omitir a dependência (como
+   * os testes existentes fazem) mantém o gatilho de sempre, sem gate nenhum.
+   */
+  contaEmModoLeitura?: (organizationId: string) => Promise<boolean>;
 }
 
 function textoOuNulo(v: unknown): string | null {
@@ -138,6 +149,7 @@ function vazio(): GatilhoEtapaSummary {
     enrolled: 0,
     skipped_existing: 0,
     sem_contato: 0,
+    modo_leitura: 0,
   };
 }
 
@@ -168,6 +180,15 @@ export async function aplicaGatilhoDeEtapa(
   // etapa não tem fluxo armado, e uma ida ao banco por card arrastado seria
   // custo puro.
   if (armados.length === 0) return summary;
+
+  // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não abre
+  // enrollment nenhum aqui (o evento é CONSUMIDO, matched:true, sem retry),
+  // nunca volta para a fila. Depois do gate "há pointer armado" (mais barato)
+  // e antes de qualquer consulta ao negócio (a próxima mais cara).
+  if (deps.contaEmModoLeitura && (await deps.contaEmModoLeitura(row.organization_id))) {
+    summary.modo_leitura = armados.length;
+    return summary;
+  }
 
   const contatoId = await deps.db.carregaContatoDoNegocio(row.organization_id, negocioId);
   if (!contatoId) {

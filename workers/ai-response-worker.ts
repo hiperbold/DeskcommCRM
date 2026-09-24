@@ -1329,3 +1329,14 @@ async function persistAndDispatch(
 
   return { outbound_message_id: inserted.id };
 }
+
+/**
+ * Tarefa 7, fase F4: `vetoPorAssinaturaSuspensa` não é exportada (é detalhe
+ * interno do pipeline) e `processMessageReceived` nunca a alcança sozinho,
+ * já que `elegivelParaWorkerLegado` devolve `false` sempre (ver
+ * `lib/ai/agents/no-ar.ts`): o worker legado inteiro está desligado do
+ * tráfego real. O gate precisa de teste do mesmo jeito: é código vivo, só
+ * não é hoje alcançável por este ponto de entrada. @internal exposto p/
+ * teste, não usar fora de testes.
+ */
+export const __test_vetoPorAssinaturaSuspensa = vetoPorAssinaturaSuspensa;

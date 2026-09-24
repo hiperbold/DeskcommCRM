@@ -211,6 +211,93 @@ function totalUsage(steps: ReadonlyArray<{ usage?: { inputTokens?: number; outpu
   return { inputTokens, outputTokens };
 }
 
+/**
+ * ═══ ASSINATURA SUSPENSA (MODO LEITURA), fase F4, decisões 5 e 6 ═══
+ *
+ * (`hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6). Extraído do corpo de
+ * `runAgent` (Tarefa 7, testes) para poder ser exercitado sem montar o run
+ * inteiro (linha, versão, credencial, token MCP, tool set): nenhuma dessas
+ * peças participa desta decisão, e arrastá-las para o teste mediria a
+ * montagem, não o gate. Comportamento IDÊNTICO ao bloco original: mesmo
+ * racional do engine (`run-model-call.ts`) e do worker legado
+ * (`ai-response-worker.ts`), chamado logo antes do único `generateText` do
+ * arquivo, para cobrir TANTO o run real quanto o `is_dry_run` (ensaio): as
+ * duas simulam resposta ao cliente, e a decisão 6 não abre exceção para
+ * ensaio. "Zero consulta a mais" no modo avisar/desligado: só lê o modo
+ * cacheado quando `PLANOS_BLOQUEIO` permite bloquear, e só chama
+ * `fn_billing_modo_leitura` quando o modo também é 'bloquear'.
+ *
+ * `null` = segue para o `generateText`; um `RunAgentResult` = a resposta
+ * FINAL de `runAgent` (o caller precisa dar `return` nele, sem mais nada).
+ */
+async function vetoPorAssinaturaSuspensaEnsaio(deps: {
+  admin: ReturnType<typeof createAdminClient>;
+  runId: string;
+  organizationId: string;
+  conversationIdForHandoff: string | null;
+  isDryRun: boolean;
+  startedAt: number;
+  waSessionName: string | null;
+  chatId: string | null;
+}): Promise<RunAgentResult | null> {
+  const chaveDeAssinatura = normalizarChaveDePlanosBloqueio(process.env.PLANOS_BLOQUEIO);
+  if (chaveDeAssinatura === "off") return null;
+
+  const { modo: modoBrutoDeAssinatura, error: erroDoModoDeAssinatura } = await modoDeBillingCacheado(
+    deps.admin,
+  );
+  if (erroDoModoDeAssinatura !== null) {
+    // Fail-open: soluço de leitura NUNCA cala a IA de quem paga.
+    return null;
+  }
+  if (
+    !deveConsultarAssinatura({
+      chave: chaveDeAssinatura,
+      modoDoBanco: normalizarModoDeBilling(modoBrutoDeAssinatura),
+      purpose: "agent_turn",
+    })
+  ) {
+    return null;
+  }
+
+  let contaEmLeitura = false;
+  try {
+    const { data, error } = await deps.admin.rpc("fn_billing_modo_leitura", {
+      p_org: deps.organizationId,
+    });
+    if (error) throw new Error(error.message);
+    contaEmLeitura = data === true;
+  } catch {
+    // Fail-open: soluço de leitura NUNCA cala a IA de quem paga.
+    return null;
+  }
+  // A chave de emergência só sabe AFROUXAR (mesma doutrina do engine e do
+  // worker legado): 'avisar' rebaixa o bloqueio para nada (o run segue),
+  // nunca vira handoff.
+  if (!contaEmLeitura || chaveDeAssinatura === "avisar") return null;
+
+  await finalizeHandoff({
+    runId: deps.runId,
+    organizationId: deps.organizationId,
+    conversationId: deps.conversationIdForHandoff,
+    reason: HANDOFF_REASON_ASSINATURA,
+    source: "billing",
+    latencyMs: Date.now() - deps.startedAt,
+    isDryRun: deps.isDryRun,
+  });
+  return {
+    run_id: deps.runId,
+    status: "handoff",
+    abort_reason: `billing:${HANDOFF_REASON_ASSINATURA}`,
+    latency_ms: Date.now() - deps.startedAt,
+    tokens_in: 0,
+    tokens_out: 0,
+    cost_cents: 0,
+    steps_count: 0,
+    would_send_to: { session: deps.waSessionName, chat_id: deps.chatId },
+  };
+}
+
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const admin = createAdminClient();
   const startedAt = Date.now();
@@ -542,66 +629,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     ];
 
     // ═══ ASSINATURA SUSPENSA (MODO LEITURA) — fase F4, decisões 5 e 6 ═══
-    //
-    // (`hiperbold/planos/fase-F4-tarefas.md`, Tarefa 6). Mesmo racional do
-    // engine (`run-model-call.ts`) e do worker legado
-    // (`ai-response-worker.ts`): conta suspensa não gera resposta nenhuma, em
-    // NENHUM propósito que fale com o cliente — este runtime (mesmo
-    // `@deprecated`) é um deles. Fica AQUI, logo antes do único `generateText`
-    // do arquivo, para cobrir TANTO o run real quanto o `is_dry_run` (ensaio):
-    // as duas simulam resposta ao cliente, e a decisão 6 não abre exceção para
-    // ensaio. "Zero consulta a mais" no modo avisar/desligado: só lê o modo
-    // cacheado quando `PLANOS_BLOQUEIO` permite bloquear, e só chama
-    // `fn_billing_modo_leitura` quando o modo também é 'bloquear'.
-    const chaveDeAssinatura = normalizarChaveDePlanosBloqueio(process.env.PLANOS_BLOQUEIO);
-    if (chaveDeAssinatura !== "off") {
-      const { modo: modoBrutoDeAssinatura, error: erroDoModoDeAssinatura } = await modoDeBillingCacheado(admin);
-      if (erroDoModoDeAssinatura !== null) {
-        // Fail-open: soluço de leitura NUNCA cala a IA de quem paga.
-      } else if (
-        deveConsultarAssinatura({
-          chave: chaveDeAssinatura,
-          modoDoBanco: normalizarModoDeBilling(modoBrutoDeAssinatura),
-          purpose: "agent_turn",
-        })
-      ) {
-        let contaEmLeitura = false;
-        try {
-          const { data, error } = await admin.rpc("fn_billing_modo_leitura", {
-            p_org: run.organization_id,
-          });
-          if (error) throw new Error(error.message);
-          contaEmLeitura = data === true;
-        } catch {
-          // Fail-open: soluço de leitura NUNCA cala a IA de quem paga.
-        }
-        if (contaEmLeitura && chaveDeAssinatura !== "avisar") {
-          // A chave de emergência só sabe AFROUXAR (mesma doutrina do engine e
-          // do worker legado): 'avisar' rebaixa o bloqueio para nada (o run
-          // segue), nunca vira handoff.
-          await finalizeHandoff({
-            runId: run.id,
-            organizationId: run.organization_id,
-            conversationId: conversationIdForHandoff,
-            reason: HANDOFF_REASON_ASSINATURA,
-            source: "billing",
-            latencyMs: Date.now() - startedAt,
-            isDryRun: run.is_dry_run,
-          });
-          return {
-            run_id: run.id,
-            status: "handoff",
-            abort_reason: `billing:${HANDOFF_REASON_ASSINATURA}`,
-            latency_ms: Date.now() - startedAt,
-            tokens_in: 0,
-            tokens_out: 0,
-            cost_cents: 0,
-            steps_count: 0,
-            would_send_to: { session: waSessionName, chat_id: chatId },
-          };
-        }
-      }
-    }
+    // Lógica em `vetoPorAssinaturaSuspensaEnsaio`, acima (Tarefa 7: extraída
+    // para ser testável sem montar o run inteiro). `null` = segue.
+    const vetoDeAssinatura = await vetoPorAssinaturaSuspensaEnsaio({
+      admin,
+      runId: run.id,
+      organizationId: run.organization_id,
+      conversationIdForHandoff,
+      isDryRun: run.is_dry_run,
+      startedAt,
+      waSessionName,
+      chatId,
+    });
+    if (vetoDeAssinatura) return vetoDeAssinatura;
 
     const result = await generateText({
       model,
@@ -803,3 +843,6 @@ function failFast(
     latency_ms: Date.now() - startedAt,
   };
 }
+
+/** @internal exposto p/ teste, não usar fora de testes. */
+export const __test_vetoPorAssinaturaSuspensaEnsaio = vetoPorAssinaturaSuspensaEnsaio;
