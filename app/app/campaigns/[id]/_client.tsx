@@ -109,7 +109,9 @@ export function DetalheDaCampanha({ id }: { id: string }) {
           </div>
           {c.failure_code && (
             <p className="mt-1 text-sm text-warning-fg">
-              {t("Último problema")}: {c.failure_code}
+              {c.failure_code === "assinatura_suspensa"
+                ? t("A campanha foi pausada porque a conta está suspensa por falta de pagamento.")
+                : `${t("Último problema")}: ${c.failure_code}`}
             </p>
           )}
         </div>

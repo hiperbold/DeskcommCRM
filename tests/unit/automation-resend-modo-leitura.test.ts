@@ -169,8 +169,15 @@ describe("POST .../resend: modo leitura (achado 5, F4)", () => {
     const res = await POST(pedido(), ctx());
 
     expect(res.status).toBe(402);
-    const corpo = (await res.json()) as { error?: { code?: string } };
+    const corpo = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(corpo.error?.code).toBe("plano_limite_atingido");
+    // Correção segunda rodada F4, item 6: a mensagem é PRÓPRIA desta rota
+    // (fala de automações), não a de MENSAGEM_ASSINATURA_SUSPENSA
+    // (lib/billing/planos/recusa-do-plano.ts), que fala de criar
+    // funil/etapa/webhook/convite, sentido errado para um reenvio de
+    // automação.
+    expect(corpo.error?.message).toContain("as automações ficam paradas");
+    expect(corpo.error?.message).not.toContain("criar funis");
     expect(vi.mocked(executeCallWebhook)).not.toHaveBeenCalled();
   });
 

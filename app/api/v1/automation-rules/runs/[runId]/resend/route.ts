@@ -19,11 +19,7 @@ import type { ActionCtx, ActionResultDetail } from "@/lib/automation/types";
 import type { EventRow } from "@/lib/event-log/dispatcher";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
-import {
-  CODIGO_RECUSA_DO_PLANO,
-  recusaDoPlano,
-  STATUS_RECUSA_DO_PLANO,
-} from "@/lib/billing/planos/recusa-do-plano";
+import { CODIGO_RECUSA_DO_PLANO, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 
 export const dynamic = "force-dynamic";
 
@@ -53,12 +49,21 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
   // (`executeCallWebhook`), sem passar pelo `run-model-call` nem pelos
   // portões dos produtores (automação/campanha/prospecção/follow-up).
   // Organização em modo leitura recusa com o mesmo código/status de recusa
-  // do plano (PT402 detail='assinatura_suspensa'), reaproveitando a frase
-  // fixa que `recusaDoPlano` já sabe montar para este motivo.
+  // do plano (PT402 detail='assinatura_suspensa'). Correção segunda rodada
+  // F4, item 6: a frase de MENSAGEM_ASSINATURA_SUSPENSA
+  // (lib/billing/planos/recusa-do-plano.ts) foi escrita para criar
+  // funil/etapa/webhook/convite, sentido errado aqui (reenviar automação não
+  // cria nenhum desses); a frase abaixo é própria desta rota.
   const adminParaModoLeitura = createAdminClient();
   if (await contaEmModoLeitura(adminParaModoLeitura, activeOrg.orgId)) {
-    const recusa = recusaDoPlano({ code: "PT402", detail: "assinatura_suspensa" });
-    return fail(CODIGO_RECUSA_DO_PLANO, t(recusa!.mensagem), STATUS_RECUSA_DO_PLANO, { requestId });
+    return fail(
+      CODIGO_RECUSA_DO_PLANO,
+      t(
+        "A conta está suspensa por falta de pagamento: as automações ficam paradas até a assinatura ser regularizada. Fale com o suporte.",
+      ),
+      STATUS_RECUSA_DO_PLANO,
+      { requestId },
+    );
   }
 
   const { data: run, error: runErr } = await supabase

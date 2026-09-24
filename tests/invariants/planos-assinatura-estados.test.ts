@@ -356,6 +356,37 @@ describe("1. Pagamento", () => {
     expect(erro).toContain("billing_pagamento_ja_estornado");
   });
 
+  // ── evento de billing_contract_eventos quando o pagamento MUDA o estado
+  //    do contrato (correção segunda rodada F4, item 2) ──
+  const ORG_PAGAMENTO_EVENTO = "09080001-0000-4000-8000-000000000009";
+  const CHAVE_PAGAMENTO_EVENTO_ATIVA = "09080001-c0de-4000-8000-00000000000c";
+  const CHAVE_PAGAMENTO_EVENTO_ATRASADA = "09080001-c0de-4000-8000-00000000000d";
+  const ACTOR_PAGAMENTO_EVENTO = "09080001-1111-4000-8000-000000000002";
+
+  it("pagamento que NÃO muda o estado (contrato já ativa) não grava evento em billing_contract_eventos (correção segunda rodada F4, item 2)", () => {
+    const linhas = comoServico(`
+      begin;
+      ${criarOrgComContratoPadraoSql(ORG_PAGAMENTO_EVENTO, "pag-evento")}
+      select public.fn_billing_registrar_pagamento('${ORG_PAGAMENTO_EVENTO}'::uuid, '2027-01-10'::date, 1000, '${CHAVE_PAGAMENTO_EVENTO_ATIVA}'::uuid, 'nota', '${ACTOR_PAGAMENTO_EVENTO}'::uuid);
+      select 'SONDA|' || count(*) from public.billing_contract_eventos where organization_id = '${ORG_PAGAMENTO_EVENTO}';
+      rollback;
+    `);
+    expect(linhas).toEqual(["0"]);
+  });
+
+  it("pagamento que MUDA o estado (atrasada -> ativa) grava um evento (tipo=estado, de=atrasada, para=ativa, motivo=pagamento, actor=p_actor) na MESMA transação (correção segunda rodada F4, item 2)", () => {
+    const linhas = comoServico(`
+      begin;
+      ${criarOrgComContratoPadraoSql(ORG_PAGAMENTO_EVENTO, "pag-evento")}
+      update public.billing_contracts set status = 'atrasada', current_period_end = now() - interval '5 days' where organization_id = '${ORG_PAGAMENTO_EVENTO}';
+      select public.fn_billing_registrar_pagamento('${ORG_PAGAMENTO_EVENTO}'::uuid, '2027-01-10'::date, 1000, '${CHAVE_PAGAMENTO_EVENTO_ATRASADA}'::uuid, 'nota', '${ACTOR_PAGAMENTO_EVENTO}'::uuid);
+      select 'SONDA|' || tipo || '|' || de || '|' || para || '|' || motivo || '|' || actor
+        from public.billing_contract_eventos where organization_id = '${ORG_PAGAMENTO_EVENTO}';
+      rollback;
+    `);
+    expect(linhas).toEqual([`estado|atrasada|ativa|pagamento|${ACTOR_PAGAMENTO_EVENTO}`]);
+  });
+
   // ── corrigir período (decisão 2) ──
   const ORG_CORRIGIR = "09080001-0000-4000-8000-000000000008";
 
@@ -719,6 +750,46 @@ describe("4. Avisos", () => {
       `select 'SONDA|' || title from public.agent_inbox_items where organization_id = '${ORG_TRES_DIAS}' and ref_kind = 'billing_assinatura' order by title;`,
     );
     expect(titulos).toEqual(["Pagamento em atraso", "Suspensão em três dias"]);
+  });
+
+  const ORG_CARENCIA_POSTERIOR = "09080004-0000-4000-8000-000000000007";
+
+  it("bloqueio_a_partir_de POSTERIOR à suspensão prevista pelo plano: o aviso usa a data REAL (greatest), e o de três dias não nasce cedo demais (correção segunda rodada F4, item 1)", () => {
+    // data prevista pelo plano = current_period_end + 7 dias = now() + 2
+    // dias (mesmo current_period_end do caso ORG_TRES_DIAS, acima). Aqui
+    // bloqueio_a_partir_de = now() + 10 dias, POSTERIOR à prevista (o
+    // inverso do caso ORG_TRES_DIAS, onde a carência é ANTERIOR e não muda
+    // nada): fn_billing_modo_leitura só liga com bloqueio_a_partir_de <=
+    // now(), então a suspensão de verdade só vale em now()+10 dias, não
+    // now()+2. Sem o fix (item 1), o texto mentiria a data (now()+2) e o
+    // aviso de três dias nasceria já na primeira chamada (now() >=
+    // (now()+2)-3 = now()-1, verdadeiro), quando a janela real só abre em
+    // now()+7.
+    comoServico(`
+      ${criarOrgComContratoPadraoSql(ORG_CARENCIA_POSTERIOR, "aviso-carencia-posterior")}
+      update public.billing_contracts
+        set status = 'atrasada', current_period_end = now() - interval '5 days', bloqueio_a_partir_de = now() + interval '10 days'
+        where organization_id = '${ORG_CARENCIA_POSTERIOR}';
+      update public.billing_settings set modo = 'bloquear' where id = 1;
+      select public.fn_billing_conferir_vencimento('${ORG_CARENCIA_POSTERIOR}'::uuid);
+      update public.billing_settings set modo = 'avisar' where id = 1;
+    `);
+
+    const titulos = comoServico(
+      `select 'SONDA|' || title from public.agent_inbox_items where organization_id = '${ORG_CARENCIA_POSTERIOR}' and ref_kind = 'billing_assinatura' order by title;`,
+    );
+    expect(titulos, "o aviso de três dias nasceu cedo demais: a janela usou a data prevista, não a real").toEqual(["Pagamento em atraso"]);
+
+    // O corpo cita a data REAL (a de bloqueio_a_partir_de, maior que a
+    // prevista), conferida contra a COLUNA gravada -- não recalculada em
+    // JS, para não provar a fórmula contra si mesma.
+    const linhas = comoServico(`
+      select 'SONDA|' || (i.body like '%' || to_char(bc.bloqueio_a_partir_de at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || '%')::text
+        from public.agent_inbox_items i
+        join public.billing_contracts bc on bc.organization_id = i.organization_id
+        where i.organization_id = '${ORG_CARENCIA_POSTERIOR}' and i.ref_kind = 'billing_assinatura' and i.title = 'Pagamento em atraso';
+    `);
+    expect(linhas, "o corpo do aviso não cita a data REAL (bloqueio_a_partir_de)").toEqual(["true"]);
   });
 
   const ORG_ATRASADA_SEM_AMEACA = "09080004-0000-4000-8000-000000000006";
@@ -1183,6 +1254,29 @@ describe("6. Pacotes", () => {
       rollback;
     `);
     expect(linhas).toEqual(["true", "false", "300"]);
+  });
+
+  const ORG_PACOTE_ID_NULO = "09080006-0000-4000-8000-000000000006";
+  const PACOTE_ID_NULO = "09080006-a0a0-4000-8000-000000000001";
+  const CHAVE_PACOTE_ID_NULO = "09080006-c0de-4000-8000-000000000006";
+
+  it("reenvio devolve pacote_id NULO (billing_token_ledger não guarda o pacote de origem; correção segunda rodada F4, item 3: antes devolvia o p_pacote da CHAMADA do reenvio, não o da original)", () => {
+    const linhas = comoServico(`
+      begin;
+      ${criarOrgComContratoPadraoSql(ORG_PACOTE_ID_NULO, "pacote-id-nulo")}
+      insert into public.billing_token_pacotes (id, codigo, nome, tokens, preco_cents, ativo)
+        values ('${PACOTE_ID_NULO}', 'pacote_id_nulo', 'Pacote Id Nulo', 300, 1500, true);
+      select 'SONDA|' || coalesce((public.fn_billing_creditar_pacote(
+        '${ORG_PACOTE_ID_NULO}'::uuid, '${PACOTE_ID_NULO}'::uuid,
+        null, '${CHAVE_PACOTE_ID_NULO}'::uuid, 'nota', null
+      ) ->> 'pacote_id'), '<null>');
+      select 'SONDA|' || coalesce((public.fn_billing_creditar_pacote(
+        '${ORG_PACOTE_ID_NULO}'::uuid, '${PACOTE_ID_NULO}'::uuid,
+        null, '${CHAVE_PACOTE_ID_NULO}'::uuid, 'nota', null
+      ) ->> 'pacote_id'), '<null>');
+      rollback;
+    `);
+    expect(linhas).toEqual([PACOTE_ID_NULO, "<null>"]);
   });
 
   const USER_CATALOGO = "09080006-1111-4000-8000-000000000001";

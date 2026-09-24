@@ -667,10 +667,15 @@ describe("0908 Tarefa 2: fn_billing_avisar_assinatura (decisão 9)", () => {
     );
   });
 
-  it("aviso de três dias antes: chave própria 'atrasada_aviso_3_dias', SÓ quando grace_days > 3 E a ameaça é real (correção revisão F4, item 7)", () => {
+  it("aviso de três dias antes: chave própria 'atrasada_aviso_3_dias', SÓ quando grace_days > 3 E a ameaça é real, contados da data REAL (correção segunda rodada F4, item 1: era v_data_suspensao, a prevista pelo plano, não greatest(prevista, bloqueio_a_partir_de))", () => {
     const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
-    expect(corpo).toMatch(/if v_ameaca_real and v_grace_days > 3 and now\(\) >= v_data_suspensao - interval '3 days' then/);
+    expect(corpo).toMatch(/if v_ameaca_real and v_grace_days > 3 and now\(\) >= v_data_suspensao_real - interval '3 days' then/);
     expect(corpo).toMatch(/'assinatura:atrasada_aviso_3_dias:' \|\| v_periodo_fmt/);
+  });
+
+  it("v_data_suspensao_real = greatest(data prevista pelo plano, bloqueio_a_partir_de), calculada só quando a ameaça é real (correção segunda rodada F4, item 1)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpo).toMatch(/v_data_suspensao_real := greatest\(v_data_suspensao, v_bloqueio_a_partir_de\);/);
   });
 
   it("dedup pela data em America/Sao_Paulo, não no fuso da sessão (correção revisão F4, item 6)", () => {
@@ -699,10 +704,10 @@ describe("0908 Tarefa 2: fn_billing_avisar_assinatura (decisão 9)", () => {
     expect(corpo).toMatch(/'assinatura:cancelada:' \|\| v_periodo_fmt/);
   });
 
-  it("a data prevista da suspensão é formatada em America/Sao_Paulo, DD/MM/YYYY (sem nome de mês)", () => {
+  it("a data REAL da suspensão (v_data_suspensao_real) é formatada em America/Sao_Paulo, DD/MM/YYYY (sem nome de mês, correção segunda rodada F4, item 1: era v_data_suspensao, a prevista)", () => {
     const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
     expect(corpo).toMatch(
-      /to_char\(v_data_suspensao at time zone 'America\/Sao_Paulo', 'DD\/MM\/YYYY'\)/,
+      /to_char\(v_data_suspensao_real at time zone 'America\/Sao_Paulo', 'DD\/MM\/YYYY'\)/,
     );
     expect(corpo).not.toMatch(/'Month'|janeiro|fevereiro/);
   });

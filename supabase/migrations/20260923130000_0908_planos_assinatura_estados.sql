@@ -206,13 +206,16 @@ create unique index if not exists billing_payments_estorna_pagamento_id_unique
 -- ============================================================================
 --
 -- fn_billing_mudar_estado, fn_billing_corrigir_periodo,
--- fn_billing_cancelar_no_fim_do_periodo (seções 5, 4 e 6, abaixo) e as três
+-- fn_billing_cancelar_no_fim_do_periodo (seções 5, 4 e 6, abaixo), as três
 -- transições de fn_billing_conferir_vencimento (seção 7, abaixo; actor nulo,
--- motivo 'conferidor') gravam uma linha aqui dentro da MESMA transação da
--- mudança que registram: sem isto, a auditoria de quem mudou o quê e por quê
--- dependia inteiramente do chamador em TypeScript (Tarefa 5, fora desta
--- migração), sem garantia nenhuma de que o registro sobrevive se a mudança em
--- si for revertida ou vice-versa.
+-- motivo 'conferidor') e, desde a correção da segunda rodada F4 (item 2),
+-- fn_billing_registrar_pagamento (seção 2, abaixo; tipo=estado, motivo=
+-- 'pagamento', só quando o pagamento MUDA o estado do contrato para ativa)
+-- gravam uma linha aqui dentro da MESMA transação da mudança que registram:
+-- sem isto, a auditoria de quem mudou o quê e por quê dependia inteiramente
+-- do chamador em TypeScript (Tarefa 5, fora desta migração), sem garantia
+-- nenhuma de que o registro sobrevive se a mudança em si for revertida ou
+-- vice-versa.
 --
 -- Mesmo molde de billing_payments (Parte 1, acima) e do livro-caixa de
 -- tokens (0906): SÓ DE ACRÉSCIMO, ninguém tem update, delete nem truncate,
@@ -240,7 +243,7 @@ create table if not exists public.billing_contract_eventos (
 );
 
 comment on table public.billing_contract_eventos is
-  'Correção (revisão F4, item 4): registro de autor e motivo das transições da assinatura (mudar_estado, corrigir_periodo, cancelar_no_fim_do_periodo, e as transições do conferidor diário com actor nulo e motivo=conferidor), gravado dentro da MESMA transação da mudança que registra. SÓ DE ACRÉSCIMO: ninguém tem update, delete nem truncate, nem o service_role (ver grants); RLS ligada sem NENHUMA policy (service_role bypassa RLS, anon/authenticated não têm policy nenhuma para se apoiar). tipo é um dos quatro valores fechados pelo CHECK; de/para em texto (current_period_end pode ser nulo antes da primeira correção de período, e cancel_at_period_end é boolean); actor nulo é válido (conferidor diário não tem humano por trás).';
+  'Correção (revisão F4, item 4): registro de autor e motivo das transições da assinatura (mudar_estado, corrigir_periodo, cancelar_no_fim_do_periodo, e as transições do conferidor diário com actor nulo e motivo=conferidor), gravado dentro da MESMA transação da mudança que registra. Correção (segunda rodada F4, item 2): registrar_pagamento também grava (tipo=estado, motivo=pagamento) quando o pagamento muda o estado para ativa. SÓ DE ACRÉSCIMO: ninguém tem update, delete nem truncate, nem o service_role (ver grants); RLS ligada sem NENHUMA policy (service_role bypassa RLS, anon/authenticated não têm policy nenhuma para se apoiar). tipo é um dos quatro valores fechados pelo CHECK; de/para em texto (current_period_end pode ser nulo antes da primeira correção de período, e cancel_at_period_end é boolean); actor nulo é válido (conferidor diário não tem humano por trás).';
 comment on column public.billing_contract_eventos.actor is
   'Correção (revisão F4, item 4): nulo nas transições do conferidor diário (fn_billing_conferir_vencimento), preenchido com o p_actor do chamador nas três funções manuais do admin.';
 
@@ -364,6 +367,22 @@ begin
         status = 'ativa'
     where id = v_contract.id;
 
+  -- Correção (segunda rodada F4, item 2): quando o pagamento MUDA o estado
+  -- do contrato (atrasada, suspensa, cancelada ou avaliacao -> ativa), grava
+  -- um evento em billing_contract_eventos na MESMA transação, mesmo padrão
+  -- de fn_billing_mudar_estado (seção 5, acima): tipo=estado,
+  -- de=v_contract.status (o estado ANTES deste UPDATE), para='ativa',
+  -- motivo='pagamento', actor=p_actor. v_contract.status aqui é sempre o
+  -- estado ANTERIOR (a variável não foi reatribuída depois do select ...
+  -- for update). ativa -> ativa (reenvio de chave nova sobre um contrato já
+  -- em dia, ou primeiro pagamento de uma organização que nasce ativa) não é
+  -- uma transição de verdade e não grava evento; o retorno antecipado da
+  -- idempotência (acima) também nunca chega aqui.
+  if v_contract.status <> 'ativa' then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (p_org, v_contract.id, 'estado', v_contract.status, 'ativa', 'pagamento', p_actor);
+  end if;
+
   return jsonb_build_object(
     'ja_registrado', false,
     'payment_id', v_payment_id,
@@ -375,7 +394,7 @@ end;
 $$;
 
 comment on function public.fn_billing_registrar_pagamento(uuid, date, integer, uuid, text, uuid) is
-  '0908, decisão 2: registra um pagamento na mão e renova o período (início = greatest(current_period_end, now()); fim = fim do dia p_fim em America/Sao_Paulo), voltando o estado para ativa sem mexer em cancel_at_period_end. Idempotente pela chave (mesmos valores devolve ja_registrado=true; valores diferentes, 22023); fim que não é posterior ao período de referência também é 22023. p_actor recebido para a auditoria do chamador (mesmo padrão de fn_billing_trocar_plano/fn_billing_definir_modo, 0904/0907), não gravado por esta função.';
+  '0908, decisão 2: registra um pagamento na mão e renova o período (início = greatest(current_period_end, now()); fim = fim do dia p_fim em America/Sao_Paulo), voltando o estado para ativa sem mexer em cancel_at_period_end. Idempotente pela chave (mesmos valores devolve ja_registrado=true; valores diferentes, 22023); fim que não é posterior ao período de referência também é 22023. p_actor recebido para a auditoria do chamador (mesmo padrão de fn_billing_trocar_plano/fn_billing_definir_modo, 0904/0907). Correção (segunda rodada F4, item 2): quando o pagamento MUDA o estado do contrato (atrasada, suspensa, cancelada ou avaliacao -> ativa), grava um evento em billing_contract_eventos (tipo=estado, de=estado anterior, para=ativa, motivo=pagamento, actor=p_actor) na MESMA transação; ativa -> ativa e o retorno antecipado da idempotência não gravam evento (não é uma transição de verdade).';
 
 revoke execute on function public.fn_billing_registrar_pagamento(uuid, date, integer, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_registrar_pagamento(uuid, date, integer, uuid, text, uuid) to service_role;
@@ -1351,6 +1370,7 @@ declare
   v_modo text;
   v_ameaca_real boolean;
   v_data_suspensao timestamptz;
+  v_data_suspensao_real timestamptz;
   v_periodo_fmt text;
   v_titulo text;
   v_corpo text;
@@ -1393,10 +1413,21 @@ begin
 
     v_titulo := 'Pagamento em atraso';
     if v_ameaca_real then
-      -- Aviso de entrada em atrasada, com a data prevista da suspensão
+      -- Correção (segunda rodada F4, item 1): a data em que o modo leitura
+      -- passa a valer de VERDADE não é sempre v_data_suspensao (a prevista
+      -- pela carência do PLANO, current_period_end + grace_days):
+      -- fn_billing_modo_leitura também exige bloqueio_a_partir_de <= now(),
+      -- e essa segunda data (carência dada por fn_billing_dar_carencia,
+      -- 0907, por um motivo TOTALMENTE separado -- teto de uso, não
+      -- pagamento) pode cair DEPOIS da suspensão prevista. A data real é o
+      -- MAIOR das duas; v_ameaca_real já garante v_bloqueio_a_partir_de
+      -- preenchido aqui (mesma condição de fn_billing_modo_leitura).
+      v_data_suspensao_real := greatest(v_data_suspensao, v_bloqueio_a_partir_de);
+
+      -- Aviso de entrada em atrasada, com a data REAL da suspensão
       -- (America/Sao_Paulo, DD/MM/YYYY, sem nome de mês).
       v_corpo := 'O pagamento desta organização está atrasado. Sem regularização, o acesso entra em modo leitura em '
-        || to_char(v_data_suspensao at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || '.';
+        || to_char(v_data_suspensao_real at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || '.';
     else
       -- Sem ameaça real (modo avisar/desligado, ou organização sem carência
       -- definida): nenhuma data, nenhum efeito prometido.
@@ -1416,11 +1447,15 @@ begin
     -- Três dias antes da suspensão, só com carência maior que três dias
     -- (decisão 9) E só quando o efeito vai valer de verdade (correção,
     -- revisão F4, item 7): sem ameaça real não existe suspensão de verdade
-    -- em três dias nenhum, o aviso nem nasce.
-    if v_ameaca_real and v_grace_days > 3 and now() >= v_data_suspensao - interval '3 days' then
+    -- em três dias nenhum, o aviso nem nasce. Correção (segunda rodada F4,
+    -- item 1): a janela dos três dias conta da data REAL
+    -- (v_data_suspensao_real), não da prevista -- senão o aviso nasceria
+    -- cedo demais quando bloqueio_a_partir_de empurra a suspensão de
+    -- verdade para depois da prevista pelo plano.
+    if v_ameaca_real and v_grace_days > 3 and now() >= v_data_suspensao_real - interval '3 days' then
       v_titulo := 'Suspensão em três dias';
       v_corpo := 'Em três dias esta organização entra em modo leitura por falta de pagamento. Regularize antes de '
-        || to_char(v_data_suspensao at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || ' para não perder o acesso de escrita.';
+        || to_char(v_data_suspensao_real at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || ' para não perder o acesso de escrita.';
 
       insert into public.billing_token_avisos_emitidos (organization_id, chave)
       values (p_org, 'assinatura:atrasada_aviso_3_dias:' || v_periodo_fmt)
@@ -1475,7 +1510,7 @@ end;
 $$;
 
 comment on function public.fn_billing_avisar_assinatura(uuid) is
-  'Tarefa 2, decisão 9: os quatro avisos da assinatura (entrada em atrasada com a data prevista da suspensão; três dias antes, só com grace_days > 3; suspensão; cancelamento), chamada por fn_billing_conferir_vencimento depois de CADA mudança de estado e no passo diário sem mudança nenhuma. Nascem em QUALQUER modo (são informativos; só a parada de verdade depende do modo leitura). kind=other, ref_kind=billing_assinatura, ref_id=organization_id. Dedup por billing_token_avisos_emitidos (0906), chave assinatura:<estado>:<fim do período YYYY-MM-DD, em America/Sao_Paulo, correção revisão F4 item 6: antes era no fuso da SESSÃO>, que sobrevive ao encerramento do item. Datas em dd/mm/aaaa, America/Sao_Paulo, sem nome de mês. Correção (revisão F4, item 7): o texto de atrasada/suspensa só afirma o efeito do modo leitura (data de suspensão, "criação de funis parada") quando ele vale ou vai valer de verdade (atrasada: modo=bloquear E esta organização tem carência definida, mesmas duas primeiras condições de fn_billing_bloqueia/fn_billing_modo_leitura, 0907/0908; suspensa: fn_billing_modo_leitura(p_org) diretamente, já que o status já é suspensa); sem isso, texto neutro ("regularize com o suporte", sem data nem ameaça) e o aviso de três dias nem nasce. Nunca lança: begin/exception próprio (raise warning), para não acionar o savepoint implícito do bloco exception do CHAMADOR e desfazer a mudança de estado já commitada.';
+  'Tarefa 2, decisão 9: os quatro avisos da assinatura (entrada em atrasada com a data REAL da suspensão; três dias antes, só com grace_days > 3; suspensão; cancelamento), chamada por fn_billing_conferir_vencimento depois de CADA mudança de estado e no passo diário sem mudança nenhuma. Nascem em QUALQUER modo (são informativos; só a parada de verdade depende do modo leitura). kind=other, ref_kind=billing_assinatura, ref_id=organization_id. Dedup por billing_token_avisos_emitidos (0906), chave assinatura:<estado>:<fim do período YYYY-MM-DD, em America/Sao_Paulo, correção revisão F4 item 6: antes era no fuso da SESSÃO>, que sobrevive ao encerramento do item. Datas em dd/mm/aaaa, America/Sao_Paulo, sem nome de mês. Correção (revisão F4, item 7): o texto de atrasada/suspensa só afirma o efeito do modo leitura (data de suspensão, "criação de funis parada") quando ele vale ou vai valer de verdade (atrasada: modo=bloquear E esta organização tem carência definida, mesmas duas primeiras condições de fn_billing_bloqueia/fn_billing_modo_leitura, 0907/0908; suspensa: fn_billing_modo_leitura(p_org) diretamente, já que o status já é suspensa); sem isso, texto neutro ("regularize com o suporte", sem data nem ameaça) e o aviso de três dias nem nasce. Correção (segunda rodada F4, item 1): a data usada no texto de atrasada e na janela dos três dias é v_data_suspensao_real = greatest(v_data_suspensao, bloqueio_a_partir_de) -- fn_billing_modo_leitura só liga com bloqueio_a_partir_de <= now(), e essa carência (fn_billing_dar_carencia, 0907, motivo de teto de uso, não de pagamento) pode vencer DEPOIS da suspensão prevista pelo plano; usar só a data prevista fazia o aviso mentir a data e o de três dias nascer cedo demais. Nunca lança: begin/exception próprio (raise warning), para não acionar o savepoint implícito do bloco exception do CHAMADOR e desfazer a mudança de estado já commitada.';
 
 revoke execute on function public.fn_billing_avisar_assinatura(uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_avisar_assinatura(uuid) to service_role;
@@ -1672,7 +1707,12 @@ begin
   -- nenhum com o lançamento: os tokens/valor_cents devolvidos aqui são
   -- SEMPRE os do lançamento ORIGINAL, nunca recalculados do p_pacote desta
   -- chamada (reenvio com outro p_pacote, por engano ou não, nunca finge que
-  -- creditou o pacote NOVO).
+  -- creditou o pacote NOVO). Correção (segunda rodada F4, item 3): o mesmo
+  -- vale para pacote_id -- billing_token_ledger não guarda o pacote de
+  -- origem nenhum (só tokens/valor_cents do lançamento), então devolver
+  -- p_pacote aqui era inventar um vínculo que a tabela nunca gravou (e que
+  -- podia nem bater com o pacote usado na chamada ORIGINAL, se o reenvio
+  -- vier com outro p_pacote). pacote_id vem nulo neste ramo de propósito.
   select tokens, valor_cents into v_ledger
     from public.billing_token_ledger
     where organization_id = p_org and chave = 'credito:' || p_chave::text;
@@ -1685,7 +1725,7 @@ begin
     return jsonb_build_object(
       'creditado', false,
       'saldo_avulso', coalesce(v_creditado, 0) - coalesce(v_consumido, 0),
-      'pacote_id', p_pacote,
+      'pacote_id', null,
       'tokens', v_ledger.tokens,
       'valor_cents', v_ledger.valor_cents
     );
@@ -1725,7 +1765,7 @@ end;
 $$;
 
 comment on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) is
-  'Tarefa 3, decisão 10: credita um pacote do catálogo (billing_token_pacotes) pela ponte com fn_billing_creditar_tokens (0906). Correção (revisão F4, item 5): confere a idempotência pela chave em billing_token_ledger ANTES de tocar no pacote -- reenvio de uma chave já creditada devolve {creditado:false, tokens/valor_cents do lançamento ORIGINAL}, mesmo que o pacote esteja hoje inativo ou a chamada informe outro p_pacote (nunca os dados do pacote novo). Sem reenvio: pacote inexistente é P0002; pacote inativo é 22023. Valor = preco_cents do catálogo quando preenchido, senão p_valor_cents informado na hora; os DOIS ausentes é 22023 (N9, nenhum preço inventado). Idempotência e trava por organização (a de fato, para o crédito NOVO) herdadas de fn_billing_creditar_tokens. Devolve o jsonb dela acrescido de pacote_id, tokens e valor_cents efetivamente usados.';
+  'Tarefa 3, decisão 10: credita um pacote do catálogo (billing_token_pacotes) pela ponte com fn_billing_creditar_tokens (0906). Correção (revisão F4, item 5): confere a idempotência pela chave em billing_token_ledger ANTES de tocar no pacote -- reenvio de uma chave já creditada devolve {creditado:false, tokens/valor_cents do lançamento ORIGINAL}, mesmo que o pacote esteja hoje inativo ou a chamada informe outro p_pacote (nunca os dados do pacote novo). Correção (segunda rodada F4, item 3): pacote_id vem NULO nesse mesmo ramo de reenvio -- billing_token_ledger não guarda o pacote de origem, então devolver p_pacote (a correção anterior devolvia o da CHAMADA atual, não o da original) inventava um vínculo que a tabela nunca gravou. Sem reenvio: pacote inexistente é P0002; pacote inativo é 22023. Valor = preco_cents do catálogo quando preenchido, senão p_valor_cents informado na hora; os DOIS ausentes é 22023 (N9, nenhum preço inventado). Idempotência e trava por organização (a de fato, para o crédito NOVO) herdadas de fn_billing_creditar_tokens. Devolve o jsonb dela acrescido de pacote_id (o do catálogo, no crédito NOVO), tokens e valor_cents efetivamente usados.';
 
 revoke execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) to service_role;

@@ -4084,6 +4084,26 @@ export const DICIONARIO: Traducoes = {
   "Conta suspensa por falta de pagamento. Fale com o suporte.": {
     es: "Cuenta suspendida por falta de pago. Habla con soporte.",
   },
+  // Correção segunda rodada F4, item 5: lib/campanhas/rodada.ts grava
+  // failure_code='assinatura_suspensa' (código cru); a tela
+  // (app/app/campaigns/[id]/_client.tsx) troca pela frase.
+  "A campanha foi pausada porque a conta está suspensa por falta de pagamento.": {
+    es: "La campaña se pausó porque la cuenta está suspendida por falta de pago.",
+  },
+  // Correção segunda rodada F4, item 5: lib/prospecting/worker.ts grava
+  // error='assinatura_suspensa' (código cru, campanha E candidato); a tela
+  // (app/app/prospecting/_client.tsx) troca pela frase, nos dois lugares.
+  "A prospecção foi pausada porque a conta está suspensa por falta de pagamento.": {
+    es: "La prospección se pausó porque la cuenta está suspendida por falta de pago.",
+  },
+  // Correção segunda rodada F4, item 6: a recusa de reenvio de automação
+  // (app/api/v1/automation-rules/runs/[runId]/resend/route.ts) usava a frase
+  // de MENSAGEM_ASSINATURA_SUSPENSA (lib/billing/planos/recusa-do-plano.ts),
+  // escrita para criar funil/etapa/webhook/convite, sentido errado aqui
+  // (reenviar automação não cria nenhum desses). Frase própria.
+  "A conta está suspensa por falta de pagamento: as automações ficam paradas até a assinatura ser regularizada. Fale com o suporte.": {
+    es: "La cuenta está suspendida por falta de pago: las automatizaciones quedan detenidas hasta que se regularice la suscripción. Habla con soporte.",
+  },
   "Falta preencher alguma configuração desta ação — abra a automação e revise.": {
     es: "Falta completar algún ajuste de esta acción. Abre la automatización y revísala.",
   },

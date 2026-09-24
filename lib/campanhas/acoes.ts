@@ -251,6 +251,11 @@ export async function iniciarAcao(
       started_at: agora.toISOString(),
       paused_at: null,
       scheduled_at: null,
+      // Correção segunda rodada F4, item 5: sem isto, uma campanha pausada
+      // por assinatura suspensa (lib/campanhas/rodada.ts) e depois retomada
+      // (a assinatura foi regularizada) continuava mostrando "Último
+      // problema" na tela com um código que já não é verdade.
+      failure_code: null,
     })
     .eq("id", c.id)
     .eq("status", c.status)

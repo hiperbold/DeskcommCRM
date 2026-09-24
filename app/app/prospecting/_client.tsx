@@ -394,7 +394,9 @@ export function ProspectingClient() {
                 </div>
                 {campaign.error && (
                   <p role="alert" className="mt-4 rounded-md bg-destructive/10 p-3 text-sm">
-                    {campaign.error}
+                    {campaign.error === "assinatura_suspensa"
+                      ? t("A prospecção foi pausada porque a conta está suspensa por falta de pagamento.")
+                      : campaign.error}
                   </p>
                 )}
                 <div className="mt-5 grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -818,7 +820,11 @@ export function ProspectingClient() {
                             <td className="max-w-64 p-4 align-top">
                               <Badge variant="outline">{t(labels[c.progress] ?? c.progress)}</Badge>
                               {c.error && (
-                                <p className="mt-2 text-xs text-muted-foreground">{c.error}</p>
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  {c.error === "assinatura_suspensa"
+                                    ? t("A prospecção foi pausada porque a conta está suspensa por falta de pagamento.")
+                                    : c.error}
+                                </p>
                               )}
                               {c.message_status && (
                                 <p className="mt-1 text-xs text-muted-foreground">
