@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F4 (autorizada pelo Filipe em 24/09; F5 e F6 depois)
-Etapa da fase: entrega final feita em 24/09/2026 (commits 467db70 e seguintes); relatório com as perguntas entregue ao Filipe na conversa. Detalhe por fase nas tabelas e seções abaixo.
+Etapa da fase: F4, plano revisado; tarefa 1 (pagamentos, estados, conferidor) em execução.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
 
