@@ -13,6 +13,7 @@ import {
   useOfficialChannel,
   useRegistrarWebhookOficial,
 } from "@/hooks/channels/useOfficialChannel";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useT } from "@/hooks/i18n/useT";
 import { ChannelAiAccess } from "./ChannelAiAccess";
@@ -62,7 +63,16 @@ function ParaColar({
   );
 }
 
-export function CanalOficialClient() {
+export function CanalOficialClient({
+  bloqueio,
+}: {
+  /**
+   * Fase F3, tarefa 9. Só trava a PRIMEIRA conexão (`!estado?.connected`
+   * abaixo): trocar a credencial de um canal já conectado não cria linha
+   * nova em `channel_sessions` e não deve ser barrado pelo teto.
+   */
+  bloqueio?: BloqueioDoBotao;
+} = {}) {
   const t = useT();
   const { data, isPending } = useOfficialChannel();
   const conectar = useConnectOfficialChannel();
@@ -284,9 +294,19 @@ export function CanalOficialClient() {
               {t("Guardado cifrado. Não é exibido de volta em nenhum momento.")}
             </span>
           </div>
-          <Button type="submit" disabled={conectar.isPending} data-testid="btn-conectar">
+          <Button
+            type="submit"
+            disabled={conectar.isPending || (!estado?.connected && bloqueio?.desabilitado)}
+            title={
+              !estado?.connected && bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined
+            }
+            data-testid="btn-conectar"
+          >
             {conectar.isPending ? t("Validando com a Meta…") : t("Validar e conectar")}
           </Button>
+          {!estado?.connected && bloqueio?.desabilitado && (
+            <p className="text-xs text-destructive">{bloqueio.motivo}</p>
+          )}
         </form>
       </Card>
     </div>

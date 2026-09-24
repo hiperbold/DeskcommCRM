@@ -38,6 +38,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
+import type { EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   ajusteDoFormulario,
   estadoInicialDoAjuste,
@@ -88,6 +89,8 @@ interface TenantPlanoClientProps {
   limitesDoPlano: Limites;
   /** `billing_contracts.bloqueio_a_partir_de` (fase F3, tarefa 10). `null` = organização não bloqueia. */
   carenciaAtual: string | null;
+  /** O estado real do bloqueio desta organização (fase F3, tarefa 9): desligado, em carência, ou valendo. */
+  bloqueio: EstadoDoBloqueio;
   ajusteAtual: AjusteDeLimites;
   notaAtual: string | null;
   planosAtivos: PlanoAtivo[];
@@ -220,6 +223,7 @@ export function TenantPlanoClient({
   limitesEmVigor,
   limitesDoPlano,
   carenciaAtual,
+  bloqueio,
   ajusteAtual,
   notaAtual,
   planosAtivos,
@@ -536,11 +540,30 @@ export function TenantPlanoClient({
             </div>
           )}
 
+          {/* Fase F3, tarefa 9: o texto reflete o estado REAL do bloqueio para
+              esta organização (desligado, em carência, ou valendo) em vez
+              de afirmar "nenhum limite bloqueia" mesmo depois de o admin ter
+              ligado o bloqueio pela tela de sistema. */}
           <p className="text-sm text-text-muted">
-            {t(
-              "Nesta fase nenhum limite bloqueia; eles só passam a valer quando o bloqueio for ligado.",
-            )}
+            {bloqueio.vale
+              ? t(
+                  "O bloqueio do plano está VALENDO para esta organização: os itens no teto abaixo não deixam criar nem reativar mais.",
+                )
+              : bloqueio.emCarencia
+                ? t(
+                    "O bloqueio do plano ainda está em carência para esta organização: os limites abaixo ainda não impedem nada.",
+                  )
+                : t(
+                    "O bloqueio do plano está desligado para esta instalação: os limites abaixo ainda não impedem nada.",
+                  )}
           </p>
+          {bloqueio.vale && bloqueio.itensNoTeto.length > 0 && (
+            <ul className="list-disc space-y-0.5 pl-5 text-sm text-destructive">
+              {bloqueio.itensNoTeto.map((item, i) => (
+                <li key={`${item.chave}-${item.pipelineId ?? i}`}>{item.motivo}</li>
+              ))}
+            </ul>
+          )}
 
           {/* Carência do bloqueio de verdade (fase F3, tarefa 10). */}
           <div className="flex flex-wrap items-center gap-2">

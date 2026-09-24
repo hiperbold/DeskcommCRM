@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiClient } from "@/lib/api/client";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { useT } from "@/hooks/i18n/useT";
 import { ChannelAiAccess } from "./ChannelAiAccess";
 
@@ -63,7 +64,17 @@ function rotuloDoStatus(status: string | null, t: (s: string) => string): string
   }
 }
 
-export function CanalInstanciaClient() {
+export function CanalInstanciaClient({
+  bloqueio,
+}: {
+  /**
+   * Fase F3, tarefa 9: quando o bloqueio do plano vale e "conexões" está no
+   * teto, o servidor já manda o motivo pronto: o cliente nunca decide isso
+   * sozinho. `undefined` (telas que ainda não passam a prop, como o wizard de
+   * onboarding) equivale a "não desabilita", nunca a "desabilita por engano".
+   */
+  bloqueio?: BloqueioDoBotao;
+} = {}) {
   const t = useT();
   const [estado, setEstado] = useState<Estado | null>(null);
   const [servidor, setServidor] = useState("");
@@ -185,12 +196,20 @@ export function CanalInstanciaClient() {
           </div>
 
           <div>
-            <Button onClick={conectar} disabled={salvando || !servidor || !token}>
+            <Button
+              onClick={conectar}
+              disabled={salvando || !servidor || !token || bloqueio?.desabilitado}
+              title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+            >
               {salvando ? t("Verificando…") : t("Conectar")}
             </Button>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {t("O servidor e o token são testados antes de gravar.")}
-            </p>
+            {bloqueio?.desabilitado ? (
+              <p className="mt-1.5 text-xs text-destructive">{bloqueio.motivo}</p>
+            ) : (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {t("O servidor e o token são testados antes de gravar.")}
+              </p>
+            )}
           </div>
         </div>
       </Card>

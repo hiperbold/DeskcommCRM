@@ -1,5 +1,6 @@
 import { createLogger } from "@/lib/agent-engine/obs/logger";
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   CHAVES_DE_LIMITE,
   esquemaDoAjusteDeLimites,
@@ -62,7 +63,7 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
   const admin = createAdminClient();
   const log = createLogger();
 
-  const [resultado, contratoCruRes, ajusteRes, planosRes, saldoResultadoRaw] = await Promise.all([
+  const [resultado, contratoCruRes, ajusteRes, planosRes, saldoResultadoRaw, bloqueio] = await Promise.all([
     planoDaOrganizacao(admin, id, log),
     // Os limites CRUS do plano CONTRATADO (coluna "do plano" da tabela),
     // separados dos limites EM VIGOR (que já aplicam o ajuste) que
@@ -93,6 +94,10 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
     // racional de `app/app/settings/plano/page.tsx` (tarefa 6): as três
     // nunca podem discordar sobre "que mês é este".
     saldoDaOrganizacao(admin, id, log),
+    // Fase F3, tarefa 9: o estado real do bloqueio para ESTA organização
+    // (desligado, em carência, ou valendo), para o texto fixo da aba parar de
+    // dizer "nenhum limite bloqueia" quando o admin já ligou o bloqueio.
+    estadoDoBloqueio(admin, id, {}, log),
   ]);
 
   const cicloDoSaldo =
@@ -188,6 +193,7 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
       limitesEmVigor={resultado.limites}
       limitesDoPlano={limitesDoPlano}
       carenciaAtual={linhaContratoCru?.bloqueio_a_partir_de ?? null}
+      bloqueio={bloqueio}
       ajusteAtual={ajusteAtual}
       notaAtual={ajusteRow?.note ?? null}
       planosAtivos={planosAtivos}

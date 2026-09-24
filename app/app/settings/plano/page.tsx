@@ -5,9 +5,14 @@
  *
  * Item por item da matriz do plano (funis, etapas por funil, membros,
  * conexões, integrações webhook, leads), quanto a organização usa contra o
- * teto contratado. Nesta fase nenhum teto bloqueia, o aviso fixo no topo
- * existe para ninguém confundir "cheguei no teto" com "fui barrado": a trava
- * de verdade é da F3 (`hiperbold/planos/fase-F2-tarefas.md`).
+ * teto contratado. Nesta fase nenhum teto bloqueia por padrão
+ * (`billing_settings.modo` segue `avisar` em toda instalação), o aviso fixo
+ * no topo diz isso quando é o caso: ninguém pode confundir "cheguei no teto"
+ * com "fui barrado". Quando o admin da plataforma liga o bloqueio para esta
+ * organização (fase F3, tarefa 9), o mesmo banner passa a mostrar o estado
+ * real, desligado, em carência até tal data, ou valendo ,, e os itens no
+ * teto entram listados, com o motivo (`lib/billing/planos/estado-do-bloqueio.ts`,
+ * que nunca lança: falha de leitura degrada para "não vale").
  *
  * ── Por que `manager`, e não `admin` como a vizinha Billing ──────────────────
  *
@@ -47,6 +52,7 @@ import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { estadoDoBloqueio, type EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   linhasDaTelaDePlano,
   type ChaveDaTelaDePlano,
@@ -110,10 +116,16 @@ export default async function PlanoEUsoPage() {
   const tagDoIdioma = tagDeIdioma(idioma);
 
   const admin = createAdminClient();
-  const [usoResultado, planoResultado, saldoResultado] = await Promise.all([
+  const [usoResultado, planoResultado, saldoResultado, bloqueio] = await Promise.all([
     usoDaOrganizacao(admin, activeOrg.orgId, logger),
     planoDaOrganizacao(admin, activeOrg.orgId, logger),
     saldoDaOrganizacao(admin, activeOrg.orgId, logger),
+    // Fase F3, tarefa 9: sem pipelineIds, esta tela não lista funil por
+    // funil, só o resumo da organização. `estadoDoBloqueio` já sai cedo (sem
+    // ler uso nem limites de novo) quando o bloqueio não vale, então não
+    // duplica o custo das duas leituras acima em toda instalação no modo
+    // `avisar` de hoje.
+    estadoDoBloqueio(admin, activeOrg.orgId, {}, logger),
   ]);
 
   const leituraFalhou = usoResultado.leituraFalhou || planoResultado.leituraFalhou;
@@ -147,9 +159,7 @@ export default async function PlanoEUsoPage() {
         )}
       </header>
 
-      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200">
-        {t("Nesta fase nenhum limite bloqueia.")}
-      </div>
+      <BannerDoBloqueio bloqueio={bloqueio} t={t} tagDoIdioma={tagDoIdioma} />
 
       {leituraFalhou && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
@@ -175,6 +185,64 @@ export default async function PlanoEUsoPage() {
           <SecaoTokensDeIA linhas={linhasTokens} t={t} tagDoIdioma={tagDoIdioma} />
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * O banner do topo, desligado, em carência, ou valendo (fase F3, tarefa 9).
+ *
+ * Três estados, um por parágrafo, nunca misturados: o de hoje (modo `avisar`
+ * ou `desligado`) não pode virar "cheguei no teto"; o de carência precisa da
+ * DATA, para o dono da operação saber quanto tempo falta; o de valendo lista
+ * os itens no teto, um a um, com o motivo que `estadoDoBloqueio` já monta em
+ * português.
+ */
+function BannerDoBloqueio({
+  bloqueio,
+  t,
+  tagDoIdioma,
+}: {
+  bloqueio: EstadoDoBloqueio;
+  t: (texto: string) => string;
+  tagDoIdioma: string;
+}) {
+  if (bloqueio.vale) {
+    return (
+      <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+        <p>
+          {t(
+            "O bloqueio do plano está valendo para esta organização. Os itens no teto abaixo não deixam criar nem reativar mais, até o plano aumentar ou algo ser liberado.",
+          )}
+        </p>
+        {bloqueio.itensNoTeto.length > 0 && (
+          <ul className="mt-2 list-disc space-y-0.5 pl-5">
+            {bloqueio.itensNoTeto.map((item, i) => (
+              <li key={`${item.chave}-${item.pipelineId ?? i}`}>
+                <span className="font-medium">{t(ROTULO_DA_CHAVE[item.chave])}</span>: {item.motivo}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  if (bloqueio.emCarencia && bloqueio.carenciaAte) {
+    return (
+      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200">
+        {t("O bloqueio do plano está em carência até")}{" "}
+        <span className="font-medium">
+          {new Date(bloqueio.carenciaAte).toLocaleDateString(tagDoIdioma)}
+        </span>
+        . {t("Depois dessa data, os itens no teto impedem criar ou reativar mais.")}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200">
+      {t("Nesta fase nenhum limite bloqueia.")}
     </div>
   );
 }

@@ -11550,6 +11550,15 @@ export const DICIONARIO: Traducoes = {
   "Nesta fase nenhum limite bloqueia; eles só passam a valer quando o bloqueio for ligado.": {
     es: "En esta fase ningún límite bloquea; solo entrarán en vigor cuando se active el bloqueo.",
   },
+  "O bloqueio do plano está VALENDO para esta organização: os itens no teto abaixo não deixam criar nem reativar mais.": {
+    es: "El bloqueo del plan está VIGENTE para esta organización: los elementos en el tope de abajo no permiten crear ni reactivar más.",
+  },
+  "O bloqueio do plano ainda está em carência para esta organização: os limites abaixo ainda não impedem nada.": {
+    es: "El bloqueo del plan todavía está en período de gracia para esta organización: los límites de abajo aún no impiden nada.",
+  },
+  "O bloqueio do plano está desligado para esta instalação: os limites abaixo ainda não impedem nada.": {
+    es: "El bloqueo del plan está desactivado para esta instalación: los límites de abajo aún no impiden nada.",
+  },
   "Seu acesso de suporte só permite leitura. Para trocar o plano ou ajustar limites, peça a um admin com acesso completo.": {
     es: "Tu acceso de soporte solo permite lectura. Para cambiar el plan o ajustar límites, pide a un admin con acceso completo.",
   },
@@ -11599,6 +11608,17 @@ export const DICIONARIO: Traducoes = {
     es: "Cuánto usa tu organización de cada elemento del plan contratado.",
   },
   "Nesta fase nenhum limite bloqueia.": { es: "En esta fase ningún límite bloquea." },
+
+  // ─── Tarefa 9, fase F3 dos planos de assinatura: o banner de bloqueio da
+  // tela "Plano e uso" (app/app/settings/plano) e os botões desabilitados
+  // pelo teto (lib/billing/planos/estado-do-bloqueio.ts) ───
+  "O bloqueio do plano está valendo para esta organização. Os itens no teto abaixo não deixam criar nem reativar mais, até o plano aumentar ou algo ser liberado.": {
+    es: "El bloqueo del plan está vigente para esta organización. Los elementos en el tope de abajo no permiten crear ni reactivar más, hasta que el plan aumente o algo se libere.",
+  },
+  "O bloqueio do plano está em carência até": { es: "El bloqueo del plan está en período de gracia hasta" },
+  "Depois dessa data, os itens no teto impedem criar ou reativar mais.": {
+    es: "Después de esa fecha, los elementos en el tope impiden crear o reactivar más.",
+  },
   "Tokens de IA": { es: "Tokens de IA" },
   "Medido a partir da próxima fase.": { es: "Se mide a partir de la próxima fase." },
   "Não foi possível medir agora.": { es: "No se pudo medir ahora." },
