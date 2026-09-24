@@ -627,3 +627,345 @@ describe("0909 Tarefa 3: limpeza", () => {
     expect(restam).toBe("0");
   });
 });
+
+// ============================================================================
+// TAREFA 4: registrar, reservar com lease, falha, reprocessar, podar.
+// ============================================================================
+
+const FUNCOES_TAREFA_4_COM_GRANT = [
+  "fn_billing_asaas_registrar_evento",
+  "fn_billing_asaas_reservar_eventos",
+  "fn_billing_asaas_registrar_falha",
+  "fn_billing_asaas_reprocessar_evento",
+  "fn_billing_asaas_podar_eventos",
+] as const;
+
+describe.each(FUNCOES_TAREFA_4_COM_GRANT)("0909 Tarefa 4: `%s` é deny-all para anon/authenticated (grants)", (funcao) => {
+  it("`anon` não tem EXECUTE no catálogo", () => {
+    expect(privilegiosDaFuncao("anon", funcao)).toBe("NENHUM");
+  });
+
+  it("`authenticated` não tem EXECUTE no catálogo", () => {
+    expect(privilegiosDaFuncao("authenticated", funcao)).toBe("NENHUM");
+  });
+
+  it("`service_role` TEM EXECUTE no catálogo (controle positivo)", () => {
+    expect(privilegiosDaFuncao("service_role", funcao)).toContain("EXECUTE");
+  });
+});
+
+describe("0909 Tarefa 4: `fn_billing_asaas_lease_e_meu` é interna, SEM execute nem para service_role", () => {
+  it("nenhum papel (anon/authenticated/service_role) tem EXECUTE no catálogo", () => {
+    expect(privilegiosDaFuncao("anon", "fn_billing_asaas_lease_e_meu")).toBe("NENHUM");
+    expect(privilegiosDaFuncao("authenticated", "fn_billing_asaas_lease_e_meu")).toBe("NENHUM");
+    expect(privilegiosDaFuncao("service_role", "fn_billing_asaas_lease_e_meu")).toBe("NENHUM");
+  });
+});
+
+describe("0909 Tarefa 4: nenhuma das cinco funções públicas roda sob authenticated/anon (medido por set role)", () => {
+  it("`authenticated` é barrado por permission denied em fn_billing_asaas_reservar_eventos", () => {
+    const erro = erroSob("authenticated", "select * from public.fn_billing_asaas_reservar_eventos(10, 300)");
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("permission denied for function");
+  });
+
+  it("`anon` é barrado por permission denied em fn_billing_asaas_registrar_evento", () => {
+    const erro = erroSob(
+      "anon",
+      "select public.fn_billing_asaas_registrar_evento('pay_x', 'PAYMENT_CREATED', null, 'sandbox', 'webhook', '{}'::jsonb)",
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("permission denied for function");
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_registrar_evento, evento repetido guardado uma vez só (decisão 11)", () => {
+  it("a mesma event_id chamada duas vezes: novo = true na primeira, novo = false na segunda", () => {
+    const eventId = "evt-repetido-0001";
+    const primeiro = sql(
+      `select public.fn_billing_asaas_registrar_evento('${eventId}', 'PAYMENT_CREATED', 'pay_teste1', 'sandbox', 'webhook', '{"id":"pay_teste1"}'::jsonb);`,
+    );
+    expect(primeiro).toContain('"novo": true');
+
+    const segundo = sql(
+      `select public.fn_billing_asaas_registrar_evento('${eventId}', 'PAYMENT_CREATED', 'pay_teste1', 'sandbox', 'webhook', '{"id":"pay_teste1"}'::jsonb);`,
+    );
+    expect(segundo).toContain('"novo": false');
+
+    const contagem = sql(`select count(*) from public.asaas_webhook_events where event_id = '${eventId}';`).trim();
+    expect(contagem).toBe("1");
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_registrar_evento, quarentena de evento fora do formato e de evento grande (decisão 19/M6)", () => {
+  it("event_type fora de ^[A-Z_]{3,64}$ vai para quarentena: resultado erro, payload cortado, e a função devolve sucesso mesmo assim", () => {
+    const eventId = "evt-formato-invalido-0001";
+    const resultado = sql(
+      `select public.fn_billing_asaas_registrar_evento('${eventId}', 'payment.created.minusculo', 'pay_x', 'sandbox', 'webhook', '{"id":"pay_x"}'::jsonb);`,
+    );
+    // Devolve sucesso (nenhuma exceção), e o corpo diz "quarentena": true.
+    expect(resultado).toContain('"quarentena": true');
+    expect(resultado).toContain('"resultado": "erro"');
+
+    const linha = sql(
+      `select resultado, erro_codigo, payload from public.asaas_webhook_events where event_id = '${eventId}';`,
+    );
+    expect(linha).toContain("erro");
+    expect(linha).toContain("evento_fora_do_formato:event_type");
+    // Payload CORTADO: não é mais o original ({"id":"pay_x"}), é o resumo pequeno.
+    expect(linha).not.toContain('"id":"pay_x"');
+    expect(linha).toContain("quarentena");
+  });
+
+  it("payload acima de 64 KB vai para quarentena: resultado erro, payload cortado, e a fila não trava (sem exceção)", () => {
+    const eventId = "evt-grande-0001";
+    // 70000 caracteres de "a" dentro de um jsonb: bem acima do teto de 65536
+    // bytes.
+    let erro: string | null = null;
+    let resultado = "";
+    try {
+      resultado = sql(
+        `select public.fn_billing_asaas_registrar_evento('${eventId}', 'PAYMENT_CREATED', 'pay_grande', 'sandbox', 'webhook', jsonb_build_object('recheio', repeat('a', 70000)));`,
+      );
+    } catch (err) {
+      erro = motivoDoErro(err);
+    }
+    expect(erro, `não deveria ter lançado exceção nenhuma: ${erro}`).toBeNull();
+    expect(resultado).toContain('"quarentena": true');
+    expect(resultado).toContain('"resultado": "erro"');
+
+    const tamanhoDoPayload = sql(
+      `select octet_length(payload::text) from public.asaas_webhook_events where event_id = '${eventId}';`,
+    ).trim();
+    expect(Number(tamanhoDoPayload)).toBeLessThan(1000);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_reservar_eventos sob DUAS SESSÕES CONCORRENTES de verdade (decisão 20)", () => {
+  const container = process.env.TEST_DB_CONTAINER;
+  const porta = Number(process.env.TEST_DB_PORT ?? 54329);
+  const pool = new pg.Pool({
+    connectionString: `postgresql://postgres:postgres@127.0.0.1:${porta}/postgres`,
+    max: 4,
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("dois processadores reservando ao mesmo tempo nunca pegam o MESMO evento", async () => {
+    if (!container) {
+      throw new Error("TEST_DB_CONTAINER ausente, rode via pnpm test:db");
+    }
+
+    sql(`
+      select public.fn_billing_asaas_registrar_evento('evt-corrida-0001', 'PAYMENT_CREATED', 'pay_corrida1', 'sandbox', 'webhook', '{}'::jsonb);
+      select public.fn_billing_asaas_registrar_evento('evt-corrida-0002', 'PAYMENT_CREATED', 'pay_corrida2', 'sandbox', 'webhook', '{}'::jsonb);
+    `);
+
+    const [r1, r2] = await Promise.all([
+      pool.query("select * from public.fn_billing_asaas_reservar_eventos($1::int, $2::int) as r", [50, 300]),
+      pool.query("select * from public.fn_billing_asaas_reservar_eventos($1::int, $2::int) as r", [50, 300]),
+    ]);
+
+    const idsReservados = [...r1.rows, ...r2.rows].map((row: { id: string }) => row.id);
+    // As duas chamadas juntas reservaram no máximo os dois eventos criados
+    // acima, e NUNCA o mesmo id duas vezes (skip locked).
+    expect(new Set(idsReservados).size).toBe(idsReservados.length);
+    expect(idsReservados.length).toBeGreaterThan(0);
+
+    const aindaAguardando = sql(
+      `select count(*) from public.asaas_webhook_events where event_id in ('evt-corrida-0001', 'evt-corrida-0002') and resultado = 'aguardando' and lease_token is null;`,
+    ).trim();
+    expect(aindaAguardando, "todo evento reservado deveria ter ganho um lease_token").toBe("0");
+  });
+});
+
+describe("0909 Tarefa 4: lease vencido volta a ser reservável (decisão 20)", () => {
+  it("um evento com lease_expira_em no passado é reservado de novo, com um lease_token NOVO", () => {
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-lease-vencido-0001', 'PAYMENT_CREATED', 'pay_lv1', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+
+    // Simula um lease de um processador anterior que caiu sem confirmar: um
+    // token qualquer, já vencido.
+    sql(`
+      update public.asaas_webhook_events
+         set lease_token = gen_random_uuid(), lease_expira_em = now() - interval '10 minutes'
+       where event_id = 'evt-lease-vencido-0001';
+    `);
+    const leaseAntigo = sql(`select lease_token from public.asaas_webhook_events where event_id = 'evt-lease-vencido-0001';`).trim();
+
+    sql(`select * from public.fn_billing_asaas_reservar_eventos(10, 300);`);
+
+    const leaseNovo = sql(`select lease_token from public.asaas_webhook_events where event_id = 'evt-lease-vencido-0001';`).trim();
+    expect(leaseNovo).not.toBe(leaseAntigo);
+    expect(leaseNovo.length).toBeGreaterThan(0);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_registrar_falha, lease alheio recusado e backoff até a décima (decisão 20)", () => {
+  it("lease de OUTRO processador (ou já vencido) é recusado com billing_lease_invalido", () => {
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-falha-lease-alheio-0001', 'PAYMENT_CREATED', 'pay_fla1', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+    sql(`select * from public.fn_billing_asaas_reservar_eventos(10, 300);`);
+
+    const eventoId = sql(
+      `select id from public.asaas_webhook_events where event_id = 'evt-falha-lease-alheio-0001';`,
+    ).trim();
+
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_asaas_registrar_falha('${eventoId}'::uuid, gen_random_uuid(), 'erro_qualquer')`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_lease_invalido");
+  });
+
+  it("backoff cresce a cada falha e vira erro exatamente na décima tentativa", () => {
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-backoff-0001', 'PAYMENT_CREATED', 'pay_bo1', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+    const eventoId = sql(`select id from public.asaas_webhook_events where event_id = 'evt-backoff-0001';`).trim();
+
+    let proxima1: string | null = null;
+    for (let tentativa = 1; tentativa <= 9; tentativa++) {
+      // Força proxima_tentativa_em para agora, para a próxima reserva pegar o
+      // evento de novo sem esperar o backoff de verdade.
+      sql(`update public.asaas_webhook_events set proxima_tentativa_em = now(), lease_expira_em = null where id = '${eventoId}';`);
+      const reserva = sql(
+        `select lease_token from (select * from public.fn_billing_asaas_reservar_eventos(50, 300)) r where r.id = '${eventoId}';`,
+      ).trim();
+      expect(reserva.length, `tentativa ${tentativa}: o evento deveria ter sido reservado de novo`).toBeGreaterThan(0);
+
+      const resultado = sql(
+        `select public.fn_billing_asaas_registrar_falha('${eventoId}'::uuid, '${reserva}'::uuid, 'falha_de_teste_${tentativa}');`,
+      );
+      expect(resultado, `tentativa ${tentativa}`).toContain(`"tentativas": ${tentativa}`);
+
+      if (tentativa < 10) {
+        expect(resultado, `tentativa ${tentativa}: ainda deveria estar aguardando`).toContain('"resultado": "aguardando"');
+      }
+      if (tentativa === 1) {
+        proxima1 = sql(`select proxima_tentativa_em from public.asaas_webhook_events where id = '${eventoId}';`).trim();
+      }
+    }
+
+    const linhaAntesDaDecima = sql(
+      `select resultado, tentativas from public.asaas_webhook_events where id = '${eventoId}';`,
+    );
+    expect(linhaAntesDaDecima).toContain("aguardando");
+    expect(linhaAntesDaDecima).toContain("9");
+    expect(proxima1, "a primeira falha deveria ter gravado um backoff no futuro").not.toBeNull();
+
+    // Décima falha: vira erro.
+    sql(`update public.asaas_webhook_events set proxima_tentativa_em = now(), lease_expira_em = null where id = '${eventoId}';`);
+    const reservaDecima = sql(
+      `select lease_token from (select * from public.fn_billing_asaas_reservar_eventos(50, 300)) r where r.id = '${eventoId}';`,
+    ).trim();
+    expect(reservaDecima.length).toBeGreaterThan(0);
+
+    const resultadoDecima = sql(
+      `select public.fn_billing_asaas_registrar_falha('${eventoId}'::uuid, '${reservaDecima}'::uuid, 'falha_de_teste_10');`,
+    );
+    expect(resultadoDecima).toContain('"tentativas": 10');
+    expect(resultadoDecima).toContain('"resultado": "erro"');
+
+    const linhaFinal = sql(`select resultado, tentativas from public.asaas_webhook_events where id = '${eventoId}';`);
+    expect(linhaFinal).toContain("erro");
+    expect(linhaFinal).toContain("10");
+
+    // Um evento erro não é mais elegível para reserva (fora do índice dos
+    // pendentes, que só cobre resultado = aguardando).
+    const naoReservavel = sql(
+      `select count(*) from (select * from public.fn_billing_asaas_reservar_eventos(50, 300)) r where r.id = '${eventoId}';`,
+    ).trim();
+    expect(naoReservavel).toBe("0");
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_reprocessar_evento (decisão 20)", () => {
+  it("volta erro para aguardando, zera tentativas, e o evento fica elegível para reserva de novo", () => {
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-reprocessar-0001', 'PAYMENT_CREATED', 'pay_rp1', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+    const eventoId = sql(`select id from public.asaas_webhook_events where event_id = 'evt-reprocessar-0001';`).trim();
+    sql(`update public.asaas_webhook_events set resultado = 'erro', tentativas = 10, erro_codigo = 'teste' where id = '${eventoId}';`);
+
+    const resultado = sql(`select public.fn_billing_asaas_reprocessar_evento('${eventoId}'::uuid, null);`);
+    expect(resultado).toContain('"resultado_novo": "aguardando"');
+
+    const linha = sql(`select resultado, tentativas, erro_codigo from public.asaas_webhook_events where id = '${eventoId}';`);
+    expect(linha).toContain("aguardando");
+    expect(linha).toContain("0");
+
+    const reservavel = sql(
+      `select count(*) from (select * from public.fn_billing_asaas_reservar_eventos(50, 300)) r where r.id = '${eventoId}';`,
+    ).trim();
+    expect(reservavel).toBe("1");
+  });
+
+  it("recusa reprocessar um evento que NÃO está em erro", () => {
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-reprocessar-invalido-0001', 'PAYMENT_CREATED', 'pay_rp2', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+    const eventoId = sql(
+      `select id from public.asaas_webhook_events where event_id = 'evt-reprocessar-invalido-0001';`,
+    ).trim();
+
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_asaas_reprocessar_evento('${eventoId}'::uuid, null)`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_evento_nao_esta_em_erro");
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_podar_eventos (decisão 21/N38)", () => {
+  it("payload vira {} e payload_podado_em é gravado só para eventos mais velhos que p_dias", () => {
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-podar-velho-0001', 'PAYMENT_CREATED', 'pay_pv1', 'sandbox', 'webhook', '{"algo":"presente"}'::jsonb);`,
+    );
+    sql(
+      `select public.fn_billing_asaas_registrar_evento('evt-podar-novo-0001', 'PAYMENT_CREATED', 'pay_pn1', 'sandbox', 'webhook', '{"algo":"presente"}'::jsonb);`,
+    );
+    // O evento "velho" recebeu o evento há 200 dias; o "novo" é de agora.
+    sql(`update public.asaas_webhook_events set recebido_em = now() - interval '200 days' where event_id = 'evt-podar-velho-0001';`);
+
+    const resultado = sql(`select public.fn_billing_asaas_podar_eventos(180);`);
+    const podados = JSON.parse(resultado) as { podados: number };
+    expect(podados.podados).toBeGreaterThanOrEqual(1);
+
+    const velho = sql(
+      `select payload::text, payload_podado_em is not null as podado from public.asaas_webhook_events where event_id = 'evt-podar-velho-0001';`,
+    );
+    expect(velho).toContain("{}");
+    expect(velho).toContain("t");
+
+    const novo = sql(
+      `select payload::text, payload_podado_em is null as nao_podado from public.asaas_webhook_events where event_id = 'evt-podar-novo-0001';`,
+    );
+    expect(novo).toContain("presente");
+    expect(novo).toContain("t");
+  });
+
+  it("rejeita p_dias inválido", () => {
+    const erro = erroSob("service_role", "select public.fn_billing_asaas_podar_eventos(0)");
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_dias_invalido");
+  });
+});
+
+describe("0909 Tarefa 4: limpeza", () => {
+  it("apaga os eventos de teste desta seção", () => {
+    sql(`
+      delete from public.asaas_webhook_events
+       where event_id like 'evt-%'
+          or event_id in ('evt-repetido-0001');
+    `);
+    const restam = sql(`select count(*) from public.asaas_webhook_events where event_id like 'evt-%';`).trim();
+    expect(restam).toBe("0");
+  });
+});

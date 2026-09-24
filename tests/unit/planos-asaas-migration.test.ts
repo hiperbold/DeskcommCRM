@@ -439,7 +439,13 @@ describe("0909 Tarefa 3: as sete funções existem, com a assinatura do plano, e
 
   it("agent_worker (se a role existir) perde execute nas sete funções, num único bloco condicional", () => {
     for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
-      const inicio = sql.lastIndexOf("if exists (select 1 from pg_roles where rolname = 'agent_worker') then");
+      // Âncora pelo comentário da seção 16 (único: "sete funções da\n--
+      // Tarefa 3"), não pelo último "if exists" do arquivo: a Tarefa 4
+      // (seção 23, abaixo) acrescentou um QUARTO bloco condicional de
+      // agent_worker depois deste, e lastIndexOf passaria a pegar o dela.
+      const ancora = sql.indexOf("perde execute nas sete funções da");
+      expect(ancora, "comentário da seção 16 (Tarefa 3) não encontrado").toBeGreaterThan(-1);
+      const inicio = sql.indexOf("if exists (select 1 from pg_roles where rolname = 'agent_worker') then", ancora);
       expect(inicio, "bloco condicional de agent_worker da Tarefa 3 não encontrado").toBeGreaterThan(-1);
       const fim = sql.indexOf("$$;", inicio);
       const corpo = sql.slice(inicio, fim);
@@ -551,5 +557,201 @@ describe("0909 Tarefa 3: fn_billing_pedido_marcar nunca a partir de pago", () =>
 
     expect(corpo).toMatch(/p_status not in \('inconclusivo', 'falhou', 'cancelado'\)/);
     expect(corpo).toMatch(/if v_pedido\.status = 'pago' then\s*\n\s*raise exception 'billing_pedido_ja_pago'/);
+  });
+});
+
+// ============================================================================
+// TAREFA 4: registrar, reservar com lease, falha, reprocessar, podar.
+// ============================================================================
+
+describe("0909 Tarefa 4: as seis peças existem, com a assinatura do plano, em security definer", () => {
+  const FUNCOES_TAREFA_4: Array<{ nome: string; assinatura: string; temGrant: boolean }> = [
+    { nome: "fn_billing_asaas_registrar_evento", assinatura: "(text, text, text, text, text, jsonb)", temGrant: true },
+    { nome: "fn_billing_asaas_reservar_eventos", assinatura: "(integer, integer)", temGrant: true },
+    { nome: "fn_billing_asaas_lease_e_meu", assinatura: "(uuid, uuid)", temGrant: false },
+    { nome: "fn_billing_asaas_registrar_falha", assinatura: "(uuid, uuid, text)", temGrant: true },
+    { nome: "fn_billing_asaas_reprocessar_evento", assinatura: "(uuid, uuid)", temGrant: true },
+    { nome: "fn_billing_asaas_podar_eventos", assinatura: "(integer)", temGrant: true },
+  ];
+
+  it.each(FUNCOES_TAREFA_4)(
+    "$nome$assinatura existe na migração e no bloco do baseline, com security definer e search_path fixo",
+    ({ nome, assinatura, temGrant }) => {
+      for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
+        const criacao = new RegExp(`create or replace function public\\.${nome}\\(`);
+        expect(sql, `${nome} não encontrada`).toMatch(criacao);
+
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        const fimCorpo = nome === "fn_billing_asaas_lease_e_meu" ? sql.indexOf("$$;", inicio) : sql.indexOf("\n$$;", inicio);
+        const corpo = sql.slice(inicio, fimCorpo);
+        expect(corpo, `${nome} sem security definer`).toMatch(/security definer/);
+        expect(corpo, `${nome} sem search_path fixo`).toMatch(/set search_path = public, pg_temp/);
+
+        const assinaturaEscapada = assinatura.replace(/[()]/g, (c) => `\\${c}`);
+        if (temGrant) {
+          expect(sql, `${nome}${assinatura} não tem revoke de public/anon/authenticated`).toMatch(
+            new RegExp(`revoke execute on function public\\.${nome}${assinaturaEscapada} from public, anon, authenticated;`),
+          );
+          expect(sql, `${nome}${assinatura} não tem grant só a service_role`).toMatch(
+            new RegExp(`grant execute on function public\\.${nome}${assinaturaEscapada} to service_role;`),
+          );
+        } else {
+          // fn_billing_asaas_lease_e_meu: o revoke inclui service_role
+          // explicitamente (este banco tem alter default privileges que
+          // concede EXECUTE a service_role por padrão, o mesmo mecanismo do
+          // agent_worker); sem isso a função ficaria executável de graça.
+          expect(sql, `${nome}${assinatura} não tem revoke de public/anon/authenticated/service_role`).toMatch(
+            new RegExp(`revoke execute on function public\\.${nome}${assinaturaEscapada} from public, anon, authenticated, service_role;`),
+          );
+          expect(sql, `${nome}${assinatura} é interna e NÃO deveria ter grant a service_role`).not.toMatch(
+            new RegExp(`grant execute on function public\\.${nome}${assinaturaEscapada} to service_role;`),
+          );
+        }
+      }
+    },
+  );
+
+  it("agent_worker (se a role existir) perde execute nas seis funções, num único bloco condicional", () => {
+    for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
+      const inicio = sql.lastIndexOf("if exists (select 1 from pg_roles where rolname = 'agent_worker') then");
+      expect(inicio, "bloco condicional de agent_worker da Tarefa 4 não encontrado").toBeGreaterThan(-1);
+      const fim = sql.indexOf("$$;", inicio);
+      const corpo = sql.slice(inicio, fim);
+      for (const { nome } of FUNCOES_TAREFA_4) {
+        expect(corpo, `${nome} não está no revoke de agent_worker da Tarefa 4`).toContain(`public.${nome}(`);
+      }
+    }
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_registrar_evento, idempotência e quarentena (decisão 19/M6)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_registrar_evento(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("on conflict (event_id) do nothing (evento repetido guardado uma vez só)", () => {
+    expect(corpo).toMatch(/on conflict \(event_id\) do nothing/);
+  });
+
+  it("checa o formato de event_id (1..100) e de event_type (^[A-Z_]{3,64}$) antes de inserir", () => {
+    expect(corpo).toMatch(/char_length\(p_event_id\) < 1 or char_length\(p_event_id\) > 100/);
+    expect(corpo).toMatch(/p_event_type !~ '\^\[A-Z_\]\{3,64\}\$'/);
+  });
+
+  it("teto de 64 KB (65536 bytes) medido no payload", () => {
+    expect(corpo).toMatch(/octet_length\(p_payload::text\) > 65536/);
+  });
+
+  it("quarentena grava resultado erro, payload CORTADO (jsonb_build_object, nunca o original) e devolve sucesso", () => {
+    expect(corpo).toMatch(/v_resultado := 'erro';/);
+    expect(corpo).toMatch(/v_payload := jsonb_build_object\('quarentena', true, 'motivo', v_erro_codigo\);/);
+    // O retorno (jsonb_build_object com 'novo') não lança exceção nenhuma no
+    // caminho de quarentena: nenhum "raise exception" depois do bloco "if
+    // v_quarentena then".
+    const trechoQuarentena = corpo.slice(corpo.indexOf("if v_quarentena then"));
+    expect(trechoQuarentena).not.toMatch(/raise exception/);
+  });
+
+  it("erro_codigo cortado em 200 caracteres no insert", () => {
+    expect(corpo).toMatch(/left\(v_erro_codigo, 200\)/);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_reservar_eventos, skip locked e lease (decisão 20)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_reservar_eventos(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("for update skip locked, só resultado = aguardando", () => {
+    expect(corpo).toMatch(/for update skip locked/);
+    expect(corpo).toMatch(/aw\.resultado = 'aguardando'/);
+  });
+
+  it("proxima_tentativa_em vencido (nulo ou passado) e lease vencido ou nulo", () => {
+    expect(corpo).toMatch(/aw\.proxima_tentativa_em is null or aw\.proxima_tentativa_em <= now\(\)/);
+    expect(corpo).toMatch(/aw\.lease_expira_em is null or aw\.lease_expira_em < now\(\)/);
+  });
+
+  it("grava lease_token novo (gen_random_uuid) com validade p_lease_segundos", () => {
+    expect(corpo).toMatch(/lease_token = gen_random_uuid\(\)/);
+    expect(corpo).toMatch(/lease_expira_em = now\(\) \+ \(p_lease_segundos \|\| ' seconds'\)::interval/);
+  });
+
+  it("p_lease_segundos tem default 300 na assinatura", () => {
+    const assinatura = MIGRATION_0909.slice(
+      MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_reservar_eventos("),
+      MIGRATION_0909.indexOf(")\nreturns table"),
+    );
+    expect(assinatura).toMatch(/p_lease_segundos integer default 300/);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_lease_e_meu, interna e sem grant a service_role", () => {
+  it("confere lease_token igual e lease_expira_em no futuro", () => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_lease_e_meu(");
+    const fim = MIGRATION_0909.indexOf("$$;", inicio);
+    const corpo = MIGRATION_0909.slice(inicio, fim);
+    expect(corpo).toMatch(/lease_token = p_lease_token/);
+    expect(corpo).toMatch(/lease_expira_em > now\(\)/);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_registrar_falha, lease alheio recusado e backoff (decisão 20)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_registrar_falha(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("recusa quando o lease não é mais o do chamador", () => {
+    expect(corpo).toMatch(
+      /if p_lease_token is null or v_evento\.lease_token is distinct from p_lease_token then\s*\n\s*raise exception 'billing_lease_invalido' using errcode = '22023';/,
+    );
+  });
+
+  it("tentativas + 1, vira erro na décima (tentativas >= 10)", () => {
+    expect(corpo).toMatch(/v_tentativas := v_evento\.tentativas \+ 1;/);
+    expect(corpo).toMatch(/if v_tentativas >= 10 then\s*\n\s*v_resultado := 'erro';/);
+  });
+
+  it("backoff now() + least(2^tentativas minutos, 6 horas)", () => {
+    expect(corpo).toMatch(/least\(\s*\n\s*power\(2::double precision, v_tentativas::double precision\) \* interval '1 minute',\s*\n\s*interval '6 hours'\s*\n\s*\)/);
+  });
+
+  it("erro_codigo cortado em 200 caracteres", () => {
+    expect(corpo).toMatch(/erro_codigo = left\(p_codigo, 200\)/);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_reprocessar_evento, só a partir de erro", () => {
+  it("recusa fora de resultado = erro, e zera tentativas/proxima_tentativa_em/erro_codigo/lease", () => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_reprocessar_evento(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    const corpo = MIGRATION_0909.slice(inicio, fim);
+
+    expect(corpo).toMatch(
+      /if v_evento\.resultado <> 'erro' then\s*\n\s*raise exception 'billing_evento_nao_esta_em_erro' using errcode = '22023';/,
+    );
+    expect(corpo).toMatch(/tentativas = 0,/);
+    expect(corpo).toMatch(/proxima_tentativa_em = now\(\),/);
+    expect(corpo).toMatch(/erro_codigo = null,/);
+    expect(corpo).toMatch(/lease_token = null,/);
+  });
+});
+
+describe("0909 Tarefa 4: fn_billing_asaas_podar_eventos, payload vira {} e marca payload_podado_em (decisão 21/N38)", () => {
+  it("where payload_podado_em is null and recebido_em mais velho que p_dias", () => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_podar_eventos(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    const corpo = MIGRATION_0909.slice(inicio, fim);
+
+    expect(corpo).toMatch(/set payload = '\{\}'::jsonb,/);
+    expect(corpo).toMatch(/payload_podado_em = now\(\)/);
+    expect(corpo).toMatch(/where payload_podado_em is null\s*\n\s*and recebido_em < now\(\) - \(p_dias \|\| ' days'\)::interval;/);
+    expect(corpo).toMatch(/get diagnostics v_quantos = row_count;/);
   });
 });

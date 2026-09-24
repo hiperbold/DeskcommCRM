@@ -44809,6 +44809,417 @@ begin
   end if;
 end
 $$;
+
+-- ============================================================================
+-- PARTE 4 (Tarefa 4): registrar, reservar com lease, falha, reprocessar,
+-- podar.
+-- ============================================================================
+--
+-- Seis peças da Tarefa 4 da fase F5 (hiperbold/planos/fase-F5-tarefas.md):
+-- fn_billing_asaas_registrar_evento (o ingresso durável do webhook, com a
+-- quarentena da decisão 19/M6), fn_billing_asaas_reservar_eventos (a reserva
+-- com lease da decisão 20, for update skip locked), fn_billing_asaas_lease_e_
+-- meu (conferidor interno do lease, sem grant, para a Tarefa 5 usar dentro de
+-- fn_billing_asaas_aplicar_evento), fn_billing_asaas_registrar_falha (o
+-- backoff da decisão 20), fn_billing_asaas_reprocessar_evento (a tela do
+-- admin, decisão 20) e fn_billing_asaas_podar_eventos (a poda de payload da
+-- decisão 21, N38). fn_billing_asaas_aplicar_evento e as funções internas que
+-- aplicam pagamento, estorno e fim de assinatura são das Tarefas 5 e 6, fora
+-- desta migration.
+--
+-- Mesmo padrão de segurança das peças anteriores desta faixa: security
+-- definer, search_path fixo em public, pg_temp, revoke de public/anon/
+-- authenticated, grant só para service_role (exceto fn_billing_asaas_lease_e_
+-- meu, que fica SEM grant nenhum: é interna, chamada só de dentro de outra
+-- função da mesma faixa, e o dono da função já tem privilégio implícito sobre
+-- o que ele mesmo é dono), bloco final revogando de agent_worker (se a role
+-- existir).
+--
+-- Lógica de três valores: toda condição booleana que envolve coluna nula usa
+-- coalesce ou "is not distinct from" / "is distinct from" (HANDOFF item 14).
+
+-- ── 17. fn_billing_asaas_registrar_evento: o registro durável do evento, com
+-- quarentena para o que foge do formato ou do teto de tamanho (decisão
+-- 19/M6) ──
+--
+-- on conflict (event_id) do nothing: evento repetido é guardado uma vez só
+-- (decisão 11, idempotência em três camadas). Quarentena: o evento chega
+-- AUTENTICADO até aqui (a rota, Tarefa 12, já validou o token do webhook e o
+-- JSON com id/event), mas pode ainda assim violar o formato que a TABELA
+-- exige (event_id fora de 1 a 100 caracteres, event_type fora de
+-- ^[A-Z_]{3,64}$) ou passar do teto de 64 KB do payload. Em vez de deixar o
+-- insert estourar o CHECK (o que derrubaria a função inteira e faria a rota
+-- responder 500, e o Asaas reentregaria travando a fila SEQUENTIALLY), esta
+-- função corrige o que precisa para caber no CHECK, grava com resultado =
+-- 'erro' e o payload CORTADO (um resumo pequeno, nunca o original malformado
+-- ou grande demais), e devolve sucesso, para a rota sempre responder 200.
+create or replace function public.fn_billing_asaas_registrar_evento(
+  p_event_id text,
+  p_event_type text,
+  p_resource_id text,
+  p_ambiente text,
+  p_origem text,
+  p_payload jsonb
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_event_id text;
+  v_event_type text;
+  v_payload jsonb;
+  v_resultado text;
+  v_erro_codigo text;
+  v_quarentena boolean := false;
+  v_id uuid;
+begin
+  if p_ambiente not in ('sandbox', 'producao') then
+    raise exception 'billing_ambiente_invalido' using errcode = '22023';
+  end if;
+
+  if p_origem not in ('webhook', 'conciliacao') then
+    raise exception 'billing_origem_invalida' using errcode = '22023';
+  end if;
+
+  if p_payload is null then
+    raise exception 'billing_payload_obrigatorio' using errcode = '22023';
+  end if;
+
+  if p_event_id is null or char_length(p_event_id) < 1 or char_length(p_event_id) > 100 then
+    v_quarentena := true;
+    v_erro_codigo := 'evento_fora_do_formato:event_id';
+  elsif p_event_type is null or p_event_type !~ '^[A-Z_]{3,64}$' then
+    v_quarentena := true;
+    v_erro_codigo := 'evento_fora_do_formato:event_type';
+  -- Teto de 64 KB (65536 bytes) medido no payload já sanitizado. A rota
+  -- (Tarefa 12) também tem o seu próprio teto de 64 KB no CORPO cru; este é
+  -- um segundo teto, independente, porque a conciliação (Tarefa 16) monta
+  -- eventos sintéticos que nunca passam pela rota.
+  elsif octet_length(p_payload::text) > 65536 then
+    v_quarentena := true;
+    v_erro_codigo := 'evento_acima_do_teto:64kb';
+  end if;
+
+  if v_quarentena then
+    v_event_id := left(
+      coalesce(nullif(btrim(p_event_id), ''), 'quarentena:' || md5(coalesce(p_event_type, '') || p_payload::text)),
+      100
+    );
+    v_event_type := case
+      when p_event_type is not null and p_event_type ~ '^[A-Z_]{3,64}$' then p_event_type
+      else 'EVENTO_EM_QUARENTENA'
+    end;
+    v_payload := jsonb_build_object('quarentena', true, 'motivo', v_erro_codigo);
+    v_resultado := 'erro';
+  else
+    v_event_id := p_event_id;
+    v_event_type := p_event_type;
+    v_payload := p_payload;
+    v_resultado := 'aguardando';
+  end if;
+
+  insert into public.asaas_webhook_events (
+    event_id, event_type, resource_id, ambiente, origem, payload, resultado, erro_codigo, processado_em
+  ) values (
+    v_event_id, v_event_type, p_resource_id, p_ambiente, p_origem, v_payload, v_resultado,
+    left(v_erro_codigo, 200), case when v_quarentena then now() else null end
+  )
+  on conflict (event_id) do nothing
+  returning id into v_id;
+
+  return jsonb_build_object(
+    'novo', v_id is not null,
+    'event_id', v_event_id,
+    'resultado', v_resultado,
+    'quarentena', v_quarentena
+  );
+end;
+$$;
+
+comment on function public.fn_billing_asaas_registrar_evento(text, text, text, text, text, jsonb) is
+  '0909, Tarefa 4: registra o evento do webhook (ou o sintético conc:<id>:<status> da conciliação, Tarefa 16). on conflict (event_id) do nothing: evento repetido é guardado uma vez só, novo = false na segunda chamada. Quarentena (decisão 19/M6): event_id fora de 1..100 caracteres, event_type fora de ^[A-Z_]{3,64}$, ou payload acima de 64 KB nunca deixam o insert estourar o CHECK da tabela; a função corrige o que precisa para caber, grava resultado = erro com o payload CORTADO (um resumo pequeno, nunca o original) e devolve sucesso mesmo assim, para a rota do webhook (Tarefa 12) sempre responder 200 e não travar a fila SEQUENTIALLY do Asaas.';
+
+revoke execute on function public.fn_billing_asaas_registrar_evento(text, text, text, text, text, jsonb) from public, anon, authenticated;
+grant execute on function public.fn_billing_asaas_registrar_evento(text, text, text, text, text, jsonb) to service_role;
+
+-- ── 18. fn_billing_asaas_reservar_eventos: a reserva com lease (decisão 20)
+-- ──
+--
+-- for update skip locked: dois processadores reservando ao mesmo tempo nunca
+-- pegam o MESMO evento. Só pendentes (resultado = 'aguardando') com
+-- proxima_tentativa_em vencido (nulo, para o evento que nunca falhou, ou no
+-- passado) e com o lease vencido ou nulo (evento nunca reservado, ou
+-- reservado antes mas o lease expirou sem confirmação). Grava um lease_token
+-- NOVO em cada evento reservado, com o prazo p_lease_segundos (padrão 300,
+-- decisão 20).
+create or replace function public.fn_billing_asaas_reservar_eventos(p_limite integer, p_lease_segundos integer default 300)
+returns table (id uuid, event_type text, resource_id text, lease_token uuid)
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if p_limite is null or p_limite <= 0 then
+    raise exception 'billing_limite_invalido' using errcode = '22023';
+  end if;
+
+  if p_lease_segundos is null or p_lease_segundos <= 0 then
+    raise exception 'billing_lease_segundos_invalido' using errcode = '22023';
+  end if;
+
+  return query
+  with candidatos as (
+    select aw.id
+      from public.asaas_webhook_events aw
+     where aw.resultado = 'aguardando'
+       and (aw.proxima_tentativa_em is null or aw.proxima_tentativa_em <= now())
+       and (aw.lease_expira_em is null or aw.lease_expira_em < now())
+     order by aw.recebido_em
+     limit p_limite
+       for update skip locked
+  )
+  update public.asaas_webhook_events aw
+     set lease_token = gen_random_uuid(),
+         lease_expira_em = now() + (p_lease_segundos || ' seconds')::interval
+    from candidatos
+   where aw.id = candidatos.id
+  returning aw.id, aw.event_type, aw.resource_id, aw.lease_token;
+end;
+$$;
+
+comment on function public.fn_billing_asaas_reservar_eventos(integer, integer) is
+  '0909, Tarefa 4, decisão 20: reserva até p_limite eventos pendentes com for update skip locked (dois processadores concorrentes nunca pegam o mesmo evento), só os que têm proxima_tentativa_em vencido (nulo ou no passado) e o lease vencido ou nulo, e grava um lease_token NOVO com validade p_lease_segundos (padrão 300). fn_billing_asaas_aplicar_evento (Tarefa 5, fora desta migration) recusa gravar quando o lease não é mais o do chamador (fn_billing_asaas_lease_e_meu, abaixo).';
+
+revoke execute on function public.fn_billing_asaas_reservar_eventos(integer, integer) from public, anon, authenticated;
+grant execute on function public.fn_billing_asaas_reservar_eventos(integer, integer) to service_role;
+
+-- ── 19. fn_billing_asaas_lease_e_meu: conferidor interno do lease, SEM
+-- grant (decisão 20) ──
+--
+-- Interna, para a Tarefa 5 usar dentro de fn_billing_asaas_aplicar_evento:
+-- nenhum grant a service_role, de propósito. O dono da função (o mesmo dono
+-- de toda a faixa) já tem privilégio implícito sobre o que é dono; quem
+-- chama de fora (authenticated, anon, e o próprio service_role sem passar
+-- por outra função da faixa) nunca executa esta diretamente. O revoke
+-- inclui service_role explicitamente (e não só public/anon/authenticated,
+-- como nas outras peças): este banco tem "alter default privileges" que
+-- concede EXECUTE em função nova a service_role (e a agent_worker) por
+-- padrão, o mesmo mecanismo que o HANDOFF descreve para agent_worker; sem
+-- este revoke, service_role ganharia a função de graça, sem grant nenhum.
+create or replace function public.fn_billing_asaas_lease_e_meu(p_evento uuid, p_lease_token uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1 from public.asaas_webhook_events
+     where id = p_evento
+       and lease_token is not null
+       and p_lease_token is not null
+       and lease_token = p_lease_token
+       and lease_expira_em is not null
+       and lease_expira_em > now()
+  );
+$$;
+
+comment on function public.fn_billing_asaas_lease_e_meu(uuid, uuid) is
+  '0909, Tarefa 4, decisão 20: verdadeiro só quando p_lease_token é o lease ATUAL do evento e ainda não venceu. Interna, SEM grant a NINGUÉM (revoke explícito de public/anon/authenticated/service_role, e de agent_worker no bloco condicional abaixo, por causa do alter default privileges deste banco): chamada de dentro de fn_billing_asaas_aplicar_evento (Tarefa 5, fora desta migration), nunca diretamente de fora.';
+
+revoke execute on function public.fn_billing_asaas_lease_e_meu(uuid, uuid) from public, anon, authenticated, service_role;
+
+-- ── 20. fn_billing_asaas_registrar_falha: o backoff (decisão 20) ──
+--
+-- Recusa (billing_lease_invalido, 22023) se p_lease_token não é mais o dono
+-- do evento: quem perdeu a corrida de fn_billing_asaas_reservar_eventos, ou
+-- cujo lease já venceu, nunca grava a falha por cima de quem reservou
+-- depois. tentativas + 1; até a nona falha (tentativas resultante até 9)
+-- volta a 'aguardando' com backoff now() + least(2^tentativas minutos, 6
+-- horas); na décima (tentativas = 10) vira 'erro', visível ao admin
+-- (fn_billing_asaas_reprocessar_evento, abaixo). erro_codigo cortado em 200
+-- caracteres (mesmo teto da coluna).
+create or replace function public.fn_billing_asaas_registrar_falha(p_evento uuid, p_lease_token uuid, p_codigo text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_evento record;
+  v_tentativas integer;
+  v_resultado text;
+  v_proxima timestamptz;
+begin
+  select * into v_evento
+    from public.asaas_webhook_events
+    where id = p_evento
+    for update;
+
+  if not found then
+    raise exception 'billing_evento_nao_encontrado' using errcode = 'P0002';
+  end if;
+
+  if p_lease_token is null or v_evento.lease_token is distinct from p_lease_token then
+    raise exception 'billing_lease_invalido' using errcode = '22023';
+  end if;
+
+  v_tentativas := v_evento.tentativas + 1;
+
+  if v_tentativas >= 10 then
+    v_resultado := 'erro';
+    v_proxima := null;
+  else
+    v_resultado := 'aguardando';
+    v_proxima := now() + least(
+      power(2::double precision, v_tentativas::double precision) * interval '1 minute',
+      interval '6 hours'
+    );
+  end if;
+
+  update public.asaas_webhook_events
+     set tentativas = v_tentativas,
+         resultado = v_resultado,
+         proxima_tentativa_em = v_proxima,
+         erro_codigo = left(p_codigo, 200),
+         processado_em = now(),
+         lease_token = null,
+         lease_expira_em = null
+   where id = p_evento;
+
+  return jsonb_build_object(
+    'evento_id', p_evento,
+    'tentativas', v_tentativas,
+    'resultado', v_resultado,
+    'proxima_tentativa_em', v_proxima
+  );
+end;
+$$;
+
+comment on function public.fn_billing_asaas_registrar_falha(uuid, uuid, text) is
+  '0909, Tarefa 4, decisão 20: grava a falha do processamento de um evento reservado. Recusa (billing_lease_invalido, 22023) se p_lease_token não é mais o lease atual do evento. tentativas + 1; até a nona falha volta a aguardando com backoff now() + least(2^tentativas minutos, 6 horas); na décima vira erro. erro_codigo cortado em 200 caracteres. Libera o lease (lease_token/lease_expira_em nulos) nos dois casos, para o evento voltar a ser elegível pela próxima reserva (ou ficar fora do índice dos pendentes, quando virou erro).';
+
+revoke execute on function public.fn_billing_asaas_registrar_falha(uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.fn_billing_asaas_registrar_falha(uuid, uuid, text) to service_role;
+
+-- ── 21. fn_billing_asaas_reprocessar_evento: a tela do admin reabre um
+-- evento em erro (decisão 20) ──
+--
+-- Só parte de resultado = 'erro' (billing_evento_nao_esta_em_erro, 22023,
+-- para qualquer outro estado). Zera tentativas, limpa erro_codigo e o lease,
+-- e proxima_tentativa_em = now(): a próxima rodada de fn_billing_asaas_
+-- reservar_eventos já pega o evento de novo. p_actor é recebido para a
+-- auditoria do chamador (Tarefa 17, fora desta migration): esta tabela não
+-- tem coluna própria para quem pediu o reprocesso (ao contrário de
+-- billing_contract_eventos, 0908), então não é gravado aqui, só o log de
+-- auditoria da ação do admin registra quem foi (mesmo padrão de p_actor em
+-- fn_billing_pedido_marcar, Tarefa 3).
+create or replace function public.fn_billing_asaas_reprocessar_evento(p_evento uuid, p_actor uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_evento record;
+begin
+  select * into v_evento
+    from public.asaas_webhook_events
+    where id = p_evento
+    for update;
+
+  if not found then
+    raise exception 'billing_evento_nao_encontrado' using errcode = 'P0002';
+  end if;
+
+  if v_evento.resultado <> 'erro' then
+    raise exception 'billing_evento_nao_esta_em_erro' using errcode = '22023';
+  end if;
+
+  update public.asaas_webhook_events
+     set resultado = 'aguardando',
+         tentativas = 0,
+         proxima_tentativa_em = now(),
+         erro_codigo = null,
+         lease_token = null,
+         lease_expira_em = null
+   where id = p_evento;
+
+  return jsonb_build_object(
+    'evento_id', p_evento,
+    'resultado_anterior', v_evento.resultado,
+    'resultado_novo', 'aguardando'
+  );
+end;
+$$;
+
+comment on function public.fn_billing_asaas_reprocessar_evento(uuid, uuid) is
+  '0909, Tarefa 4, decisão 20: reabre um evento em erro (billing_evento_nao_esta_em_erro, 22023, para qualquer outro resultado). Zera tentativas e proxima_tentativa_em = now(), para a próxima rodada de fn_billing_asaas_reservar_eventos pegar o evento de novo. p_actor recebido para a auditoria do chamador (Tarefa 17, fora desta migration), não gravado por esta função: asaas_webhook_events não tem coluna própria para quem pediu.';
+
+revoke execute on function public.fn_billing_asaas_reprocessar_evento(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_asaas_reprocessar_evento(uuid, uuid) to service_role;
+
+-- ── 22. fn_billing_asaas_podar_eventos: a poda de payload (decisão 21, N38)
+-- ──
+--
+-- payload vira '{}' e payload_podado_em recebe now() para todo evento mais
+-- velho que p_dias (medido por recebido_em) que ainda não foi podado.
+-- Devolve quantos foram podados nesta chamada.
+create or replace function public.fn_billing_asaas_podar_eventos(p_dias integer)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_quantos integer;
+begin
+  if p_dias is null or p_dias <= 0 then
+    raise exception 'billing_dias_invalido' using errcode = '22023';
+  end if;
+
+  update public.asaas_webhook_events
+     set payload = '{}'::jsonb,
+         payload_podado_em = now()
+   where payload_podado_em is null
+     and recebido_em < now() - (p_dias || ' days')::interval;
+
+  get diagnostics v_quantos = row_count;
+
+  return jsonb_build_object('podados', v_quantos);
+end;
+$$;
+
+comment on function public.fn_billing_asaas_podar_eventos(integer) is
+  '0909, Tarefa 4, decisão 21 (N38): payload vira {} e payload_podado_em recebe now() para todo evento com recebido_em mais velho que p_dias e ainda não podado. Devolve quantos foram podados nesta chamada. p_dias vem da chamada da cron conciliar-asaas (Tarefa 16, fora desta migration; padrão 180 dias).';
+
+revoke execute on function public.fn_billing_asaas_podar_eventos(integer) from public, anon, authenticated;
+grant execute on function public.fn_billing_asaas_podar_eventos(integer) to service_role;
+
+-- ── 23. agent_worker (se a role existir) perde execute nas seis funções da
+-- Tarefa 4, num único bloco condicional (mesmo padrão das seções 7, 8 e 16,
+-- acima) ──
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function '
+      || 'public.fn_billing_asaas_registrar_evento(text, text, text, text, text, jsonb), '
+      || 'public.fn_billing_asaas_reservar_eventos(integer, integer), '
+      || 'public.fn_billing_asaas_lease_e_meu(uuid, uuid), '
+      || 'public.fn_billing_asaas_registrar_falha(uuid, uuid, text), '
+      || 'public.fn_billing_asaas_reprocessar_evento(uuid, uuid), '
+      || 'public.fn_billing_asaas_podar_eventos(integer) '
+      || 'from agent_worker';
+  end if;
+end
+$$;
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria
