@@ -285,6 +285,26 @@ describe("1. Pagamento", () => {
     });
   });
 
+  // Correção (revisão F4, item 4): billing_contract_eventos, mesmo desenho
+  // deny-all de billing_payments (RLS ligada, ZERO policy, revoke all de
+  // anon/authenticated). Citada em tests/invariants/rls-completude-varredura.test.ts
+  // (PROVA_PROPRIA).
+  describe("`authenticated` não lê nem grava billing_contract_eventos (correção revisão F4, item 4: telas leem pelo servidor)", () => {
+    it("select barrado", () => {
+      esperaBarrado(USER_PRIV, `select id from public.billing_contract_eventos limit 1`, "select em billing_contract_eventos");
+    });
+
+    it("insert barrado", () => {
+      esperaBarrado(
+        USER_PRIV,
+        `insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para)
+           select organization_id, id, 'estado', 'ativa', 'cancelada'
+           from public.billing_contracts where organization_id = '${ORG_PRIV}'`,
+        "insert em billing_contract_eventos",
+      );
+    });
+  });
+
   // ── estorno (decisão 2) e o estorno duplo (achado da Tarefa 1, corrigido
   //    na própria 0908 via billing_payments.estorna_pagamento_id) ──
   const ORG_ESTORNO = "09080001-0000-4000-8000-000000000007";
@@ -405,13 +425,44 @@ describe("2. Estados", () => {
     { nome: "atrasada -> ativa, com período futuro, permitida", de: "atrasada", periodo: "futuro", para: "ativa", permitida: true },
     { nome: "cancelada -> ativa, com período futuro, permitida", de: "cancelada", periodo: "futuro", para: "ativa", permitida: true },
     { nome: "suspensa -> avaliacao, com período preenchido (futuro), permitida", de: "suspensa", periodo: "futuro", para: "avaliacao", permitida: true },
-    { nome: "atrasada -> avaliacao, com período preenchido (passado), permitida (só exige NÃO NULO)", de: "atrasada", periodo: "passado", para: "avaliacao", permitida: true },
+    // Correção (revisão F4, item 2): avaliacao passa a exigir período FUTURO,
+    // não só preenchido. Período PASSADO agora é 22023 próprio
+    // (billing_avaliacao_sem_data_futura), não mais permitido.
+    { nome: "atrasada -> avaliacao, com período FUTURO, permitida", de: "atrasada", periodo: "futuro", para: "avaliacao", permitida: true },
+    {
+      nome: "atrasada -> avaliacao, com período preenchido no PASSADO, 22023 (billing_avaliacao_sem_data_futura, correção revisão F4 item 2)",
+      de: "atrasada",
+      periodo: "passado",
+      para: "avaliacao",
+      permitida: false,
+      mensagemDeErro: "billing_avaliacao_sem_data_futura",
+    },
     { nome: "avaliacao -> atrasada, PROIBIDA (atrasada só sai de ativa)", de: "avaliacao", periodo: null, para: "atrasada", permitida: false, mensagemDeErro: "billing_transicao_nao_permitida" },
     { nome: "suspensa -> atrasada, PROIBIDA (atrasada só sai de ativa)", de: "suspensa", periodo: null, para: "atrasada", permitida: false, mensagemDeErro: "billing_transicao_nao_permitida" },
     { nome: "atrasada -> suspensa, PROIBIDA (suspensa só sai de ativa)", de: "atrasada", periodo: null, para: "suspensa", permitida: false, mensagemDeErro: "billing_transicao_nao_permitida" },
     { nome: "cancelada -> atrasada, PROIBIDA", de: "cancelada", periodo: null, para: "atrasada", permitida: false, mensagemDeErro: "billing_transicao_nao_permitida" },
     { nome: "cancelada -> ativa, SEM período vigente, 22023 (billing_estado_sem_periodo_vigente)", de: "cancelada", periodo: null, para: "ativa", permitida: false, mensagemDeErro: "billing_estado_sem_periodo_vigente" },
-    { nome: "ativa -> avaliacao, SEM data de fim, 22023", de: "ativa", periodo: null, para: "avaliacao", permitida: false, mensagemDeErro: "billing_transicao_nao_permitida" },
+    {
+      nome: "ativa -> avaliacao, SEM data de fim, 22023 (billing_avaliacao_sem_data_futura, correção revisão F4 item 2)",
+      de: "ativa",
+      periodo: null,
+      para: "avaliacao",
+      permitida: false,
+      mensagemDeErro: "billing_avaliacao_sem_data_futura",
+    },
+    // Correção (revisão F4, item 3): ativa -> ativa é sucesso SEM MUDANÇA
+    // quando o período está vigente; com período vencido mantém o erro atual
+    // (billing_estado_sem_periodo_vigente, a mesma mensagem de qualquer outra
+    // transição para ativa sem período vigente).
+    { nome: "ativa -> ativa, com período FUTURO, sucesso sem mudança (correção revisão F4 item 3)", de: "ativa", periodo: "futuro", para: "ativa", permitida: true },
+    {
+      nome: "ativa -> ativa, com período VENCIDO, mantém o erro (billing_estado_sem_periodo_vigente, correção revisão F4 item 3)",
+      de: "ativa",
+      periodo: "passado",
+      para: "ativa",
+      permitida: false,
+      mensagemDeErro: "billing_estado_sem_periodo_vigente",
+    },
   ];
 
   for (const caso of CASOS) {
@@ -646,20 +697,44 @@ describe("4. Avisos", () => {
 
   const ORG_TRES_DIAS = "09080004-0000-4000-8000-000000000002";
 
-  it("atrasada há tempo suficiente (grace_days=7 > 3) emite TAMBÉM o aviso de três dias antes da suspensão, junto do de entrada", () => {
+  it("atrasada há tempo suficiente (grace_days=7 > 3) emite TAMBÉM o aviso de três dias antes da suspensão, junto do de entrada, quando o efeito vale ou vai valer (correção revisão F4, item 7)", () => {
     // data_suspensao = current_period_end + 7 dias. Escolhendo
     // current_period_end = now() - 5 dias, data_suspensao = now() + 2 dias,
     // que cai dentro da janela [data_suspensao - 3 dias, data_suspensao) já
-    // na primeira chamada (decisão 9).
+    // na primeira chamada (decisão 9). Correção (revisão F4, item 7): o
+    // aviso de três dias só nasce quando o efeito VAI VALER de verdade
+    // (modo=bloquear E a organização tem carência definida); modo volta a
+    // 'avisar' no fim do MESMO script, sem vazar para os outros casos deste
+    // arquivo.
     comoServico(`
       ${criarOrgComContratoPadraoSql(ORG_TRES_DIAS, "aviso-tres-dias")}
-      update public.billing_contracts set status = 'atrasada', current_period_end = now() - interval '5 days' where organization_id = '${ORG_TRES_DIAS}';
+      update public.billing_contracts
+        set status = 'atrasada', current_period_end = now() - interval '5 days', bloqueio_a_partir_de = now() - interval '1 day'
+        where organization_id = '${ORG_TRES_DIAS}';
+      update public.billing_settings set modo = 'bloquear' where id = 1;
       select public.fn_billing_conferir_vencimento('${ORG_TRES_DIAS}'::uuid);
+      update public.billing_settings set modo = 'avisar' where id = 1;
     `);
     const titulos = comoServico(
       `select 'SONDA|' || title from public.agent_inbox_items where organization_id = '${ORG_TRES_DIAS}' and ref_kind = 'billing_assinatura' order by title;`,
     );
     expect(titulos).toEqual(["Pagamento em atraso", "Suspensão em três dias"]);
+  });
+
+  const ORG_ATRASADA_SEM_AMEACA = "09080004-0000-4000-8000-000000000006";
+
+  it("atrasada SEM ameaça real (modo avisar): texto neutro, sem data nem 'Suspensão em três dias' (correção revisão F4, item 7)", () => {
+    comoServico(`
+      ${criarOrgComContratoPadraoSql(ORG_ATRASADA_SEM_AMEACA, "aviso-atrasada-sem-ameaca")}
+      update public.billing_contracts
+        set status = 'atrasada', current_period_end = now() - interval '5 days', bloqueio_a_partir_de = null
+        where organization_id = '${ORG_ATRASADA_SEM_AMEACA}';
+      select public.fn_billing_conferir_vencimento('${ORG_ATRASADA_SEM_AMEACA}'::uuid);
+    `);
+    const linhas = comoServico(
+      `select 'SONDA|' || title || '|' || body from public.agent_inbox_items where organization_id = '${ORG_ATRASADA_SEM_AMEACA}' and ref_kind = 'billing_assinatura';`,
+    );
+    expect(linhas).toEqual(["Pagamento em atraso|O pagamento da assinatura está em atraso. Regularize com o suporte."]);
   });
 
   const ORG_SUSPENSA = "09080004-0000-4000-8000-000000000003";

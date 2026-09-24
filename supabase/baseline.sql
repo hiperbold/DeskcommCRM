@@ -42166,6 +42166,65 @@ create unique index if not exists billing_payments_estorna_pagamento_id_unique
   where estorna_pagamento_id is not null;
 
 -- ============================================================================
+-- 1c. billing_contract_eventos: registro de autor e motivo das transições da
+-- assinatura, SÓ DE ACRÉSCIMO (correção, revisão F4, item 4).
+-- ============================================================================
+--
+-- fn_billing_mudar_estado, fn_billing_corrigir_periodo,
+-- fn_billing_cancelar_no_fim_do_periodo (seções 5, 4 e 6, abaixo) e as três
+-- transições de fn_billing_conferir_vencimento (seção 7, abaixo; actor nulo,
+-- motivo 'conferidor') gravam uma linha aqui dentro da MESMA transação da
+-- mudança que registram: sem isto, a auditoria de quem mudou o quê e por quê
+-- dependia inteiramente do chamador em TypeScript (Tarefa 5, fora desta
+-- migração), sem garantia nenhuma de que o registro sobrevive se a mudança em
+-- si for revertida ou vice-versa.
+--
+-- Mesmo molde de billing_payments (Parte 1, acima) e do livro-caixa de
+-- tokens (0906): SÓ DE ACRÉSCIMO, ninguém tem update, delete nem truncate,
+-- nem o service_role, e não há gatilho BEFORE UPDATE/DELETE (a exclusão em
+-- cascata da organização funciona porque a ação referencial roda como dono
+-- da tabela). RLS ligada SEM NENHUMA POLICY (mesmo padrão de billing_payments:
+-- service_role tem bypassrls, então lê/escreve mesmo sem policy; anon e
+-- authenticated não têm bypassrls e RLS sem policy nenhuma nega tudo).
+--
+-- actor nulo é válido de propósito: as transições do conferidor diário
+-- (fn_billing_conferir_vencimento) não têm um humano por trás.
+--
+-- Idempotente: create table if not exists, create index if not exists.
+create table if not exists public.billing_contract_eventos (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.organizations(id) on delete cascade,
+  contract_id uuid not null references public.billing_contracts(id) on delete cascade,
+  tipo text not null,
+  de text,
+  para text,
+  motivo text,
+  actor uuid,
+  criado_em timestamptz not null default now(),
+  constraint billing_contract_eventos_tipo_check check (tipo in ('estado', 'periodo', 'cancelar_no_fim', 'conferidor'))
+);
+
+comment on table public.billing_contract_eventos is
+  'Correção (revisão F4, item 4): registro de autor e motivo das transições da assinatura (mudar_estado, corrigir_periodo, cancelar_no_fim_do_periodo, e as transições do conferidor diário com actor nulo e motivo=conferidor), gravado dentro da MESMA transação da mudança que registra. SÓ DE ACRÉSCIMO: ninguém tem update, delete nem truncate, nem o service_role (ver grants); RLS ligada sem NENHUMA policy (service_role bypassa RLS, anon/authenticated não têm policy nenhuma para se apoiar). tipo é um dos quatro valores fechados pelo CHECK; de/para em texto (current_period_end pode ser nulo antes da primeira correção de período, e cancel_at_period_end é boolean); actor nulo é válido (conferidor diário não tem humano por trás).';
+comment on column public.billing_contract_eventos.actor is
+  'Correção (revisão F4, item 4): nulo nas transições do conferidor diário (fn_billing_conferir_vencimento), preenchido com o p_actor do chamador nas três funções manuais do admin.';
+
+create index if not exists billing_contract_eventos_org_idx
+  on public.billing_contract_eventos (organization_id, criado_em desc);
+create index if not exists billing_contract_eventos_contract_id_idx
+  on public.billing_contract_eventos (contract_id);
+
+alter table public.billing_contract_eventos enable row level security;
+
+revoke all on public.billing_contract_eventos from anon, authenticated;
+
+-- Só select e insert para service_role (decisão do item 4: SÓ DE ACRÉSCIMO,
+-- mesmo padrão de billing_payments). Sem policy nenhuma: quem não tem
+-- bypassrls (anon, authenticated) não enxerga nem escreve nada.
+grant select, insert on public.billing_contract_eventos to service_role;
+revoke update, delete, truncate on public.billing_contract_eventos from service_role;
+
+-- ============================================================================
 -- 2. fn_billing_registrar_pagamento: registra um pagamento e renova o
 -- período (decisão 2).
 -- ============================================================================
@@ -42451,9 +42510,14 @@ begin
     set current_period_end = v_periodo_fim
     where id = v_contract.id;
 
-  -- p_motivo e p_actor recebidos para a auditoria do CHAMADOR (mesmo padrão
-  -- de p_actor em fn_billing_trocar_plano/fn_billing_definir_modo, 0904/
-  -- 0907): não são gravados por esta função.
+  -- Correção (revisão F4, item 4): evento próprio dentro da MESMA transação
+  -- (tipo=periodo, de/para em texto porque current_period_end pode ser nulo
+  -- antes da primeira correção). p_motivo e p_actor continuam recebidos
+  -- também para a auditoria do CHAMADOR (mesmo padrão de p_actor em
+  -- fn_billing_trocar_plano/fn_billing_definir_modo, 0904/0907).
+  insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+  values (p_org, v_contract.id, 'periodo', v_contract.current_period_end::text, v_periodo_fim::text, p_motivo, p_actor);
+
   return jsonb_build_object(
     'current_period_end_anterior', v_contract.current_period_end,
     'current_period_end_novo', v_periodo_fim
@@ -42462,7 +42526,7 @@ end;
 $$;
 
 comment on function public.fn_billing_corrigir_periodo(uuid, date, text, uuid) is
-  '0908, decisão 2: corrige o fim do período por erro de digitação (p_motivo obrigatório, 22023 se ausente/vazio). Só mexe em current_period_end; current_period_start e status ficam como estão. p_actor recebido para a auditoria do chamador, não gravado por esta função (mesmo padrão de 0904/0907).';
+  '0908, decisão 2: corrige o fim do período por erro de digitação (p_motivo obrigatório, 22023 se ausente/vazio). Só mexe em current_period_end; current_period_start e status ficam como estão. p_actor recebido para a auditoria do chamador, não gravado por esta função (mesmo padrão de 0904/0907). Correção (revisão F4, item 4): grava um evento em billing_contract_eventos (tipo=periodo, de/para em texto, motivo=p_motivo, actor=p_actor) na MESMA transação.';
 
 revoke execute on function public.fn_billing_corrigir_periodo(uuid, date, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_corrigir_periodo(uuid, date, text, uuid) to service_role;
@@ -42501,6 +42565,20 @@ begin
     raise exception 'billing_contrato_nao_encontrado' using errcode = 'P0002';
   end if;
 
+  -- Correção (revisão F4, item 3): ativa -> ativa é sucesso SEM MUDANÇA
+  -- quando o período está vigente (reenvio idempotente, não é uma transição
+  -- de verdade), retorno antecipado antes de qualquer checagem de destino
+  -- abaixo. Com período vencido, cai no MESMO caminho de sempre (v_permitido
+  -- fica false porque 'ativa' não está na lista de origem aceita por
+  -- p_estado = 'ativa', logo abaixo) e mantém o erro atual
+  -- (billing_estado_sem_periodo_vigente): reenviar não finge que o período
+  -- está em dia.
+  if p_estado = 'ativa' and v_contract.status = 'ativa'
+    and coalesce(v_contract.current_period_end > now(), false)
+  then
+    return jsonb_build_object('estado_anterior', 'ativa', 'estado_novo', 'ativa');
+  end if;
+
   -- Decisão 3: uma checagem por destino. coalesce(..., false) em toda
   -- condição booleana que envolve current_period_end (pode ser nulo): lógica
   -- de três valores nunca pode decidir "permitido" por acidente.
@@ -42509,7 +42587,14 @@ begin
     v_permitido := true;
   elsif p_estado = 'avaliacao' then
     -- Reusa o current_period_end já existente; não cria período novo.
-    v_permitido := coalesce(v_contract.current_period_end is not null, false);
+    -- Correção (revisão F4, item 2): exige período FUTURO (current_period_end
+    -- > now()), não só preenchido -- avaliação com data no passado não é
+    -- avaliação de verdade, e o erro é próprio (billing_avaliacao_sem_data_
+    -- futura, abaixo), não o genérico billing_transicao_nao_permitida.
+    v_permitido := coalesce(
+      v_contract.current_period_end is not null and v_contract.current_period_end > now(),
+      false
+    );
   elsif p_estado in ('atrasada', 'suspensa') then
     -- Só sai de 'ativa' por esta função (a transição atrasada -> suspensa é
     -- do conferidor diário, decisão 4, não desta função manual).
@@ -42526,6 +42611,8 @@ begin
   if not coalesce(v_permitido, false) then
     if p_estado = 'ativa' then
       raise exception 'billing_estado_sem_periodo_vigente' using errcode = '22023';
+    elsif p_estado = 'avaliacao' then
+      raise exception 'billing_avaliacao_sem_data_futura' using errcode = '22023';
     else
       raise exception 'billing_transicao_nao_permitida' using errcode = '22023';
     end if;
@@ -42535,14 +42622,20 @@ begin
     set status = p_estado
     where id = v_contract.id;
 
-  -- p_motivo e p_actor recebidos para a auditoria do chamador, não gravados
-  -- por esta função (mesmo padrão de 0904/0907).
+  -- Correção (revisão F4, item 4): registro de autor e motivo dentro da
+  -- MESMA transação, na tabela de acréscimo billing_contract_eventos (seção
+  -- nova, Parte 4, abaixo). p_motivo e p_actor continuam recebidos também
+  -- para a auditoria do chamador (mesmo padrão de 0904/0907), agora com um
+  -- segundo destino, próprio da assinatura.
+  insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+  values (p_org, v_contract.id, 'estado', v_contract.status, p_estado, p_motivo, p_actor);
+
   return jsonb_build_object('estado_anterior', v_contract.status, 'estado_novo', p_estado);
 end;
 $$;
 
 comment on function public.fn_billing_mudar_estado(uuid, text, text, uuid) is
-  '0908, decisão 3: transições manuais do admin. Qualquer estado -> cancelada, sem condição. ativa -> atrasada ou suspensa. atrasada/suspensa/cancelada -> ativa só com período vigente (current_period_end preenchido e no futuro; senão 22023, "registre um pagamento antes"). avaliacao exige current_period_end já preenchido (reusa o período existente). Toda transição fora desta lista é 22023.';
+  '0908, decisão 3: transições manuais do admin. Qualquer estado -> cancelada, sem condição. ativa -> atrasada ou suspensa. atrasada/suspensa/cancelada -> ativa só com período vigente (current_period_end preenchido e no futuro; senão 22023, "registre um pagamento antes"). avaliacao exige current_period_end já preenchido e FUTURO (senão 22023 próprio, billing_avaliacao_sem_data_futura). ativa -> ativa com período vigente é sucesso sem mudança (idempotência de reenvio); com período vencido mantém o erro de sempre. Toda transição fora desta lista é 22023. Correção (revisão F4, item 4): grava um evento em billing_contract_eventos (tipo=estado, de/para/motivo/actor) na MESMA transação, exceto no atalho ativa->ativa sem mudança (não é uma transição de verdade).';
 
 revoke execute on function public.fn_billing_mudar_estado(uuid, text, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_mudar_estado(uuid, text, text, uuid) to service_role;
@@ -42584,12 +42677,19 @@ begin
     set cancel_at_period_end = p_sim
     where id = v_contract.id;
 
+  -- Correção (revisão F4, item 4): evento próprio dentro da MESMA transação
+  -- (tipo=cancelar_no_fim). Esta função não recebe p_motivo (não existe na
+  -- assinatura, decisão 3): motivo fica nulo, mesmo padrão de "sem motivo
+  -- explícito" que o resto do arquivo usa quando a operação não pede um.
+  insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+  values (p_org, v_contract.id, 'cancelar_no_fim', v_contract.cancel_at_period_end::text, p_sim::text, null, p_actor);
+
   return jsonb_build_object('cancel_at_period_end', p_sim);
 end;
 $$;
 
 comment on function public.fn_billing_cancelar_no_fim_do_periodo(uuid, boolean, uuid) is
-  '0908, decisão 3: liga/desliga billing_contracts.cancel_at_period_end. Não mexe em status nem em período.';
+  '0908, decisão 3: liga/desliga billing_contracts.cancel_at_period_end. Não mexe em status nem em período. Correção (revisão F4, item 4): grava um evento em billing_contract_eventos (tipo=cancelar_no_fim, de/para em texto, motivo nulo, actor=p_actor) na MESMA transação.';
 
 revoke execute on function public.fn_billing_cancelar_no_fim_do_periodo(uuid, boolean, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_cancelar_no_fim_do_periodo(uuid, boolean, uuid) to service_role;
@@ -42619,10 +42719,12 @@ as $$
 declare
   v_current_period_end timestamptz;
   v_grace_days integer;
+  v_contract_id uuid;
+  v_estado_anterior text;
   v_estado_novo text;
 begin
-  select bc.current_period_end, bp.grace_days
-    into v_current_period_end, v_grace_days
+  select bc.current_period_end, bp.grace_days, bc.id
+    into v_current_period_end, v_grace_days, v_contract_id
     from public.billing_contracts bc
     join public.billing_plans bp on bp.id = bc.plan_id
     where bc.organization_id = p_org;
@@ -42635,14 +42737,36 @@ begin
   -- (a) cancel_at_period_end e período vencido: cancelada. Vence ANTES do
   -- atraso (decisão 4): quem pediu para não renovar não passa por
   -- "atrasada" no caminho.
-  update public.billing_contracts
-    set status = 'cancelada'
-    where organization_id = p_org
-      and status <> 'cancelada'
-      and coalesce(cancel_at_period_end, false)
-      and current_period_end <= now()
-    returning status into v_estado_novo;
+  --
+  -- Correção (revisão F4, item 4): o UPDATE simples só devolvia o status
+  -- NOVO (sempre o mesmo literal), sem capturar o status ANTIGO para o
+  -- evento em billing_contract_eventos. O CTE "alvo" abaixo faz select ...
+  -- for update com o MESMO where do UPDATE original (nenhuma mudança na
+  -- regra de elegibilidade nem na garantia de atomicidade que o cabeçalho
+  -- desta função documenta: a leitura ainda é DIRETO da tabela, dentro do
+  -- MESMO comando, e o for update ainda prende a linha contra o select ...
+  -- for update de fn_billing_registrar_pagamento sob o advisory lock dela),
+  -- só que agora guarda o status antigo antes do UPDATE que referencia essa
+  -- mesma linha travada.
+  with alvo as (
+    select id, status as status_antigo
+      from public.billing_contracts
+      where organization_id = p_org
+        and status <> 'cancelada'
+        and coalesce(cancel_at_period_end, false)
+        and current_period_end <= now()
+      for update
+  ), atualizado as (
+    update public.billing_contracts bc
+      set status = 'cancelada'
+      from alvo
+      where bc.id = alvo.id
+      returning alvo.status_antigo, bc.status as status_novo
+  )
+  select status_antigo, status_novo into v_estado_anterior, v_estado_novo from atualizado;
   if found then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (p_org, v_contract_id, 'conferidor', v_estado_anterior, v_estado_novo, 'conferidor', null);
     -- Tarefa 2, decisão 9: fn_billing_avisar_assinatura roda DEPOIS de cada
     -- mudança de estado (dedup própria por período/estado, nunca duplica; erro
     -- interno vira warning, nunca desfaz a transição que já aconteceu, ver o
@@ -42652,13 +42776,24 @@ begin
   end if;
 
   -- (b) ativa ou avaliacao com período vencido: atrasada.
-  update public.billing_contracts
-    set status = 'atrasada'
-    where organization_id = p_org
-      and status in ('ativa', 'avaliacao')
-      and current_period_end <= now()
-    returning status into v_estado_novo;
+  with alvo as (
+    select id, status as status_antigo
+      from public.billing_contracts
+      where organization_id = p_org
+        and status in ('ativa', 'avaliacao')
+        and current_period_end <= now()
+      for update
+  ), atualizado as (
+    update public.billing_contracts bc
+      set status = 'atrasada'
+      from alvo
+      where bc.id = alvo.id
+      returning alvo.status_antigo, bc.status as status_novo
+  )
+  select status_antigo, status_novo into v_estado_anterior, v_estado_novo from atualizado;
   if found then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (p_org, v_contract_id, 'conferidor', v_estado_anterior, v_estado_novo, 'conferidor', null);
     -- Tarefa 2, decisão 9: fn_billing_avisar_assinatura roda DEPOIS de cada
     -- mudança de estado (dedup própria por período/estado, nunca duplica; erro
     -- interno vira warning, nunca desfaz a transição que já aconteceu, ver o
@@ -42669,13 +42804,24 @@ begin
 
   -- (c) atrasada além da carência do plano (current_period_end + grace_days
   -- no passado): suspensa.
-  update public.billing_contracts
-    set status = 'suspensa'
-    where organization_id = p_org
-      and status = 'atrasada'
-      and current_period_end + (v_grace_days || ' days')::interval <= now()
-    returning status into v_estado_novo;
+  with alvo as (
+    select id, status as status_antigo
+      from public.billing_contracts
+      where organization_id = p_org
+        and status = 'atrasada'
+        and current_period_end + (v_grace_days || ' days')::interval <= now()
+      for update
+  ), atualizado as (
+    update public.billing_contracts bc
+      set status = 'suspensa'
+      from alvo
+      where bc.id = alvo.id
+      returning alvo.status_antigo, bc.status as status_novo
+  )
+  select status_antigo, status_novo into v_estado_anterior, v_estado_novo from atualizado;
   if found then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (p_org, v_contract_id, 'conferidor', v_estado_anterior, v_estado_novo, 'conferidor', null);
     -- Tarefa 2, decisão 9: fn_billing_avisar_assinatura roda DEPOIS de cada
     -- mudança de estado (dedup própria por período/estado, nunca duplica; erro
     -- interno vira warning, nunca desfaz a transição que já aconteceu, ver o
@@ -42702,7 +42848,7 @@ end;
 $$;
 
 comment on function public.fn_billing_conferir_vencimento(uuid) is
-  '0908, decisão 4: conferidor diário, uma organização por chamada. Ordem fixa: (a) cancel_at_period_end + período vencido -> cancelada; (b) ativa/avaliacao + período vencido -> atrasada; (c) atrasada + current_period_end + grace_days no passado -> suspensa. Cada passo é um UPDATE atômico com WHERE lido direto da tabela (nunca sobrescreve um pagamento que entrou no meio). Organização sem contrato ou sem período nunca muda. Devolve o estado novo ou null quando nada mudou; nunca lança (erro interno vira raise warning + null, decisão 4). Tarefa 2, decisão 9: chama fn_billing_avisar_assinatura(p_org) em TODO caminho de saída (depois de cada mudança de estado, e também no passo diário sem mudança nenhuma, para o aviso de três dias antes da suspensão nascer enquanto a organização segue atrasada); a chamada nunca lança (ver o comentário daquela função).';
+  '0908, decisão 4: conferidor diário, uma organização por chamada. Ordem fixa: (a) cancel_at_period_end + período vencido -> cancelada; (b) ativa/avaliacao + período vencido -> atrasada; (c) atrasada + current_period_end + grace_days no passado -> suspensa. Cada passo é um UPDATE atômico com WHERE lido direto da tabela (nunca sobrescreve um pagamento que entrou no meio); desde a correção do item 4 (revisão F4), o UPDATE vira um CTE (select ... for update + update ... from) que preserva a MESMA elegibilidade e a MESMA garantia de atomicidade, só que agora também captura o status ANTERIOR, para gravar o evento. Organização sem contrato ou sem período nunca muda. Devolve o estado novo ou null quando nada mudou; nunca lança (erro interno vira raise warning + null, decisão 4). Correção (revisão F4, item 4): grava um evento em billing_contract_eventos (tipo=conferidor, de/para, motivo=conferidor, actor=null) em toda transição real, na MESMA transação, antes de chamar o aviso. Tarefa 2, decisão 9: chama fn_billing_avisar_assinatura(p_org) em TODO caminho de saída (depois de cada mudança de estado, e também no passo diário sem mudança nenhuma, para o aviso de três dias antes da suspensão nascer enquanto a organização segue atrasada); a chamada nunca lança (ver o comentário daquela função).';
 
 revoke execute on function public.fn_billing_conferir_vencimento(uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_conferir_vencimento(uuid) to service_role;
@@ -42711,13 +42857,25 @@ grant execute on function public.fn_billing_conferir_vencimento(uuid) to service
 -- 8. agent_worker não registra pagamento, não muda estado nem confere
 -- vencimento pelas peças novas desta migration (mesmo racional de todo
 -- bloco análogo em 0904/0905/0906/0907): por alter default privileges ela
--- ganharia select/insert na tabela nova e execute em toda função nova do
--- schema public, e tem bypassrls.
+-- ganharia select/insert/update/delete na tabela nova (grant select, insert,
+-- update, delete on all tables in schema public to agent_worker, mais o
+-- alter default privileges equivalente para tabela futura, hiperbold/
+-- scripts/role-agent-worker.sql) e execute em toda função nova do schema
+-- public, e tem bypassrls.
+--
+-- Correção (revisão F4): a versão original desta migration revogava só
+-- select/insert, deixando update e delete de pé (o revoke explícito de
+-- update/delete/truncate na seção 1 é FROM service_role, não FROM
+-- agent_worker: são roles diferentes, um revoke não cobre o outro).
+-- Conferido no banco local antes da correção: agent_worker tinha DELETE e
+-- UPDATE em billing_payments. billing_payments é acréscimo apenas para
+-- TODO mundo (decisão 1), agent_worker incluído. billing_contract_eventos
+-- (seção 1c, item 4 da mesma revisão) é tabela NOVA, mesmo racional.
 -- ============================================================================
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
-    execute 'revoke select, insert on public.billing_payments from agent_worker';
+    execute 'revoke select, insert, update, delete, truncate on public.billing_payments, public.billing_contract_eventos from agent_worker';
     execute 'revoke execute on function public.fn_billing_registrar_pagamento(uuid, date, integer, uuid, text, uuid), public.fn_billing_estornar_pagamento(uuid, uuid, uuid, text, uuid), public.fn_billing_corrigir_periodo(uuid, date, text, uuid), public.fn_billing_mudar_estado(uuid, text, text, uuid), public.fn_billing_cancelar_no_fim_do_periodo(uuid, boolean, uuid), public.fn_billing_conferir_vencimento(uuid) from agent_worker';
   end if;
 end
@@ -42770,6 +42928,273 @@ $$;
 -- (Tarefa 6, run-model-call.ts, roda com o pool do próprio agent_worker).
 --
 -- Idempotente: create or replace, revoke/grant repetíveis.
+
+-- ============================================================================
+-- 8b. Redefinição, na versão FINAL desta fase, dos quatro gatilhos de
+-- criação e das três proteções de agent_inbox_items (correção, revisão F4,
+-- item 8).
+-- ============================================================================
+--
+-- O comentário do topo desta Parte 2 (decisões 7 e 9, acima) diz que essas
+-- sete peças foram "editadas NO LUGAR" na migração 0905 e no baseline.sql
+-- (fn_billing_trava_crm_pipelines, fn_billing_trava_crm_stages,
+-- fn_billing_trava_webhook_sources, fn_billing_trava_team_invites, as duas
+-- policies RESTRICTIVE billing_agent_inbox_items_insert/_delete, e o gatilho
+-- de update fn_billing_trava_agent_inbox_items_update) -- e de fato foram: o
+-- TEXTO da 0905 já tem a versão final, com fn_billing_modo_leitura e
+-- billing_assinatura. Isso resolve um banco criado do ZERO (o baseline
+-- inteiro é reaplicado, decisão 4 do repositório).
+--
+-- Não resolve um banco que já tinha a 0905 ANTIGA aplicada (a versão sem
+-- fn_billing_modo_leitura/billing_assinatura) ANTES desta edição existir:
+-- "editar no lugar" muda o TEXTO do arquivo de migração, não reexecuta uma
+-- migração já marcada como aplicada (supabase_migrations.schema_migrations).
+-- Um banco assim fica com os quatro gatilhos e as três proteções na versão
+-- ANTIGA para sempre, a menos que ALGUMA migração posterior os redefina. É
+-- isso que esta seção faz: create or replace function (o dono da migração é
+-- sempre o mesmo, create or replace preserva o OID, então os gatilhos das
+-- quatro tabelas continuam apontando para a MESMA função sem precisar ser
+-- recriados) para as quatro funções de gatilho, drop policy if exists +
+-- create policy para as duas RESTRICTIVE, e create or replace function + drop
+-- trigger if exists + create trigger para o gatilho de update (este último
+-- também recriado por completo, não só a função, seguindo à risca o pedido
+-- da correção).
+--
+-- Corpo idêntico ao texto final de 0905 (idempotente por natureza: um banco
+-- que já rodou a 0905 nova não muda nada; um banco com a 0905 antiga passa a
+-- ter o comportamento certo a partir desta migração).
+
+create or replace function public.fn_billing_trava_crm_pipelines()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.is_archived = false then
+      if public.fn_billing_modo_leitura(new.organization_id) then
+        raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+      end if;
+      if public.fn_billing_bloqueia(new.organization_id, 'funis', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'funis';
+      end if;
+      perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
+    end if;
+  elsif old.is_archived = true and new.is_archived = false then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
+    if public.fn_billing_bloqueia(new.organization_id, 'funis', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'funis';
+    end if;
+    perform public.fn_billing_conferir_teto(new.organization_id, 'funis', null);
+
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
+    if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.id) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+    end if;
+    perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.id);
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_crm_pipelines() is
+  'Gatilho de plano (Tarefa 3, decisão 5, 0905): chama fn_billing_conferir_teto(funis) só na transição de is_archived para false, em insert ou update. Achado B4.1 (revisão fase F2): a transição de desarquivar TAMBÉM confere etapas_por_funil do próprio funil, porque as etapas ativas dele reaparecem sem passar por nenhum insert em crm_stages. Fase F3 (migration 0907): antes de cada conferência de aviso, fn_billing_bloqueia decide o bloqueio de verdade; PT402 fora de qualquer bloco exception. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura. Redefinida aqui (revisão F4, item 8) para um banco que já tinha a 0905 antiga (sem fn_billing_modo_leitura) ficar com a versão final.';
+
+revoke execute on function public.fn_billing_trava_crm_pipelines() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_crm_pipelines() to service_role;
+
+create or replace function public.fn_billing_trava_crm_stages()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.is_archived = false then
+      if public.fn_billing_modo_leitura(new.organization_id) then
+        raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+      end if;
+      if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+      end if;
+      perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
+    end if;
+  elsif old.is_archived = true and new.is_archived = false then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
+    if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+    end if;
+    perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
+  elsif new.is_archived = false and new.pipeline_id is distinct from old.pipeline_id then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
+    if public.fn_billing_bloqueia(new.organization_id, 'etapas_por_funil', new.pipeline_id) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'etapas_por_funil';
+    end if;
+    perform public.fn_billing_conferir_teto(new.organization_id, 'etapas_por_funil', new.pipeline_id);
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_crm_stages() is
+  'Gatilho de plano (Tarefa 3, decisão 5, 0905): chama fn_billing_conferir_teto(etapas_por_funil, pipeline_id) na transição de is_archived para false (insert ou update) e, achado B4.2 (revisão fase F2), quando uma etapa ATIVA muda de pipeline_id (confere o funil de DESTINO). Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura. Redefinida aqui (revisão F4, item 8) para um banco que já tinha a 0905 antiga ficar com a versão final.';
+
+revoke execute on function public.fn_billing_trava_crm_stages() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_crm_stages() to service_role;
+
+create or replace function public.fn_billing_trava_webhook_sources()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if tg_op = 'INSERT' then
+    if new.is_active = true then
+      if public.fn_billing_modo_leitura(new.organization_id) then
+        raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+      end if;
+      if public.fn_billing_bloqueia(new.organization_id, 'integracoes_webhook', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'integracoes_webhook';
+      end if;
+      perform public.fn_billing_conferir_teto(new.organization_id, 'integracoes_webhook', null);
+    end if;
+  elsif old.is_active = false and new.is_active = true then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
+    if public.fn_billing_bloqueia(new.organization_id, 'integracoes_webhook', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'integracoes_webhook';
+    end if;
+    perform public.fn_billing_conferir_teto(new.organization_id, 'integracoes_webhook', null);
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_webhook_sources() is
+  'Gatilho de plano (Tarefa 3, decisão 5, 0905): chama fn_billing_conferir_teto(integracoes_webhook) só na transição de is_active para true, em insert ou update. Fase F3 (migration 0907): fn_billing_bloqueia antes de cada conferência de aviso, PT402 fora de bloco exception. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura. Redefinida aqui (revisão F4, item 8) para um banco que já tinha a 0905 antiga ficar com a versão final.';
+
+revoke execute on function public.fn_billing_trava_webhook_sources() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_webhook_sources() to service_role;
+
+create or replace function public.fn_billing_trava_team_invites()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_novo_pendente boolean;
+  v_antigo_pendente boolean;
+begin
+  v_novo_pendente := new.accepted_at is null and new.revoked_at is null and new.expires_at > now();
+
+  if tg_op = 'INSERT' then
+    v_antigo_pendente := false;
+  else
+    v_antigo_pendente := old.accepted_at is null and old.revoked_at is null and old.expires_at > now();
+  end if;
+
+  if tg_op = 'UPDATE' and v_novo_pendente and v_antigo_pendente
+    and (new.email is distinct from old.email or new.organization_id is distinct from old.organization_id)
+  then
+    v_antigo_pendente := false;
+  end if;
+
+  if v_novo_pendente and not v_antigo_pendente then
+    if public.fn_billing_modo_leitura(new.organization_id) then
+      raise exception 'Conta suspensa' using errcode = 'PT402', detail = 'assinatura_suspensa';
+    end if;
+    if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then
+      raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';
+    end if;
+    perform public.fn_billing_conferir_teto(new.organization_id, 'membros', null);
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_team_invites() is
+  'Gatilho de plano (Tarefa 3, decisão 5, 0905): chama fn_billing_conferir_teto(membros) na transição para pendente e não vencido. Achado B1 (revisão fase F2) e correção A3 pós-auditoria (email/organization_id contam como convite novo quando trocados num convite que continua pendente). Fase F3 (migration 0907, decisão 4, item 1): fn_billing_bloqueia antes da conferência de aviso, sem isenção nenhuma. Fase F4 (migration 0908, decisão 7): antes do bloqueio de teto, fn_billing_modo_leitura recusa com PT402/assinatura_suspensa quando a conta está no modo leitura (o convite em si, não o aceite). Redefinida aqui (revisão F4, item 8) para um banco que já tinha a 0905 antiga ficar com a versão final.';
+
+revoke execute on function public.fn_billing_trava_team_invites() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_team_invites() to service_role;
+
+-- As duas policies RESTRICTIVE de agent_inbox_items (M2, 0905), na versão
+-- final com billing_assinatura ao lado de billing_limite/billing_carteira.
+drop policy if exists billing_agent_inbox_items_insert on public.agent_inbox_items;
+create policy billing_agent_inbox_items_insert on public.agent_inbox_items
+  as restrictive for insert
+  to authenticated
+  with check (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira', 'billing_assinatura'));
+
+drop policy if exists billing_agent_inbox_items_delete on public.agent_inbox_items;
+create policy billing_agent_inbox_items_delete on public.agent_inbox_items
+  as restrictive for delete
+  to authenticated
+  using (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira', 'billing_assinatura'));
+
+-- O gatilho de UPDATE (M2, 0905): função E gatilho recriados por completo
+-- (drop trigger if exists + create trigger), como pedido pela correção
+-- (revisão F4, item 8), embora create or replace da função já bastasse
+-- (mesmo OID, o gatilho já existente continuaria apontando para a versão
+-- nova sozinho).
+create or replace function public.fn_billing_trava_agent_inbox_items_update()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if current_user not in ('postgres', 'service_role', 'supabase_admin')
+     and (old.ref_kind in ('billing_limite', 'billing_carteira', 'billing_assinatura') or new.ref_kind in ('billing_limite', 'billing_carteira', 'billing_assinatura'))
+     and (to_jsonb(old) - array['status', 'resolved_at']) is distinct from (to_jsonb(new) - array['status', 'resolved_at'])
+  then
+    raise exception 'aviso de plano: só status e resolved_at podem mudar fora do servidor' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_agent_inbox_items_update() is
+  'M2 (revisão fase F2), estendida na revisão da F3 (achado baixo 9) e na F4 (migration 0908, decisão 9): quando old.ref_kind ou new.ref_kind é billing_limite, billing_carteira OU billing_assinatura, recusa update de QUALQUER coluna fora de status e resolved_at, fora do servidor. security invoker de propósito: precisa ver a role real de quem grava. Redefinida aqui (revisão F4, item 8), função e gatilho, para um banco que já tinha a 0905 antiga (sem billing_assinatura) ficar com a versão final.';
+
+revoke execute on function public.fn_billing_trava_agent_inbox_items_update() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_agent_inbox_items_update() to service_role;
+
+drop trigger if exists trg_billing_trava_agent_inbox_items_update on public.agent_inbox_items;
+create trigger trg_billing_trava_agent_inbox_items_update
+  before update on public.agent_inbox_items
+  for each row
+  execute function public.fn_billing_trava_agent_inbox_items_update();
+
+-- agent_worker: as sete peças redefinidas acima já foram revogadas dela na
+-- própria 0905 (create or replace não reseta grants/revokes existentes,
+-- eles persistem pelo OID); reforçado aqui por completude e defesa em
+-- profundidade, mesmo racional de todo bloco análogo deste arquivo.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_billing_trava_crm_pipelines(), public.fn_billing_trava_crm_stages(), public.fn_billing_trava_webhook_sources(), public.fn_billing_trava_team_invites(), public.fn_billing_trava_agent_inbox_items_update() from agent_worker';
+  end if;
+end
+$$;
 
 -- ============================================================================
 -- 9. fn_billing_modo_leitura: o interruptor do modo leitura (decisão 5).
@@ -42887,14 +43312,17 @@ declare
   v_status text;
   v_current_period_end timestamptz;
   v_grace_days integer;
+  v_bloqueio_a_partir_de timestamptz;
+  v_modo text;
+  v_ameaca_real boolean;
   v_data_suspensao timestamptz;
   v_periodo_fmt text;
   v_titulo text;
   v_corpo text;
   v_linhas integer;
 begin
-  select bc.status, bc.current_period_end, bp.grace_days
-    into v_status, v_current_period_end, v_grace_days
+  select bc.status, bc.current_period_end, bp.grace_days, bc.bloqueio_a_partir_de
+    into v_status, v_current_period_end, v_grace_days, v_bloqueio_a_partir_de
     from public.billing_contracts bc
     join public.billing_plans bp on bp.id = bc.plan_id
     where bc.organization_id = p_org;
@@ -42903,16 +43331,42 @@ begin
     return;
   end if;
 
-  v_periodo_fmt := to_char(v_current_period_end, 'YYYY-MM-DD');
+  -- Correção (revisão F4, item 6): dedup pela data em America/Sao_Paulo, não
+  -- no fuso da SESSÃO (o cluster/conexão pode estar em qualquer fuso; sem a
+  -- conversão, a MESMA data local vira duas chaves diferentes perto da
+  -- virada do dia, dependendo do fuso de quem chamou, e o aviso duplica).
+  v_periodo_fmt := to_char(v_current_period_end at time zone 'America/Sao_Paulo', 'YYYY-MM-DD');
+
+  -- Correção (revisão F4, item 7): os textos anteriores afirmavam o efeito
+  -- do modo leitura ("entra em modo leitura em DD/MM", "a criação de funis
+  -- está parada") mesmo quando billing_settings.modo não está em bloquear ou
+  -- esta organização nunca recebeu carência nenhuma (bloqueio_a_partir_de
+  -- nulo) -- nesses casos o efeito NUNCA vale, e o aviso mentia. v_ameaca_real
+  -- usa as MESMAS duas primeiras condições de fn_billing_bloqueia/
+  -- fn_billing_modo_leitura (0907/0908): modo=bloquear E esta organização tem
+  -- carência definida (preenchida, não necessariamente vencida -- o aviso de
+  -- atrasada fala do que VAI acontecer, não do que já vale agora). Para o
+  -- aviso de suspensa, que fala do efeito JÁ EM VIGOR, o ramo abaixo (status
+  -- suspensa) usa fn_billing_modo_leitura(p_org) diretamente
+  -- em vez desta variável (a função já exige vencida e status suspensa/
+  -- cancelada, exatamente o "vale AGORA" daquele texto).
+  select modo into v_modo from public.billing_settings where id = 1;
+  v_ameaca_real := coalesce(v_modo = 'bloquear' and v_bloqueio_a_partir_de is not null, false);
 
   if v_status = 'atrasada' then
     v_data_suspensao := v_current_period_end + (v_grace_days || ' days')::interval;
 
-    -- Aviso de entrada em atrasada, com a data prevista da suspensão
-    -- (America/Sao_Paulo, DD/MM/YYYY, sem nome de mês).
     v_titulo := 'Pagamento em atraso';
-    v_corpo := 'O pagamento desta organização está atrasado. Sem regularização, o acesso entra em modo leitura em '
-      || to_char(v_data_suspensao at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || '.';
+    if v_ameaca_real then
+      -- Aviso de entrada em atrasada, com a data prevista da suspensão
+      -- (America/Sao_Paulo, DD/MM/YYYY, sem nome de mês).
+      v_corpo := 'O pagamento desta organização está atrasado. Sem regularização, o acesso entra em modo leitura em '
+        || to_char(v_data_suspensao at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || '.';
+    else
+      -- Sem ameaça real (modo avisar/desligado, ou organização sem carência
+      -- definida): nenhuma data, nenhum efeito prometido.
+      v_corpo := 'O pagamento da assinatura está em atraso. Regularize com o suporte.';
+    end if;
 
     insert into public.billing_token_avisos_emitidos (organization_id, chave)
     values (p_org, 'assinatura:atrasada:' || v_periodo_fmt)
@@ -42925,9 +43379,10 @@ begin
     end if;
 
     -- Três dias antes da suspensão, só com carência maior que três dias
-    -- (decisão 9): com carência de até 3 dias, o aviso de entrada acima já
-    -- avisa em cima da hora, um segundo aviso não cabe.
-    if v_grace_days > 3 and now() >= v_data_suspensao - interval '3 days' then
+    -- (decisão 9) E só quando o efeito vai valer de verdade (correção,
+    -- revisão F4, item 7): sem ameaça real não existe suspensão de verdade
+    -- em três dias nenhum, o aviso nem nasce.
+    if v_ameaca_real and v_grace_days > 3 and now() >= v_data_suspensao - interval '3 days' then
       v_titulo := 'Suspensão em três dias';
       v_corpo := 'Em três dias esta organização entra em modo leitura por falta de pagamento. Regularize antes de '
         || to_char(v_data_suspensao at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') || ' para não perder o acesso de escrita.';
@@ -42944,7 +43399,15 @@ begin
     end if;
   elsif v_status = 'suspensa' then
     v_titulo := 'Conta suspensa';
-    v_corpo := 'Esta organização está suspensa por falta de pagamento: a criação de funis, etapas, integrações webhook e convites está parada até a regularização.';
+    if public.fn_billing_modo_leitura(p_org) then
+      v_corpo := 'Esta organização está suspensa por falta de pagamento: a criação de funis, etapas, integrações webhook e convites está parada até a regularização.';
+    else
+      -- fn_billing_modo_leitura(p_org) falso aqui (status já é suspensa)
+      -- significa modo avisar/desligado, ou a carência desta organização
+      -- ainda não venceu: nenhum efeito de verdade, texto sem ameaça
+      -- (correção, revisão F4, item 7).
+      v_corpo := 'A assinatura está suspensa por falta de pagamento. Regularize com o suporte.';
+    end if;
 
     insert into public.billing_token_avisos_emitidos (organization_id, chave)
     values (p_org, 'assinatura:suspensa:' || v_periodo_fmt)
@@ -42977,7 +43440,7 @@ end;
 $$;
 
 comment on function public.fn_billing_avisar_assinatura(uuid) is
-  'Tarefa 2, decisão 9: os quatro avisos da assinatura (entrada em atrasada com a data prevista da suspensão; três dias antes, só com grace_days > 3; suspensão; cancelamento), chamada por fn_billing_conferir_vencimento depois de CADA mudança de estado e no passo diário sem mudança nenhuma. Nascem em QUALQUER modo (são informativos; só a parada de verdade depende do modo leitura). kind=other, ref_kind=billing_assinatura, ref_id=organization_id. Dedup por billing_token_avisos_emitidos (0906), chave assinatura:<estado>:<fim do período YYYY-MM-DD>, que sobrevive ao encerramento do item. Datas em dd/mm/aaaa, America/Sao_Paulo, sem nome de mês. Nunca lança: begin/exception próprio (raise warning), para não acionar o savepoint implícito do bloco exception do CHAMADOR e desfazer a mudança de estado já commitada.';
+  'Tarefa 2, decisão 9: os quatro avisos da assinatura (entrada em atrasada com a data prevista da suspensão; três dias antes, só com grace_days > 3; suspensão; cancelamento), chamada por fn_billing_conferir_vencimento depois de CADA mudança de estado e no passo diário sem mudança nenhuma. Nascem em QUALQUER modo (são informativos; só a parada de verdade depende do modo leitura). kind=other, ref_kind=billing_assinatura, ref_id=organization_id. Dedup por billing_token_avisos_emitidos (0906), chave assinatura:<estado>:<fim do período YYYY-MM-DD, em America/Sao_Paulo, correção revisão F4 item 6: antes era no fuso da SESSÃO>, que sobrevive ao encerramento do item. Datas em dd/mm/aaaa, America/Sao_Paulo, sem nome de mês. Correção (revisão F4, item 7): o texto de atrasada/suspensa só afirma o efeito do modo leitura (data de suspensão, "criação de funis parada") quando ele vale ou vai valer de verdade (atrasada: modo=bloquear E esta organização tem carência definida, mesmas duas primeiras condições de fn_billing_bloqueia/fn_billing_modo_leitura, 0907/0908; suspensa: fn_billing_modo_leitura(p_org) diretamente, já que o status já é suspensa); sem isso, texto neutro ("regularize com o suporte", sem data nem ameaça) e o aviso de três dias nem nasce. Nunca lança: begin/exception próprio (raise warning), para não acionar o savepoint implícito do bloco exception do CHAMADOR e desfazer a mudança de estado já commitada.';
 
 revoke execute on function public.fn_billing_avisar_assinatura(uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_avisar_assinatura(uuid) to service_role;
@@ -42996,6 +43459,7 @@ begin
   end if;
 end
 $$;
+
 -- ============================================================================
 -- PARTE 3 (Tarefa 3): catálogo de pacotes de tokens vendidos na mão, e o
 -- fechamento do D-046 (registro falso na auditoria).
@@ -43060,14 +43524,25 @@ $$;
 --     nenhuma dessas funções é afetada.
 -- Nenhum gravador de PRODUÇÃO grava api_audit_log pela sessão do usuário.
 --
--- agent_worker (se a role existir) perde update, delete e truncate na tabela
--- (mesmo vocabulário da migration 0258, que já fez isso para
--- anon/authenticated/service_role no baseline): defesa em profundidade, essa
--- role nunca teve select/insert concedido nela por nenhuma migração deste
--- fork, mas tem bypassrls e ganhou update/delete no provisionamento
--- (`grant select, insert, update, delete on all tables in schema public to
--- agent_worker`, hiperbold/scripts/role-agent-worker.sql) antes de qualquer
--- revoke específico existir.
+-- agent_worker (se a role existir) perde select, insert, update, delete e
+-- truncate na tabela (mesmo vocabulário da migration 0258, que já fez isso
+-- para anon/authenticated/service_role no baseline): defesa em profundidade.
+-- api_audit_log é ANTERIOR a esta migração (não nasceu com 0908), mas a role
+-- recebeu os QUATRO privilégios (select, insert, update, delete) direto no
+-- provisionamento (`grant select, insert, update, delete on all tables in
+-- schema public to agent_worker`, hiperbold/scripts/role-agent-worker.sql),
+-- antes de qualquer revoke específico existir nesta tabela.
+--
+-- Correção (revisão F4): a versão original desta migration revogava só
+-- update/delete/truncate, deixando select/insert de pé -- conferido no banco
+-- local antes da correção: agent_worker tinha INSERT e SELECT em
+-- api_audit_log. Conferido por grep (workers/, lib/agent-engine/,
+-- lib/automation): nenhum código lê nem escreve api_audit_log pela conexão
+-- direta do próprio agent_worker (SUPABASE_DB_URL/DB_URL do worker); o único
+-- gravador de produção é lib/audit/index.ts, que usa o cliente Supabase com
+-- service_role ou, no plano B de desenvolvimento sem chave de serviço, a
+-- sessão do usuário `authenticated` (ver o mapa de gravadores, acima) --
+-- nunca a conexão do worker. Por isso o revoke passa a ser total.
 --
 -- Mesmo padrão de segurança das partes anteriores: security definer,
 -- search_path fixo em public, pg_temp, revoke de public/anon/authenticated,
@@ -43147,7 +43622,40 @@ declare
   v_pacote record;
   v_valor_cents integer;
   v_credito jsonb;
+  v_ledger record;
+  v_creditado bigint;
+  v_consumido bigint;
 begin
+  -- Correção (revisão F4, item 5): confere a idempotência pela CHAVE ANTES
+  -- de validar o pacote. Sem isto, reenviar um crédito já feito com um
+  -- pacote HOJE inativo batia no 22023 de billing_pacote_inativo em vez de
+  -- devolver "já creditado" (o pacote pode ter sido desativado entre a
+  -- primeira chamada e o reenvio, o crédito em si já aconteceu e não
+  -- depende mais do cadastro). Lê direto billing_token_ledger pela MESMA
+  -- chave prefixada que fn_billing_creditar_tokens usa (0906,
+  -- ''credito:<p_chave>''), porque billing_token_pacotes não guarda vínculo
+  -- nenhum com o lançamento: os tokens/valor_cents devolvidos aqui são
+  -- SEMPRE os do lançamento ORIGINAL, nunca recalculados do p_pacote desta
+  -- chamada (reenvio com outro p_pacote, por engano ou não, nunca finge que
+  -- creditou o pacote NOVO).
+  select tokens, valor_cents into v_ledger
+    from public.billing_token_ledger
+    where organization_id = p_org and chave = 'credito:' || p_chave::text;
+
+  if found then
+    select creditado, consumido into v_creditado, v_consumido
+      from public.billing_token_wallets
+      where organization_id = p_org and fonte = 'avulso' and ciclo is null;
+
+    return jsonb_build_object(
+      'creditado', false,
+      'saldo_avulso', coalesce(v_creditado, 0) - coalesce(v_consumido, 0),
+      'pacote_id', p_pacote,
+      'tokens', v_ledger.tokens,
+      'valor_cents', v_ledger.valor_cents
+    );
+  end if;
+
   select id, tokens, preco_cents, ativo into v_pacote
     from public.billing_token_pacotes
     where id = p_pacote;
@@ -43182,7 +43690,7 @@ end;
 $$;
 
 comment on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) is
-  'Tarefa 3, decisão 10: credita um pacote do catálogo (billing_token_pacotes) pela ponte com fn_billing_creditar_tokens (0906). Pacote inexistente é P0002; pacote inativo é 22023. Valor = preco_cents do catálogo quando preenchido, senão p_valor_cents informado na hora; os DOIS ausentes é 22023 (N9, nenhum preço inventado). Idempotência e trava por organização herdadas de fn_billing_creditar_tokens. Devolve o jsonb dela acrescido de pacote_id, tokens e valor_cents efetivamente usados.';
+  'Tarefa 3, decisão 10: credita um pacote do catálogo (billing_token_pacotes) pela ponte com fn_billing_creditar_tokens (0906). Correção (revisão F4, item 5): confere a idempotência pela chave em billing_token_ledger ANTES de tocar no pacote -- reenvio de uma chave já creditada devolve {creditado:false, tokens/valor_cents do lançamento ORIGINAL}, mesmo que o pacote esteja hoje inativo ou a chamada informe outro p_pacote (nunca os dados do pacote novo). Sem reenvio: pacote inexistente é P0002; pacote inativo é 22023. Valor = preco_cents do catálogo quando preenchido, senão p_valor_cents informado na hora; os DOIS ausentes é 22023 (N9, nenhum preço inventado). Idempotência e trava por organização (a de fato, para o crédito NOVO) herdadas de fn_billing_creditar_tokens. Devolve o jsonb dela acrescido de pacote_id, tokens e valor_cents efetivamente usados.';
 
 revoke execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) from public, anon, authenticated;
 grant execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) to service_role;
@@ -43190,11 +43698,17 @@ grant execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer,
 -- ============================================================================
 -- 14. agent_worker não cadastra, não desativa nem credita pacote pelas peças
 -- novas desta parte 3 (mesmo racional de todo bloco análogo acima).
+--
+-- Correção (revisão F4): a versão original revogava só select/insert/update,
+-- deixando delete de pé (billing_token_pacotes não concede delete a
+-- NINGUÉM, decisão 10, mas o revoke de delete/truncate da seção 12 é FROM
+-- service_role, não FROM agent_worker). Conferido no banco local antes da
+-- correção: agent_worker tinha DELETE em billing_token_pacotes.
 -- ============================================================================
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
-    execute 'revoke select, insert, update on public.billing_token_pacotes from agent_worker';
+    execute 'revoke select, insert, update, delete, truncate on public.billing_token_pacotes from agent_worker';
     execute 'revoke execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) from agent_worker';
   end if;
 end
@@ -43215,14 +43729,14 @@ comment on policy api_audit_log_insert_authenticated_restritiva on public.api_au
   'D-046 (hiperbold/DEBITO.md), Tarefa 3 da fase F4: RESTRICTIVE que fecha o insert de authenticated por completo (with check(false) numa restrictive é AND com toda permissive da mesma ação, nenhuma linha passa), sem editar a policy permissive do autor audit_log_insert_tenant_member. Todo gravador de produção usa service_role (bypassrls) ou função security definer, nenhum depende do insert de authenticated (ver o comentário da Parte 3, acima); o único caminho fechado é o plano B de desenvolvimento sem chave de serviço (lib/audit/index.ts), que já é fire-and-forget e passa a só registrar a falha no log.';
 
 -- ============================================================================
--- 16. agent_worker perde update, delete e truncate em api_audit_log (mesmo
--- vocabulário da migration 0258, defesa em profundidade: ver o comentário da
--- Parte 3, acima).
+-- 16. agent_worker perde select, insert, update, delete e truncate em
+-- api_audit_log (mesmo vocabulário da migration 0258, defesa em
+-- profundidade: ver o comentário da Parte 3, acima).
 -- ============================================================================
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
-    execute 'revoke update, delete, truncate on public.api_audit_log from agent_worker';
+    execute 'revoke select, insert, update, delete, truncate on public.api_audit_log from agent_worker';
   end if;
 end
 $$;

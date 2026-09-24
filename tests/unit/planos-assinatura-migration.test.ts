@@ -172,10 +172,12 @@ describe("0908: padrão de segurança das seis funções novas", () => {
     }
   });
 
-  it("o bloco da role agent_worker revoga select/insert na tabela e execute das seis funções", () => {
+  it("o bloco da role agent_worker revoga select/insert/update/delete/truncate na tabela (correção revisão F4, item 1: a versão original deixava update/delete de pé) e execute das seis funções", () => {
     for (const sql of [MIGRATION_0908, extraiBloco0908Baseline()]) {
       expect(sql).toMatch(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/);
-      expect(sql).toMatch(/revoke select, insert on public\.billing_payments from agent_worker/);
+      expect(sql).toMatch(
+        /revoke select, insert, update, delete, truncate on public\.billing_payments, public\.billing_contract_eventos from agent_worker/,
+      );
       for (const assinatura of FUNCOES_0908) {
         const nome = assinatura.slice(0, assinatura.indexOf("("));
         expect(sql).toMatch(new RegExp(`public\\.${nome}\\(`));
@@ -335,10 +337,18 @@ describe("0908: fn_billing_mudar_estado (decisão 3, as transições)", () => {
     expect(corpo).toMatch(/raise exception 'billing_estado_sem_periodo_vigente' using errcode = '22023';/);
   });
 
-  it("avaliacao reusa current_period_end já existente (não pode ser nulo)", () => {
+  it("avaliacao reusa current_period_end já existente e exige FUTURO (correção revisão F4, item 2)", () => {
     const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_mudar_estado");
     expect(corpo).toMatch(
-      /elsif p_estado = 'avaliacao' then\s*\n\s*-- Reusa o current_period_end já existente[^\n]*\n\s*v_permitido := coalesce\(v_contract\.current_period_end is not null, false\);/,
+      /elsif p_estado = 'avaliacao' then\s*\n\s*-- Reusa o current_period_end já existente[^\n]*\n[\s\S]*?v_permitido := coalesce\(\s*\n\s*v_contract\.current_period_end is not null and v_contract\.current_period_end > now\(\),\s*\n\s*false\s*\n\s*\);/,
+    );
+    expect(corpo).toMatch(/raise exception 'billing_avaliacao_sem_data_futura' using errcode = '22023';/);
+  });
+
+  it("ativa -> ativa com período vigente é sucesso sem mudança (correção revisão F4, item 3); com período vencido mantém o erro atual", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_mudar_estado");
+    expect(corpo).toMatch(
+      /if p_estado = 'ativa' and v_contract\.status = 'ativa'\s*\n\s*and coalesce\(v_contract\.current_period_end > now\(\), false\)\s*\n\s*then\s*\n\s*return jsonb_build_object\('estado_anterior', 'ativa', 'estado_novo', 'ativa'\);/,
     );
   });
 
@@ -381,7 +391,7 @@ describe("0908: fn_billing_conferir_vencimento (decisão 4, o conferidor)", () =
     expect(corpo).not.toMatch(/pg_advisory_xact_lock/);
   });
 
-  it("ordem fixa: (a) cancelada, (b) atrasada, (c) suspensa, cada uma um UPDATE atômico com WHERE lido da tabela", () => {
+  it("ordem fixa: (a) cancelada, (b) atrasada, (c) suspensa, cada uma um CTE select...for update + update...from atômico com WHERE lido da tabela (correção revisão F4, item 4: vira CTE para capturar o status ANTERIOR)", () => {
     const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_conferir_vencimento");
     const posCancelada = corpo.indexOf("set status = 'cancelada'");
     const posAtrasada = corpo.indexOf("set status = 'atrasada'");
@@ -392,24 +402,30 @@ describe("0908: fn_billing_conferir_vencimento (decisão 4, o conferidor)", () =
 
     // (a) cancel_at_period_end + período vencido, nunca reafirma cancelada.
     expect(corpo).toMatch(
-      /where organization_id = p_org\s*\n\s*and status <> 'cancelada'\s*\n\s*and coalesce\(cancel_at_period_end, false\)\s*\n\s*and current_period_end <= now\(\)\s*\n\s*returning status into v_estado_novo;/,
+      /where organization_id = p_org\s*\n\s*and status <> 'cancelada'\s*\n\s*and coalesce\(cancel_at_period_end, false\)\s*\n\s*and current_period_end <= now\(\)\s*\n\s*for update/,
     );
     // (b) ativa/avaliacao vencidos.
     expect(corpo).toMatch(
-      /where organization_id = p_org\s*\n\s*and status in \('ativa', 'avaliacao'\)\s*\n\s*and current_period_end <= now\(\)\s*\n\s*returning status into v_estado_novo;/,
+      /where organization_id = p_org\s*\n\s*and status in \('ativa', 'avaliacao'\)\s*\n\s*and current_period_end <= now\(\)\s*\n\s*for update/,
     );
     // (c) atrasada além da carência do plano.
     expect(corpo).toMatch(
-      /where organization_id = p_org\s*\n\s*and status = 'atrasada'\s*\n\s*and current_period_end \+ \(v_grace_days \|\| ' days'\)::interval <= now\(\)\s*\n\s*returning status into v_estado_novo;/,
+      /where organization_id = p_org\s*\n\s*and status = 'atrasada'\s*\n\s*and current_period_end \+ \(v_grace_days \|\| ' days'\)::interval <= now\(\)\s*\n\s*for update/,
     );
 
-    // Cada UPDATE é seguido de "if found then ... return" antes do próximo
-    // passo. Tarefa 2, decisão 9: cada um dos três chama
-    // fn_billing_avisar_assinatura ANTES de devolver (aviso depois de CADA
-    // mudança de estado); o teste exige a chamada, não só permite.
+    // As três CTEs escritoras devolvem status_antigo/status_novo.
+    const ocorrenciasCte = [
+      ...corpo.matchAll(/returning alvo\.status_antigo, bc\.status as status_novo/g),
+    ];
+    expect(ocorrenciasCte.length).toBe(3);
+
+    // Cada SELECT INTO é seguido de "if found then" gravando o evento em
+    // billing_contract_eventos (correção revisão F4, item 4: tipo=conferidor,
+    // de/para=status_anterior/novo, motivo=conferidor, actor=null) e SÓ DEPOIS
+    // chamando fn_billing_avisar_assinatura antes de devolver.
     const ocorrencias = [
       ...corpo.matchAll(
-        /returning status into v_estado_novo;\s*\n\s*if found then\s*\n(?:\s*--[^\n]*\n)*\s*perform public\.fn_billing_avisar_assinatura\(p_org\);\s*\n\s*return v_estado_novo;\s*\n\s*end if;/g,
+        /select status_antigo, status_novo into v_estado_anterior, v_estado_novo from atualizado;\s*\n\s*if found then\s*\n\s*insert into public\.billing_contract_eventos \(organization_id, contract_id, tipo, de, para, motivo, actor\)\s*\n\s*values \(p_org, v_contract_id, 'conferidor', v_estado_anterior, v_estado_novo, 'conferidor', null\);\s*\n(?:\s*--[^\n]*\n)*\s*perform public\.fn_billing_avisar_assinatura\(p_org\);\s*\n\s*return v_estado_novo;\s*\n\s*end if;/g,
       ),
     ];
     expect(ocorrencias.length).toBe(3);
@@ -651,10 +667,30 @@ describe("0908 Tarefa 2: fn_billing_avisar_assinatura (decisão 9)", () => {
     );
   });
 
-  it("aviso de três dias antes: chave própria 'atrasada_aviso_3_dias', SÓ quando grace_days > 3", () => {
+  it("aviso de três dias antes: chave própria 'atrasada_aviso_3_dias', SÓ quando grace_days > 3 E a ameaça é real (correção revisão F4, item 7)", () => {
     const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
-    expect(corpo).toMatch(/if v_grace_days > 3 and now\(\) >= v_data_suspensao - interval '3 days' then/);
+    expect(corpo).toMatch(/if v_ameaca_real and v_grace_days > 3 and now\(\) >= v_data_suspensao - interval '3 days' then/);
     expect(corpo).toMatch(/'assinatura:atrasada_aviso_3_dias:' \|\| v_periodo_fmt/);
+  });
+
+  it("dedup pela data em America/Sao_Paulo, não no fuso da sessão (correção revisão F4, item 6)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    expect(corpo).toMatch(
+      /v_periodo_fmt := to_char\(v_current_period_end at time zone 'America\/Sao_Paulo', 'YYYY-MM-DD'\);/,
+    );
+  });
+
+  it("textos de atrasada/suspensa só afirmam o efeito do modo leitura quando ele vale ou vai valer (correção revisão F4, item 7)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_avisar_assinatura");
+    // atrasada: v_ameaca_real = modo bloquear E carência definida (mesmas
+    // duas primeiras condições de fn_billing_bloqueia/fn_billing_modo_leitura).
+    expect(corpo).toMatch(
+      /v_ameaca_real := coalesce\(v_modo = 'bloquear' and v_bloqueio_a_partir_de is not null, false\);/,
+    );
+    expect(corpo).toMatch(/'O pagamento da assinatura está em atraso\. Regularize com o suporte\.'/);
+    // suspensa: usa fn_billing_modo_leitura(p_org) diretamente (status já é suspensa).
+    expect(corpo).toMatch(/if public\.fn_billing_modo_leitura\(p_org\) then/);
+    expect(corpo).toMatch(/'A assinatura está suspensa por falta de pagamento\. Regularize com o suporte\.'/);
   });
 
   it("aviso de suspensão: chave 'assinatura:suspensa:<período>'; aviso de cancelamento: chave 'assinatura:cancelada:<período>'", () => {
@@ -767,9 +803,11 @@ describe("0908 Tarefa 3: billing_token_pacotes (decisão 10)", () => {
     expect(parte3).not.toMatch(/insert into public\.billing_token_pacotes/);
   });
 
-  it("agent_worker perde select/insert/update na tabela", () => {
+  it("agent_worker perde select/insert/update/delete/truncate na tabela (correção revisão F4, item 1: a versão original deixava delete de pé)", () => {
     for (const sql of [MIGRATION_0908, extraiBloco0908Baseline()]) {
-      expect(sql).toMatch(/revoke select, insert, update on public\.billing_token_pacotes from agent_worker/);
+      expect(sql).toMatch(
+        /revoke select, insert, update, delete, truncate on public\.billing_token_pacotes from agent_worker/,
+      );
     }
   });
 });
@@ -838,9 +876,9 @@ describe("0908 Tarefa 3: D-046 fechado (hiperbold/DEBITO.md)", () => {
     );
   });
 
-  it("agent_worker perde update, delete e truncate em api_audit_log", () => {
+  it("agent_worker perde select, insert, update, delete e truncate em api_audit_log (correção revisão F4, item 1: a versão original deixava select/insert de pé, e nenhum código lê/escreve a tabela pela conexão do worker)", () => {
     for (const sql of [MIGRATION_0908, extraiBloco0908Baseline()]) {
-      expect(sql).toMatch(/revoke update, delete, truncate on public\.api_audit_log from agent_worker/);
+      expect(sql).toMatch(/revoke select, insert, update, delete, truncate on public\.api_audit_log from agent_worker/);
     }
   });
 });

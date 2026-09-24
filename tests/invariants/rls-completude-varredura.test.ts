@@ -350,6 +350,21 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "prova que nem `service_role` tem update/delete (o livro-caixa de " +
       "pagamentos é só de acréscimo, mesmo desenho de billing_token_ledger).",
   },
+  // ─── billing_contract_eventos (migration 0908, correção revisão F4, item 4) ───
+  //
+  // Mesmo desenho deny-all de billing_payments, acima: RLS ligada, ZERO
+  // policy, privilégio NENHUM para `authenticated` (a tela lê pelo servidor
+  // com `service_role`). Registro de autor/motivo das transições da
+  // assinatura, só de acréscimo (nem `service_role` tem update/delete).
+  {
+    tabela: "billing_contract_eventos",
+    razao:
+      "tests/invariants/planos-assinatura-estados.test.ts, describe " +
+      "'`authenticated` não lê nem grava billing_contract_eventos' (fork " +
+      "Hiperbold, 0908, correção revisão F4 item 4): `authenticated` barrado " +
+      "por `permission denied` ao SELECT e ao INSERT (medido sob `set " +
+      "role`/JWT real), mesmo desenho deny-all de billing_payments.",
+  },
 ];
 
 /**
