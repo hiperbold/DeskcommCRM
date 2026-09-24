@@ -1025,7 +1025,7 @@ function reservarPorEventId(eventId: string): { id: string; lease: string } {
   const [id, lease] = linha.split("|");
   expect(id, `evento ${eventId} não foi reservado (lease_token ausente)`).toBeTruthy();
   expect(lease, `evento ${eventId} não ganhou lease_token`).toBeTruthy();
-  return { id: id.trim(), lease: lease.trim() };
+  return { id: (id ?? "").trim(), lease: (lease ?? "").trim() };
 }
 
 function registrarEAplicar(eventId: string, resourceId: string, confirmacao: string | null): string {
@@ -1286,14 +1286,14 @@ describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo, dia 31 de janeiro ma
   it("mensal: 31/01 + 1 mês (arimética nativa do Postgres, 2026 não é bissexto) + 1 dia = 2026-03-01 00h SP", () => {
     const linha = sql(`select periodo_inicio, periodo_fim from public.fn_billing_asaas_periodo_do_ciclo('2026-01-31'::date, 'monthly');`);
     const [inicio, fim] = linha.split("|");
-    expect(inicio.trim()).toBe("2026-01-31 03:00:00+00");
-    expect(fim.trim()).toBe("2026-03-01 03:00:00+00");
+    expect((inicio ?? "").trim()).toBe("2026-01-31 03:00:00+00");
+    expect((fim ?? "").trim()).toBe("2026-03-01 03:00:00+00");
   });
 
   it("anual: 31/01 + 1 ano + 1 dia = 2027-02-01 00h SP", () => {
     const linha = sql(`select periodo_inicio, periodo_fim from public.fn_billing_asaas_periodo_do_ciclo('2026-01-31'::date, 'yearly');`);
     const [, fim] = linha.split("|");
-    expect(fim.trim()).toBe("2027-02-01 03:00:00+00");
+    expect((fim ?? "").trim()).toBe("2027-02-01 03:00:00+00");
   });
 });
 
@@ -1758,7 +1758,7 @@ describe("0909 Tarefa 6 (M8): aguardando ganha backoff, não é reservado de nov
     const linha = sql(`select id, lease_token from public.asaas_webhook_events where event_id = 'evt-t6-013';`);
     const [id, lease] = linha.split("|");
 
-    const resultado = sql(`select public.fn_billing_asaas_aplicar_evento('${id.trim()}'::uuid, '${lease.trim()}'::uuid, null);`);
+    const resultado = sql(`select public.fn_billing_asaas_aplicar_evento('${(id ?? "").trim()}'::uuid, '${(lease ?? "").trim()}'::uuid, null);`);
     expect(resultado).toContain('"resultado": "erro"');
 
     const linhaFinal = sql(`select resultado, tentativas, proxima_tentativa_em is null from public.asaas_webhook_events where id = '${eventoId}';`);
