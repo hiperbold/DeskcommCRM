@@ -2,7 +2,7 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: FIM (F1, F2, F2-B e F3 feitas; F4 em diante dependem do Filipe)
+Fase atual: F4 (autorizada pelo Filipe em 24/09; F5 e F6 depois)
 Etapa da fase: entrega final feita em 24/09/2026 (commits 467db70 e seguintes); relatório com as perguntas entregue ao Filipe na conversa. Detalhe por fase nas tabelas e seções abaixo.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
@@ -19,6 +19,8 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 | F2 | **feita**: 8 tarefas, revisão e auditoria sem achado alto (médios corrigidos em duas levas), todos os portões verdes | 28d21a3 | 23/09/2026 15:20 |
 | F2-B | **feita**: 8 tarefas, revisão (2 altos) e auditoria (1 alto) corrigidas; portões no commit 3898b63 com os vermelhos abaixo, todos corrigidos e reconferidos | a0f7d60 | 23/09/2026 21:05 |
 | F3 | **feita**: 10 tarefas; auditoria (3 altos) e revisão (3 médios) corrigidas e provadas no banco; portões no commit 2f4bcc3 com 2 vermelhos de teste do autor, corrigidos e reconferidos | ver abaixo | 24/09/2026 04:05 |
+| F4 | em andamento: autorizada pelo Filipe em 24/09 ("anote todas as dúvidas mas avance sem parar"); plano em `hiperbold/planos/fase-F4-tarefas.md` | | |
+| F5 | pendente (Asaas: construir contra o manual, com dublês; nenhuma chamada real, nem sandbox, sem autorização explícita) | | |
 | F6 | registrada (pedido do Filipe, 23/09 à tarde): site de vendas, `/precos`, Termos e Privacidade. Fica depois das fases do loop; não começa sem confirmação | ff34e69 | |
 
 ## Tarefas da fase atual
@@ -59,6 +61,7 @@ F2: ainda não planejadas. Abaixo, as da F1, para registro.
 ## Perguntas para o Filipe
 
 - **Respondidas pelo Filipe em 23/09/2026, à tarde**: N10 (só lead aberto conta, confirmado) e N13 a N17 (padrões aprovados). N1 e N12 explicadas de novo a ele; os modelos dos agentes serão baratos e fora da Anthropic (GPT Luna, DeepSeek, GLM), o que torna o D-050 mais importante: hoje o orçamento de IA não enxerga nenhum deles.
+- **Consolidado em 24/09/2026, madrugada (Filipe mandou anotar todas e seguir sem parar)**: abertas N3 (cache a 10% e conferências contam), N8 (preço anual), N9 (preço e tamanho do pacote de tokens), N19 (7 dias de carência), N20 (mídia não para com tokens zerados), N21 (quando ligar o bloqueio), N23 e N24 (F4), as antigas A a D da seção 12 do plano mestre (suspensão, avaliação, contatos, onde digitar o cartão, tolerância, cancelamento, estorno), F6 (quando e com quais dados da empresa), D-056 (integrar GLM), D-050 (autorizar a leitura do banco de produção antes de publicar). Cada uma segue com o padrão declarado.
 - **Respondidas pelo Filipe em 23/09/2026, fim da tarde**: N18 e N22: toda criação de lead para no teto, qualquer origem (automação, webhook, prospecção inclusive); o chat ao vivo nunca para, porque conversa não é lead. Prospecção (função do autor, chegou na junção de 22/09): fica disponível; a busca usa a chave do Apify da PRÓPRIA organização (conferido: `credential(db, admin, org)` em `lib/prospecting/store.ts`), por conta do cliente, fora dos planos e dos tokens. As mensagens que o agente de IA manda na campanha consomem tokens como qualquer resposta, e os leads criados contam no teto.
 - **N13 a N17 (carteira de tokens, F2-B)**: pacote avulso não vence; tetos de segurança diários desligados e, ligados, só avisam; troca de plano no meio do mês não refaz a concessão; embedding não consome tokens do cliente (peso 0); consumo com a chave da própria organização fica fora da carteira. Detalhe e onde muda em `hiperbold/planos/fase-F2-B-tarefas.md`, "Perguntas novas desta fase".
 - **Preço anual (N8)**: nulo no catálogo até ele responder. Onde muda: `price_yearly_cents` em `billing_plans`.
