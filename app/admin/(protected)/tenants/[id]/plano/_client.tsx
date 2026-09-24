@@ -47,9 +47,10 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
-import type {
-  PagamentoDaAssinatura,
-  ResultadoEstadoDaAssinatura,
+import {
+  ultimoDiaDoPeriodo,
+  type PagamentoDaAssinatura,
+  type ResultadoEstadoDaAssinatura,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
 import type { EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
@@ -154,6 +155,14 @@ const ROTULO_DA_CHAVE: Record<ChaveDeLimite, string> = {
   integracoes_webhook: "Integrações webhook",
   tokens_ia_mes: "Tokens de IA por mês",
 };
+
+/**
+ * `current_period_end`/`billing_period_end`/`dataPrevistaDaSuspensao` são
+ * sempre 00:00 em America/Sao_Paulo (migração 0908, decisão 2; comentário de
+ * `ultimoDiaDoPeriodo` em `lib/billing/assinatura/estado-da-assinatura.ts`).
+ * Fixar o fuso aqui evita que a data mostrada dependa do fuso do SERVIDOR.
+ */
+const FUSO_SP = "America/Sao_Paulo";
 
 const CONTRATO_STATUS_VARIANT: Record<string, "success" | "info" | "warning" | "error" | "neutral"> = {
   avaliacao: "info",
@@ -874,17 +883,23 @@ export function TenantPlanoClient({
               <p className="text-sm text-text-muted">
                 {t("Período")}:{" "}
                 {assinatura.contrato.currentPeriodStart
-                  ? new Date(assinatura.contrato.currentPeriodStart).toLocaleDateString(tagDoIdioma)
+                  ? new Date(assinatura.contrato.currentPeriodStart).toLocaleDateString(tagDoIdioma, {
+                      timeZone: FUSO_SP,
+                    })
                   : "-"}{" "}
                 {t("até")}{" "}
                 {assinatura.contrato.currentPeriodEnd
-                  ? new Date(assinatura.contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma)
+                  ? ultimoDiaDoPeriodo(assinatura.contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma, {
+                      timeZone: FUSO_SP,
+                    })
                   : "-"}
               </p>
               {assinatura.contrato.dataPrevistaDaSuspensao && (
                 <p className="text-sm text-text-muted">
                   {t("Data prevista do modo leitura")}:{" "}
-                  {new Date(assinatura.contrato.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma)}
+                  {new Date(assinatura.contrato.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma, {
+                    timeZone: FUSO_SP,
+                  })}
                 </p>
               )}
             </div>
@@ -1048,7 +1063,8 @@ export function TenantPlanoClient({
                     </TableCell>
                     <TableCell>{formatCentsBRL(p.grossCents)}</TableCell>
                     <TableCell>
-                      {new Date(p.billingPeriodStart).toLocaleDateString(tagDoIdioma)} - {new Date(p.billingPeriodEnd).toLocaleDateString(tagDoIdioma)}
+                      {new Date(p.billingPeriodStart).toLocaleDateString(tagDoIdioma, { timeZone: FUSO_SP })} -{" "}
+                      {ultimoDiaDoPeriodo(p.billingPeriodEnd).toLocaleDateString(tagDoIdioma, { timeZone: FUSO_SP })}
                     </TableCell>
                     <TableCell>{new Date(p.createdAt).toLocaleDateString(tagDoIdioma)}</TableCell>
                     <TableCell className="max-w-xs truncate">{p.nota ?? "-"}</TableCell>

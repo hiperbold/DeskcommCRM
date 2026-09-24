@@ -187,9 +187,18 @@ function mensagemDoErroDaAssinatura(error: { code?: string; message?: string } |
     if (msg.includes("billing_pagamento_nao_pode_ser_estornado")) {
       return "Este pagamento já foi estornado e não pode ser estornado de novo.";
     }
+    // Achado da Tarefa 1 (estorno duplo), corrigido na Tarefa 2, migração
+    // 0908: segundo estorno do MESMO pagamento por outra chave (a checagem
+    // acima, pelo status da linha original, não pega esse caso).
+    if (msg.includes("billing_pagamento_ja_estornado")) return "Este pagamento já foi estornado.";
     if (msg.includes("billing_motivo_obrigatorio")) return "O motivo é obrigatório.";
     if (msg.includes("billing_fim_anterior_ao_inicio_do_periodo")) {
       return "A data de fim precisa ser posterior ao início do período.";
+    }
+    // fn_billing_mudar_estado (migração 0908, parte em andamento): avaliacao
+    // exige current_period_end preenchido E no futuro, não só preenchido.
+    if (msg.includes("billing_avaliacao_sem_data_futura")) {
+      return "Para pôr em avaliação, o período precisa terminar numa data futura. Corrija o período antes.";
     }
     if (msg.includes("billing_estado_invalido")) return "Estado inválido.";
     if (msg.includes("billing_estado_sem_periodo_vigente")) {

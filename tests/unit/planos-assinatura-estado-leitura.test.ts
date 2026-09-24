@@ -11,6 +11,7 @@ import {
   estadoDaAssinatura,
   organizacoesAtrasadasESuspensas,
   pagamentosDaAssinatura,
+  ultimoDiaDoPeriodo,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
@@ -37,6 +38,43 @@ describe("dataPrevistaDaSuspensao", () => {
 
   it("atrasada sem período gravado: null", () => {
     expect(dataPrevistaDaSuspensao("atrasada", null, 7)).toBeNull();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────
+// ultimoDiaDoPeriodo (função pura)
+// ───────────────────────────────────────────────────────────────────────
+
+describe("ultimoDiaDoPeriodo", () => {
+  it("subtrai exatamente 1 dia (24h) do fim exclusivo", () => {
+    // 2026-10-31T03:00:00.000Z é 00:00 em America/Sao_Paulo do dia 31/10
+    // (fuso fixo -03:00, sem horário de verão desde 2019).
+    const r = ultimoDiaDoPeriodo("2026-10-31T03:00:00.000Z");
+    expect(r.toISOString()).toBe("2026-10-30T03:00:00.000Z");
+  });
+
+  it("vira o mês corretamente: fim exclusivo em 01/11 dá o último dia 31/10", () => {
+    const r = ultimoDiaDoPeriodo("2026-11-01T03:00:00.000Z");
+    expect(r.toISOString()).toBe("2026-10-31T03:00:00.000Z");
+  });
+
+  it("vira o ano corretamente: fim exclusivo em 01/01 dá o último dia 31/12", () => {
+    const r = ultimoDiaDoPeriodo("2027-01-01T03:00:00.000Z");
+    expect(r.toISOString()).toBe("2026-12-31T03:00:00.000Z");
+  });
+
+  it("aceita Date além de string ISO", () => {
+    const r = ultimoDiaDoPeriodo(new Date("2026-09-10T03:00:00.000Z"));
+    expect(r.toISOString()).toBe("2026-09-09T03:00:00.000Z");
+  });
+
+  it("formatado em America/Sao_Paulo cai no dia civil que o admin registrou, não um dia depois", () => {
+    // Admin registrou fim = 30/10 (p_fim): a migração 0908 grava
+    // current_period_end = (p_fim + 1) à meia-noite SP, 31/10T00:00 SP.
+    const fimExclusivoGravado = "2026-10-31T03:00:00.000Z";
+    const r = ultimoDiaDoPeriodo(fimExclusivoGravado);
+    const diaCivilSP = r.toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+    expect(diaCivilSP).toBe("30/10/2026");
   });
 });
 

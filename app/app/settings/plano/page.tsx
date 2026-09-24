@@ -54,6 +54,7 @@ import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import {
   estadoDaAssinatura,
+  ultimoDiaDoPeriodo,
   type ResultadoEstadoDaAssinatura,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
 import { estadoDoBloqueio, type EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
@@ -89,6 +90,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const metadata = { title: "Plano e uso" };
 export const dynamic = "force-dynamic";
+
+/**
+ * `current_period_end`/`dataPrevistaDaSuspensao` são sempre 00:00 em
+ * America/Sao_Paulo (migração 0908, decisão 2 e comentário de
+ * `estado-da-assinatura.ts`). Formatar sem fixar o fuso deixaria a data
+ * depender do fuso do SERVIDOR (que numa instalação self-host pode não ser
+ * SP), não do dia civil que o banco de fato gravou.
+ */
+const FUSO_SP = "America/Sao_Paulo";
 
 /** Rótulo de cada item, na mesma ordem de `CHAVES_DA_TELA_DE_PLANO`. */
 const ROTULO_DA_CHAVE: Record<ChaveDaTelaDePlano, string> = {
@@ -265,13 +275,18 @@ function CartaoDaAssinatura({
           </Badge>
           {contrato.status === "avaliacao" && contrato.currentPeriodEnd && (
             <span className="text-sm text-muted-foreground">
-              {t("até")} {new Date(contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma)}
+              {t("até")}{" "}
+              {ultimoDiaDoPeriodo(contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma, {
+                timeZone: FUSO_SP,
+              })}
             </span>
           )}
           {contrato.status === "atrasada" && contrato.dataPrevistaDaSuspensao && (
             <span className="text-sm text-muted-foreground">
               {t("modo leitura a partir de")}{" "}
-              {new Date(contrato.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma)}
+              {new Date(contrato.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma, {
+                timeZone: FUSO_SP,
+              })}
             </span>
           )}
         </div>
@@ -280,7 +295,9 @@ function CartaoDaAssinatura({
           <p className="text-sm text-muted-foreground">
             {t("Próximo vencimento")}:{" "}
             <span className="font-medium text-text">
-              {new Date(contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma)}
+              {ultimoDiaDoPeriodo(contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma, {
+                timeZone: FUSO_SP,
+              })}
             </span>
             {contrato.cancelAtPeriodEnd && (
               <span className="ml-2">{t("(a assinatura cancela no fim deste período)")}</span>

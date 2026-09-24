@@ -223,6 +223,18 @@ describe("estornarPagamento", () => {
     expect(r).toEqual({ ok: false, error: "Este pagamento já foi estornado e não pode ser estornado de novo." });
   });
 
+  it("segundo estorno do mesmo pagamento por OUTRA chave (billing_pagamento_ja_estornado, 22023) devolve a frase certa", async () => {
+    h.rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: "22023", message: "billing_pagamento_ja_estornado" },
+    });
+    const { estornarPagamento } = await acoes();
+
+    const r = await estornarPagamento({ organizationId: ORG, pagamentoId: PAGAMENTO, chave: CHAVE });
+
+    expect(r).toEqual({ ok: false, error: "Este pagamento já foi estornado." });
+  });
+
   it("sucesso audita pagamento_id e chave, SEM a nota", async () => {
     const { estornarPagamento } = await acoes();
 
@@ -363,6 +375,21 @@ describe("mudarEstadoDaAssinatura", () => {
     const r = await mudarEstadoDaAssinatura({ organizationId: ORG, estado: "avaliacao" });
 
     expect(r).toEqual({ ok: false, error: "Essa transição de estado não é permitida." });
+  });
+
+  it("billing_avaliacao_sem_data_futura (22023) devolve a frase certa", async () => {
+    h.rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: "22023", message: "billing_avaliacao_sem_data_futura" },
+    });
+    const { mudarEstadoDaAssinatura } = await acoes();
+
+    const r = await mudarEstadoDaAssinatura({ organizationId: ORG, estado: "avaliacao" });
+
+    expect(r).toEqual({
+      ok: false,
+      error: "Para pôr em avaliação, o período precisa terminar numa data futura. Corrija o período antes.",
+    });
   });
 
   it("sucesso audita estado, motivo (quando informado) e a transição", async () => {

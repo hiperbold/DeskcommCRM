@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { loadAuthUser } from "@/lib/auth/server";
-import { organizacoesAtrasadasESuspensas } from "@/lib/billing/assinatura/estado-da-assinatura";
+import {
+  organizacoesAtrasadasESuspensas,
+  ultimoDiaDoPeriodo,
+} from "@/lib/billing/assinatura/estado-da-assinatura";
 import { carregarBloqueioDosPlanos } from "@/lib/billing/planos/bloqueio-da-instalacao";
 import { carregarComportamentoDaInstalacao } from "@/lib/instalacao/comportamento-servidor";
 import { modulosLigados } from "@/lib/instalacao/modulos";
@@ -22,6 +25,14 @@ import {
 
 export const metadata = { title: "Comportamento da instalação" };
 export const dynamic = "force-dynamic";
+
+/**
+ * `current_period_end`/`dataPrevistaDaSuspensao` são sempre 00:00 em
+ * America/Sao_Paulo (migração 0908, decisão 2; comentário de
+ * `ultimoDiaDoPeriodo` em `lib/billing/assinatura/estado-da-assinatura.ts`).
+ * Fixar o fuso aqui evita que a data mostrada dependa do fuso do SERVIDOR.
+ */
+const FUSO_SP = "America/Sao_Paulo";
 
 /**
  * A tela onde o dono da instalação decide COMO ela se comporta, sem SSH.
@@ -125,11 +136,17 @@ export default async function Page() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {org.currentPeriodEnd ? new Date(org.currentPeriodEnd).toLocaleDateString(tagDoIdioma) : "-"}
+                      {org.currentPeriodEnd
+                        ? ultimoDiaDoPeriodo(org.currentPeriodEnd).toLocaleDateString(tagDoIdioma, {
+                            timeZone: FUSO_SP,
+                          })
+                        : "-"}
                     </TableCell>
                     <TableCell>
                       {org.dataPrevistaDaSuspensao
-                        ? new Date(org.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma)
+                        ? new Date(org.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma, {
+                            timeZone: FUSO_SP,
+                          })
                         : "-"}
                     </TableCell>
                     <TableCell>

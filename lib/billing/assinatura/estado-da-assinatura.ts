@@ -55,6 +55,35 @@ const MS_POR_DIA = 24 * 60 * 60 * 1000;
 const GRACE_DAYS_PADRAO = 7;
 
 /**
+ * O ÚLTIMO DIA coberto por um período cujo fim é EXCLUSIVO (migração 0908,
+ * decisão 2): `current_period_end`/`billing_payments.billing_period_end`
+ * gravam 00:00 em America/Sao_Paulo do dia SEGUINTE ao último dia pago (`(p_fim
+ * + 1)::timestamp at time zone 'America/Sao_Paulo'`). Formatar esse instante
+ * direto numa tela mostra um dia A MAIS (admin registra fim 30/10, a tela diz
+ * "vence em 31/10"). Esta função devolve o instante um dia ANTES: como o
+ * Brasil não tem horário de verão desde 2019 (mesma doutrina já usada acima,
+ * `MS_POR_DIA`), subtrair 24h em milissegundos é exato, sem precisar de
+ * biblioteca de fuso. Use para EXIBIR fim de período, "próximo vencimento" e
+ * "avaliação até"; nunca para decidir o que o banco decide.
+ *
+ * ─── Por que NÃO se aplica a `dataPrevistaDaSuspensao` ─────────────────────
+ *
+ * `dataPrevistaDaSuspensao` não é o fim de um período PAGO: é o instante em
+ * que `fn_billing_conferir_vencimento` de fato muda o estado para `suspensa`
+ * (`current_period_end + grace_days <= now()`). Esse dia É o primeiro dia do
+ * modo leitura, não o fim de um período anterior; é o mesmo valor que
+ * `fn_billing_avisar_assinatura` (migração 0908) já formata SEM ajuste
+ * nenhum ("... entra em modo leitura em " || to_char(v_data_suspensao ...)).
+ * Passar esse valor por `ultimoDiaDoPeriodo` mostraria um dia ANTES do que o
+ * conferidor realmente suspende: o mesmo bug que esta função existe para
+ * corrigir, só que na direção contrária.
+ */
+export function ultimoDiaDoPeriodo(fimExclusivo: string | Date): Date {
+  const instante = fimExclusivo instanceof Date ? fimExclusivo : new Date(fimExclusivo);
+  return new Date(instante.getTime() - MS_POR_DIA);
+}
+
+/**
  * `current_period_end + grace_days`, só quando o estado é `atrasada` e o
  * período está preenchido (o único caso em que uma suspensão está prevista);
  * fora disso, `null`. Função pura, exportada para ser testada direto.
