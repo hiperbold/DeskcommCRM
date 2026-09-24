@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useT } from "@/hooks/i18n/useT";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { UploadSimple } from "@/lib/ui/icons";
 
 import type { FunilDaLista } from "../_client";
@@ -49,7 +50,14 @@ export interface ResumoDaImportacao {
  *     pergunta a mais para uma resposta que já é a certa — e quem quiser outra
  *     etapa arrasta os cards, que é o gesto do quadro.
  */
-export function ImportarLeads({ funis }: { funis: FunilDaLista[] }) {
+export function ImportarLeads({
+  funis,
+  bloqueio,
+}: {
+  funis: FunilDaLista[];
+  /** Fase F3, tarefa 9: item "leads" da matriz do plano, no botão que de fato cria os leads. */
+  bloqueio?: BloqueioDoBotao;
+}) {
   const t = useT();
   const [aberto, setAberto] = useState(false);
   const [funilId, setFunilId] = useState(funis[0]?.id ?? "");
@@ -136,13 +144,19 @@ export function ImportarLeads({ funis }: { funis: FunilDaLista[] }) {
             />
             <Button
               className="w-full gap-2"
-              disabled={enviando || !funilId}
+              disabled={enviando || !funilId || bloqueio?.desabilitado}
+              title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
               onClick={() => arquivoRef.current?.click()}
               data-testid="escolher-planilha"
             >
               <UploadSimple size={16} aria-hidden />
               {enviando ? t("Importando…") : t("Escolher o arquivo CSV")}
             </Button>
+            {bloqueio?.desabilitado && (
+              <p className="text-xs text-destructive" data-testid="importar-leads-bloqueio-motivo">
+                {bloqueio.motivo}
+              </p>
+            )}
 
             {/* Rota de API que devolve o arquivo com `content-disposition:
                 attachment` — é download, não navegação de página. */}

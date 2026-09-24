@@ -39,12 +39,18 @@ import {
   useWebhookSourceEvents,
   type WebhookSourceRow,
 } from "@/hooks/webhooks/useWebhookSources";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { useT } from "@/hooks/i18n/useT";
 
 interface Props {
   source: WebhookSourceRow;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Fase F3, tarefa 9. Só trava LIGAR uma fonte pausada (`!source.is_active`
+   * abaixo): pausar não cria linha nova, não conta contra o teto.
+   */
+  bloqueio?: BloqueioDoBotao;
 }
 
 function publicUrl(pathToken: string): string {
@@ -81,7 +87,7 @@ function relativeReceivedAt(iso: string, locale: Locale): string {
   return formatDistanceToNowStrict(new Date(iso), { addSuffix: true, locale: locale });
 }
 
-export function SourceDetail({ source, open, onOpenChange }: Props) {
+export function SourceDetail({ source, open, onOpenChange, bloqueio }: Props) {
   const localeDaData = useLocaleDeData();
   const t = useT();
   const update = useUpdateWebhookSource();
@@ -251,12 +257,17 @@ export function SourceDetail({ source, open, onOpenChange }: Props) {
             <div>
               <p className="text-sm font-medium text-text">{t("Fonte ativa")}</p>
               <p className="text-xs text-muted-foreground">
-                {t("Pausada, ela para de aceitar novos envios.")}
+                {!source.is_active && bloqueio?.desabilitado
+                  ? bloqueio.motivo
+                  : t("Pausada, ela para de aceitar novos envios.")}
               </p>
             </div>
             <Switch
               checked={source.is_active}
-              disabled={update.isPending}
+              disabled={update.isPending || (!source.is_active && bloqueio?.desabilitado)}
+              title={
+                !source.is_active && bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined
+              }
               onCheckedChange={(checked) =>
                 update.mutate(
                   { id: source.id, is_active: checked },

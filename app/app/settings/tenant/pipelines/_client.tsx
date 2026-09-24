@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { updatePipelineConfig } from "@/app/actions/settings/updatePipelineConfig";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import type { PipelineConfigPatch } from "@/lib/schemas/settings";
 import { camposDoFunil } from "@/lib/leads/campos-do-funil";
 import { customFieldSchema, type CustomFieldDef } from "@/lib/schemas/settings";
@@ -64,19 +65,25 @@ function readLostReasons(settings: Record<string, unknown> | null): string[] {
 export function PipelinesClient({
   pipelines,
   podeEditarConfig,
+  bloqueioPorFunil,
 }: {
   pipelines: PipelineRow[];
   /** Vocabulário/custom fields são admin (a server action recusa o resto). */
   podeEditarConfig: boolean;
+  /** Fase F3, tarefa 9: um `BloqueioDoBotao` de "etapas_por_funil" por `pipeline.id`. */
+  bloqueioPorFunil?: Record<string, BloqueioDoBotao>;
 }) {
   const t = useT();
   if (pipelines.length === 0) {
-    // ⚠️ NÃO PROMETA UM CAMINHO QUE NÃO EXISTE. Criar funil não é feito por
-    // nenhuma tela, rota ou action deste produto — só por script de instalação;
-    // e como o instalador não provisiona funil, ESTE é o estado de toda
-    // instalação nova. O texto anterior mandava "crie um no quadro", e o quadro
-    // vazio manda "Ir para Configurações": pingue-pongue fechado, com o usuário
-    // procurando um botão que não existe em lugar nenhum.
+    // ⚠️ NÃO PROMETA UM CAMINHO QUE NÃO EXISTE NESTA TELA. Corrigido na fase
+    // F3, tarefa 9: "Novo funil" e "Criar meu primeiro funil" existem em
+    // /app/kanban (manager para cima), este comentário dizia o contrário. O
+    // que continua verdade é que ESTA tela de configuração (vocabulário e
+    // campos do funil) não cria funil nenhum, então o texto abaixo manda para
+    // /app/kanban em vez de repetir um botão que não existe aqui. Sem funil
+    // nenhum na organização, esta continua sendo a única tela que sobra para
+    // avisar: é o estado de toda instalação em que o gatilho de seed não
+    // rodou, ou em que ninguém foi ainda ao quadro criar o primeiro.
     return (
       <Card className="p-6 text-sm leading-relaxed text-muted-foreground">
         {t("Você ainda não tem nenhum funil. Enquanto for assim, o agente atende normalmente, mas não tem para onde levar o card de ninguém — não há etapas para onde mover. Criar o funil é feito por quem instalou o sistema, direto no banco; depois ele aparece aqui para você escolher a etapa de cada passo.")}
@@ -96,7 +103,11 @@ export function PipelinesClient({
               depois se decide o que o assistente faz com ele. Invertido, a
               primeira coisa que o dono da clínica vê é um mapeamento sobre
               colunas de e-commerce que ele nem sabia que dava para trocar. */}
-          <StagesSection pipelineId={p.id} ancoraMapeamento={ancoraDoMapeamento(p.id)} />
+          <StagesSection
+            pipelineId={p.id}
+            ancoraMapeamento={ancoraDoMapeamento(p.id)}
+            bloqueio={bloqueioPorFunil?.[p.id]}
+          />
           <div className="border-t border-border pt-6">
             <AgentMappingSection pipelineId={p.id} ancoraEtapas={ancoraDasEtapas(p.id)} />
           </div>

@@ -4,8 +4,11 @@ import { redirect } from "next/navigation";
 import { Kanban } from "@/lib/ui/icons";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
 import { FunisClient, type FunilDaLista } from "./_client";
 
 export const dynamic = "force-dynamic";
@@ -64,6 +67,13 @@ export default async function KanbanPickerPage() {
   const idioma = user.idioma;
   const t = (texto: string) => traduzir(texto, idioma);
 
+  // Fase F3, tarefa 9: "funis" trava os dois botões de criar funil desta
+  // tela; "leads" trava o botão de importar planilha (ImportarLeads), que
+  // cria leads em lote. Uma leitura só, os dois itens saem do mesmo estado.
+  const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
+  const bloqueioFunis = bloqueioDoBotao(estado, "funis");
+  const bloqueioLeads = bloqueioDoBotao(estado, "leads");
+
   return (
     <div className="flex h-full flex-col gap-4 p-6">
       <header className="flex items-center gap-3">
@@ -83,6 +93,8 @@ export default async function KanbanPickerPage() {
         arquivados={arquivados}
         podeGerenciar={podeGerenciar}
         podeImportar={podeImportar}
+        bloqueio={bloqueioFunis}
+        bloqueioImportacao={bloqueioLeads}
       />
     </div>
   );

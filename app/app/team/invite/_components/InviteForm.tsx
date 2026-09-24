@@ -10,6 +10,7 @@ import { toast } from "sonner";
 
 import { useT } from "@/hooks/i18n/useT";
 import { useInviteMembers } from "@/hooks/team/useInviteMembers";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -28,7 +29,7 @@ interface ResultState {
   failed: Array<{ email: string; reason: string }>;
 }
 
-export function InviteForm() {
+export function InviteForm({ bloqueio }: { bloqueio?: BloqueioDoBotao } = {}) {
   const t = useT();
   const [emailsRaw, setEmailsRaw] = useState("");
   const [settings, setSettings] = useState(INTERFACE_COMPLETA);
@@ -106,11 +107,16 @@ export function InviteForm() {
           disabled={
             invite.isPending ||
             !interfaceSettingsSchema.safeParse(settings).success ||
-            !interfaceTemDestino(settings, role)
+            !interfaceTemDestino(settings, role) ||
+            bloqueio?.desabilitado
           }
+          title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
         >
           {invite.isPending ? t("Enviando…") : t("Enviar convites")}
         </Button>
+        {bloqueio?.desabilitado && (
+          <p className="text-xs text-destructive">{bloqueio.motivo}</p>
+        )}
       </form>
 
       <div className="space-y-4">

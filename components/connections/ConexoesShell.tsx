@@ -3,6 +3,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { CanalInstanciaClient } from "./CanalInstanciaClient";
 import { RedesSociaisClient } from "./RedesSociaisClient";
 import { CanalOficialClient } from "./CanalOficialClient";
@@ -39,10 +40,17 @@ import { useT } from "@/hooks/i18n/useT";
 export function ConexoesShell({
   wahaConfigured: _wahaConfigured,
   wacallsConfigured,
+  bloqueio,
 }: {
   /** Sem uso na Hiperbold (sem canal por QR); mantido para a página do autor não mudar. */
   wahaConfigured: boolean;
   wacallsConfigured: boolean;
+  /**
+   * Fase F3, tarefa 9: o mesmo estado de "conexões" da matriz do plano, para
+   * os quatro canais que criam `channel_sessions`. `undefined` (nenhuma
+   * página passa isso ainda além desta) equivale a "não desabilita".
+   */
+  bloqueio?: BloqueioDoBotao;
 }) {
   const t = useT();
   const router = useRouter();
@@ -105,13 +113,13 @@ export function ConexoesShell({
       </TabsList>
 
       <TabsContent value="instancia" className="mt-0">
-        <CanalInstanciaClient />
+        <CanalInstanciaClient bloqueio={bloqueio} />
       </TabsContent>
 
       <TabsContent value="telefonia" className="mt-0">
         <TelefoniaClient />
       </TabsContent>
-      <TabsContent value="sociais" className="mt-0"><RedesSociaisClient /></TabsContent>
+      <TabsContent value="sociais" className="mt-0"><RedesSociaisClient bloqueio={bloqueio} /></TabsContent>
 
       <TabsContent value="voz" className="mt-0">
         <CanalVozClient wacallsConfigured={wacallsConfigured} />
@@ -129,7 +137,7 @@ export function ConexoesShell({
             <TabsTrigger value="templates">{t("Modelos do parceiro")}</TabsTrigger>
           </TabsList>
           <TabsContent value="conexao" className="mt-0">
-            <CanalParceiroClient />
+            <CanalParceiroClient bloqueio={bloqueio} />
           </TabsContent>
           <TabsContent value="templates" className="mt-0">
             <TemplatesParceiroClient />
@@ -150,7 +158,7 @@ export function ConexoesShell({
             <TabsTrigger value="templates">{t("Templates da Meta")}</TabsTrigger>
           </TabsList>
           <TabsContent value="conexao" className="mt-0">
-            <CanalOficialClient />
+            <CanalOficialClient bloqueio={bloqueio} />
           </TabsContent>
           <TabsContent value="templates" className="mt-0">
             <TemplatesClient />

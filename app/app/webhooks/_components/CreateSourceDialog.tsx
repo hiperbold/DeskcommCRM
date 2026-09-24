@@ -26,15 +26,18 @@ import {
   usePipelineStages,
   type WebhookSourceRow,
 } from "@/hooks/webhooks/useWebhookSources";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { useT } from "@/hooks/i18n/useT";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (source: WebhookSourceRow) => void;
+  /** Fase F3, tarefa 9: item "integracoes_webhook" da matriz do plano. */
+  bloqueio?: BloqueioDoBotao;
 }
 
-export function CreateSourceDialog({ open, onOpenChange, onCreated }: Props) {
+export function CreateSourceDialog({ open, onOpenChange, onCreated, bloqueio }: Props) {
   const t = useT();
   const [name, setName] = React.useState("");
   const [pipelineId, setPipelineId] = React.useState<string>("");
@@ -159,10 +162,17 @@ export function CreateSourceDialog({ open, onOpenChange, onCreated }: Props) {
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               {t("Cancelar")}
             </Button>
-            <Button type="submit" disabled={create.isPending}>
+            <Button
+              type="submit"
+              disabled={create.isPending || bloqueio?.desabilitado}
+              title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+            >
               {t("Criar fonte")}
             </Button>
           </DialogFooter>
+          {bloqueio?.desabilitado && (
+            <p className="text-xs text-destructive">{bloqueio.motivo}</p>
+          )}
         </form>
       </DialogContent>
     </Dialog>

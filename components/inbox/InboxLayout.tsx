@@ -31,6 +31,7 @@ import { OpenConversationProvider } from "@/hooks/notifications/OpenConversation
 import { CaretLeft, ChatCircle, IdentificationCard } from "@/lib/ui/icons";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { cn } from "@/lib/utils";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
 import { buscaValeConsulta } from "@/lib/inbox/termo-de-busca";
@@ -122,9 +123,11 @@ function parseFilterParam(v: string | null): InboxTab {
 
 interface InboxLayoutProps {
   initialSelectedId?: string | null;
+  /** Fase F3, tarefa 9: item "leads" da matriz do plano, para o "Novo Lead" do painel lateral. */
+  bloqueio?: BloqueioDoBotao;
 }
 
-export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {}) {
+export function InboxLayout({ initialSelectedId = null, bloqueio }: InboxLayoutProps = {}) {
   const t = useT();
   const { activeOrg, user } = useAuth();
   const supportReadonly = user.support?.access_mode === "support_readonly";
@@ -479,7 +482,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
                 </SheetTrigger>
                 <SheetContent side="right" className="w-[min(22rem,90vw)] overflow-y-auto p-0">
                   <SheetTitle className="sr-only">{t("Ficha do contato")}</SheetTitle>
-                  <CRMSidePanel conversation={selectedConversation} />
+                  <CRMSidePanel conversation={selectedConversation} bloqueio={bloqueio} />
                 </SheetContent>
               </Sheet>
             )}
@@ -537,7 +540,7 @@ export function InboxLayout({ initialSelectedId = null }: InboxLayoutProps = {})
       </div>
 
       <div className="hidden h-full min-h-0 xl:block">
-        <CRMSidePanel conversation={selectedConversation} />
+        <CRMSidePanel conversation={selectedConversation} bloqueio={bloqueio} />
       </div>
 
       <InboxKeyboardShortcuts

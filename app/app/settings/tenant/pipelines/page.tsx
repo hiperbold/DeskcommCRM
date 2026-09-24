@@ -2,7 +2,14 @@ import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import {
+  bloqueioDoBotao,
+  estadoDoBloqueio,
+  type BloqueioDoBotao,
+} from "@/lib/billing/planos/estado-do-bloqueio";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { logger } from "@/lib/logger";
 import { PipelinesClient, type PipelineRow } from "./_client";
 import { traduzir } from "@/lib/i18n/dicionario";
 
@@ -42,6 +49,19 @@ export default async function PipelinesSettingsPage() {
   const pipelines = (data ?? []) as PipelineRow[];
   const idioma = user.idioma;
 
+  // Fase F3, tarefa 9: "etapas_por_funil" é o único item POR FUNIL da matriz
+  // (ver o comentário de `estado-do-bloqueio.ts`) — só entram os funis que
+  // esta tela desenha, nunca todo `pipelineIds` da organização.
+  const estado = await estadoDoBloqueio(
+    createAdminClient(),
+    activeOrg.orgId,
+    { pipelineIds: pipelines.map((p) => p.id) },
+    logger,
+  );
+  const bloqueioPorFunil: Record<string, BloqueioDoBotao> = Object.fromEntries(
+    pipelines.map((p) => [p.id, bloqueioDoBotao(estado, "etapas_por_funil", p.id)]),
+  );
+
   return (
     <div className="flex h-full flex-col gap-6 p-6">
       <header>
@@ -56,7 +76,11 @@ export default async function PipelinesSettingsPage() {
           .
         </p>
       </header>
-      <PipelinesClient pipelines={pipelines} podeEditarConfig={podeEditarConfig} />
+      <PipelinesClient
+        pipelines={pipelines}
+        podeEditarConfig={podeEditarConfig}
+        bloqueioPorFunil={bloqueioPorFunil}
+      />
     </div>
   );
 }

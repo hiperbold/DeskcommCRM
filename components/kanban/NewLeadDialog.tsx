@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useCreateLead } from "@/hooks/kanban/useCreateLead";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import type { Stage } from "@/lib/kanban/types";
 import { createLeadSchema, type CreateLeadInput } from "@/lib/schemas/leads";
 import { parseReaisToCents } from "@/lib/money";
@@ -50,6 +51,8 @@ interface Props {
   contactId?: string | null;
   /** Depois do INSERT — o inbox relê o resumo para o lead novo aparecer no formulário. */
   onCreated?: () => void;
+  /** Fase F3, tarefa 9: item "leads" da matriz do plano, no botão "Criar lead". */
+  bloqueio?: BloqueioDoBotao;
 }
 
 function defaultStageId(stages: Stage[]): string {
@@ -64,6 +67,7 @@ export function NewLeadDialog({
   stages,
   contactId,
   onCreated,
+  bloqueio,
 }: Props) {
   const t = useT();
   const create = useCreateLead(pipelineId);
@@ -282,10 +286,17 @@ export function NewLeadDialog({
             >
               {t("Cancelar")}
             </Button>
-            <Button type="submit" disabled={create.isPending || !stageId}>
+            <Button
+              type="submit"
+              disabled={create.isPending || !stageId || bloqueio?.desabilitado}
+              title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+            >
               {create.isPending ? t("Criando…") : t("Criar lead")}
             </Button>
           </DialogFooter>
+          {bloqueio?.desabilitado && (
+            <p className="text-xs text-destructive">{bloqueio.motivo}</p>
+          )}
         </form>
       </DialogContent>
     </Dialog>

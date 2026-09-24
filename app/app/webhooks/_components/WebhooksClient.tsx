@@ -2,13 +2,14 @@
 import * as React from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { SourcesTab } from "./SourcesTab";
 import { RulesTab } from "./RulesTab";
 import { ActivityTab } from "./ActivityTab";
 import { CapturasTab } from "./CapturasTab";
 import { useT } from "@/hooks/i18n/useT";
 
-export function WebhooksClient() {
+export function WebhooksClient({ bloqueio }: { bloqueio?: BloqueioDoBotao } = {}) {
   const t = useT();
   // Radix Tabs gera ids via useId; com SSR streamado (Next 15) os ids divergem
   // entre server e client e o React acusa hydration mismatch. Nenhuma outra
@@ -42,7 +43,7 @@ export function WebhooksClient() {
         <TabsTrigger value="rules">{t("Automações")}</TabsTrigger>
         <TabsTrigger value="activity">{t("Atividade")}</TabsTrigger>
       </TabsList>
-      <TabsContent value="sources"><SourcesTab /></TabsContent>
+      <TabsContent value="sources"><SourcesTab bloqueio={bloqueio} /></TabsContent>
       <TabsContent value="capturas"><CapturasTab /></TabsContent>
       <TabsContent value="rules"><RulesTab /></TabsContent>
       <TabsContent value="activity"><ActivityTab /></TabsContent>

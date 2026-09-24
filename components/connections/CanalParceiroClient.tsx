@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiClient } from "@/lib/api/client";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useT } from "@/hooks/i18n/useT";
 import { ChannelAiAccess } from "./ChannelAiAccess";
@@ -81,7 +82,16 @@ function ParaColar({ rotulo, valor }: { rotulo: string; valor: string }) {
   );
 }
 
-export function CanalParceiroClient() {
+export function CanalParceiroClient({
+  bloqueio,
+}: {
+  /**
+   * Fase F3, tarefa 9. Só trava a PRIMEIRA conexão (`!conectado` abaixo): a
+   * rota (`app/api/v1/channels/partner/route.ts`) só conta contra o teto uma
+   * sessão nova ou arquivada, reconectar uma sessão ativa não cria linha.
+   */
+  bloqueio?: BloqueioDoBotao;
+} = {}) {
   const t = useT();
   const [estado, setEstado] = useState<Estado | null>(null);
   const [accountId, setAccountId] = useState("");
@@ -193,12 +203,20 @@ export function CanalParceiroClient() {
           </div>
 
           <div>
-            <Button onClick={conectar} disabled={salvando || !accountId || !apiKey}>
+            <Button
+              onClick={conectar}
+              disabled={salvando || !accountId || !apiKey || (!conectado && bloqueio?.desabilitado)}
+              title={!conectado && bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+            >
               {salvando ? t("Verificando…") : conectado ? t("Reconectar") : t("Conectar")}
             </Button>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {t("A credencial é testada contra o provedor antes de ser gravada.")}
-            </p>
+            {!conectado && bloqueio?.desabilitado ? (
+              <p className="mt-1.5 text-xs text-destructive">{bloqueio.motivo}</p>
+            ) : (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {t("A credencial é testada contra o provedor antes de ser gravada.")}
+              </p>
+            )}
           </div>
         </div>
       </Card>

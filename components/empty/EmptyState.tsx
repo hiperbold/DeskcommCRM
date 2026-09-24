@@ -9,6 +9,13 @@ export interface EmptyStateAction {
   label: string;
   onClick?: () => void;
   href?: string;
+  /**
+   * Fase F3, tarefa 9: o botão de criar (ex.: "Criar meu primeiro funil")
+   * desabilitado quando o bloqueio do plano vale. `title` é o motivo, para o
+   * mesmo padrão de tooltip dos botões de conexão.
+   */
+  disabled?: boolean;
+  title?: string;
 }
 
 export interface EmptyStateProps {
@@ -28,13 +35,19 @@ function ActionButton({
 }) {
   if (action.href) {
     return (
-      <Button asChild variant={variant}>
+      <Button asChild variant={variant} disabled={action.disabled} title={action.title}>
         <Link href={action.href}>{action.label}</Link>
       </Button>
     );
   }
   return (
-    <Button type="button" onClick={action.onClick} variant={variant}>
+    <Button
+      type="button"
+      onClick={action.onClick}
+      variant={variant}
+      disabled={action.disabled}
+      title={action.title}
+    >
       {action.label}
     </Button>
   );

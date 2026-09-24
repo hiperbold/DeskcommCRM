@@ -25,6 +25,7 @@ import {
 } from "@/hooks/pipelines/useStages";
 import { LEAD_STAGES, type LeadStage } from "@/lib/agent-engine/agent/lead-state";
 import { ApiError } from "@/lib/api/types";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { ROTULO_DO_PASSO } from "@/lib/leads/agent-mapping";
 import { Archive, CaretDown, CaretUp, Plus, Warning } from "@/lib/ui/icons";
 import { SeloDeAutoria } from "@/components/operacao/SeloDeAutoria";
@@ -199,10 +200,13 @@ export const ROTULO = {
 export function StagesSection({
   pipelineId,
   ancoraMapeamento,
+  bloqueio,
 }: {
   pipelineId: string;
   /** Para onde mandar quem precisa desfazer o vínculo de uma etapa com o assistente. */
   ancoraMapeamento: string;
+  /** Fase F3, tarefa 9: item "etapas_por_funil" da matriz do plano, PARA ESTE FUNIL. */
+  bloqueio?: BloqueioDoBotao;
 }) {
   const t = useT();
   const consulta = useAgentMapping(pipelineId);
@@ -644,10 +648,24 @@ export function StagesSection({
       </ul>
 
       {nova === null ? (
-        <Button variant="ghost" size="sm" data-testid="nova-etapa" onClick={() => setNova("")}>
-          <Plus size={16} className="mr-1" aria-hidden />
-          {t("Acrescentar etapa ao fim")}
-        </Button>
+        <>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="nova-etapa"
+            onClick={() => setNova("")}
+            disabled={bloqueio?.desabilitado}
+            title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+          >
+            <Plus size={16} className="mr-1" aria-hidden />
+            {t("Acrescentar etapa ao fim")}
+          </Button>
+          {bloqueio?.desabilitado && (
+            <p className="text-xs text-destructive" data-testid="nova-etapa-bloqueio-motivo">
+              {bloqueio.motivo}
+            </p>
+          )}
+        </>
       ) : (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Input

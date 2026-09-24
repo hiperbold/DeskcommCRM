@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/lib/api/client";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { useT } from "@/hooks/i18n/useT";
 import { ChannelAiAccess } from "./ChannelAiAccess";
 
@@ -27,7 +28,17 @@ type State = {
   networks: { id: string; label: string; inbox: boolean }[];
   accounts: Account[];
 };
-export function RedesSociaisClient() {
+export function RedesSociaisClient({
+  bloqueio,
+}: {
+  /**
+   * Fase F3, tarefa 9. "Autorizar conta" nunca cria `channel_sessions` (só
+   * devolve a URL de OAuth); quem cria é "Receber no atendimento"
+   * (`connectSocialInbox`), e só quando a conta ainda não tem `account.channel`
+   * — por isso só esse botão, por conta, é travado.
+   */
+  bloqueio?: BloqueioDoBotao;
+} = {}) {
   const t = useT();
   const params = useSearchParams();
   const query = useQuery({
@@ -235,7 +246,14 @@ export function RedesSociaisClient() {
                   {account.inbox_supported &&
                     (!account.channel || account.channel.status !== "WORKING") && (
                       <Button
-                        disabled={!!busy || !account.active}
+                        disabled={
+                          !!busy || !account.active || (!account.channel && bloqueio?.desabilitado)
+                        }
+                        title={
+                          !account.channel && bloqueio?.desabilitado
+                            ? bloqueio.motivo ?? undefined
+                            : undefined
+                        }
                         onClick={() =>
                           void perform(account.id, { action: "inbox", account_id: account.id })
                         }
@@ -243,6 +261,9 @@ export function RedesSociaisClient() {
                         {t("Receber no atendimento")}
                       </Button>
                     )}
+                  {!account.channel && bloqueio?.desabilitado && (
+                    <p className="w-full text-xs text-destructive">{bloqueio.motivo}</p>
+                  )}
                   {account.channel && (
                     <Button asChild variant="outline">
                       <Link href="/app/inbox">{t("Abrir atendimento")}</Link>

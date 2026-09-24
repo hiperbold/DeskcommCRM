@@ -1,6 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
+import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { logger } from "@/lib/logger";
 import { PipelinePageClient } from "./_client";
 
 export const dynamic = "force-dynamic";
@@ -26,5 +29,8 @@ export default async function PipelinePage({
     .eq("id", id)
     .maybeSingle();
   if (!pipeline) notFound();
-  return <PipelinePageClient pipelineId={id} initialName={pipeline.name} />;
+  // Fase F3, tarefa 9: item "leads" para o "Novo Lead" deste funil.
+  const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
+  const bloqueio = bloqueioDoBotao(estado, "leads");
+  return <PipelinePageClient pipelineId={id} initialName={pipeline.name} bloqueio={bloqueio} />;
 }

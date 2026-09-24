@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { ApiError } from "@/lib/api/types";
 import {
   Archive,
@@ -90,6 +91,8 @@ export function FunisClient({
   arquivados: arquivadosDoServidor,
   podeGerenciar,
   podeImportar,
+  bloqueio,
+  bloqueioImportacao,
 }: {
   funis: FunilDaLista[];
   /**
@@ -102,6 +105,10 @@ export function FunisClient({
   podeGerenciar: boolean;
   /** Espelha o `requireRole("agent")` de `POST /api/v1/leads/import`. */
   podeImportar: boolean;
+  /** Fase F3, tarefa 9: item "funis" da matriz do plano, para os dois botões de criar. */
+  bloqueio?: BloqueioDoBotao;
+  /** Idem, item "leads" — repassado para o botão de importar planilha. */
+  bloqueioImportacao?: BloqueioDoBotao;
 }) {
   const t = useT();
   /**
@@ -439,10 +446,20 @@ export function FunisClient({
           <EmptyPipeline
             primary={
               podeGerenciar
-                ? { label: t("Criar meu primeiro funil"), onClick: () => setNovo("") }
+                ? {
+                    label: t("Criar meu primeiro funil"),
+                    onClick: () => setNovo(""),
+                    disabled: bloqueio?.desabilitado,
+                    title: bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined,
+                  }
                 : undefined
             }
           />
+        )}
+        {podeGerenciar && bloqueio?.desabilitado && (
+          <p className="text-xs text-destructive" data-testid="funis-bloqueio-motivo">
+            {bloqueio.motivo}
+          </p>
         )}
         {erro && (
           <p className="text-sm text-destructive" data-testid="erro-geral">
@@ -465,13 +482,24 @@ export function FunisClient({
               lista que se escolhe o funil, e a planilha precisa de um destino.
               Uma rota nova exigiria um item de menu para uma coisa que se faz
               uma vez por mês — ruído permanente para um gesto ocasional. */}
-          {podeImportar ? <ImportarLeads funis={funis} /> : null}
+          {podeImportar ? <ImportarLeads funis={funis} bloqueio={bloqueioImportacao} /> : null}
           {podeGerenciar && novo === null ? (
-            <Button onClick={() => setNovo("")} disabled={ocupado} data-testid="novo-funil" className="w-full sm:w-auto">
+            <Button
+              onClick={() => setNovo("")}
+              disabled={ocupado || bloqueio?.desabilitado}
+              title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+              data-testid="novo-funil"
+              className="w-full sm:w-auto"
+            >
               <Plus size={16} className="mr-2" aria-hidden /> {t("Novo funil")}
             </Button>
           ) : null}
         </div>
+      )}
+      {podeGerenciar && funis.length > 0 && bloqueio?.desabilitado && (
+        <p className="text-xs text-destructive sm:text-right" data-testid="funis-bloqueio-motivo-lista">
+          {bloqueio.motivo}
+        </p>
       )}
 
       {formularioDeCriacao}

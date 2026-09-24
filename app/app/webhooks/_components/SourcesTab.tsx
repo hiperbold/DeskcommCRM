@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PlugsConnected, Plus } from "@/lib/ui/icons";
+import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { SeloDeAutoria } from "@/components/operacao/SeloDeAutoria";
 import { useWebhookSources, type WebhookSourceRow } from "@/hooks/webhooks/useWebhookSources";
 import { CreateSourceDialog } from "./CreateSourceDialog";
@@ -22,7 +23,7 @@ function lastReceivedLabel(iso: string | null, t: (texto: string) => string, loc
   return `${t("último recebimento")} ${formatDistanceToNowStrict(new Date(iso), { addSuffix: true, locale: locale })}`;
 }
 
-export function SourcesTab() {
+export function SourcesTab({ bloqueio }: { bloqueio?: BloqueioDoBotao } = {}) {
   const localeDaData = useLocaleDeData();
   const t = useT();
   const { data, isLoading } = useWebhookSources();
@@ -63,9 +64,15 @@ export function SourcesTab() {
           open={createOpen}
           onOpenChange={setCreateOpen}
           onCreated={setSelected}
+          bloqueio={bloqueio}
         />
         {selected ? (
-          <SourceDetail source={selected} open={!!selected} onOpenChange={() => setSelected(null)} />
+          <SourceDetail
+            source={selected}
+            open={!!selected}
+            onOpenChange={() => setSelected(null)}
+            bloqueio={bloqueio}
+          />
         ) : null}
       </div>
     );
@@ -103,9 +110,19 @@ export function SourcesTab() {
         ))}
       </div>
 
-      <CreateSourceDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={setSelected} />
+      <CreateSourceDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={setSelected}
+        bloqueio={bloqueio}
+      />
       {selected ? (
-        <SourceDetail source={selected} open={!!selected} onOpenChange={() => setSelected(null)} />
+        <SourceDetail
+          source={selected}
+          open={!!selected}
+          onOpenChange={() => setSelected(null)}
+          bloqueio={bloqueio}
+        />
       ) : null}
     </div>
   );

@@ -3,8 +3,11 @@ import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import { ConexoesShell } from "@/components/connections/ConexoesShell";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Conexões" };
@@ -24,6 +27,14 @@ export default async function ConnectionsPage() {
   );
   const wacallsConfigured = Boolean(process.env.WACALLS_API_BASE_URL);
 
+  // Fase F3, tarefa 9: os quatro canais que criam `channel_sessions`
+  // (instância, oficial, parceiro, redes sociais) usam o MESMO item da
+  // matriz de plano ("conexoes"), então um só `estadoDoBloqueio` serve a
+  // todos — cada componente decide sozinho se o botão que ele mostra é uma
+  // conexão NOVA (ver comentário de cada um).
+  const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
+  const bloqueio = bloqueioDoBotao(estado, "conexoes");
+
   return (
     <div className="flex h-full flex-col gap-6 p-6">
       <header>
@@ -35,7 +46,11 @@ export default async function ConnectionsPage() {
           )}
         </p>
       </header>
-      <ConexoesShell wahaConfigured={wahaConfigured} wacallsConfigured={wacallsConfigured} />
+      <ConexoesShell
+        wahaConfigured={wahaConfigured}
+        wacallsConfigured={wacallsConfigured}
+        bloqueio={bloqueio}
+      />
     </div>
   );
 }

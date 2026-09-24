@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { WebhooksClient } from "./_components/WebhooksClient";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +18,11 @@ export default async function WebhooksPage() {
   if (!canManage) redirect("/app/inbox");
   const idioma = user.idioma;
 
+  // Fase F3, tarefa 9: item "integracoes_webhook" para "Nova fonte"/"Criar
+  // primeira fonte" e para reativar uma fonte pausada.
+  const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
+  const bloqueio = bloqueioDoBotao(estado, "integracoes_webhook");
+
   return (
     <div className="flex h-full flex-col gap-6 p-6">
       <header>
@@ -26,7 +34,7 @@ export default async function WebhooksPage() {
           )}
         </p>
       </header>
-      <WebhooksClient />
+      <WebhooksClient bloqueio={bloqueio} />
     </div>
   );
 }

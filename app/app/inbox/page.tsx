@@ -2,8 +2,11 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import { InboxLayout } from "@/components/inbox/InboxLayout";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Inbox" };
@@ -37,5 +40,8 @@ export default async function InboxPage({
     );
   }
   const { id } = await searchParams;
-  return <InboxLayout initialSelectedId={id ?? null} />;
+  // Fase F3, tarefa 9: item "leads" para o "Novo Lead" do painel lateral.
+  const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
+  const bloqueio = bloqueioDoBotao(estado, "leads");
+  return <InboxLayout initialSelectedId={id ?? null} bloqueio={bloqueio} />;
 }
