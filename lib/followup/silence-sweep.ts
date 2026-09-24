@@ -83,12 +83,23 @@ export interface SilenceSweepSummary {
   pointers_gated_out: number;
   enrolled: number;
   skipped_existing: number;
+  /** Tarefa 7, fase F4: pointers pulados por organização em modo leitura. */
+  pointers_modo_leitura?: number;
 }
 
 export interface SilenceSweepDeps {
   db: SilenceSweepDb;
   gateDb: FollowupGateDb;
   clock: () => Date;
+  /**
+   * Tarefa 7, decisão 8 da fase F4: organização em modo leitura não recebe
+   * follow-up de silêncio NOVO (o gatilho é TIME-DRIVEN, silêncio nunca
+   * "volta pra fila" sozinho, então não há evento represado para perder: só
+   * não nasce enrollment enquanto durar a suspensão). Opcional e com
+   * fail-open embutido em `contaEmModoLeitura`: omitir a dependência (como
+   * os testes existentes fazem) mantém o sweep de sempre, sem gate nenhum.
+   */
+  contaEmModoLeitura?: (organizationId: string) => Promise<boolean>;
 }
 
 export async function runSilenceSweep(deps: SilenceSweepDeps): Promise<SilenceSweepSummary> {
@@ -98,6 +109,7 @@ export async function runSilenceSweep(deps: SilenceSweepDeps): Promise<SilenceSw
     pointers_gated_out: 0,
     enrolled: 0,
     skipped_existing: 0,
+    pointers_modo_leitura: 0,
   };
 
   const pointers = await db.loadActiveSilencePointers();
@@ -120,6 +132,15 @@ export async function runSilenceSweep(deps: SilenceSweepDeps): Promise<SilenceSw
   };
 
   for (const pointer of pointers) {
+    // Tarefa 7, decisão 8: modo leitura pula o pointer inteiro, nenhum
+    // contato desta organização entra em follow-up de silêncio novo. Depois
+    // do gate de agente (mais barato) e antes de qualquer consulta de
+    // contato silencioso (a mais cara desta varredura).
+    if (deps.contaEmModoLeitura && (await deps.contaEmModoLeitura(pointer.organization_id))) {
+      summary.pointers_modo_leitura = (summary.pointers_modo_leitura ?? 0) + 1;
+      continue;
+    }
+
     const agentId = await resolveAgent(pointer.organization_id, pointer.id);
     if (agentId === null) {
       summary.pointers_gated_out++;

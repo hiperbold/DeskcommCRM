@@ -14,6 +14,7 @@ import { createSupabaseAdminClient, type FollowupJobRequest } from "@/lib/follow
 import type { EnrollmentRow } from "@/lib/followup/node-handlers";
 import { completeTurnForEnrollment, type TurnBridgeAdminClient } from "@/lib/followup/turn-bridge";
 import { logger } from "@/lib/logger";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 
 function ponteSupabase(admin: SupabaseClient): TurnBridgeAdminClient {
   const base = createSupabaseAdminClient(admin);
@@ -85,6 +86,22 @@ export async function enviarTextoFixoPendente(
     if (claimErr) throw new Error(claimErr.message);
     if (!claimed) continue;
     const jobClaim={worker_id:claimed.locked_by as string,acquired_at:claimed.locked_at as string};
+
+    // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não recebe
+    // este texto fixo. O job já está "running" (claimed acima); `settle(...,
+    // true)` marca `done` SEM enviar e sem completar o turno do enrollment,
+    // o mesmo caminho que a linha `!enr` já usa alguns parágrafos abaixo
+    // quando o job chegou tarde. O enrollment fica onde estava (parado nesse
+    // nó); reativar a conta não reenvia este texto, porque o job que o
+    // mandaria já foi consumido aqui, não devolvido à fila.
+    if (await contaEmModoLeitura(admin, job.organization_id as string)) {
+      logger.info("[followup] texto fixo não enviado: organização em modo leitura", {
+        organization_id: job.organization_id,
+        enrollment_id: enrollmentId,
+      });
+      await settle(job.organization_id, job.id, jobClaim.acquired_at, true);
+      continue;
+    }
 
     try {
       const { data: enr } = await admin

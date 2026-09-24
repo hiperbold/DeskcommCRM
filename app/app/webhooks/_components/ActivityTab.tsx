@@ -119,6 +119,10 @@ const MOTIVO_DA_PARADA: Record<string, string> = {
   missing_url: "Esta ação de webhook não tem endereço configurado. Abra a automação e preencha.",
   unknown_action:
     "A regra usa um tipo de ação que esta instalação não tem (pode ter saído em uma atualização). Abra a automação e escolha outra ação.",
+  // Fase F4 dos planos (Tarefa 7, decisão 8): a automação não rodou porque a
+  // conta está suspensa/cancelada e a carência da assinatura já venceu.
+  assinatura_suspensa:
+    "A conta está suspensa: a IA e as automações estão paradas até o pagamento ser regularizado.",
 };
 
 function explicacaoDe(

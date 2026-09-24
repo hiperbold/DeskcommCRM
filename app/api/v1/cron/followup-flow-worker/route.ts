@@ -37,13 +37,33 @@ import { createSupabaseFollowupGateDb } from "@/lib/followup/agent-followup-gate
 import { enviarTextoFixoPendente } from "@/lib/followup/enviar-texto-fixo";
 import { createSupabaseSilenceSweepDb, runSilenceSweep } from "@/lib/followup/silence-sweep";
 import { autorizaCron } from "@/lib/auth/cron-auth";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 
 export const dynamic = "force-dynamic";
 
 /** Insere o job followup_turn na fila existente (migration 0050) — consumido
- *  pelo handler já pronto em lib/agent-engine/agent/followup-turn.ts. */
+ *  pelo handler já pronto em lib/agent-engine/agent/followup-turn.ts.
+ *
+ *  Tarefa 7, decisão 8 da fase F4: organização em modo leitura NÃO enfileira
+ *  o turno, nem o de IA (`purpose` ai) nem o de texto fixo. `applyResult`
+ *  (lib/followup/engine.ts) já gravou o evento do passo ANTES desta chamada
+ *  (idempotency_key = node:steps_taken), então este `return` silencioso não
+ *  perde o registro: o enrollment avança para `wake_status`/`next_eval_at`
+ *  como se o turno tivesse sido enfileirado, e o dead-man's switch do próprio
+ *  motor (rechecksOciososDaAcao / MAX_ACTION_RECHECKS) o encerra sozinho
+ *  quando o turno nunca completa, sem reenviar em massa na reativação, e
+ *  sem precisar ensinar o engine.ts a conhecer billing (o gate fica só aqui,
+ *  na borda que decide se o job chega a existir). */
 async function enqueueJob(job: FollowupJobRequest): Promise<void> {
   const admin = createAdminClient();
+  if (await contaEmModoLeitura(admin, job.organization_id)) {
+    logger.info("[followup-flow-worker.cron] turno não enfileirado: organização em modo leitura", {
+      organization_id: job.organization_id,
+      contact_id: job.contact_id,
+      followup_enrollment_id: job.payload.followup_enrollment_id,
+    });
+    return;
+  }
   const { error } = await admin.from("job_queue").insert({
     organization_id: job.organization_id,
     contact_id: job.contact_id,
@@ -119,6 +139,9 @@ async function handle(req: NextRequest): Promise<Response> {
       db: createSupabaseSilenceSweepDb(admin),
       gateDb: createSupabaseFollowupGateDb(admin),
       clock: () => new Date(),
+      // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
+      // ganha follow-up de silêncio novo.
+      contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
     });
     if (sweepSummary.enrolled || sweepSummary.pointers_gated_out || sweepSummary.skipped_existing) {
       void audit({

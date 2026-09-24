@@ -23,6 +23,7 @@ import { audit } from "@/lib/audit";
 import { regraDoEvento } from "@/lib/automation/gatilho-de-data-do-funil";
 import { ENTIDADE_ESPERADA_POR_GATILHO } from "@/lib/schemas/webhooks";
 import { logger } from "@/lib/logger";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 
 export const AUTOMATION_CONSUMER_KEY = "automation-rules";
 
@@ -200,6 +201,53 @@ export async function runAutomationForEvent(
   const matched = regraApontada ? todas.filter((r) => r.id === regraApontada) : todas;
   if (!matched.length) {
     return { consumer_key: AUTOMATION_CONSUMER_KEY, status: "ok", detail: "no_rules" };
+  }
+
+  // Tarefa 7, decisão 8 da fase F4: conta em modo leitura não dispara
+  // automação nenhuma, checado só DEPOIS dos dois "no_rules" (zero custo
+  // quando não há regra pra este evento, e zero consulta a mais no modo
+  // avisar, o de produção: `contaEmModoLeitura` sai sem RPC se o modo em
+  // cache não for 'bloquear'). O evento é CONSUMIDO aqui, antes de avaliar
+  // condição: cada regra casada grava sua própria linha (rule_id é
+  // obrigatório em automation_rule_runs) com status='failed', o vocabulário
+  // do CHECK (migration 0175) não tem outro status para "não tentou e não
+  // vai tentar", e NÃO volta para a fila (decisão 8/N26): reativar a conta
+  // não pode disparar uma automação que ficou represada durante a
+  // suspensão (perda declarada). O aniversário (`contact.birthday`, emitido
+  // por `cron/contact-birthdays`) passa por aqui como qualquer outro
+  // gatilho: quem emite é um cron à parte, mas quem executa a regra é este
+  // motor.
+  if (await contaEmModoLeitura(admin, row.organization_id)) {
+    for (const rule of matched) {
+      const { data: runRow, error: runErr } = await admin
+        .from("automation_rule_runs")
+        .insert({
+          organization_id: row.organization_id,
+          rule_id: rule.id,
+          event_id: row.id,
+          status: "failed",
+          actions_result: [
+            {
+              type: "assinatura_suspensa",
+              status: "failed",
+              detail: { reason: "assinatura_suspensa" },
+            },
+          ],
+        })
+        .select("id")
+        .maybeSingle();
+      if (runErr) {
+        logger.error("[automation.engine] run insert failed", { error: runErr.message });
+      }
+      void audit({
+        action: "automation.rule_executed",
+        organizationId: row.organization_id,
+        resourceType: "automation_rule_run",
+        resourceId: runRow?.id ?? null,
+        metadata: { rule_id: rule.id, status: "failed", event_type: row.event_type },
+      });
+    }
+    return { consumer_key: AUTOMATION_CONSUMER_KEY, status: "ok", detail: "assinatura_suspensa" };
   }
 
   const context = await buildContext(admin, row);

@@ -42,6 +42,7 @@ import { decidePacing, dayStartInTz } from "@/lib/agent-engine/pacing/engine";
 import { loadChannelKnobs, loadPacingState, recordSend } from "@/lib/agent-engine/pacing/store";
 import { beginServiceAtOrigin } from "@/lib/atendimento/origem";
 import { logger } from "@/lib/logger";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 
 import { motivoParaExcluir, recusouMarketing } from "./elegibilidade";
 import { hashDoEndereco } from "./exclusoes";
@@ -132,6 +133,22 @@ export async function rodarUmaRodadaDeCampanha(
     // a vez: sem isso, a última criada poderia monopolizar a fila para sempre.
     if (numerosAtendidos.has(campanha.channel_session_id)) continue;
     if (numerosAtendidos.size >= NUMEROS_POR_RODADA) break;
+
+    // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
+    // dispara campanha. A campanha fica EXATAMENTE como está (sem avançar,
+    // sem marcar destinatário como enviado, não chama `rodarUmaCampanha`),
+    // porque reativar a conta não pode disparar uma mensagem que ficou
+    // represada durante a suspensão (perda declarada, decisão 8/N26). Não
+    // ocupa o número: nenhuma tentativa de fato aconteceu, e a campanha
+    // seguinte do mesmo número pode ser de outra organização.
+    if (await contaEmModoLeitura(admin, campanha.organization_id)) {
+      logger.info("[campanha] rodada não enviou: organização em modo leitura", {
+        campanha: campanha.id,
+        organization_id: campanha.organization_id,
+      });
+      detalhes.push(`${campanha.id.slice(0, 8)}:modo_leitura`);
+      continue;
+    }
 
     try {
       const r = await rodarUmaCampanha(admin, campanha, agora);

@@ -4073,6 +4073,11 @@ export const DICIONARIO: Traducoes = {
   "O lead não foi criado porque o plano chegou ao limite de leads.": {
     es: "El lead no se creó porque el plan llegó al límite de leads.",
   },
+  // Tarefa 7, fase F4 dos planos de assinatura: motivo de parada por modo
+  // leitura (MOTIVO_DA_PARADA em ActivityTab.tsx).
+  "A conta está suspensa: a IA e as automações estão paradas até o pagamento ser regularizado.": {
+    es: "La cuenta está suspendida: la IA y las automatizaciones están detenidas hasta regularizar el pago.",
+  },
   "Falta preencher alguma configuração desta ação — abra a automação e revise.": {
     es: "Falta completar algún ajuste de esta acción. Abre la automatización y revísala.",
   },

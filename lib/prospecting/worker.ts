@@ -21,6 +21,7 @@ import { autorizarContatoParaIA } from "@/lib/ai/elegibilidade/autorizacao";
 import { decidirPreGoLiveDoCanalViaSupabase } from "@/lib/ai/elegibilidade/consulta-pre-go-live";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura";
 import { assertProspectingDelivery } from "./guard";
 import { campaignConfigSchema } from "./schema";
 import { ProspectingError } from "./provider";
@@ -381,7 +382,19 @@ export async function tickProspecting(pool: pg.Pool, admin: SupabaseClient) {
             [org],
           )
         ).rows[0];
-        if (c) {
+        // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
+        // dispara abordagem. A campanha de prospecção fica exatamente como
+        // está (parada, sem marcar candidato); reativar a conta não pode
+        // disparar uma abordagem represada durante a suspensão. Checado
+        // ANTES de `sendNextCandidate` (não dentro dela): o candidato só é
+        // reservado (status='sending') depois deste ponto, então pular aqui
+        // não deixa candidato "preso" a meio caminho.
+        if (c && (await contaEmModoLeituraPeloPool(pool, org))) {
+          logger.info("[prospecting] tick não enviou: organização em modo leitura", {
+            organization_id: org,
+            campaign_id: c.id,
+          });
+        } else if (c) {
           try {
             await sendNextCandidate(pool, db, admin, c);
           } catch (error) {
