@@ -296,6 +296,13 @@ describe("0909: billing_settings.compra_pelo_cliente (decisão 18)", () => {
   });
 });
 
+describe("0909: comentário de topo já não diz 'só as Tarefas 1 e 2'", () => {
+  it("o comentário de topo da migração menciona as Tarefas 1 a 5", () => {
+    expect(MIGRATION_0909).not.toMatch(/traz só as Tarefas 1 e 2/);
+    expect(MIGRATION_0909).toMatch(/Tarefas 1 a 5/);
+  });
+});
+
 describe("0909: fn_billing_protege_assinatura_asaas + trg_billing_protege_assinatura_asaas (decisão 22)", () => {
   it("a função raise exception quando asaas_subscription_id preenchido e o marcador nulo, e SEMPRE devolve old (nunca null)", () => {
     for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
@@ -613,7 +620,14 @@ describe("0909 Tarefa 4: as seis peças existem, com a assinatura do plano, em s
 
   it("agent_worker (se a role existir) perde execute nas seis funções, num único bloco condicional", () => {
     for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
-      const inicio = sql.lastIndexOf("if exists (select 1 from pg_roles where rolname = 'agent_worker') then");
+      // Âncora pelo comentário da seção 23 (único: "seis funções da\n--
+      // Tarefa 4"), não pelo último "if exists" do arquivo: a Tarefa 5
+      // (seção 30, abaixo) acrescentou um QUINTO bloco condicional de
+      // agent_worker depois deste, e lastIndexOf passaria a pegar o dela
+      // (mesmo ajuste já feito para a Tarefa 3, acima).
+      const ancora = sql.indexOf("perde execute nas seis funções da");
+      expect(ancora, "comentário da seção 23 (Tarefa 4) não encontrado").toBeGreaterThan(-1);
+      const inicio = sql.indexOf("if exists (select 1 from pg_roles where rolname = 'agent_worker') then", ancora);
       expect(inicio, "bloco condicional de agent_worker da Tarefa 4 não encontrado").toBeGreaterThan(-1);
       const fim = sql.indexOf("$$;", inicio);
       const corpo = sql.slice(inicio, fim);
@@ -753,5 +767,276 @@ describe("0909 Tarefa 4: fn_billing_asaas_podar_eventos, payload vira {} e marca
     expect(corpo).toMatch(/payload_podado_em = now\(\)/);
     expect(corpo).toMatch(/where payload_podado_em is null\s*\n\s*and recebido_em < now\(\) - \(p_dias \|\| ' days'\)::interval;/);
     expect(corpo).toMatch(/get diagnostics v_quantos = row_count;/);
+  });
+});
+
+// ============================================================================
+// TAREFA 5: pagamento, período, troca de plano, pacote.
+// ============================================================================
+
+describe("0909 Tarefa 5: asaas_webhook_events.alarme e billing_contract_eventos.tipo ganham a peça nova", () => {
+  it("alarme text nullable existe", () => {
+    for (const sql of [MIGRATION_0909, BASELINE]) {
+      expect(sql).toMatch(/alter table public\.asaas_webhook_events add column if not exists alarme text;/);
+    }
+  });
+
+  it("billing_contract_eventos_tipo_check é recriado (drop + add) com 'plano' incluído (B6)", () => {
+    for (const sql of [MIGRATION_0909, BASELINE]) {
+      expect(sql).toMatch(
+        /alter table public\.billing_contract_eventos drop constraint if exists billing_contract_eventos_tipo_check;/,
+      );
+      expect(sql).toMatch(
+        /alter table public\.billing_contract_eventos add constraint billing_contract_eventos_tipo_check check \(\s*\n\s*tipo in \('estado', 'periodo', 'cancelar_no_fim', 'conferidor', 'plano'\)\s*\n\s*\);/,
+      );
+    }
+  });
+});
+
+describe("0909 Tarefa 5: as quatro peças existem, com a assinatura do plano, em security definer", () => {
+  const FUNCOES_TAREFA_5: Array<{ nome: string; assinatura: string; temGrant: boolean }> = [
+    { nome: "fn_billing_asaas_periodo_do_ciclo", assinatura: "(date, text)", temGrant: false },
+    { nome: "fn_billing_asaas_rotear_pagamento", assinatura: "(text, text, text, text)", temGrant: false },
+    { nome: "fn_billing_asaas_aplicar_pagamento", assinatura: "(jsonb, text)", temGrant: false },
+    { nome: "fn_billing_asaas_aplicar_evento", assinatura: "(uuid, uuid, jsonb)", temGrant: true },
+  ];
+
+  it.each(FUNCOES_TAREFA_5)(
+    "$nome$assinatura existe na migração e no bloco do baseline, com security definer e search_path fixo",
+    ({ nome, assinatura, temGrant }) => {
+      for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
+        const criacao = new RegExp(`create or replace function public\\.${nome}\\(`);
+        expect(sql, `${nome} não encontrada`).toMatch(criacao);
+
+        const inicio = sql.indexOf(`create or replace function public.${nome}(`);
+        const fim = sql.indexOf("\n$$;", inicio);
+        const corpo = sql.slice(inicio, fim);
+        expect(corpo, `${nome} sem security definer`).toMatch(/security definer/);
+        expect(corpo, `${nome} sem search_path fixo`).toMatch(/set search_path = public, pg_temp/);
+
+        const assinaturaEscapada = assinatura.replace(/[()]/g, (c) => `\\${c}`);
+        if (temGrant) {
+          expect(sql, `${nome}${assinatura} não tem revoke de public/anon/authenticated`).toMatch(
+            new RegExp(`revoke execute on function public\\.${nome}${assinaturaEscapada} from public, anon, authenticated;`),
+          );
+          expect(sql, `${nome}${assinatura} não tem grant só a service_role`).toMatch(
+            new RegExp(`grant execute on function public\\.${nome}${assinaturaEscapada} to service_role;`),
+          );
+        } else {
+          // Interna (fn_billing_asaas_periodo_do_ciclo, fn_billing_asaas_
+          // rotear_pagamento, fn_billing_asaas_aplicar_pagamento): revoke
+          // inclui service_role explicitamente (achado da Tarefa 4: este
+          // banco concede EXECUTE em função nova a service_role por
+          // privilégio padrão), e NENHUM grant a ninguém.
+          expect(sql, `${nome}${assinatura} não tem revoke de public/anon/authenticated/service_role`).toMatch(
+            new RegExp(`revoke execute on function public\\.${nome}${assinaturaEscapada} from public, anon, authenticated, service_role;`),
+          );
+          expect(sql, `${nome}${assinatura} é interna e NÃO deveria ter grant a service_role`).not.toMatch(
+            new RegExp(`grant execute on function public\\.${nome}${assinaturaEscapada} to service_role;`),
+          );
+        }
+      }
+    },
+  );
+
+  it("agent_worker (se a role existir) perde execute nas quatro funções, num único bloco condicional", () => {
+    for (const sql of [MIGRATION_0909, extraiBloco0909Baseline()]) {
+      const inicio = sql.lastIndexOf("if exists (select 1 from pg_roles where rolname = 'agent_worker') then");
+      expect(inicio, "bloco condicional de agent_worker da Tarefa 5 não encontrado").toBeGreaterThan(-1);
+      const fim = sql.indexOf("$$;", inicio);
+      const corpo = sql.slice(inicio, fim);
+      for (const { nome } of FUNCOES_TAREFA_5) {
+        expect(corpo, `${nome} não está no revoke de agent_worker da Tarefa 5`).toContain(`public.${nome}(`);
+      }
+    }
+  });
+});
+
+describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo (decisão 5)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_periodo_do_ciclo(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("início = p_due às 00h de America/Sao_Paulo", () => {
+    expect(corpo).toMatch(/periodo_inicio := p_due::timestamp at time zone 'America\/Sao_Paulo';/);
+  });
+
+  it("fim = (p_due + intervalo do Postgres, sem clamp manual) + 1 dia, às 00h de SP", () => {
+    expect(corpo).toMatch(/v_fim_data := \(p_due \+ v_intervalo\)::date \+ 1;/);
+    expect(corpo).toMatch(/periodo_fim := v_fim_data::timestamp at time zone 'America\/Sao_Paulo';/);
+  });
+
+  it("é IMMUTABLE (função pura)", () => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_periodo_do_ciclo(");
+    const fimAssinatura = MIGRATION_0909.indexOf("language plpgsql", inicio);
+    const assinatura = MIGRATION_0909.slice(inicio, fimAssinatura + "language plpgsql\nimmutable".length);
+    expect(assinatura).toMatch(/immutable/);
+  });
+});
+
+describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("(a) pedido não pago pela assinatura antes do contrato (primeiro pagamento tem prioridade sobre renovação)", () => {
+    const posPedido = corpo.indexOf("categoria := 'pedido';");
+    const posRenovacao = corpo.indexOf("categoria := 'renovacao';");
+    expect(posPedido).toBeGreaterThan(-1);
+    expect(posRenovacao).toBeGreaterThan(-1);
+    expect(posPedido).toBeLessThan(posRenovacao);
+  });
+
+  it("status <> 'pago' em toda busca de pedido (nunca acha um pedido já honrado)", () => {
+    const ocorrencias = corpo.match(/status <> 'pago'/g) ?? [];
+    expect(ocorrencias.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("prefixo diferente de HC: vira outro_app; nada casou vira sem_vinculo", () => {
+    expect(corpo).toMatch(/p_external_reference !~ '\^HC:'/);
+    expect(corpo).toContain("categoria := 'outro_app';");
+    expect(corpo).toContain("categoria := 'sem_vinculo';");
+  });
+
+  it("é STABLE (só lê, nenhuma trava)", () => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
+    const fimAssinatura = MIGRATION_0909.indexOf("language plpgsql", inicio);
+    const assinatura = MIGRATION_0909.slice(inicio, fimAssinatura + "language plpgsql\nstable".length);
+    expect(assinatura).toMatch(/stable/);
+    expect(corpo).not.toMatch(/for update/);
+    expect(corpo).not.toMatch(/pg_advisory_xact_lock/);
+  });
+});
+
+describe("0909 Tarefa 5: fn_billing_asaas_aplicar_pagamento (decisões 4 a 8, 12, 26, 27)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_aplicar_pagamento(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("idempotência por asaas_payment_id ANTES e DEPOIS das travas (duas ocorrências de billing_payments where asaas_payment_id)", () => {
+    const ocorrencias = corpo.match(/from public\.billing_payments\s*\n\s*where asaas_payment_id = v_payment_id;/g) ?? [];
+    expect(ocorrencias.length).toBe(2);
+  });
+
+  it("travas na ordem fixa da decisão 12: billing:<org> antes de billing_assinatura:<org>, antes do for update no contrato", () => {
+    const posBilling = corpo.indexOf("pg_advisory_xact_lock(hashtextextended('billing:' || v_org::text, 0))");
+    const posAssinatura = corpo.indexOf("pg_advisory_xact_lock(hashtextextended('billing_assinatura:' || v_org::text, 0))");
+    const posForUpdate = corpo.indexOf("where organization_id = v_org\n    for update;");
+    expect(posBilling).toBeGreaterThan(-1);
+    expect(posAssinatura).toBeGreaterThan(posBilling);
+    expect(posForUpdate).toBeGreaterThan(posAssinatura);
+  });
+
+  it("roteamento chamado duas vezes (antes e depois das travas, decisão 12/B5)", () => {
+    const ocorrencias = corpo.match(/fn_billing_asaas_rotear_pagamento\(/g) ?? [];
+    expect(ocorrencias.length).toBe(2);
+  });
+
+  it("cliente confirmado tem que casar com billing_customers da mesma organização e ambiente, senão divergente", () => {
+    expect(corpo).toMatch(/from public\.billing_customers\s*\n\s*where organization_id = v_org and ambiente = p_ambiente;/);
+    expect(corpo).toContain("'resultado', 'divergente'");
+  });
+
+  it("valor: coalesce(originalValue, value), menor recusa, maior concede com alarme divergente_valor", () => {
+    expect(corpo).toMatch(/\(p_confirmacao->>'originalValue'\)::numeric,\s*\n\s*\(p_confirmacao->>'value'\)::numeric/);
+    expect(corpo).toMatch(/if v_valor_cents < v_esperado_cents then/);
+    expect(corpo).toMatch(/if v_valor_cents > v_esperado_cents then\s*\n\s*v_alarmes := v_alarmes \|\| 'divergente_valor'::text;/);
+  });
+
+  it("pedido fora do estado aberto ganha o alarme pago_fora_do_prazo (decisão 4/A1)", () => {
+    expect(corpo).toMatch(
+      /if v_pedido\.status not in \('criado', 'aguardando_pagamento', 'inconclusivo', 'processando'\) then\s*\n\s*v_alarmes := v_alarmes \|\| 'pago_fora_do_prazo'::text;/,
+    );
+  });
+
+  it("ORDEM FIXA (decisão 8/B1): insert em billing_payments dentro de begin/exception, unique_violation vira ja_aplicado", () => {
+    const ocorrencias = corpo.match(/exception when unique_violation then\s*\n\s*return jsonb_build_object\('resultado', 'ja_aplicado'/g) ?? [];
+    expect(ocorrencias.length).toBe(3);
+  });
+
+  it("pacote de tokens: período nulo no insert, credita via fn_billing_creditar_tokens com o valor do pedido (não o pago)", () => {
+    expect(corpo).toMatch(/null, null, v_chave, 'Asaas: pacote de tokens'/);
+    expect(corpo).toMatch(
+      /fn_billing_creditar_tokens\(v_org, v_pedido\.tokens, v_pedido\.id, v_pedido\.amount_cents, 'Asaas', null\)/,
+    );
+  });
+
+  it("Pix anual: início = greatest(current_period_end, paymentDate), fim = início + 1 ano + 1 dia (decisão 5)", () => {
+    expect(corpo).toMatch(
+      /if v_pedido\.metodo = 'PIX' and v_pedido\.ciclo = 'yearly' then/,
+    );
+    expect(corpo).toMatch(/v_periodo_inicio := greatest\(v_contract\.current_period_end, v_pago_em\);/);
+    expect(corpo).toMatch(/v_periodo_fim := v_periodo_inicio \+ interval '1 year' \+ interval '1 day';/);
+  });
+
+  it("current_period_end = greatest(atual, fim): evento velho nunca encurta (decisão 5/B9)", () => {
+    const ocorrencias = corpo.match(/v_novo_fim := greatest\(v_contract\.current_period_end, v_periodo_fim\);/g) ?? [];
+    expect(ocorrencias.length).toBe(2);
+  });
+
+  it("primeiro pagamento troca plan_id/cycle/gateway/asaas_subscription_id/cancel_at_period_end (decisão 8)", () => {
+    expect(corpo).toMatch(
+      /set plan_id = v_pedido\.plan_id,\s*\n\s*cycle = v_pedido\.ciclo,\s*\n\s*gateway = 'asaas',\s*\n\s*asaas_subscription_id = coalesce\(v_subscription, v_contract\.asaas_subscription_id\),/,
+    );
+    expect(corpo).toMatch(/cancel_at_period_end = false,/);
+  });
+
+  it("renovação com assinatura ACTIVE confirmada desliga cancel_at_period_end (decisão 10/M3)", () => {
+    expect(corpo).toMatch(
+      /cancel_at_period_end = case when coalesce\(p_confirmacao->>'assinatura_status', ''\) = 'ACTIVE' then false else cancel_at_period_end end/,
+    );
+  });
+
+  it("cada mudança de estado, período ou plano grava billing_contract_eventos com motivo pay_ (B6)", () => {
+    const ocorrencias = corpo.match(/'pay_primeiro_pagamento'/g) ?? [];
+    const ocorrenciasRenovacao = corpo.match(/'pay_renovacao'/g) ?? [];
+    expect(ocorrencias.length).toBeGreaterThanOrEqual(3);
+    expect(ocorrenciasRenovacao.length).toBeGreaterThanOrEqual(2);
+    expect(corpo).toMatch(/'plano', v_plan_id_anterior::text, v_pedido\.plan_id::text, 'pay_primeiro_pagamento'/);
+  });
+
+  it("pedido vira pago com pago_em, contract_id vem do contrato já travado", () => {
+    const ocorrencias = corpo.match(/set status = 'pago', pago_em = now\(\) where id = v_pedido\.id;/g) ?? [];
+    expect(ocorrencias.length).toBe(2);
+  });
+});
+
+describe("0909 Tarefa 5: fn_billing_asaas_aplicar_evento (decisão 20)", () => {
+  const corpo = (() => {
+    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_aplicar_evento(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    return MIGRATION_0909.slice(inicio, fim);
+  })();
+
+  it("confere o lease via fn_billing_asaas_lease_e_meu e recusa com billing_lease_invalido", () => {
+    expect(corpo).toMatch(
+      /if not public\.fn_billing_asaas_lease_e_meu\(p_evento, p_lease_token\) then\s*\n\s*raise exception 'billing_lease_invalido' using errcode = '22023';/,
+    );
+  });
+
+  it("evento de dinheiro sem confirmação fica aguardando", () => {
+    expect(corpo).toMatch(/if p_confirmacao is null then\s*\n\s*v_resultado := 'aguardando';/);
+  });
+
+  it("begin/exception interno: falha em aplicar_pagamento vira resultado=erro, sem propagar a exceção", () => {
+    expect(corpo).toMatch(/v_aplicacao := public\.fn_billing_asaas_aplicar_pagamento\(p_confirmacao, v_evento\.ambiente\);/);
+    expect(corpo).toMatch(/exception when others then\s*\n\s*v_resultado := 'erro';/);
+  });
+
+  it("estorno/chargeback/PAYMENT_OVERDUE/PAYMENT_DELETED/fim de assinatura viram ignorado com tarefa_6_pendente", () => {
+    expect(corpo).toContain("'PAYMENT_REFUNDED'");
+    expect(corpo).toContain("'PAYMENT_CHARGEBACK_REQUESTED'");
+    expect(corpo).toContain("'SUBSCRIPTION_DELETED'");
+    expect(corpo).toContain("'tarefa_6_pendente'");
+  });
+
+  it("libera o lease no fim (lease_token/lease_expira_em nulos)", () => {
+    expect(corpo).toMatch(/lease_token = null,\s*\n\s*lease_expira_em = null\s*\n\s*where id = p_evento;/);
   });
 });

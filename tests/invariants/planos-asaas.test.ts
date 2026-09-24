@@ -969,3 +969,421 @@ describe("0909 Tarefa 4: limpeza", () => {
     expect(restam).toBe("0");
   });
 });
+
+// ============================================================================
+// TAREFA 5: pagamento, período, troca de plano, pacote (decisões 4 a 8, 12,
+// 26, 27; correções A1, M2, M3, M5, M8, B1, B5, B6, B9).
+// ============================================================================
+
+const FUNCOES_TAREFA_5_INTERNAS = [
+  "fn_billing_asaas_periodo_do_ciclo",
+  "fn_billing_asaas_rotear_pagamento",
+  "fn_billing_asaas_aplicar_pagamento",
+] as const;
+
+describe.each(FUNCOES_TAREFA_5_INTERNAS)("0909 Tarefa 5: `%s` é interna, SEM execute nem para service_role", (funcao) => {
+  it("nenhum papel (anon/authenticated/service_role) tem EXECUTE no catálogo", () => {
+    expect(privilegiosDaFuncao("anon", funcao)).toBe("NENHUM");
+    expect(privilegiosDaFuncao("authenticated", funcao)).toBe("NENHUM");
+    expect(privilegiosDaFuncao("service_role", funcao)).toBe("NENHUM");
+  });
+});
+
+describe("0909 Tarefa 5: `fn_billing_asaas_aplicar_evento` é deny-all para anon/authenticated (grants)", () => {
+  it("`anon` não tem EXECUTE no catálogo", () => {
+    expect(privilegiosDaFuncao("anon", "fn_billing_asaas_aplicar_evento")).toBe("NENHUM");
+  });
+
+  it("`authenticated` não tem EXECUTE no catálogo", () => {
+    expect(privilegiosDaFuncao("authenticated", "fn_billing_asaas_aplicar_evento")).toBe("NENHUM");
+  });
+
+  it("`service_role` TEM EXECUTE no catálogo (controle positivo)", () => {
+    expect(privilegiosDaFuncao("service_role", "fn_billing_asaas_aplicar_evento")).toContain("EXECUTE");
+  });
+
+  it("`authenticated` é barrado por permission denied ao chamar de verdade", () => {
+    const erro = erroSob(
+      "authenticated",
+      "select public.fn_billing_asaas_aplicar_evento('00000000-0000-4000-8000-000000000000', gen_random_uuid(), null)",
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("permission denied for function");
+  });
+});
+
+/**
+ * Reserva os eventos pendentes (até 50) e devolve id/lease_token do
+ * event_id ESPECÍFICO, lido de asaas_webhook_events DEPOIS da reserva
+ * (nunca filtrando o resultado da própria função por resource_id: dois
+ * event_id diferentes podem compartilhar o mesmo resource_id/asaas_
+ * payment_id nestes testes, ex.: reenvio de CONFIRMED seguido de RECEIVED).
+ */
+function reservarPorEventId(eventId: string): { id: string; lease: string } {
+  sql(`select public.fn_billing_asaas_reservar_eventos(50, 300);`);
+  const linha = sql(`select id, lease_token from public.asaas_webhook_events where event_id = '${eventId}';`);
+  const [id, lease] = linha.split("|");
+  expect(id, `evento ${eventId} não foi reservado (lease_token ausente)`).toBeTruthy();
+  expect(lease, `evento ${eventId} não ganhou lease_token`).toBeTruthy();
+  return { id: id.trim(), lease: lease.trim() };
+}
+
+function registrarEAplicar(eventId: string, resourceId: string, confirmacao: string | null): string {
+  sql(
+    `select public.fn_billing_asaas_registrar_evento('${eventId}', 'PAYMENT_CONFIRMED', '${resourceId}', 'sandbox', 'webhook', '{}'::jsonb);`,
+  );
+  const { id, lease } = reservarPorEventId(eventId);
+  return sql(
+    `select public.fn_billing_asaas_aplicar_evento('${id}'::uuid, '${lease}'::uuid, ${confirmacao ?? "null"});`,
+  );
+}
+
+const ORG_T5_PRIMEIRO = "09090005-a5aa-4000-8000-000000000001";
+const ORG_T5_PACOTE = "09090005-a5aa-4000-8000-000000000002";
+const ORG_T5_RENOVACAO = "09090005-a5aa-4000-8000-000000000003";
+const ORG_T5_DIVERGENTE = "09090005-a5aa-4000-8000-000000000004";
+const ORG_T5_VENCIDO = "09090005-a5aa-4000-8000-000000000005";
+const ORG_T5_CARENCIA = "09090005-a5aa-4000-8000-000000000006";
+const ORG_T5_CORRIDA = "09090005-a5aa-4000-8000-000000000007";
+const ORG_T5_CONFERIDOR = "09090005-a5aa-4000-8000-000000000008";
+
+const ORGS_T5 = [
+  ORG_T5_PRIMEIRO, ORG_T5_PACOTE, ORG_T5_RENOVACAO, ORG_T5_DIVERGENTE,
+  ORG_T5_VENCIDO, ORG_T5_CARENCIA, ORG_T5_CORRIDA, ORG_T5_CONFERIDOR,
+];
+
+describe("0909 Tarefa 5: setup comum (organizações, compra ligada, pro à venda, pacote de teste)", () => {
+  it("cria as organizações e liga o necessário", () => {
+    sql(`
+      ${ORGS_T5.map((id) => `insert into public.organizations (id, slug, legal_name, display_name) values ('${id}', 't5-${id.slice(-4)}', 't5 LTDA', 't5') on conflict (id) do nothing;`).join("\n")}
+      select public.fn_billing_definir_compra_pelo_cliente(true, null);
+      select public.fn_billing_definir_a_venda('pro', true, null);
+      insert into public.billing_token_pacotes (codigo, nome, tokens, preco_cents, ativo)
+        values ('t5pacote', 'Pacote de teste T5', 100000, 5000, true)
+        on conflict (codigo) do update set preco_cents = 5000, ativo = true, tokens = 100000;
+    `);
+    const contagem = sql(
+      `select count(*) from public.organizations where id = any(array[${ORGS_T5.map((id) => `'${id}'`).join(",")}]::uuid[]);`,
+    ).trim();
+    expect(contagem).toBe(String(ORGS_T5.length));
+  });
+});
+
+describe("0909 Tarefa 5: CONFIRMED e depois RECEIVED concedem uma vez (decisão 4)", () => {
+  it("primeiro pagamento troca de Ilimitado para Pro, e a segunda confirmação (mesmo asaas_payment_id) é ja_aplicado", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T5_PRIMEIRO}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(
+      `select id from public.billing_orders where organization_id = '${ORG_T5_PRIMEIRO}' and status = 'criado';`,
+    ).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T5_PRIMEIRO}'::uuid, '${pedidoId}'::uuid, 'pay_t5_001', null, null);`);
+    sql(`select public.fn_billing_vincular_cliente_asaas('${ORG_T5_PRIMEIRO}'::uuid, 'sandbox', 'cus_t5001');`);
+
+    // sem confirmação: fica aguardando (decisão 3).
+    const semConfirmacao = registrarEAplicar("evt-t5-001a", "pay_t5_001", null);
+    expect(semConfirmacao).toContain('"resultado": "aguardando"');
+    expect(sql(`select resultado from public.asaas_webhook_events where event_id = 'evt-t5-001a';`).trim()).toBe("aguardando");
+
+    // CONFIRMED: concede, plan_id troca para Pro.
+    const confirmado = `jsonb_build_object('id','pay_t5_001','status','CONFIRMED','value',199.00,'dueDate','2026-10-01','paymentDate','2026-10-01','customer','cus_t5001','externalReference','HC:ord:${pedidoId}')`;
+    const { id: eventoId1, lease: lease1 } = (() => {
+      sql(`select public.fn_billing_asaas_registrar_evento('evt-t5-001b', 'PAYMENT_CONFIRMED', 'pay_t5_001', 'sandbox', 'webhook', '{}'::jsonb);`);
+      return reservarPorEventId("evt-t5-001b");
+    })();
+    const resultadoConfirmed = sql(
+      `select public.fn_billing_asaas_aplicar_evento('${eventoId1}'::uuid, '${lease1}'::uuid, ${confirmado});`,
+    );
+    expect(resultadoConfirmed).toContain('"resultado": "aplicado"');
+
+    const planoDoContrato = sql(
+      `select bp.code from public.billing_contracts bc join public.billing_plans bp on bp.id = bc.plan_id where bc.organization_id = '${ORG_T5_PRIMEIRO}';`,
+    ).trim();
+    expect(planoDoContrato).toBe("pro");
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("pago");
+
+    // RECEIVED do MESMO asaas_payment_id: ja_aplicado, uma linha só.
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t5-001c', 'PAYMENT_RECEIVED', 'pay_t5_001', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const { id: eventoId2, lease: lease2 } = reservarPorEventId("evt-t5-001c");
+    const resultadoReceived = sql(
+      `select public.fn_billing_asaas_aplicar_evento('${eventoId2}'::uuid, '${lease2}'::uuid, jsonb_build_object('id','pay_t5_001','status','RECEIVED','value',199.00,'dueDate','2026-10-01','customer','cus_t5001'));`,
+    );
+    expect(resultadoReceived).toContain('"resultado": "ja_aplicado"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_t5_001';`).trim()).toBe("1");
+
+    // billing_contract_eventos gravado (periodo e plano; sem "estado" aqui
+    // porque a organização já nasce com status=ativa, e ativa -> ativa não é
+    // uma transição de verdade, mesmo padrão de fn_billing_registrar_
+    // pagamento, 0908).
+    const tipos = sql(
+      `select string_agg(distinct tipo, ',') from public.billing_contract_eventos where organization_id = '${ORG_T5_PRIMEIRO}' and motivo = 'pay_primeiro_pagamento';`,
+    ).trim();
+    expect(tipos).toContain("periodo");
+    expect(tipos).toContain("plano");
+  });
+});
+
+describe("0909 Tarefa 5: pacote de tokens credita uma vez (decisão 8)", () => {
+  it("aplica, credita a carteira, marca o pedido pago; reprocesso não credita de novo", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T5_PACOTE}'::uuid, 'pacote_tokens', null, null, 't5pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(
+      `select id from public.billing_orders where organization_id = '${ORG_T5_PACOTE}' and status = 'criado';`,
+    ).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T5_PACOTE}'::uuid, '${pedidoId}'::uuid, 'pay_t5_002', null, null);`);
+
+    const confirmacao = `jsonb_build_object('id','pay_t5_002','status','RECEIVED','value',50.00,'dueDate','2026-10-01','externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicar("evt-t5-002", "pay_t5_002", confirmacao);
+    expect(resultado).toContain('"resultado": "aplicado"');
+
+    const creditado = sql(
+      `select creditado from public.billing_token_wallets where organization_id = '${ORG_T5_PACOTE}' and fonte = 'avulso' and ciclo is null;`,
+    ).trim();
+    expect(creditado).toBe("100000");
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("pago");
+
+    // período nulo, origem asaas, order_id do pedido.
+    const linha = sql(
+      `select billing_period_start is null, billing_period_end is null, origem, order_id from public.billing_payments where asaas_payment_id = 'pay_t5_002';`,
+    );
+    expect(linha).toContain("t|t|asaas|");
+    expect(linha).toContain(pedidoId);
+
+    // reprocesso: nao credita de novo.
+    sql(`select public.fn_billing_asaas_registrar_evento('conc:pay_t5_002:RECEIVED', 'PAYMENT_RECEIVED', 'pay_t5_002', 'sandbox', 'conciliacao', '{}'::jsonb);`);
+    const { id: eventoId2, lease: lease2 } = reservarPorEventId("conc:pay_t5_002:RECEIVED");
+    const reprocesso = sql(
+      `select public.fn_billing_asaas_aplicar_evento('${eventoId2}'::uuid, '${lease2}'::uuid, ${confirmacao});`,
+    );
+    expect(reprocesso).toContain('"resultado": "ja_aplicado"');
+    expect(sql(`select creditado from public.billing_token_wallets where organization_id = '${ORG_T5_PACOTE}' and fonte = 'avulso' and ciclo is null;`).trim()).toBe("100000");
+  });
+});
+
+describe("0909 Tarefa 5: renovação estende sem encurtar, evento velho não encurta, M3 desliga cancel_at_period_end", () => {
+  it("assinatura de cartão já ativa: renovação estende o período; evento com dueDate anterior não encurta", () => {
+    sql(`
+      update public.billing_contracts
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5003',
+             current_period_start = now() - interval '25 days', current_period_end = now() - interval '5 hours',
+             status = 'ativa', cancel_at_period_end = true
+       where organization_id = '${ORG_T5_RENOVACAO}';
+      select public.fn_billing_vincular_cliente_asaas('${ORG_T5_RENOVACAO}'::uuid, 'sandbox', 'cus_t5003');
+    `);
+
+    const confirmacao = `jsonb_build_object('id','pay_t5_003','status','RECEIVED','value',199.00,'dueDate','2026-11-01','customer','cus_t5003','subscription','sub_t5003','assinatura_status','ACTIVE')`;
+    const resultado = registrarEAplicar("evt-t5-003", "pay_t5_003", confirmacao);
+    expect(resultado).toContain('"resultado": "aplicado"');
+
+    const cancelApos = sql(`select cancel_at_period_end from public.billing_contracts where organization_id = '${ORG_T5_RENOVACAO}';`).trim();
+    expect(cancelApos, "M3: renovação confirmada com assinatura ACTIVE deveria desligar cancel_at_period_end").toBe("f");
+
+    const fimApos1 = sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T5_RENOVACAO}';`).trim();
+
+    // evento VELHO (dueDate anterior): nao encurta.
+    const confirmacaoVelha = `jsonb_build_object('id','pay_t5_003_velho','status','RECEIVED','value',199.00,'dueDate','2020-01-01','customer','cus_t5003','subscription','sub_t5003')`;
+    registrarEAplicar("evt-t5-003-velho", "pay_t5_003_velho", confirmacaoVelha);
+    const fimApos2 = sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T5_RENOVACAO}';`).trim();
+    expect(fimApos2).toBe(fimApos1);
+
+    const tipos = sql(
+      `select string_agg(distinct tipo, ',') from public.billing_contract_eventos where organization_id = '${ORG_T5_RENOVACAO}' and motivo = 'pay_renovacao';`,
+    ).trim();
+    expect(tipos).toContain("periodo");
+    expect(tipos).toContain("cancelar_no_fim");
+  });
+});
+
+describe("0909 Tarefa 5: cliente trocado e valor menor dão divergente; valor maior concede com alarme", () => {
+  it("cliente diferente do vinculado: divergente, sem gravar pagamento", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T5_DIVERGENTE}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T5_DIVERGENTE}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T5_DIVERGENTE}'::uuid, '${pedidoId}'::uuid, 'pay_t5_004a', null, null);`);
+    sql(`select public.fn_billing_vincular_cliente_asaas('${ORG_T5_DIVERGENTE}'::uuid, 'sandbox', 'cus_t5004');`);
+
+    const confA = `jsonb_build_object('id','pay_t5_004a','status','CONFIRMED','value',199.00,'dueDate','2026-10-01','customer','cus_OUTRO')`;
+    const resultadoA = registrarEAplicar("evt-t5-004a", "pay_t5_004a", confA);
+    expect(resultadoA).toContain('"resultado": "divergente"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_t5_004a';`).trim()).toBe("0");
+
+    // valor MENOR: divergente, tambem sem gravar.
+    const confB = `jsonb_build_object('id','pay_t5_004b','status','CONFIRMED','value',50.00,'dueDate','2026-10-01','customer','cus_t5004','externalReference','HC:ord:${pedidoId}')`;
+    const resultadoB = registrarEAplicar("evt-t5-004b", "pay_t5_004b", confB);
+    expect(resultadoB).toContain('"resultado": "divergente"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_t5_004b';`).trim()).toBe("0");
+
+    // valor MAIOR: concede com o alarme divergente_valor.
+    const confC = `jsonb_build_object('id','pay_t5_004c','status','CONFIRMED','value',250.00,'dueDate','2026-10-01','customer','cus_t5004','externalReference','HC:ord:${pedidoId}')`;
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t5-004c', 'PAYMENT_CONFIRMED', 'pay_t5_004c', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const { id: eventoIdC, lease: leaseC } = reservarPorEventId("evt-t5-004c");
+    const resultadoC = sql(`select public.fn_billing_asaas_aplicar_evento('${eventoIdC}'::uuid, '${leaseC}'::uuid, ${confC});`);
+    expect(resultadoC).toContain('"resultado": "aplicado"');
+    expect(sql(`select alarme from public.asaas_webhook_events where event_id = 'evt-t5-004c';`).trim()).toBe("divergente_valor");
+  });
+});
+
+describe("0909 Tarefa 5: prefixo HT: dá outro_app", () => {
+  it("externalReference de outro app nunca casa com pedido nenhum", () => {
+    const conf = `jsonb_build_object('id','pay_t5_005','status','CONFIRMED','value',100.00,'dueDate','2026-10-01','externalReference','HT:algumacoisa')`;
+    const resultado = registrarEAplicar("evt-t5-005", "pay_t5_005", conf);
+    expect(resultado).toContain('"resultado": "outro_app"');
+  });
+});
+
+describe("0909 Tarefa 5: pago fora do prazo concede com alarme (decisão 4/A1)", () => {
+  it("pedido vencido, pago mesmo assim: concede, com o alarme pago_fora_do_prazo", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T5_VENCIDO}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T5_VENCIDO}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T5_VENCIDO}'::uuid, '${pedidoId}'::uuid, 'pay_t5_006', null, null);`);
+    sql(`update public.billing_orders set status = 'vencido' where id = '${pedidoId}';`);
+    // contrato suspenso (nao so pedido vencido): cobre o ramo "estado" de
+    // billing_contract_eventos (a organizacao T5_PRIMEIRO nasce ativa e nunca
+    // exercita esse ramo).
+    sql(`update public.billing_contracts set status = 'suspensa' where organization_id = '${ORG_T5_VENCIDO}';`);
+    sql(`select public.fn_billing_vincular_cliente_asaas('${ORG_T5_VENCIDO}'::uuid, 'sandbox', 'cus_t5006');`);
+
+    const conf = `jsonb_build_object('id','pay_t5_006','status','CONFIRMED','value',199.00,'dueDate','2026-10-01','customer','cus_t5006')`;
+    const resultado = registrarEAplicar("evt-t5-006", "pay_t5_006", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(sql(`select alarme from public.asaas_webhook_events where event_id = 'evt-t5-006';`).trim()).toBe("pago_fora_do_prazo");
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("pago");
+    expect(sql(`select status from public.billing_contracts where organization_id = '${ORG_T5_VENCIDO}';`).trim()).toBe("ativa");
+
+    const tipos = sql(
+      `select string_agg(distinct tipo, ',') from public.billing_contract_eventos where organization_id = '${ORG_T5_VENCIDO}' and motivo = 'pay_primeiro_pagamento';`,
+    ).trim();
+    expect(tipos, "com o contrato suspenso, o pagamento deveria gravar um evento de tipo estado (suspensa -> ativa)").toContain("estado");
+  });
+});
+
+describe("0909 Tarefa 5: sem confirmação fica aguardando; lease alheio recusado", () => {
+  it("p_confirmacao nulo em evento de pagamento fica aguardando, sem organization_id", () => {
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t5-007', 'PAYMENT_CONFIRMED', 'pay_t5_007', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const { id, lease } = reservarPorEventId("evt-t5-007");
+    const resultado = sql(`select public.fn_billing_asaas_aplicar_evento('${id}'::uuid, '${lease}'::uuid, null);`);
+    expect(resultado).toContain('"resultado": "aguardando"');
+    expect(sql(`select organization_id is null from public.asaas_webhook_events where id = '${id}';`).trim()).toBe("t");
+  });
+
+  it("lease que não é mais o do chamador é recusado com billing_lease_invalido", () => {
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t5-008', 'PAYMENT_CONFIRMED', 'pay_t5_008', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const eventoId = sql(`select id from public.asaas_webhook_events where event_id = 'evt-t5-008';`).trim();
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_asaas_aplicar_evento('${eventoId}'::uuid, gen_random_uuid(), null)`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_lease_invalido");
+  });
+});
+
+describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo, dia 31 de janeiro mais um mês", () => {
+  it("mensal: 31/01 + 1 mês (arimética nativa do Postgres, 2026 não é bissexto) + 1 dia = 2026-03-01 00h SP", () => {
+    const linha = sql(`select periodo_inicio, periodo_fim from public.fn_billing_asaas_periodo_do_ciclo('2026-01-31'::date, 'monthly');`);
+    const [inicio, fim] = linha.split("|");
+    expect(inicio.trim()).toBe("2026-01-31 03:00:00+00");
+    expect(fim.trim()).toBe("2026-03-01 03:00:00+00");
+  });
+
+  it("anual: 31/01 + 1 ano + 1 dia = 2027-02-01 00h SP", () => {
+    const linha = sql(`select periodo_inicio, periodo_fim from public.fn_billing_asaas_periodo_do_ciclo('2026-01-31'::date, 'yearly');`);
+    const [, fim] = linha.split("|");
+    expect(fim.trim()).toBe("2027-02-01 03:00:00+00");
+  });
+});
+
+describe("0909 Tarefa 5: corrida com o conferidor da F4 e com fn_billing_registrar_pagamento (duas sessões de verdade)", () => {
+  const container = process.env.TEST_DB_CONTAINER;
+  const porta = Number(process.env.TEST_DB_PORT ?? 54329);
+  const pool = new pg.Pool({
+    connectionString: `postgresql://postgres:postgres@127.0.0.1:${porta}/postgres`,
+    max: 4,
+  });
+
+  afterAll(async () => {
+    await pool.end();
+  });
+
+  it("aplicar_pagamento (renovação) concorrente com fn_billing_registrar_pagamento na MESMA organização: sem deadlock, os dois pagamentos ficam registrados", async () => {
+    if (!container) {
+      throw new Error("TEST_DB_CONTAINER ausente, rode via pnpm test:db");
+    }
+
+    sql(`
+      update public.billing_contracts
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5_corrida',
+             current_period_start = now() - interval '20 days', current_period_end = now() + interval '5 days',
+             status = 'ativa'
+       where organization_id = '${ORG_T5_CORRIDA}';
+      select public.fn_billing_vincular_cliente_asaas('${ORG_T5_CORRIDA}'::uuid, 'sandbox', 'cus_t5corrida');
+    `);
+
+    const confirmacao = JSON.stringify({
+      id: "pay_t5_corrida", status: "RECEIVED", value: 199.0, dueDate: "2026-12-01",
+      customer: "cus_t5corrida", subscription: "sub_t5_corrida",
+    });
+
+    const [r1, r2] = await Promise.all([
+      pool.query("select public.fn_billing_asaas_aplicar_pagamento($1::jsonb, 'sandbox') as r", [confirmacao]),
+      pool.query(
+        "select public.fn_billing_registrar_pagamento($1::uuid, $2::date, $3::int, gen_random_uuid(), $4, null) as r",
+        [ORG_T5_CORRIDA, "2026-12-31", 19900, "pagamento manual concorrente"],
+      ),
+    ]);
+
+    expect((r1.rows[0] as { r: { resultado: string } }).r.resultado).toBe("aplicado");
+    expect(r2.rows[0]).toBeDefined();
+
+    const total = sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T5_CORRIDA}';`).trim();
+    expect(total).toBe("2");
+  });
+
+  it("aplicar_pagamento (renovação) concorrente com fn_billing_conferir_vencimento (F4) na MESMA organização: sem deadlock", async () => {
+    if (!container) {
+      throw new Error("TEST_DB_CONTAINER ausente, rode via pnpm test:db");
+    }
+
+    sql(`
+      update public.billing_contracts
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5_conferidor',
+             current_period_start = now() - interval '20 days', current_period_end = now() - interval '2 hours',
+             status = 'ativa'
+       where organization_id = '${ORG_T5_CONFERIDOR}';
+      select public.fn_billing_vincular_cliente_asaas('${ORG_T5_CONFERIDOR}'::uuid, 'sandbox', 'cus_t5conferidor');
+    `);
+
+    const confirmacao = JSON.stringify({
+      id: "pay_t5_conferidor", status: "RECEIVED", value: 199.0, dueDate: "2026-12-01",
+      customer: "cus_t5conferidor", subscription: "sub_t5_conferidor",
+    });
+
+    const [r1] = await Promise.all([
+      pool.query("select public.fn_billing_asaas_aplicar_pagamento($1::jsonb, 'sandbox') as r", [confirmacao]),
+      pool.query("select public.fn_billing_conferir_vencimento($1::uuid) as r", [ORG_T5_CONFERIDOR]),
+    ]);
+
+    expect((r1.rows[0] as { r: { resultado: string } }).r.resultado).toBe("aplicado");
+    const status = sql(`select status from public.billing_contracts where organization_id = '${ORG_T5_CONFERIDOR}';`).trim();
+    expect(status).toBe("ativa");
+  });
+});
+
+describe("0909 Tarefa 5: limpeza", () => {
+  it("apaga as organizações de teste (billing_contracts primeiro, sem assinatura Asaas) e os eventos", () => {
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = null, asaas_assinatura_encerrada_em = null
+       where organization_id = any(array[${ORGS_T5.map((id) => `'${id}'`).join(",")}]::uuid[]);
+      delete from public.organizations where id = any(array[${ORGS_T5.map((id) => `'${id}'`).join(",")}]::uuid[]);
+      delete from public.asaas_webhook_events where event_id like 'evt-t5-%' or event_id like 'conc:pay_t5_%';
+    `);
+    const restam = sql(
+      `select count(*) from public.organizations where id = any(array[${ORGS_T5.map((id) => `'${id}'`).join(",")}]::uuid[]);`,
+    ).trim();
+    expect(restam).toBe("0");
+  });
+});

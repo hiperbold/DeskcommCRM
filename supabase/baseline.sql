@@ -43788,10 +43788,11 @@ $$;
 -- assinatura.md). Contrato comum: F:\github-projects\hiper-track\docs\manual-
 -- api-asaas-saas.md.
 --
--- Esta migration (0909) traz só as Tarefas 1 e 2 da fase: o SCHEMA (tabelas,
--- colunas, checks, índices) e o gatilho/grants das três tabelas novas. As
--- funções que escrevem nessas tabelas (pedido, cliente, webhook, aplicação de
--- pagamento/estorno/fim de assinatura) são das Tarefas 3 em diante, fora
+-- Esta migration (0909) traz as Tarefas 1 a 5 da fase: o SCHEMA (tabelas,
+-- colunas, checks, índices), o gatilho/grants das três tabelas novas, o
+-- pedido/cliente/chaves, o registro/reserva/falha/reprocesso/poda do webhook
+-- e a aplicação do pagamento confirmado (período, troca de plano, pacote de
+-- tokens). Estorno, chargeback e fim de assinatura são da Tarefa 6, fora
 -- desta migration. Nenhuma chamada real ao Asaas acontece aqui nem em nenhuma
 -- parte desta fase (restrição fixa 1 do plano da fase).
 --
@@ -45216,6 +45217,692 @@ begin
       || 'public.fn_billing_asaas_registrar_falha(uuid, uuid, text), '
       || 'public.fn_billing_asaas_reprocessar_evento(uuid, uuid), '
       || 'public.fn_billing_asaas_podar_eventos(integer) '
+      || 'from agent_worker';
+  end if;
+end
+$$;
+
+-- ============================================================================
+-- PARTE 5 (Tarefa 5): pagamento, período, troca de plano, pacote.
+-- ============================================================================
+--
+-- Quatro peças da Tarefa 5 da fase F5 (hiperbold/planos/fase-F5-tarefas.md):
+-- fn_billing_asaas_periodo_do_ciclo (decisão 5, cálculo puro do período a
+-- partir do dueDate confirmado); fn_billing_asaas_rotear_pagamento (o
+-- roteamento da decisão 6, sem trava nenhuma, chamada duas vezes por quem
+-- aplica: antes de travar, só para saber qual organização travar, e DEPOIS
+-- das travas, decisão 12/B5, para decidir de verdade); fn_billing_asaas_
+-- aplicar_pagamento (a função interna que faz o trabalho: cliente, valor,
+-- período, troca de plano e pacote, decisões 4 a 8 e 27); fn_billing_asaas_
+-- aplicar_evento (a função pública, chamada pelo processador, que confere o
+-- lease, decide se o evento é de pagamento confirmado e despacha para
+-- aplicar_pagamento dentro de um begin/exception interno, decisão 20).
+--
+-- Nesta tarefa só os eventos de PAGAMENTO CONFIRMADO são tratados
+-- (PAYMENT_CONFIRMED, PAYMENT_RECEIVED, PAYMENT_RECEIVED_IN_CASH, decisão 4).
+-- Estorno, chargeback, PAYMENT_OVERDUE, PAYMENT_DELETED e fim de assinatura
+-- (decisões 9 e 10) são da Tarefa 6, fora desta migration: o despacho de
+-- fn_billing_asaas_aplicar_evento já reconhece esses tipos e devolve
+-- ignorado com o código tarefa_6_pendente, para o processador não tratar
+-- como falha.
+--
+-- Contrato do jsonb p_confirmacao (o objeto que a Tarefa 11/13, fora desta
+-- migration, devolve depois do GET /payments/{id} confirmado, decisão 3):
+--   id                text  (obrigatório, "pay_...")
+--   status             text  (obrigatório: CONFIRMED, RECEIVED, RECEIVED_IN_CASH
+--                              ou qualquer outro valor que o Asaas devolva)
+--   value              numeric (obrigatório)
+--   originalValue      numeric ou nulo (decisão 7/M5, valor sem juros e multa)
+--   dueDate            date (obrigatório para calcular o período)
+--   paymentDate        date ou nulo
+--   confirmedDate      date ou nulo
+--   customer           text ou nulo ("cus_...")
+--   subscription       text ou nulo ("sub_...")
+--   externalReference  text ou nulo ("HC:ord:<uuid>" ou outro prefixo)
+--   assinatura_status  text ou nulo (decisão 10/M3: só presente numa
+--                       renovação quando quem chamou também consultou
+--                       GET /subscriptions/{id}; "ACTIVE" desliga
+--                       cancel_at_period_end)
+--
+-- Os alarmes da decisão 7 (divergente_valor) e da decisão 4/A1
+-- (pago_fora_do_prazo) ficam numa coluna nova, asaas_webhook_events.alarme
+-- (texto livre, vários códigos separados por vírgula quando mais de um se
+-- aplica ao mesmo evento): é aqui que a tela do admin (Tarefa 18, fora desta
+-- migration) filtra "where alarme is not null" para mostrar o que precisa de
+-- atenção, sem precisar reabrir o payload do webhook.
+--
+-- Mesmo padrão de segurança das peças anteriores desta faixa: security
+-- definer, search_path fixo em public, pg_temp. fn_billing_asaas_periodo_do_
+-- ciclo, fn_billing_asaas_rotear_pagamento e fn_billing_asaas_aplicar_
+-- pagamento são INTERNAS: nenhum grant a ninguém, revoke explícito de
+-- public/anon/authenticated E service_role (mesmo racional de fn_billing_
+-- asaas_lease_e_meu, Tarefa 4: este banco concede EXECUTE em função nova a
+-- service_role por privilégio padrão, achado da Tarefa 4). Só fn_billing_
+-- asaas_aplicar_evento tem grant, para service_role. Bloco final revogando
+-- de agent_worker (se a role existir) as quatro, num único bloco condicional.
+
+-- ── 24. asaas_webhook_events.alarme: alerta consultável pela tela do admin
+-- (decisões 4, 7; "coluna alarme no evento", decisão desta tarefa) ──
+alter table public.asaas_webhook_events add column if not exists alarme text;
+
+comment on column public.asaas_webhook_events.alarme is
+  '0909, Tarefa 5: código (ou vários, separados por vírgula) que a tela do admin (Tarefa 18, fora desta migration) mostra sem abrir o payload. Valores conhecidos nesta tarefa: divergente_valor (decisão 7, pagamento maior que o esperado) e pago_fora_do_prazo (decisão 4/A1, pedido vencido ou cancelado pago mesmo assim). A Tarefa 6 acrescenta outros (reversão de chargeback, N43). Nulo quando o evento não precisa de atenção.';
+
+-- ── 25. billing_contract_eventos.tipo ganha "plano" (B6: cada mudança de
+-- estado, período OU PLANO grava um evento) ──
+alter table public.billing_contract_eventos drop constraint if exists billing_contract_eventos_tipo_check;
+alter table public.billing_contract_eventos add constraint billing_contract_eventos_tipo_check check (
+  tipo in ('estado', 'periodo', 'cancelar_no_fim', 'conferidor', 'plano')
+);
+
+comment on column public.billing_contract_eventos.tipo is
+  '0908 (revisão F4) + 0909 Tarefa 5 (B6): estado, periodo, cancelar_no_fim, conferidor (0908) e plano (0909, primeiro pagamento de uma assinatura troca billing_contracts.plan_id, decisão 8).';
+
+-- ── 26. fn_billing_asaas_periodo_do_ciclo: cálculo puro do período (decisão
+-- 5) ──
+--
+-- Início = dueDate às 00h de America/Sao_Paulo. Fim = (dueDate + 1 mês ou 1
+-- ano, por calendário, com o interval do Postgres, sem nenhum clamp manual:
+-- a decisão 5 manda usar "o interval do Postgres", ou seja, o que quer que a
+-- aritmética nativa produza no dia 31) + 1 dia, às 00h de SP (limite
+-- EXCLUSIVO: o dia a mais evita "pagamento em atraso" no próprio dia da
+-- cobrança do cartão). IMMUTABLE: função pura, mesma entrada sempre produz a
+-- mesma saída, nunca lê tabela nem now().
+create or replace function public.fn_billing_asaas_periodo_do_ciclo(p_due date, p_ciclo text)
+returns table (periodo_inicio timestamptz, periodo_fim timestamptz)
+language plpgsql
+immutable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_intervalo interval;
+  v_fim_data date;
+begin
+  if p_due is null then
+    raise exception 'billing_due_obrigatorio' using errcode = '22023';
+  end if;
+
+  if p_ciclo not in ('monthly', 'yearly') then
+    raise exception 'billing_ciclo_invalido' using errcode = '22023';
+  end if;
+
+  v_intervalo := case when p_ciclo = 'monthly' then interval '1 month' else interval '1 year' end;
+  v_fim_data := (p_due + v_intervalo)::date + 1;
+
+  periodo_inicio := p_due::timestamp at time zone 'America/Sao_Paulo';
+  periodo_fim := v_fim_data::timestamp at time zone 'America/Sao_Paulo';
+  return next;
+end;
+$$;
+
+comment on function public.fn_billing_asaas_periodo_do_ciclo(date, text) is
+  '0909, Tarefa 5, decisão 5: início = p_due às 00h de America/Sao_Paulo; fim = (p_due + 1 mês ou 1 ano, aritmética NATIVA do Postgres, sem clamp manual) + 1 dia, às 00h de SP (limite exclusivo). Interna: nenhum grant, nem a service_role (revoke explícito abaixo).';
+
+revoke execute on function public.fn_billing_asaas_periodo_do_ciclo(date, text) from public, anon, authenticated, service_role;
+
+-- ── 27. fn_billing_asaas_rotear_pagamento: o roteamento sem trava nenhuma
+-- (decisão 6), chamado duas vezes por quem aplica ──
+--
+-- STABLE, sem select ... for update em lugar nenhum: só lê. (a) por
+-- assinatura: pedido NÃO PAGO com o mesmo asaas_subscription_id é o pedido
+-- (primeiro pagamento de cartão, ou cada ciclo do Pix anual, decisão 2, que
+-- não tem assinatura Asaas de verdade); senão, contrato com o mesmo
+-- asaas_subscription_id é renovação. (b) sem assinatura (ou sem achar):
+-- externalReference HC:ord:<uuid>, senão asaas_payment_id do pedido. (c)
+-- outro prefixo (diferente de HC:) vira outro_app. (d) nada casou vira
+-- sem_vinculo. categoria devolvida é uma de: pedido, renovacao, outro_app,
+-- sem_vinculo. pedido_tipo (assinatura ou pacote_tokens) só vem preenchido
+-- quando categoria = pedido.
+create or replace function public.fn_billing_asaas_rotear_pagamento(
+  p_ambiente text,
+  p_subscription text,
+  p_external_reference text,
+  p_payment_id text
+)
+returns table (categoria text, organization_id uuid, pedido_id uuid, pedido_tipo text)
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_pedido record;
+  v_contrato record;
+  v_id_do_pedido uuid;
+begin
+  if p_subscription is not null then
+    select * into v_pedido
+      from public.billing_orders
+      where ambiente = p_ambiente and asaas_subscription_id = p_subscription and status <> 'pago'
+      order by created_at desc
+      limit 1;
+    if found then
+      categoria := 'pedido';
+      organization_id := v_pedido.organization_id;
+      pedido_id := v_pedido.id;
+      pedido_tipo := v_pedido.tipo;
+      return next;
+      return;
+    end if;
+
+    select * into v_contrato
+      from public.billing_contracts
+      where asaas_subscription_id = p_subscription;
+    if found then
+      categoria := 'renovacao';
+      organization_id := v_contrato.organization_id;
+      pedido_id := null;
+      pedido_tipo := null;
+      return next;
+      return;
+    end if;
+  end if;
+
+  if p_external_reference is not null and p_external_reference ~ '^HC:ord:' then
+    v_id_do_pedido := nullif(substring(p_external_reference from 8), '')::uuid;
+    if v_id_do_pedido is not null then
+      select * into v_pedido
+        from public.billing_orders
+        where id = v_id_do_pedido and ambiente = p_ambiente and status <> 'pago';
+      if found then
+        categoria := 'pedido';
+        organization_id := v_pedido.organization_id;
+        pedido_id := v_pedido.id;
+        pedido_tipo := v_pedido.tipo;
+        return next;
+        return;
+      end if;
+    end if;
+  end if;
+
+  if p_payment_id is not null then
+    select * into v_pedido
+      from public.billing_orders
+      where ambiente = p_ambiente and asaas_payment_id = p_payment_id and status <> 'pago';
+    if found then
+      categoria := 'pedido';
+      organization_id := v_pedido.organization_id;
+      pedido_id := v_pedido.id;
+      pedido_tipo := v_pedido.tipo;
+      return next;
+      return;
+    end if;
+  end if;
+
+  if p_external_reference is not null and p_external_reference !~ '^HC:' then
+    categoria := 'outro_app';
+    organization_id := null;
+    pedido_id := null;
+    pedido_tipo := null;
+    return next;
+    return;
+  end if;
+
+  categoria := 'sem_vinculo';
+  organization_id := null;
+  pedido_id := null;
+  pedido_tipo := null;
+  return next;
+  return;
+end;
+$$;
+
+comment on function public.fn_billing_asaas_rotear_pagamento(text, text, text, text) is
+  '0909, Tarefa 5, decisão 6: roteia o pagamento confirmado até a organização, sem travar nada (STABLE). Chamado duas vezes por fn_billing_asaas_aplicar_pagamento: antes das travas (só para saber qual organização travar) e DEPOIS das travas (decisão 12/B5, a leitura que vale de verdade). categoria: pedido (primeiro pagamento de assinatura no cartão, cada ciclo do Pix anual, ou pacote de tokens), renovacao (assinatura Asaas de cartão já ativa), outro_app (externalReference de outro prefixo), sem_vinculo (nada casou). Interna: nenhum grant, nem a service_role.';
+
+revoke execute on function public.fn_billing_asaas_rotear_pagamento(text, text, text, text) from public, anon, authenticated, service_role;
+
+-- ── 28. fn_billing_asaas_aplicar_pagamento: o trabalho de verdade (decisões
+-- 4 a 8, 12, 26, 27; correções A1, M2, M3, M5, M8, B1, B5, B6, B9) ──
+--
+-- Ordem: (1) idempotência global por asaas_payment_id, ANTES de qualquer
+-- trava (o caminho mais barato para CONFIRMED seguido de RECEIVED, ou o
+-- evento sintético conc: reprocessando o Pix anual, decisão 8/B1). (2)
+-- roteamento sem trava, só para saber qual organização travar. (3) travas na
+-- ordem fixa da decisão 12: billing:<org>, billing_assinatura:<org>, for
+-- update no contrato. (4) idempotência de novo, sob a trava (corrida com
+-- outra sessão). (5) roteamento REFEITO sob a trava (decisão 12/B5: o
+-- estado pode ter mudado enquanto esperava). (6) cliente confirmado tem que
+-- casar com billing_customers da MESMA organização e do MESMO ambiente,
+-- senão divergente (decisão 6, última frase). (7) valor: coalesce(
+-- originalValue, value) (decisão 7/M5); menor que o esperado é divergente
+-- (não concede); maior concede com alarme divergente_valor; pedido vencido
+-- ou cancelado concede com alarme pago_fora_do_prazo (decisão 4/A1). (8)
+-- ORDEM FIXA por categoria (decisão 8/B1): insere em billing_payments
+-- PRIMEIRO (dentro de um begin/exception que vira ja_aplicado no unique_
+-- violation, mesma trava lógica de fn_billing_registrar_pagamento) e só
+-- estende o contrato, credita o pacote ou marca o pedido pago se o insert
+-- deu certo. Cada mudança de estado, período ou plano do contrato grava um
+-- evento em billing_contract_eventos na MESMA transação (B6, motivo com o
+-- prefixo pay_).
+create or replace function public.fn_billing_asaas_aplicar_pagamento(p_confirmacao jsonb, p_ambiente text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_payment_id text := nullif(p_confirmacao->>'id', '');
+  v_status text := p_confirmacao->>'status';
+  v_subscription text := nullif(p_confirmacao->>'subscription', '');
+  v_external_reference text := nullif(p_confirmacao->>'externalReference', '');
+  v_customer text := nullif(p_confirmacao->>'customer', '');
+  v_due_date date;
+  v_valor_cents bigint;
+  v_pago_em timestamptz;
+  v_chave uuid;
+  v_ja record;
+  v_rota record;
+  v_org uuid;
+  v_contract record;
+  v_pedido record;
+  v_plano record;
+  v_customer_local text;
+  v_esperado_cents bigint;
+  v_alarmes text[] := array[]::text[];
+  v_payment_row_id uuid;
+  v_periodo_inicio timestamptz;
+  v_periodo_fim timestamptz;
+  v_estado_anterior text;
+  v_fim_anterior timestamptz;
+  v_plan_id_anterior uuid;
+  v_cancel_anterior boolean;
+  v_novo_fim timestamptz;
+begin
+  if p_ambiente not in ('sandbox', 'producao') then
+    raise exception 'billing_ambiente_invalido' using errcode = '22023';
+  end if;
+
+  if v_payment_id is null then
+    raise exception 'billing_payment_id_obrigatorio' using errcode = '22023';
+  end if;
+
+  if coalesce(v_status, '') not in ('CONFIRMED', 'RECEIVED', 'RECEIVED_IN_CASH') then
+    raise exception 'billing_status_nao_confirma_pagamento' using errcode = '22023';
+  end if;
+
+  v_due_date := nullif(p_confirmacao->>'dueDate', '')::date;
+  v_valor_cents := round(coalesce(
+    (p_confirmacao->>'originalValue')::numeric,
+    (p_confirmacao->>'value')::numeric
+  ) * 100);
+  v_pago_em := coalesce(
+    (nullif(p_confirmacao->>'paymentDate', ''))::date::timestamp at time zone 'America/Sao_Paulo',
+    (nullif(p_confirmacao->>'confirmedDate', ''))::date::timestamp at time zone 'America/Sao_Paulo',
+    now()
+  );
+  v_chave := md5('HC:asaas:pay:' || v_payment_id)::uuid;
+
+  -- (1) idempotência global, ANTES de qualquer trava (decisão 4/8/B1).
+  select id, organization_id, order_id into v_ja
+    from public.billing_payments
+    where asaas_payment_id = v_payment_id;
+  if found then
+    return jsonb_build_object(
+      'resultado', 'ja_aplicado', 'organization_id', v_ja.organization_id,
+      'payment_id', v_ja.id, 'order_id', v_ja.order_id, 'alarmes', '[]'::jsonb
+    );
+  end if;
+
+  -- (2) roteamento sem trava, só para decidir qual organização travar.
+  select * into v_rota
+    from public.fn_billing_asaas_rotear_pagamento(p_ambiente, v_subscription, v_external_reference, v_payment_id);
+
+  if v_rota.categoria in ('outro_app', 'sem_vinculo') then
+    return jsonb_build_object(
+      'resultado', v_rota.categoria, 'organization_id', null,
+      'payment_id', null, 'order_id', null, 'alarmes', '[]'::jsonb
+    );
+  end if;
+
+  v_org := v_rota.organization_id;
+
+  -- (3) travas na ordem fixa da decisão 12.
+  perform pg_advisory_xact_lock(hashtextextended('billing:' || v_org::text, 0));
+  perform pg_advisory_xact_lock(hashtextextended('billing_assinatura:' || v_org::text, 0));
+
+  select * into v_contract
+    from public.billing_contracts
+    where organization_id = v_org
+    for update;
+
+  if not found then
+    return jsonb_build_object('resultado', 'sem_vinculo', 'organization_id', null, 'payment_id', null, 'order_id', null, 'alarmes', '[]'::jsonb);
+  end if;
+
+  -- (4) idempotência de novo, sob a trava.
+  select id, organization_id, order_id into v_ja
+    from public.billing_payments
+    where asaas_payment_id = v_payment_id;
+  if found then
+    return jsonb_build_object(
+      'resultado', 'ja_aplicado', 'organization_id', v_ja.organization_id,
+      'payment_id', v_ja.id, 'order_id', v_ja.order_id, 'alarmes', '[]'::jsonb
+    );
+  end if;
+
+  -- (5) roteamento REFEITO sob a trava (decisão 12/B5).
+  select * into v_rota
+    from public.fn_billing_asaas_rotear_pagamento(p_ambiente, v_subscription, v_external_reference, v_payment_id);
+
+  if v_rota.categoria in ('outro_app', 'sem_vinculo') or v_rota.organization_id is distinct from v_org then
+    return jsonb_build_object('resultado', 'sem_vinculo', 'organization_id', v_org, 'payment_id', null, 'order_id', null, 'alarmes', '[]'::jsonb);
+  end if;
+
+  -- (6) cliente confirmado tem que ser o vinculado a ESTA organização e a
+  -- ESTE ambiente (decisão 6, última frase).
+  if v_customer is not null then
+    select asaas_customer_id into v_customer_local
+      from public.billing_customers
+      where organization_id = v_org and ambiente = p_ambiente;
+    if v_customer_local is distinct from v_customer then
+      return jsonb_build_object('resultado', 'divergente', 'organization_id', v_org, 'payment_id', null, 'order_id', null, 'alarmes', '[]'::jsonb);
+    end if;
+  end if;
+
+  if v_rota.categoria = 'pedido' then
+    select * into v_pedido
+      from public.billing_orders
+      where id = v_rota.pedido_id
+      for update;
+
+    if not found or v_pedido.status = 'pago' then
+      return jsonb_build_object('resultado', 'sem_vinculo', 'organization_id', v_org, 'payment_id', null, 'order_id', null, 'alarmes', '[]'::jsonb);
+    end if;
+
+    -- (7) valor (decisão 7/M5) e prazo (decisão 4/A1).
+    v_esperado_cents := v_pedido.amount_cents;
+    if v_valor_cents < v_esperado_cents then
+      return jsonb_build_object('resultado', 'divergente', 'organization_id', v_org, 'payment_id', null, 'order_id', v_pedido.id, 'alarmes', '[]'::jsonb);
+    end if;
+    if v_valor_cents > v_esperado_cents then
+      v_alarmes := v_alarmes || 'divergente_valor'::text;
+    end if;
+    if v_pedido.status not in ('criado', 'aguardando_pagamento', 'inconclusivo', 'processando') then
+      v_alarmes := v_alarmes || 'pago_fora_do_prazo'::text;
+    end if;
+
+    if v_pedido.tipo = 'pacote_tokens' then
+      -- (8) pacote de tokens: insere PRIMEIRO (decisão 8/B1), período nulo
+      -- (decisão 8, CHECK da 0909 já permite; confere o tipo do pedido aqui
+      -- porque o CHECK da tabela não consegue), só credita se inseriu.
+      begin
+        insert into public.billing_payments (
+          organization_id, contract_id, asaas_payment_id, gross_cents, status, paid_at,
+          billing_period_start, billing_period_end, chave, nota, criado_por, origem, order_id
+        ) values (
+          v_org, v_contract.id, v_payment_id, v_valor_cents, v_status, v_pago_em,
+          null, null, v_chave, 'Asaas: pacote de tokens', null, 'asaas', v_pedido.id
+        )
+        returning id into v_payment_row_id;
+      exception when unique_violation then
+        return jsonb_build_object('resultado', 'ja_aplicado', 'organization_id', v_org, 'payment_id', null, 'order_id', v_pedido.id, 'alarmes', '[]'::jsonb);
+      end;
+
+      perform public.fn_billing_creditar_tokens(v_org, v_pedido.tokens, v_pedido.id, v_pedido.amount_cents, 'Asaas', null);
+
+      update public.billing_orders set status = 'pago', pago_em = now() where id = v_pedido.id;
+
+      return jsonb_build_object(
+        'resultado', 'aplicado', 'organization_id', v_org, 'payment_id', v_payment_row_id,
+        'order_id', v_pedido.id, 'alarmes', to_jsonb(v_alarmes)
+      );
+    end if;
+
+    -- tipo = assinatura: primeiro pagamento de cartão, OU cada ciclo do Pix
+    -- anual (decisão 2: Pix não tem assinatura Asaas, cada renovação é um
+    -- pedido novo, roteado aqui como categoria=pedido, não renovacao).
+    if v_pedido.metodo = 'PIX' and v_pedido.ciclo = 'yearly' then
+      -- Decisão 5, regra especial do Pix anual: início = greatest(current_
+      -- period_end, paymentDate); fim = início + 1 ano + 1 dia.
+      v_periodo_inicio := greatest(v_contract.current_period_end, v_pago_em);
+      v_periodo_fim := v_periodo_inicio + interval '1 year' + interval '1 day';
+    else
+      select periodo_inicio, periodo_fim into v_periodo_inicio, v_periodo_fim
+        from public.fn_billing_asaas_periodo_do_ciclo(v_due_date, v_pedido.ciclo);
+    end if;
+
+    begin
+      insert into public.billing_payments (
+        organization_id, contract_id, asaas_payment_id, gross_cents, status, paid_at,
+        billing_period_start, billing_period_end, chave, nota, criado_por, origem, order_id
+      ) values (
+        v_org, v_contract.id, v_payment_id, v_valor_cents, v_status, v_pago_em,
+        v_periodo_inicio, v_periodo_fim, v_chave, 'Asaas: assinatura', null, 'asaas', v_pedido.id
+      )
+      returning id into v_payment_row_id;
+    exception when unique_violation then
+      return jsonb_build_object('resultado', 'ja_aplicado', 'organization_id', v_org, 'payment_id', null, 'order_id', v_pedido.id, 'alarmes', '[]'::jsonb);
+    end;
+
+    -- Decisão 8: só estende/troca de plano se o insert acima deu certo
+    -- (chegamos até aqui, então deu). current_period_end = greatest(atual,
+    -- fim), evento velho nunca encurta (decisão 5/B9).
+    v_estado_anterior := v_contract.status;
+    v_fim_anterior := v_contract.current_period_end;
+    v_plan_id_anterior := v_contract.plan_id;
+    v_novo_fim := greatest(v_contract.current_period_end, v_periodo_fim);
+
+    update public.billing_contracts
+      set plan_id = v_pedido.plan_id,
+          cycle = v_pedido.ciclo,
+          gateway = 'asaas',
+          asaas_subscription_id = coalesce(v_subscription, v_contract.asaas_subscription_id),
+          asaas_assinatura_encerrada_em = case when v_subscription is not null then null else v_contract.asaas_assinatura_encerrada_em end,
+          cancel_at_period_end = false,
+          current_period_start = v_periodo_inicio,
+          current_period_end = v_novo_fim,
+          status = 'ativa'
+      where id = v_contract.id;
+
+    if v_estado_anterior <> 'ativa' then
+      insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+      values (v_org, v_contract.id, 'estado', v_estado_anterior, 'ativa', 'pay_primeiro_pagamento', null);
+    end if;
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (v_org, v_contract.id, 'periodo', v_fim_anterior::text, v_novo_fim::text, 'pay_primeiro_pagamento', null);
+    if v_plan_id_anterior is distinct from v_pedido.plan_id then
+      insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+      values (v_org, v_contract.id, 'plano', v_plan_id_anterior::text, v_pedido.plan_id::text, 'pay_primeiro_pagamento', null);
+    end if;
+
+    update public.billing_orders set status = 'pago', pago_em = now() where id = v_pedido.id;
+
+    return jsonb_build_object(
+      'resultado', 'aplicado', 'organization_id', v_org, 'payment_id', v_payment_row_id,
+      'order_id', v_pedido.id, 'alarmes', to_jsonb(v_alarmes)
+    );
+  end if;
+
+  -- categoria = renovacao: contrato já com assinatura Asaas de cartão ativa,
+  -- sem pedido nenhum envolvido.
+  select * into v_plano from public.billing_plans where id = v_contract.plan_id;
+  if not found then
+    raise exception 'billing_plano_do_contrato_nao_encontrado' using errcode = 'P0002';
+  end if;
+
+  v_esperado_cents := case when v_contract.cycle = 'yearly' then v_plano.price_yearly_cents else v_plano.price_monthly_cents end;
+  if v_esperado_cents is not null and v_valor_cents <> v_esperado_cents then
+    v_alarmes := v_alarmes || 'divergente_valor'::text;
+  end if;
+
+  select periodo_inicio, periodo_fim into v_periodo_inicio, v_periodo_fim
+    from public.fn_billing_asaas_periodo_do_ciclo(v_due_date, coalesce(v_contract.cycle, 'monthly'));
+
+  begin
+    insert into public.billing_payments (
+      organization_id, contract_id, asaas_payment_id, gross_cents, status, paid_at,
+      billing_period_start, billing_period_end, chave, nota, criado_por, origem, order_id
+    ) values (
+      v_org, v_contract.id, v_payment_id, v_valor_cents, v_status, v_pago_em,
+      v_periodo_inicio, v_periodo_fim, v_chave, 'Asaas: renovacao', null, 'asaas', null
+    )
+    returning id into v_payment_row_id;
+  exception when unique_violation then
+    return jsonb_build_object('resultado', 'ja_aplicado', 'organization_id', v_org, 'payment_id', null, 'order_id', null, 'alarmes', '[]'::jsonb);
+  end;
+
+  v_estado_anterior := v_contract.status;
+  v_fim_anterior := v_contract.current_period_end;
+  v_cancel_anterior := v_contract.cancel_at_period_end;
+  v_novo_fim := greatest(v_contract.current_period_end, v_periodo_fim);
+
+  update public.billing_contracts
+    set current_period_start = greatest(v_contract.current_period_start, v_periodo_inicio),
+        current_period_end = v_novo_fim,
+        status = 'ativa',
+        cancel_at_period_end = case when coalesce(p_confirmacao->>'assinatura_status', '') = 'ACTIVE' then false else cancel_at_period_end end
+    where id = v_contract.id;
+
+  if v_estado_anterior <> 'ativa' then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (v_org, v_contract.id, 'estado', v_estado_anterior, 'ativa', 'pay_renovacao', null);
+  end if;
+  insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+  values (v_org, v_contract.id, 'periodo', v_fim_anterior::text, v_novo_fim::text, 'pay_renovacao', null);
+  if v_cancel_anterior and coalesce(p_confirmacao->>'assinatura_status', '') = 'ACTIVE' then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (v_org, v_contract.id, 'cancelar_no_fim', 'true', 'false', 'pay_renovacao', null);
+  end if;
+
+  return jsonb_build_object(
+    'resultado', 'aplicado', 'organization_id', v_org, 'payment_id', v_payment_row_id,
+    'order_id', null, 'alarmes', to_jsonb(v_alarmes)
+  );
+end;
+$$;
+
+comment on function public.fn_billing_asaas_aplicar_pagamento(jsonb, text) is
+  '0909, Tarefa 5, decisões 4 a 8, 12, 26, 27 (correções A1, M2, M3, M5, M8, B1, B5, B6, B9): aplica um pagamento CONFIRMADO (p_confirmacao, contrato documentado no comentário da PARTE 5, acima). Idempotência global por asaas_payment_id antes e depois das travas; roteamento (fn_billing_asaas_rotear_pagamento) chamado antes e depois das travas (decisão 12/B5); travas billing:<org>, billing_assinatura:<org>, for update no contrato (decisão 12); cliente divergente ou valor menor que o esperado não concedem (divergente); valor maior concede com alarme divergente_valor; pedido vencido/cancelado concede com alarme pago_fora_do_prazo; ORDEM FIXA insere billing_payments antes de estender o contrato, creditar o pacote ou marcar o pedido pago (decisão 8/B1); cada mudança de estado, período ou plano grava billing_contract_eventos na mesma transação (B6). Interna: nenhum grant, nem a service_role.';
+
+revoke execute on function public.fn_billing_asaas_aplicar_pagamento(jsonb, text) from public, anon, authenticated, service_role;
+
+-- ── 29. fn_billing_asaas_aplicar_evento: a função pública, chamada pelo
+-- processador (decisão 20, begin/exception interno) ──
+--
+-- Confere o lease (fn_billing_asaas_lease_e_meu, Tarefa 4), decide pelo
+-- event_type se é um evento de PAGAMENTO CONFIRMADO desta tarefa, e despacha
+-- para fn_billing_asaas_aplicar_pagamento dentro de um begin/exception
+-- interno: uma falha ali grava resultado=erro SEM desfazer o registro do
+-- evento (o insert de fn_billing_asaas_registrar_evento já está commitado
+-- numa chamada anterior) nem propagar a exceção para o chamador (decisão
+-- 20). Evento de dinheiro sem p_confirmacao, ou cuja confirmação não é um
+-- status de pagamento liquidado, fica aguardando (decisão 3). Estorno,
+-- chargeback, PAYMENT_OVERDUE, PAYMENT_DELETED e fim de assinatura (Tarefa
+-- 6) devolvem ignorado com o código tarefa_6_pendente; qualquer outro tipo
+-- (PAYMENT_CREATED, SUBSCRIPTION_CREATED, CHECKOUT_*, etc.) só fica
+-- registrado (decisão 10), ignorado sem código.
+create or replace function public.fn_billing_asaas_aplicar_evento(p_evento uuid, p_lease_token uuid, p_confirmacao jsonb)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_evento record;
+  v_resultado text;
+  v_erro_codigo text;
+  v_organization_id uuid;
+  v_alarme text;
+  v_aplicacao jsonb;
+begin
+  select * into v_evento
+    from public.asaas_webhook_events
+    where id = p_evento
+    for update;
+
+  if not found then
+    raise exception 'billing_evento_nao_encontrado' using errcode = 'P0002';
+  end if;
+
+  if not public.fn_billing_asaas_lease_e_meu(p_evento, p_lease_token) then
+    raise exception 'billing_lease_invalido' using errcode = '22023';
+  end if;
+
+  if v_evento.event_type in ('PAYMENT_CONFIRMED', 'PAYMENT_RECEIVED', 'PAYMENT_RECEIVED_IN_CASH') then
+    if p_confirmacao is null then
+      v_resultado := 'aguardando';
+      v_erro_codigo := 'billing_confirmacao_ausente';
+      v_organization_id := null;
+      v_alarme := null;
+    elsif coalesce(p_confirmacao->>'status', '') not in ('CONFIRMED', 'RECEIVED', 'RECEIVED_IN_CASH') then
+      v_resultado := 'aguardando';
+      v_erro_codigo := 'billing_status_confirmado_nao_e_pagamento';
+      v_organization_id := null;
+      v_alarme := null;
+    else
+      begin
+        v_aplicacao := public.fn_billing_asaas_aplicar_pagamento(p_confirmacao, v_evento.ambiente);
+        v_resultado := v_aplicacao->>'resultado';
+        v_organization_id := nullif(v_aplicacao->>'organization_id', '')::uuid;
+        v_alarme := case
+          when jsonb_typeof(v_aplicacao->'alarmes') = 'array' and jsonb_array_length(v_aplicacao->'alarmes') > 0
+            then (select string_agg(value, ',') from jsonb_array_elements_text(v_aplicacao->'alarmes'))
+          else null
+        end;
+        v_erro_codigo := null;
+      exception when others then
+        v_resultado := 'erro';
+        v_erro_codigo := left(sqlerrm, 200);
+        v_organization_id := null;
+        v_alarme := null;
+      end;
+    end if;
+  elsif v_evento.event_type in (
+    'PAYMENT_REFUNDED', 'PAYMENT_PARTIALLY_REFUNDED', 'PAYMENT_CHARGEBACK_REQUESTED',
+    'PAYMENT_AWAITING_CHARGEBACK_REVERSAL', 'PAYMENT_OVERDUE', 'PAYMENT_DELETED',
+    'SUBSCRIPTION_DELETED', 'SUBSCRIPTION_INACTIVATED', 'SUBSCRIPTION_UPDATED'
+  ) then
+    v_resultado := 'ignorado';
+    v_erro_codigo := 'tarefa_6_pendente';
+    v_organization_id := null;
+    v_alarme := null;
+  else
+    v_resultado := 'ignorado';
+    v_erro_codigo := null;
+    v_organization_id := null;
+    v_alarme := null;
+  end if;
+
+  update public.asaas_webhook_events
+     set resultado = v_resultado,
+         erro_codigo = v_erro_codigo,
+         organization_id = coalesce(v_organization_id, organization_id),
+         alarme = v_alarme,
+         processado_em = now(),
+         lease_token = null,
+         lease_expira_em = null
+   where id = p_evento;
+
+  return jsonb_build_object(
+    'evento_id', p_evento,
+    'resultado', v_resultado,
+    'organization_id', v_organization_id,
+    'alarme', v_alarme
+  );
+end;
+$$;
+
+comment on function public.fn_billing_asaas_aplicar_evento(uuid, uuid, jsonb) is
+  '0909, Tarefa 5, decisão 20: confere o lease (fn_billing_asaas_lease_e_meu) e recusa gravar se não for mais o do chamador (billing_lease_invalido). Despacha por event_type: PAYMENT_CONFIRMED/PAYMENT_RECEIVED/PAYMENT_RECEIVED_IN_CASH chamam fn_billing_asaas_aplicar_pagamento dentro de um begin/exception interno (uma falha vira resultado=erro sem propagar a exceção nem desfazer o registro do evento); sem p_confirmacao, ou com p_confirmacao fora de um status de pagamento liquidado, fica aguardando; estorno/chargeback/PAYMENT_OVERDUE/PAYMENT_DELETED/fim de assinatura (Tarefa 6) viram ignorado com o código tarefa_6_pendente; qualquer outro tipo só fica registrado (ignorado, decisão 10). Grava resultado, erro_codigo, organization_id, alarme e processado_em, e libera o lease.';
+
+revoke execute on function public.fn_billing_asaas_aplicar_evento(uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.fn_billing_asaas_aplicar_evento(uuid, uuid, jsonb) to service_role;
+
+-- ── 30. agent_worker (se a role existir) perde execute nas quatro peças da
+-- Tarefa 5, num único bloco condicional (mesmo padrão das seções 16 e 23,
+-- acima) ──
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function '
+      || 'public.fn_billing_asaas_periodo_do_ciclo(date, text), '
+      || 'public.fn_billing_asaas_rotear_pagamento(text, text, text, text), '
+      || 'public.fn_billing_asaas_aplicar_pagamento(jsonb, text), '
+      || 'public.fn_billing_asaas_aplicar_evento(uuid, uuid, jsonb) '
       || 'from agent_worker';
   end if;
 end
