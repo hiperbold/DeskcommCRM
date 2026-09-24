@@ -104,6 +104,12 @@ const envSchema = z.object({
   // worker no boot, e derrubar o worker é o oposto do que um kill switch faz.
   // Quem normaliza é `normalizarChaveDeOrcamento` (edge/llm/orcamento.ts).
   AI_BUDGET_ENFORCEMENT: z.string().min(1).optional(),
+  // Irmã da chave acima, para o bloqueio de PLANOS (fase F3, decisão 1:
+  // hiperbold/planos/fase-F3-tarefas.md, Tarefa 8): mesmo molde
+  // off/avisar/on, mesma razão de ser `z.string()` cru (um valor inesperado
+  // não pode derrubar o worker no boot). Normaliza
+  // `normalizarChaveDePlanosBloqueio` (edge/llm/carteira.ts).
+  PLANOS_BLOQUEIO: z.string().min(1).optional(),
   // Modo do gate de disclosure: 'inject' (default conservador) ou 'veto'.
   DISCLOSURE_MODE: z.enum(['inject', 'veto']).default('inject'),
   // Resposta 'queued' (sessão ≠ WORKING): job reagendado com este atraso, SEM

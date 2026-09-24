@@ -246,6 +246,24 @@ const schema = z.object({
    */
   AI_BUDGET_ENFORCEMENT: z.string().optional().default("on"),
 
+  /**
+   * Kill switch do bloqueio de PLANOS (fase F3, decisão 1:
+   * `hiperbold/planos/fase-F3-tarefas.md`), no MESMO molde da chave acima:
+   * `off`/`avisar`/`on` (default `on`, que significa "obedece o que
+   * `billing_settings.modo` diz no banco"). Só alcança o que roda no Node: o
+   * bloqueio da IA por carteira de tokens (Tarefa 8) e o `podeCriar` dos
+   * caminhos de lead; os gatilhos do banco não leem variável de ambiente
+   * nenhuma, e por isso a emergência para ELES é outra (mudar
+   * `billing_settings.modo` pela tela ou por SQL, não esta variável).
+   *
+   * `z.string()` cru e nunca `z.enum`, pelo MESMO motivo escrito ao lado de
+   * `AI_BUDGET_ENFORCEMENT`: normalização mora em
+   * `normalizarChaveDeOrcamento` (reaproveitada por
+   * `lib/agent-engine/edge/llm/carteira.ts` como
+   * `normalizarChaveDePlanosBloqueio`, mesmo espaço de valores).
+   */
+  PLANOS_BLOQUEIO: z.string().optional().default("on"),
+
   // As duas chaves do MOTOR que também são comportamento da INSTALAÇÃO (issue
   // #1034): o modo do portão de disclosure do atendimento e a camada semântica
   // de promessa. Existem em `lib/agent-engine/env.ts` (é lá que o worker as

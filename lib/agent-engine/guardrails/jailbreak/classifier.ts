@@ -140,6 +140,10 @@ export async function classifyJailbreak(
   } catch (err) {
     // Ver a nota do cabeçalho: camada advisória não deixa o lead sem resposta — menos
     // o orçamento, que a escolta do turno precisa receber para fazer a passagem.
+    // `LlmCarteiraEsgotadaError` (fase F3) é subclasse e cai aqui também, mas
+    // `jailbreak_detect` está em PURPOSES_ISENTOS, então o gate de carteira nunca
+    // a lança para este propósito; o `instanceof` cobre o caso mesmo assim, sem
+    // depender dessa isenção continuar valendo para sempre.
     if (err instanceof LlmBudgetExceededError) throw err;
     // Sem PII: a mensagem do erro é do fornecedor/config, nunca a mensagem do lead.
     deps.log.warn('jailbreak: classificador falhou — turno segue sem sinal', {

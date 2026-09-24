@@ -36,13 +36,15 @@ import ts from "typescript";
 
 import {
   comHandoffSeOrcamentoAcabar,
+  HANDOFF_REASON_CARTEIRA,
   HANDOFF_REASON_ORCAMENTO,
   RESUMO_DO_HANDOFF_POR_ORCAMENTO,
+  TITULO_DO_HANDOFF_POR_CARTEIRA,
   TITULO_DO_HANDOFF_POR_ORCAMENTO,
 } from "@/lib/agent-engine/agent/inbound-turn";
 import type { DesfechoDoAviso } from "@/lib/agent-engine/agent/aviso-de-escalacao";
 import { corpoDoBloqueio } from "@/lib/agent-engine/edge/llm/orcamento";
-import { LlmBudgetExceededError } from "@/lib/agent-engine/edge/llm/run-model-call";
+import { LlmBudgetExceededError, LlmCarteiraEsgotadaError } from "@/lib/agent-engine/edge/llm/run-model-call";
 import { montarBriefingDaPassagem } from "@/lib/escalacao/briefing-da-passagem";
 
 const RAIZ = process.cwd();
@@ -316,6 +318,33 @@ describe("a escolta do orçamento", () => {
         throw new LlmBudgetExceededError();
       }),
     ).rejects.toThrow("banco fora");
+  });
+
+  it("carteira de tokens esgotada: mesma escolta, reason e título PRÓPRIOS (fase F3, decisão 7)", async () => {
+    const { pool, chamadas } = poolFalso();
+    const erro = new LlmCarteiraEsgotadaError(0);
+
+    await expect(
+      comHandoffSeOrcamentoAcabar(contexto(pool, logFalso()), async () => {
+        throw erro;
+      }),
+    ).rejects.toBe(erro);
+
+    // `conversations.last_handoff_reason`: coluna livre, ganha valor PRÓPRIO.
+    const conversa = chamadas.find((c) => c.sql.includes("update conversations"));
+    expect(conversa?.params).toContain(HANDOFF_REASON_CARTEIRA);
+    expect(conversa?.params).not.toContain(HANDOFF_REASON_ORCAMENTO);
+
+    // A Central recebe o título PRÓPRIO da carteira, não o do orçamento em dólar.
+    const inbox = chamadas.find((c) => c.sql.includes("agent_inbox_items"));
+    expect(inbox?.params).toContain(TITULO_DO_HANDOFF_POR_CARTEIRA);
+    expect(inbox?.params).not.toContain(TITULO_DO_HANDOFF_POR_ORCAMENTO);
+
+    // `motivo_codigo`/`origem` da passagem são vocabulário FECHADO
+    // (passagens_de_atendimento), reaproveitados de propósito (decisão 7).
+    const passagem = chamadas.find((c) => c.sql.includes("insert into passagens_de_atendimento"));
+    expect(passagem?.params).toContain("teto_de_gasto");
+    expect(passagem?.params).toContain("orcamento_de_ia");
   });
 });
 

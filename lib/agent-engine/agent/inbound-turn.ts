@@ -56,6 +56,7 @@ import { WahaChannelAdapter } from '../edge/channel/waha-adapter';
 import { applySendOutcome } from '../edge/crm/send-message';
 import {
   LlmBudgetExceededError,
+  LlmCarteiraEsgotadaError,
   runModelCall,
   tool,
   type LlmEdgeConfig,
@@ -618,6 +619,33 @@ export const RESUMO_DO_HANDOFF_POR_ORCAMENTO =
 export const TITULO_DO_HANDOFF_POR_ORCAMENTO = 'Teto de gasto com IA atingido — assumir a conversa';
 
 /**
+ * Os mesmos dois textos acima, para a carteira de tokens esgotada (fase F3,
+ * decisão 7). `LlmCarteiraEsgotadaError extends LlmBudgetExceededError`, então
+ * `comHandoffSeOrcamentoAcabar` cai no MESMO `catch`: o que muda é só a redação,
+ * quem assume não pode ler "teto de gasto" quando o que acabou foi a carteira de
+ * tokens do plano, e ir procurar o conserto em Uso de IA › Orçamento em vez de
+ * Configurações › Plano e uso.
+ */
+export const RESUMO_DO_HANDOFF_POR_CARTEIRA =
+  'A IA parou de responder porque a carteira de tokens de IA desta organização esgotou ' +
+  'neste ciclo: o lead NÃO pediu atendimento humano. Assuma a conversa; para a IA voltar a ' +
+  'responder ainda neste mês, contrate mais tokens em Configurações › Plano e uso.';
+
+export const TITULO_DO_HANDOFF_POR_CARTEIRA = 'Carteira de tokens de IA esgotada: assumir a conversa';
+
+/**
+ * `conversations.last_handoff_reason` (coluna `text`, sem CHECK, ao contrário de
+ * `passagens_de_atendimento.motivo_codigo`, vocabulário FECHADO conferido por
+ * `tests/invariants/vocabulario-banco-x-typescript.test.ts`): aqui o "vocabulário
+ * do autor" PERMITE um valor próprio (decisão 7 da fase F3), e por isso esta
+ * constante existe em vez de reaproveitar `HANDOFF_REASON_ORCAMENTO`. Já
+ * `motivoCodigo`/`origem` da passagem, mais abaixo, continuam `orcamento_de_ia` e
+ * `teto_de_gasto`, reaproveitados de propósito, porque aqueles DOIS campos são
+ * fechados e esta tarefa não abre migração para acrescentar um valor novo.
+ */
+export const HANDOFF_REASON_CARTEIRA = 'carteira_de_tokens_esgotada';
+
+/**
  * ORÇAMENTO ESGOTADO NÃO PODE VIRAR SILÊNCIO PARA O LEAD.
  *
  * `aplicarOrcamento` recusa a chamada ANTES de sair byte para o provedor
@@ -700,6 +728,9 @@ export async function comHandoffSeOrcamentoAcabar<T>(
     return await chamada();
   } catch (err) {
     if (!(err instanceof LlmBudgetExceededError)) throw err;
+    // Subclasse (fase F3, decisão 7): mesma escolta, textos próprios; ver o
+    // cabeçalho de HANDOFF_REASON_CARTEIRA sobre por que só `reason` diverge.
+    const ehCarteira = err instanceof LlmCarteiraEsgotadaError;
     const doCheckpoint = await ctx.briefingDoCheckpoint();
     // AVISA antes de silenciar — ver a nota de ORDEM no gatilho determinístico:
     // `performHumanHandoff` arma a trava que o gate de envio lê, então a única
@@ -727,23 +758,34 @@ export async function comHandoffSeOrcamentoAcabar<T>(
     // aqui, e é o ponto: o motivo do desvio é justamente não haver orçamento.
     const briefing: BriefingDaPassagem = {
       ...doCheckpoint,
-      body: `${RESUMO_DO_HANDOFF_POR_ORCAMENTO}\n\n${doCheckpoint.body}`,
+      body: `${ehCarteira ? RESUMO_DO_HANDOFF_POR_CARTEIRA : RESUMO_DO_HANDOFF_POR_ORCAMENTO}\n\n${doCheckpoint.body}`,
     };
     await performHumanHandoff(
       ctx.pool,
       { tenantId: ctx.tenantId, leadId: ctx.leadId, conversationId: ctx.conversationId },
       {
-        reason: HANDOFF_REASON_ORCAMENTO,
+        // `reason` grava em `conversations.last_handoff_reason` (coluna livre,
+        // sem CHECK): ganha valor PRÓPRIO para a carteira (decisão 7).
+        reason: ehCarteira ? HANDOFF_REASON_CARTEIRA : HANDOFF_REASON_ORCAMENTO,
         conversationSummary: briefing.body,
-        inboxTitle: TITULO_DO_HANDOFF_POR_ORCAMENTO,
+        inboxTitle: ehCarteira ? TITULO_DO_HANDOFF_POR_CARTEIRA : TITULO_DO_HANDOFF_POR_ORCAMENTO,
+        // `motivoCodigo`/`origem` são o vocabulário FECHADO de
+        // `passagens_de_atendimento` (CHECK + tests/invariants/vocabulario-banco-
+        // x-typescript.test.ts): sem migração nesta tarefa, os dois continuam
+        // reaproveitando 'orcamento_de_ia'/'teto_de_gasto' também para a
+        // carteira: é o próprio "senão reaproveita e o registro diz por quê"
+        // da decisão 7, e o "porquê" é este comentário.
         passagem: { origem: 'teto_de_gasto', motivoCodigo: 'orcamento_de_ia', briefing },
         avisoAoLead: aviso,
         log: ctx.log,
       },
     );
-    ctx.log.warn('turno interrompido pelo teto de gasto — conversa devolvida à fila humana', {
-      lead_avisado: aviso.avisado,
-    });
+    ctx.log.warn(
+      ehCarteira
+        ? 'turno interrompido pela carteira de tokens esgotada: conversa devolvida à fila humana'
+        : 'turno interrompido pelo teto de gasto: conversa devolvida à fila humana',
+      { lead_avisado: aviso.avisado },
+    );
     throw err;
   }
 }

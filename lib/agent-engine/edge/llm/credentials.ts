@@ -74,6 +74,15 @@ export interface LlmEdgeConfig {
    * exatamente onde a IA gasta.
    */
   budgetEnforcement?: ChaveDeOrcamento;
+  /**
+   * `PLANOS_BLOQUEIO` já normalizado (fase F3, decisão 1): o kill switch do
+   * bloqueio de carteira de tokens, IRMÃO de `budgetEnforcement` acima e no
+   * MESMO espaço de valores (`ChaveDeOrcamento` é reaproveitado de propósito:
+   * são duas chaves distintas com semântica idêntica, e uma segunda união de
+   * tipos ('off'|'avisar'|'on') seria uma cópia que só pode divergir).
+   * Ausente = `'on'`, que só significa "obedeça `billing_settings.modo`".
+   */
+  bloqueioDePlanos?: ChaveDeOrcamento;
 }
 
 /**
@@ -92,6 +101,7 @@ export function llmEdgeConfigFromEnv(env: {
   OPENROUTER_API_KEY?: string;
   LLM_CACHE_TTL?: string;
   AI_BUDGET_ENFORCEMENT?: string;
+  PLANOS_BLOQUEIO?: string;
   DEEPSEEK_THINKING?: string;
 }): LlmEdgeConfig {
   const ttl = env.LLM_CACHE_TTL ?? '1h';
@@ -113,6 +123,8 @@ export function llmEdgeConfigFromEnv(env: {
     // opcional que some faria o seam ter de repetir o default, e dois defaults
     // é como um dos dois fica para trás.
     budgetEnforcement: normalizarChaveDeOrcamento(env.AI_BUDGET_ENFORCEMENT),
+    // Mesma doutrina da linha acima, para a irmã do bloqueio de planos.
+    bloqueioDePlanos: normalizarChaveDeOrcamento(env.PLANOS_BLOQUEIO),
   };
 }
 

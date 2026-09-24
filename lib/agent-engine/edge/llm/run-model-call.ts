@@ -35,9 +35,21 @@ import {
   decidirOrcamento,
   normalizarModoDeOrcamento,
   LIMIAR_PADRAO_PCT,
+  PURPOSES_ISENTOS,
   SQL_ORCAMENTO,
   type ChaveDeOrcamento,
 } from './orcamento';
+import {
+  aplicarChaveNoVeredicto,
+  CARTEIRA_BLOQUEIO_TITULO,
+  corpoDoBloqueioDaCarteira,
+  deveConsultarCarteira,
+  interpretarVeredictoDaCarteira,
+  normalizarModoDeBilling,
+  SQL_MODO_DE_BILLING,
+  type ModoDeBilling,
+  type VeredictoDaCarteira,
+} from './carteira';
 import { custoCentsComCatalogo } from './pricing';
 import { chaveDeOrcamentoDaInstalacao } from '../../../instalacao/comportamento';
 import { createDefaultRegistry, type ProviderRegistry } from './providers';
@@ -58,7 +70,11 @@ export { llmEdgeConfigFromEnv, LlmNotConfiguredError } from './credentials';
 
 /** Teto mensal da org esgotado — runs recusados ANTES do provider (zero tokens). */
 export class LlmBudgetExceededError extends Error {
-  override readonly name = 'llm_budget_exceeded';
+  // Tipo alargado para `string` (em vez do literal inferido) só para permitir a
+  // subclasse `LlmCarteiraEsgotadaError` (fase F3, decisão 7) sobrescrever com o
+  // próprio literal: sem isto o TypeScript recusa o `override` por variância de
+  // literal, mesmo o valor em si nunca mudando de tipo em runtime.
+  override readonly name: string = 'llm_budget_exceeded';
   /**
    * Veto PERMANENTE de negócio, não incidente de sistema — tentar de novo daqui
    * a um minuto dá o mesmo resultado, porque o gasto não diminui sozinho.
@@ -72,6 +88,31 @@ export class LlmBudgetExceededError extends Error {
   readonly terminal = true;
   constructor() {
     super('orçamento mensal de IA da organização atingido — chamada recusada antes de sair byte para o provedor; ajuste o teto em Uso de IA › Orçamento, desligue a proteção, ou aguarde a virada do mês (agent_inbox_items kind=budget_exceeded)');
+  }
+}
+
+/**
+ * Carteira de tokens de IA da organização esgotada: decisão 7 da fase F3
+ * (`hiperbold/planos/fase-F3-tarefas.md`). SUBCLASSE, de propósito: a fila
+ * (`workers/agent-worker/main.ts`) lê `terminal` por herança e cancela em vez de
+ * repetir, e a escolta de handoff (`comHandoffSeOrcamentoAcabar`, `inbound-turn.ts`)
+ * reconhece pela CLASSE-MÃE: os dois desfechos já certos do orçamento em dólar
+ * valem aqui sem duplicar nenhum dos dois. `name` e `message` são sobrescritos
+ * porque este é um veto DIFERENTE (carteira de tokens do plano, não teto de gasto
+ * escolhido pela organização), e as duas tabelas que leem o erro
+ * (`llm_calls.error_message`, o `job_dead` da fila) mostram o texto: confundir os
+ * dois motivos mandaria quem lê consertar o campo errado (Uso de IA › Orçamento em
+ * vez de Configurações › Plano e uso).
+ */
+export class LlmCarteiraEsgotadaError extends LlmBudgetExceededError {
+  override readonly name = 'llm_carteira_esgotada';
+  constructor(saldoTokens: number | null) {
+    super();
+    this.message =
+      `carteira de tokens de IA da organização esgotada neste ciclo` +
+      (saldoTokens === null ? '' : ` (saldo: ${saldoTokens} tokens)`) +
+      ': chamada recusada antes de sair byte para o provedor; contrate mais tokens em ' +
+      'Configurações › Plano e uso (agent_inbox_items ref_kind=billing_carteira)';
   }
 }
 
@@ -408,6 +449,163 @@ async function aplicarOrcamento(d: {
 }
 
 /**
+ * `billing_settings.modo`, cacheado 60s POR POOL (decisão 6 da fase F3: "o modo,
+ * lido com cache curto em memória, como a chave do orçamento"). `WeakMap<pg.Pool,…>`
+ * pelo MESMO motivo do `resolvedoresDeCatalogoPorPool` abaixo: cada pool ganha seu
+ * próprio cache, dois pools de teste nunca vazam estado entre si, e um pool
+ * finalizado libera a entrada sozinho.
+ *
+ * 60s (e não os 30s do memo de `comportamentoEmVigor`) porque este é OUTRO dado:
+ * `billing_settings` é tabela do fork Hiperbold, lida pelo `db` (pg.Pool) do
+ * próprio `run-model-call`, nunca pelo Supabase admin client (HTTP): o invariante
+ * `tests/invariants/autonomia-preview-core.test.ts` exige ZERO `fetch` no caminho
+ * do ensaio do agente, e ler `billing_settings` por HTTP quebraria exatamente isso.
+ */
+const CACHE_MODO_DE_BILLING_TTL_MS = 60_000;
+const modoDeBillingPorPool = new WeakMap<pg.Pool, { modo: ModoDeBilling; expiraEm: number }>();
+
+async function modoDeBillingPeloDb(db: pg.Pool): Promise<ModoDeBilling> {
+  const cache = modoDeBillingPorPool.get(db);
+  if (cache && cache.expiraEm > Date.now()) return cache.modo;
+  const { rows } = await db.query<{ modo: string | null }>(SQL_MODO_DE_BILLING);
+  const modo = normalizarModoDeBilling(rows[0]?.modo ?? null);
+  modoDeBillingPorPool.set(db, { modo, expiraEm: Date.now() + CACHE_MODO_DE_BILLING_TTL_MS });
+  return modo;
+}
+
+/**
+ * O GATE DA CARTEIRA DE TOKENS: decisões 6 e 7 da fase F3
+ * (`hiperbold/planos/fase-F3-tarefas.md`). Roda logo depois de `aplicarOrcamento`,
+ * no MESMO ponto (antes de sair byte para o provedor): os dois vetos são
+ * independentes (ver o cabeçalho de `./carteira.ts`) e por isso um não substitui o
+ * outro.
+ *
+ * ═══ "SEGUE SEM CONSULTA NENHUMA" É LITERAL ═══
+ *
+ * As quatro condições de `deveConsultarCarteira` são checadas ANTES de qualquer
+ * leitura de banco, inclusive antes de `modoDeBillingPeloDb`, que já é cacheada:
+ * a variável (`d.chave`), a origem da chave e o propósito estão todos em memória, e
+ * só quando as três permitem é que a leitura (cacheada) do modo acontece. Só
+ * quando o modo também permite é que a RPC `fn_billing_ia_pode_responder`, a
+ * única consulta desta função que não é cacheada, porque o saldo muda a cada
+ * resposta, é chamada. No modo `avisar` (billing_settings) e com
+ * `PLANOS_BLOQUEIO=off`, zero consulta a mais: nem a de `modoDeBillingPeloDb`
+ * quando as três primeiras já bastam para decidir.
+ *
+ * Mídia (transcrição, visão, embedding) não passa por este gate (decisão 8 da
+ * fase): nenhum desses caminhos chama `runModelCall`, então a exclusão é por
+ * construção, não por um `if` aqui.
+ */
+async function aplicarCarteira(d: {
+  db: pg.Pool;
+  organizationId: string;
+  chave: ChaveDeOrcamento;
+  origemDaChave: OrigemDaChaveLlm;
+  purpose: string;
+  provider: string;
+  model: string;
+  origem: string;
+  input: RunModelCallInput;
+  log?: Logger;
+}): Promise<void> {
+  const comum = { organization_id: d.organizationId, purpose: d.purpose };
+
+  // Atalhos de custo #1 a #3: nenhum toca o banco. `deveConsultarCarteira` não
+  // recebe o modo ainda (ele é o quarto atalho, e o único que exige I/O), porque a
+  // função pura precisa do modo já resolvido; aqui ele entra com o valor mais
+  // frouxo possível ('desligado') só para as três primeiras condições decidirem
+  // sozinhas: se elas já bastarem para recusar a consulta, o modo nunca é lido.
+  if (
+    d.chave === 'off' ||
+    d.origemDaChave !== 'chave_da_instalacao' ||
+    (PURPOSES_ISENTOS as readonly string[]).includes(d.purpose)
+  ) {
+    return;
+  }
+
+  let modo: ModoDeBilling;
+  try {
+    modo = await modoDeBillingPeloDb(d.db);
+  } catch (err) {
+    d.log?.warn('llm: leitura de billing_settings.modo falhou: a chamada SEGUE sem teto de carteira', {
+      ...comum,
+      ...normalizarErro(err),
+    });
+    return;
+  }
+
+  if (!deveConsultarCarteira({ chave: d.chave, modoDoBanco: modo, origemDaChave: d.origemDaChave, purpose: d.purpose })) {
+    return;
+  }
+
+  let veredito: VeredictoDaCarteira;
+  try {
+    const { rows } = await d.db.query<{ veredito: unknown }>(
+      'select public.fn_billing_ia_pode_responder($1) as veredito',
+      [d.organizationId],
+    );
+    veredito = interpretarVeredictoDaCarteira(rows[0]?.veredito);
+  } catch (err) {
+    d.log?.warn('llm: consulta da carteira de tokens falhou: a chamada SEGUE sem teto de carteira', {
+      ...comum,
+      ...normalizarErro(err),
+    });
+    return;
+  }
+
+  veredito = aplicarChaveNoVeredicto(veredito, d.chave);
+
+  if (veredito.acao === 'seguir') {
+    return;
+  }
+  if (veredito.acao === 'avisar_e_seguir') {
+    // O aviso de fim de saldo já é da PRÓPRIA carteira (fn_billing_avisar_carteira,
+    // 0906, Central), não duplica aqui (decisão 7 da fase F3).
+    d.log?.warn('llm: saldo da carteira de tokens abaixo do limiar: a chamada SEGUE', {
+      ...comum,
+      motivo: veredito.motivo,
+      saldo: veredito.saldo,
+    });
+    return;
+  }
+
+  const erro = new LlmCarteiraEsgotadaError(veredito.saldo);
+  // `kind='other'`, não `'budget_exceeded'`: o CHECK de `agent_inbox_items.kind` é
+  // vocabulário fechado (tests/invariants/vocabulario-banco-x-typescript.test.ts) e
+  // esta tarefa não abre migração nova. `ref_kind='billing_carteira'` é o que
+  // garante a dedup PRÓPRIA (decisão 7: "não se misturar com o budget_exceeded do
+  // orçamento em dólar"), mesmo padrão de `billing_limite` (0905/0907), que
+  // também vive em `kind='other'` com `ref_kind` próprio.
+  await d.db.query(
+    `insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
+     select $1, 'other', 'critical', $2, $3, 'billing_carteira', $1
+     where not exists (
+       select 1 from agent_inbox_items
+       where organization_id = $1 and kind = 'other' and ref_kind = 'billing_carteira' and status = 'open'
+     )`,
+    [d.organizationId, CARTEIRA_BLOQUEIO_TITULO, corpoDoBloqueioDaCarteira(veredito.saldo)],
+  );
+  await registrarFalha(d.db, {
+    input: d.input,
+    purpose: d.purpose,
+    provider: d.provider,
+    model: d.model,
+    origem: d.origem,
+    origemDaChave: d.origemDaChave,
+    latencyMs: 0,
+    erro,
+  }).catch(() => {
+    // Gravar a recusa não pode impedir a recusa.
+  });
+  d.log?.warn('llm: chamada recusada: carteira de tokens de IA esgotada', {
+    ...comum,
+    motivo: veredito.motivo,
+    saldo: veredito.saldo,
+  });
+  throw erro;
+}
+
+/**
  * Deixa o rastro da recusa por endereço da empresa com chave da instalação e
  * DEVOLVE o erro — quem chama o lança (`throw await …`), para a recusa ficar
  * visível no ponto em que acontece.
@@ -689,6 +887,31 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     ...(deps.log ? { log: deps.log } : {}),
   });
 
+  // ═══ A CARTEIRA DE TOKENS, LOGO EM SEGUIDA ═══
+  //
+  // Mesmo ponto (antes de qualquer byte ao provedor), mesma razão. É um veto
+  // INDEPENDENTE do orçamento em dólar acima (decisões 6 e 7 da fase F3, ver o
+  // cabeçalho de `./carteira.ts`): uma organização pode estourar só um dos dois, e
+  // os dois precisam poder recusar sem que um mascare o outro no log nem na Central.
+  //
+  // `cfg.bloqueioDePlanos` NÃO passa por `lib/instalacao/comportamento.ts` (ao
+  // contrário da chave de orçamento, que tem override por `platform_settings`):
+  // a decisão 1 da fase declara `PLANOS_BLOQUEIO` uma chave só de `.env`, sem linha
+  // de banco própria: o modo que de fato manda é `billing_settings.modo`, lido
+  // dentro de `aplicarCarteira` (cacheado, 60s por pool).
+  await aplicarCarteira({
+    db,
+    organizationId: input.tenantId,
+    chave: cfg.bloqueioDePlanos ?? 'on',
+    purpose,
+    provider: config.provider,
+    model,
+    origem: decisao.origem,
+    origemDaChave: config.origemDaChave,
+    input,
+    ...(deps.log ? { log: deps.log } : {}),
+  });
+
   // Disciplina de cache: o prefixo estável org-wide (system do playbook + tools
   // em ordem determinística) ganha os breakpoints AQUI, no seam — call sites
   // passam system/tools crus. Tudo por-lead vive em input.messages, DEPOIS do
@@ -881,6 +1104,18 @@ export function normalizarErro(err: unknown): {
   // grafias de fornecedor para reconciliar — há um objeto que nós mesmos
   // construímos. Sem este ramo a tela de Execuções mostraria "Não conseguimos
   // classificar esta falha" no caso mais bem explicado do produto.
+  // A subclasse ANTES da mãe: `LlmCarteiraEsgotadaError extends
+  // LlmBudgetExceededError` (decisão 7 da fase F3): sem este ramo primeiro, o
+  // `instanceof` de baixo casaria as duas e a carteira esgotada gravaria em
+  // `llm_calls.error_code` o MESMO código do orçamento em dólar, apontando quem lê
+  // para o campo errado (Uso de IA › Orçamento em vez de Plano e uso).
+  if (err instanceof LlmCarteiraEsgotadaError) {
+    return {
+      error_code: 'carteira_de_tokens_esgotada',
+      error_message: redigirMensagemDoProvedor(bruto),
+      http_status: null,
+    };
+  }
   if (err instanceof LlmBudgetExceededError) {
     return { error_code: 'orcamento_esgotado', error_message: redigirMensagemDoProvedor(bruto), http_status: null };
   }

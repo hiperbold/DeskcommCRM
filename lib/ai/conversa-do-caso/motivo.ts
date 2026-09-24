@@ -47,6 +47,13 @@ export interface MotivoDaConversa {
 
 export function motivoDaConversaDoCaso(erro: unknown): MotivoDaConversa {
   if (erro instanceof LlmNotConfiguredError) return motivo("llm_not_configured");
+  // `LlmCarteiraEsgotadaError` (fase F3, decisão 7) é SUBCLASSE de
+  // `LlmBudgetExceededError` e cai neste mesmo `instanceof`, de propósito:
+  // `agent_case_chat_messages.error_code` é vocabulário FECHADO (CHECK +
+  // tests/invariants/vocabulario-banco-x-typescript.test.ts, símbolo
+  // `CaseChatErrorCode`), e esta tarefa não abre migração para um código novo:
+  // reaproveita "orcamento_esgotado", mesmo padrão de `motivoCodigo` em
+  // `inbound-turn.ts`/`HANDOFF_REASON_CARTEIRA`.
   if (erro instanceof LlmBudgetExceededError) return motivo("orcamento_esgotado");
   if (erro instanceof LlmModelNotEnabledError || erro instanceof LlmProviderUnknownError) {
     return motivo("modelo_indisponivel");

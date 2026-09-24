@@ -134,9 +134,12 @@ function errMsg(err: unknown): string {
  *
  * O erro é lido pela PROPRIEDADE `terminal`, e não pela classe, porque o
  * contrato é da fila e não do seam que o produziu: quem sabe que "tentar de novo
- * daqui a um minuto dá o mesmo resultado" é quem lança. Hoje o único produtor é
+ * daqui a um minuto dá o mesmo resultado" é quem lança. Os produtores são
  * `LlmBudgetExceededError` (`lib/agent-engine/edge/llm/run-model-call.ts`), que
- * declara a propriedade com a razão escrita ao lado.
+ * declara a propriedade com a razão escrita ao lado, e a subclasse
+ * `LlmCarteiraEsgotadaError` (fase F3, decisão 7: carteira de tokens do plano
+ * esgotada), que HERDA `terminal = true`, então cai aqui sem precisar de um
+ * segundo `if`.
  *
  * Sem esta distinção, um bloqueio por orçamento ia para `failJob`, que reagenda
  * até `max_attempts` (5) e então insere um `job_dead` **crítico por job, sem

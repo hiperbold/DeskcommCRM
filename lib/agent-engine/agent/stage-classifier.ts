@@ -142,6 +142,9 @@ export async function classifyStage(
   } catch (err) {
     // Ver a nota do cabeçalho: dica não é condição de atendimento — menos o orçamento,
     // que a escolta do turno precisa receber para passar a conversa a uma pessoa.
+    // `LlmCarteiraEsgotadaError` (fase F3) é subclasse e sobe por este mesmo
+    // `instanceof`: `stage_classifier` não é isento no gate de carteira, então
+    // este é um caminho REAL de disparo, não só teórico como no jailbreak.
     if (err instanceof LlmBudgetExceededError) throw err;
     // Sem PII: a mensagem do erro é do fornecedor/config, nunca o texto do lead.
     deps.log.warn('stage-classifier falhou — turno segue sem sugestão de estágio', {
