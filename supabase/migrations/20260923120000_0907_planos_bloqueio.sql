@@ -587,8 +587,27 @@ as $$
   -- com essa forma, fn_billing_e_servidor() devolvia true também para
   -- authenticated). Por isso o fallback só soma quando a claim existe E diz
   -- service_role explicitamente; ausência de claim não decide nada aqui.
-  select coalesce(current_setting('role', true), 'none') in ('none', 'service_role')
-    or current_setting('request.jwt.claims', true)::jsonb ->> 'role' = 'service_role';
+  --
+  -- Segundo defeito, achado pela PROVA automatizada desta correção (não pela
+  -- auditoria original): quando o papel não é servidor E a claim não tem a
+  -- chave "role" (o caso comum de verdade, authenticated com só {"sub":...},
+  -- que é exatamente o que `set_config('request.jwt.claims', ...)` grava em
+  -- todo teste e em toda requisição real do PostgREST): o operador `->>`
+  -- devolve SQL NULL (chave ausente), e `NULL = 'service_role'` também é NULL
+  -- (comparação com NULL nunca é FALSE). "false OR NULL" não é false: em
+  -- lógica de três valores é NULL. A função inteira devolvia NULL, não false,
+  -- para authenticated sem a claim "role", e todo `if not fn_billing_e_servidor() then ...`
+  -- (a isenção 2 de membro e o gatilho de organization_id, ambos abaixo)
+  -- trata "not NULL" como NULL, que o PL/pgSQL só enxerga como falso dentro
+  -- de um "if", pulando o bloco SEM levantar PT402/42501: a isenção e a trava
+  -- ficavam mudas bem na sessão authenticated comum, que é o alvo de todas as
+  -- duas. `coalesce(..., false)` por fora fecha a lógica de três valores: só
+  -- "true" isenta, "false" e "null" (indefinido) nunca isentam.
+  select coalesce(
+    coalesce(current_setting('role', true), 'none') in ('none', 'service_role')
+      or (current_setting('request.jwt.claims', true)::jsonb ->> 'role') = 'service_role',
+    false
+  );
 $$;
 
 comment on function public.fn_billing_e_servidor() is

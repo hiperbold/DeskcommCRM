@@ -211,3 +211,347 @@ describe("3. Modo avisar (o padrão): a mesma organização no mesmo teto cria o
     expect(linhas).toEqual(["modo=avisar", "lead=1"]);
   });
 });
+
+/**
+ * A1 pós-auditoria (achado alto, migration 0907 parte 5 + correção editada NO
+ * LUGAR na parte 4 desta 0907 e na 0905): a soma do contador saiu do AFTER
+ * (que só dispara no FIM do comando inteiro) e entrou no BEFORE
+ * (`fn_billing_bloqueia_crm_leads`), logo depois de aprovar CADA linha. Antes
+ * da correção, um comando com várias linhas (insert de lote, PATCH em massa,
+ * `fn_mover_leads_em_lote`) fazia TODAS as linhas lerem o MESMO contador
+ * ainda não somado e passavam juntas por cima do teto, provado à mão no
+ * commit da correção (teto 9, contador 8, 50 inseridos, os 50 entravam).
+ *
+ * Fixture única: organização com teto de leads = 9, 8 leads ABERTOS de
+ * verdade (não só o contador: `count(*)` real bate), mais 5 PERDIDOS e 5
+ * GANHOS para as duas reaberturas em lote. Os 8/5/5 nascem enquanto o modo
+ * ainda é `avisar` (o padrão herdado do banco), sem nenhum bloqueio: só
+ * DEPOIS deles o modo vira `bloquear` e a carência vence, exatamente como
+ * `fixtureOrgNoTeto` acima faz para o caso 1.
+ *
+ * O comando arriscado de cada caso roda dentro de um `do $$ ... exception
+ * when sqlstate 'PT402' ... $$`, o mesmo molde do caso 1: sem isso,
+ * `ON_ERROR_STOP=1` abortaria o script (e a transação) inteiro no primeiro
+ * erro, e não daria para ler o estado DEPOIS da recusa (nada novo gravado, o
+ * contador sem se mexer) na mesma transação/fixture.
+ */
+
+const ORG_A1_INSERT = "0907a001-0000-4000-8000-000000000001";
+const ADMIN_A1_INSERT = "0907a001-1111-4000-8000-000000000001";
+const PIPELINE_A1_INSERT = "0907a001-0000-4000-8000-000000000002";
+const STAGE_ABERTA_A1_INSERT = "0907a001-0000-4000-8000-000000000003";
+const STAGE_PERDIDA_A1_INSERT = "0907a001-0000-4000-8000-000000000004";
+const STAGE_GANHA_A1_INSERT = "0907a001-0000-4000-8000-000000000005";
+
+const ORG_A1_UPDATE = "0907a002-0000-4000-8000-000000000001";
+const ADMIN_A1_UPDATE = "0907a002-1111-4000-8000-000000000001";
+const PIPELINE_A1_UPDATE = "0907a002-0000-4000-8000-000000000002";
+const STAGE_ABERTA_A1_UPDATE = "0907a002-0000-4000-8000-000000000003";
+const STAGE_PERDIDA_A1_UPDATE = "0907a002-0000-4000-8000-000000000004";
+const STAGE_GANHA_A1_UPDATE = "0907a002-0000-4000-8000-000000000005";
+
+const ORG_A1_MOVER = "0907a003-0000-4000-8000-000000000001";
+const ADMIN_A1_MOVER = "0907a003-1111-4000-8000-000000000001";
+const PIPELINE_A1_MOVER = "0907a003-0000-4000-8000-000000000002";
+const STAGE_ABERTA_A1_MOVER = "0907a003-0000-4000-8000-000000000003";
+const STAGE_PERDIDA_A1_MOVER = "0907a003-0000-4000-8000-000000000004";
+const STAGE_GANHA_A1_MOVER = "0907a003-0000-4000-8000-000000000005";
+
+const ORG_A1_AVISAR = "0907a004-0000-4000-8000-000000000001";
+const ADMIN_A1_AVISAR = "0907a004-1111-4000-8000-000000000001";
+const PIPELINE_A1_AVISAR = "0907a004-0000-4000-8000-000000000002";
+const STAGE_ABERTA_A1_AVISAR = "0907a004-0000-4000-8000-000000000003";
+const STAGE_PERDIDA_A1_AVISAR = "0907a004-0000-4000-8000-000000000004";
+const STAGE_GANHA_A1_AVISAR = "0907a004-0000-4000-8000-000000000005";
+
+/**
+ * O prefixo que põe a sessão no lugar exato em que o PostgREST põe a de um
+ * usuário logado (mesmo molde de `planos-trava-avisa.test.ts`).
+ */
+function comoMembroA1(userId: string): string {
+  return `set role authenticated;\nselect set_config('request.jwt.claims', '{"sub":"${userId}"}', false);`;
+}
+
+/**
+ * Organização com teto de leads = 9: 8 abertos, 5 perdidos e 5 ganhos de
+ * verdade (não só o contador). `bloqueado`: além do teto, liga o modo
+ * `bloquear` com carência vencida (`bloqueio_a_partir_de` no passado): os
+ * oito/cinco/cinco leads iniciais nascem ANTES dessa troca, com o modo ainda
+ * `avisar`, para não esbarrar em bloqueio nenhum na hora de semear.
+ */
+function fixtureOrgLote(params: {
+  org: string;
+  admin: string;
+  pipeline: string;
+  stageAberta: string;
+  stagePerdida: string;
+  stageGanha: string;
+  bloqueado: boolean;
+}): string {
+  const { org, admin, pipeline, stageAberta, stagePerdida, stageGanha, bloqueado } = params;
+  const sufixo = org.slice(-8);
+  return `
+    insert into public.organizations (id, slug, legal_name, display_name)
+      values ('${org}', 'inv-a1-lote-${sufixo}', 'A1 Lote LTDA', 'A1 Lote')
+      on conflict (id) do nothing;
+    insert into auth.users (id, email) values ('${admin}', 'admin-a1-${sufixo}@invariant.test')
+      on conflict (id) do nothing;
+    insert into public.user_organizations (user_id, organization_id, role, accepted_at)
+      values ('${admin}', '${org}', 'admin', now())
+      on conflict do nothing;
+
+    select public.fn_billing_ajustar_limites('${org}'::uuid, '{"leads": 9}'::jsonb, null, null);
+
+    insert into public.crm_pipelines (id, organization_id, name, slug)
+      values ('${pipeline}', '${org}', 'Funil A1 Lote', 'funil-a1-lote-${sufixo}')
+      on conflict (id) do nothing;
+    insert into public.crm_stages (id, organization_id, pipeline_id, name, slug, position, is_won, is_lost) values
+      ('${stageAberta}', '${org}', '${pipeline}', 'Aberta', 'aberta-${sufixo}', 1000, false, false),
+      ('${stagePerdida}', '${org}', '${pipeline}', 'Perdida', 'perdida-${sufixo}', 2000, false, true),
+      ('${stageGanha}', '${org}', '${pipeline}', 'Ganha', 'ganha-${sufixo}', 3000, true, false)
+      on conflict (id) do nothing;
+
+    -- 8 leads ABERTOS de verdade. Modo ainda avisar neste ponto do script
+    -- (a troca para bloquear, quando "bloqueado", só acontece no FIM desta
+    -- fixture): fn_billing_bloqueia devolve false incondicionalmente fora do
+    -- modo bloquear, então os 8 entram livres, e o BEFORE soma o contador a
+    -- cada um dos 8 (correção A1: soma incondicional de modo).
+    insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+      select '${org}', '${pipeline}', '${stageAberta}', 'Aberto seed ' || g
+      from generate_series(1, 8) g;
+
+    -- 5 PERDIDOS e 5 GANHOS: matéria-prima das duas reaberturas em lote
+    -- abaixo (update direto de status; fn_mover_leads_em_lote). Nascem
+    -- FECHADOS (a trigger do autor decide o status pelo is_won/is_lost da
+    -- etapa), então nunca somaram o contador.
+    insert into public.crm_leads (organization_id, pipeline_id, stage_id, title, lost_reason)
+      select '${org}', '${pipeline}', '${stagePerdida}', 'Perdido seed ' || g, 'other'
+      from generate_series(1, 5) g;
+    insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+      select '${org}', '${pipeline}', '${stageGanha}', 'Ganho seed ' || g
+      from generate_series(1, 5) g;
+
+    ${
+      bloqueado
+        ? `
+    update public.billing_settings set modo = 'bloquear' where id = 1;
+    update public.billing_contracts set bloqueio_a_partir_de = now() - interval '1 day'
+      where organization_id = '${org}';
+    `
+        : ""
+    }
+  `;
+}
+
+describe("4. A1 pós-auditoria: um comando com várias linhas não passa por cima do teto (modo bloquear, carência vencida)", () => {
+  it("INSERT de 50 linhas num comando só, pela sessão authenticated do admin, dá PT402 e nada entra; o contador fica como estava", () => {
+    const linhas = comoServico(`
+      begin;
+
+      ${fixtureOrgLote({
+        org: ORG_A1_INSERT,
+        admin: ADMIN_A1_INSERT,
+        pipeline: PIPELINE_A1_INSERT,
+        stageAberta: STAGE_ABERTA_A1_INSERT,
+        stagePerdida: STAGE_PERDIDA_A1_INSERT,
+        stageGanha: STAGE_GANHA_A1_INSERT,
+        bloqueado: true,
+      })}
+
+      ${comoMembroA1(ADMIN_A1_INSERT)}
+
+      -- Antes da correção A1: as 50 linhas liam o MESMO contador (8) ainda
+      -- não somado pelo AFTER (que só dispara no fim do comando inteiro) e
+      -- entravam juntas, mesmo com teto 9. Depois da correção, a 2ª linha já
+      -- vê o contador somado pela 1ª (BEFORE soma linha a linha), esbarra no
+      -- teto, e a exceção sem savepoint desfaz o comando INTEIRO: nenhuma
+      -- das 50, nem a 1ª que "caberia" sozinha.
+      do $$
+      begin
+        insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+          select '${ORG_A1_INSERT}', '${PIPELINE_A1_INSERT}', '${STAGE_ABERTA_A1_INSERT}', 'Lote 50 ' || g
+          from generate_series(1, 50) g;
+      exception
+        when sqlstate 'PT402' then
+          raise notice 'PT402 capturado: o insert de 50 linhas foi recusado inteiro';
+      end $$;
+
+      reset role;
+      select 'SONDA|leads_novos=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_INSERT}' and title like 'Lote 50 %';
+      select 'SONDA|contador=' || valor from public.billing_usage_counters
+        where organization_id = '${ORG_A1_INSERT}' and item = 'leads';
+      select 'SONDA|abertos_reais=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_INSERT}' and status = 'open';
+
+      rollback;
+    `);
+    expect(linhas, "leads_novos=0: nada do lote de 50 pode ter entrado").toEqual([
+      "leads_novos=0",
+      "contador=8",
+      "abertos_reais=8",
+    ]);
+  });
+
+  it("UPDATE ... set status = 'open' reabrindo vários leads perdidos num comando só dá PT402; o contador fica como estava", () => {
+    const linhas = comoServico(`
+      begin;
+
+      ${fixtureOrgLote({
+        org: ORG_A1_UPDATE,
+        admin: ADMIN_A1_UPDATE,
+        pipeline: PIPELINE_A1_UPDATE,
+        stageAberta: STAGE_ABERTA_A1_UPDATE,
+        stagePerdida: STAGE_PERDIDA_A1_UPDATE,
+        stageGanha: STAGE_GANHA_A1_UPDATE,
+        bloqueado: true,
+      })}
+
+      ${comoMembroA1(ADMIN_A1_UPDATE)}
+
+      -- PATCH em massa: um UPDATE só, sem lista de colunas no gatilho (roda
+      -- em qualquer update da linha), reabrindo os 5 perdidos de uma vez.
+      do $$
+      begin
+        update public.crm_leads set status = 'open', closed_at = null
+         where organization_id = '${ORG_A1_UPDATE}' and title like 'Perdido seed %';
+      exception
+        when sqlstate 'PT402' then
+          raise notice 'PT402 capturado: a reabertura em lote (update direto) foi recusada inteira';
+      end $$;
+
+      reset role;
+      select 'SONDA|reabertos=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_UPDATE}' and title like 'Perdido seed %' and status = 'open';
+      select 'SONDA|contador=' || valor from public.billing_usage_counters
+        where organization_id = '${ORG_A1_UPDATE}' and item = 'leads';
+      select 'SONDA|abertos_reais=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_UPDATE}' and status = 'open';
+
+      rollback;
+    `);
+    expect(linhas, "reabertos=0: nenhum dos 5 perdidos pode ter voltado a aberto").toEqual([
+      "reabertos=0",
+      "contador=8",
+      "abertos_reais=8",
+    ]);
+  });
+
+  it("fn_mover_leads_em_lote reabrindo 5 leads GANHOS para uma etapa aberta, num comando só, dá PT402; o contador fica como estava", () => {
+    const linhas = comoServico(`
+      begin;
+
+      ${fixtureOrgLote({
+        org: ORG_A1_MOVER,
+        admin: ADMIN_A1_MOVER,
+        pipeline: PIPELINE_A1_MOVER,
+        stageAberta: STAGE_ABERTA_A1_MOVER,
+        stagePerdida: STAGE_PERDIDA_A1_MOVER,
+        stageGanha: STAGE_GANHA_A1_MOVER,
+        bloqueado: true,
+      })}
+
+      ${comoMembroA1(ADMIN_A1_MOVER)}
+
+      -- fn_mover_leads_em_lote (a RPC do arrasto em lote no quadro; granted a
+      -- authenticated e service_role) move os 5 ganhos para a etapa aberta
+      -- num UPDATE só; trg_crm_lead_close_on_stage (do autor) resolve
+      -- new.status = 'open' para cada um (saiu de 'won'), e é esse UPDATE
+      -- que o teto de leads tem que travar por linha, não por comando.
+      do $$
+      declare
+        v_ids uuid[];
+      begin
+        select array_agg(id) into v_ids from public.crm_leads
+          where organization_id = '${ORG_A1_MOVER}' and title like 'Ganho seed %';
+        perform public.fn_mover_leads_em_lote(
+          '${ORG_A1_MOVER}'::uuid, v_ids, '${STAGE_ABERTA_A1_MOVER}'::uuid, null
+        );
+      exception
+        when sqlstate 'PT402' then
+          raise notice 'PT402 capturado: fn_mover_leads_em_lote nao reabriu os ganhos';
+      end $$;
+
+      reset role;
+      select 'SONDA|reabertos=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_MOVER}' and title like 'Ganho seed %' and status = 'open';
+      select 'SONDA|contador=' || valor from public.billing_usage_counters
+        where organization_id = '${ORG_A1_MOVER}' and item = 'leads';
+      select 'SONDA|abertos_reais=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_MOVER}' and status = 'open';
+
+      rollback;
+    `);
+    expect(linhas, "reabertos=0: nenhum dos 5 ganhos pode ter voltado a aberto").toEqual([
+      "reabertos=0",
+      "contador=8",
+      "abertos_reais=8",
+    ]);
+  });
+});
+
+describe("5. Modo avisar (o padrão): os mesmos três comandos passam, e o contador sempre fica igual ao count(*) real de leads abertos", () => {
+  it("insert de 50, update em lote e fn_mover_leads_em_lote passam sem PT402; o contador acompanha cada passo", () => {
+    const linhas = comoServico(`
+      begin;
+
+      ${fixtureOrgLote({
+        org: ORG_A1_AVISAR,
+        admin: ADMIN_A1_AVISAR,
+        pipeline: PIPELINE_A1_AVISAR,
+        stageAberta: STAGE_ABERTA_A1_AVISAR,
+        stagePerdida: STAGE_PERDIDA_A1_AVISAR,
+        stageGanha: STAGE_GANHA_A1_AVISAR,
+        bloqueado: false,
+      })}
+
+      -- Controle: o modo é o padrão (avisar) e não foi tocado por este caso.
+      select 'SONDA|modo=' || modo from public.billing_settings where id = 1;
+
+      ${comoMembroA1(ADMIN_A1_AVISAR)}
+
+      insert into public.crm_leads (organization_id, pipeline_id, stage_id, title)
+        select '${ORG_A1_AVISAR}', '${PIPELINE_A1_AVISAR}', '${STAGE_ABERTA_A1_AVISAR}', 'Lote 50 ' || g
+        from generate_series(1, 50) g;
+
+      update public.crm_leads set status = 'open', closed_at = null
+       where organization_id = '${ORG_A1_AVISAR}' and title like 'Perdido seed %';
+
+      do $$
+      declare
+        v_ids uuid[];
+      begin
+        select array_agg(id) into v_ids from public.crm_leads
+          where organization_id = '${ORG_A1_AVISAR}' and title like 'Ganho seed %';
+        perform public.fn_mover_leads_em_lote(
+          '${ORG_A1_AVISAR}'::uuid, v_ids, '${STAGE_ABERTA_A1_AVISAR}'::uuid, null
+        );
+      end $$;
+
+      reset role;
+      select 'SONDA|novos=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_AVISAR}' and title like 'Lote 50 %' and status = 'open';
+      select 'SONDA|reabertos_update=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_AVISAR}' and title like 'Perdido seed %' and status = 'open';
+      select 'SONDA|reabertos_mover=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_AVISAR}' and title like 'Ganho seed %' and status = 'open';
+      select 'SONDA|contador=' || valor from public.billing_usage_counters
+        where organization_id = '${ORG_A1_AVISAR}' and item = 'leads';
+      select 'SONDA|abertos_reais=' || count(*) from public.crm_leads
+        where organization_id = '${ORG_A1_AVISAR}' and status = 'open';
+
+      rollback;
+    `);
+    // 8 (seed) + 50 (insert em lote) + 5 (reabertos por update) + 5
+    // (reabertos por fn_mover_leads_em_lote) = 68, e o contador tem que
+    // bater com a contagem REAL em cada uma das duas colunas.
+    expect(linhas).toEqual([
+      "modo=avisar",
+      "novos=50",
+      "reabertos_update=5",
+      "reabertos_mover=5",
+      "contador=68",
+      "abertos_reais=68",
+    ]);
+  });
+});
