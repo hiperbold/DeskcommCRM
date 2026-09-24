@@ -39,6 +39,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Logger } from "@/lib/agent-engine/obs/logger";
+import { modoDeBillingCacheado } from "./modo-cacheado";
 
 export async function bloqueioValeParaOrganizacao(
   admin: SupabaseClient,
@@ -46,19 +47,19 @@ export async function bloqueioValeParaOrganizacao(
   log?: Logger,
 ): Promise<boolean> {
   try {
-    const { data: settings, error: erroSettings } = await admin
-      .from("billing_settings")
-      .select("modo")
-      .eq("id", 1)
-      .maybeSingle();
-    if (erroSettings) {
-      throw new Error(`ler billing_settings: ${erroSettings.message}`);
+    // Revisão da F3 (achado baixo 4): cacheado 60s por processo, mesmo padrão
+    // de `modoDeBillingPeloDb` (run-model-call.ts), sem isto, cada chamada
+    // desta pré-checagem (channels/partner, leads/import, leads/bulk) pagava
+    // uma consulta PostgREST a mais para uma linha que quase nunca muda.
+    const { modo, error: mensagemDeErro } = await modoDeBillingCacheado(admin);
+    if (mensagemDeErro) {
+      throw new Error(`ler billing_settings: ${mensagemDeErro}`);
     }
 
     // Sem linha (banco recém-migrado, antes da semeadura) ou modo diferente
     // de 'bloquear': sai aqui, sem ler billing_contracts nem gastar consulta
     // a mais, o mesmo "zero custo a mais" de `fn_billing_bloqueia`.
-    if ((settings as { modo?: string } | null)?.modo !== "bloquear") {
+    if (modo !== "bloquear") {
       return false;
     }
 

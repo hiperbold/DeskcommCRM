@@ -41,7 +41,7 @@ import {
 } from './orcamento';
 import {
   aplicarChaveNoVeredicto,
-  CARTEIRA_BLOQUEIO_TITULO,
+  carteiraBloqueioTitulo,
   corpoDoBloqueioDaCarteira,
   deveConsultarCarteira,
   interpretarVeredictoDaCarteira,
@@ -576,14 +576,23 @@ async function aplicarCarteira(d: {
   // garante a dedup PRÓPRIA (decisão 7: "não se misturar com o budget_exceeded do
   // orçamento em dólar"), mesmo padrão de `billing_limite` (0905/0907), que
   // também vive em `kind='other'` com `ref_kind` próprio.
+  //
+  // Revisão da F3 (achado baixo 7): a dedup por SÓ "existe item aberto" fazia
+  // um aviso de um mês anterior, nunca fechado, impedir o aviso do mês atual
+  // de nascer. `carteiraBloqueioTitulo(veredito.ciclo)` embute o ciclo no
+  // título (mesmo molde do aviso de limiar em `fn_billing_avisar_carteira`,
+  // 0906, que embute o mês para o mesmo fim); a dedup agora é por
+  // ref_kind + TÍTULO + status='open', então um aviso de agosto aberto não
+  // impede o de setembro.
+  const titulo = carteiraBloqueioTitulo(veredito.ciclo);
   await d.db.query(
     `insert into agent_inbox_items (organization_id, kind, severity, title, body, ref_kind, ref_id)
      select $1, 'other', 'critical', $2, $3, 'billing_carteira', $1
      where not exists (
        select 1 from agent_inbox_items
-       where organization_id = $1 and kind = 'other' and ref_kind = 'billing_carteira' and status = 'open'
+       where organization_id = $1 and kind = 'other' and ref_kind = 'billing_carteira' and title = $2 and status = 'open'
      )`,
-    [d.organizationId, CARTEIRA_BLOQUEIO_TITULO, corpoDoBloqueioDaCarteira(veredito.saldo)],
+    [d.organizationId, titulo, corpoDoBloqueioDaCarteira(veredito.saldo)],
   );
   await registrarFalha(d.db, {
     input: d.input,

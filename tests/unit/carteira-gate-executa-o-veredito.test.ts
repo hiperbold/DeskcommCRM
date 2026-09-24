@@ -20,7 +20,7 @@ import {
   LlmCarteiraEsgotadaError,
   normalizarErro,
 } from "@/lib/agent-engine/edge/llm/run-model-call";
-import { deveConsultarCarteira } from "@/lib/agent-engine/edge/llm/carteira";
+import { deveConsultarCarteira, carteiraBloqueioTitulo } from "@/lib/agent-engine/edge/llm/carteira";
 
 const ORG = "44444444-4444-4444-8444-444444444444";
 
@@ -151,9 +151,29 @@ describe("o gate da carteira de tokens lê billing_settings e executa o veredito
       expect(sqlDoInsert).toMatch(/'billing_carteira'/);
       expect(sqlDoInsert).toMatch(/not exists/i);
       const [, titulo, corpo] = r.inboxInserts[0] as [string, string, string];
-      expect(titulo).toBe("Os tokens de IA do mês acabaram");
+      // Revisão da F3 (achado baixo 7): o título embute o ciclo (o veredito
+      // falso do poolFalso usa ciclo "2026-09-01"), mesmo molde do aviso de
+      // limiar da carteira, é o que fecha a dedup por mês (ver o teste
+      // dedicado abaixo, "aviso do mês passado não trava o do mês atual").
+      expect(titulo).toBe("Os tokens de IA do mês acabaram (setembro de 2026)");
       expect(corpo).toMatch(/Plano e uso/);
       expect(corpo).not.toMatch(/Uso de IA › Orçamento/);
+    });
+
+    it("achado baixo 7: o título muda por ciclo, e a dedup do insert é por título, um aviso do mês passado não trava o do mês atual", async () => {
+      const r = await chamar({
+        veredito: { acao: "bloquear", motivo: "saldo de tokens esgotado", saldo: 0, ciclo: "2026-10-01" },
+      });
+      const sqlDoInsert = r.sqls.find(
+        (s) => s.includes("insert into agent_inbox_items") && !s.includes("fn_billing_ia_pode_responder"),
+      );
+      // A dedup do WHERE NOT EXISTS agora inclui "title = $2": um aviso ABERTO
+      // de agosto (título diferente, mês diferente) não bate nesse filtro, e
+      // o de outubro nasce normalmente.
+      expect(sqlDoInsert).toMatch(/title\s*=\s*\$2/);
+      const [, titulo] = r.inboxInserts[0] as [string, string, string];
+      expect(titulo).toBe("Os tokens de IA do mês acabaram (outubro de 2026)");
+      expect(titulo).not.toBe("Os tokens de IA do mês acabaram (setembro de 2026)");
     });
 
     it("a recusa vira linha de ERRO em llm_calls, com error_code PRÓPRIO", async () => {
@@ -238,6 +258,19 @@ describe("o gate da carteira de tokens lê billing_settings e executa o veredito
       ).rejects.toBe(SENTINELA);
       const leituras = p.sqls.filter((s) => s.includes("billing_settings")).length;
       expect(leituras).toBe(1);
+    });
+  });
+
+  describe("carteiraBloqueioTitulo: o título embute o ciclo, para a dedup ser por mês", () => {
+    it("meses diferentes geram títulos diferentes", () => {
+      expect(carteiraBloqueioTitulo("2026-09-01")).toBe("Os tokens de IA do mês acabaram (setembro de 2026)");
+      expect(carteiraBloqueioTitulo("2026-10-01")).toBe("Os tokens de IA do mês acabaram (outubro de 2026)");
+      expect(carteiraBloqueioTitulo("2026-09-01")).not.toBe(carteiraBloqueioTitulo("2026-10-01"));
+    });
+
+    it("ciclo ausente ou fora do formato não quebra: cai no título fixo", () => {
+      expect(carteiraBloqueioTitulo(null)).toBe("Os tokens de IA do mês acabaram");
+      expect(carteiraBloqueioTitulo("formato-estranho")).toBe("Os tokens de IA do mês acabaram");
     });
   });
 

@@ -112,9 +112,14 @@ const FUNCOES_0907 = [
   "fn_billing_trava_carencia_contrato_novo()",
   "fn_billing_trava_carencia_troca_de_plano()",
   "fn_billing_bloqueia(uuid, text, uuid)",
+  // Revisão pós-auditoria da F3 (achado médio 1): a sexta função da mesma
+  // leva, mesmo padrão de segurança (security definer, search_path fixo,
+  // revoke de public/anon/authenticated, grant só a service_role, revogada
+  // de agent_worker no mesmo bloco).
+  "fn_billing_bloqueio_ativo(uuid)",
 ] as const;
 
-describe("0907: padrão de segurança das cinco funções novas", () => {
+describe("0907: padrão de segurança das seis funções novas", () => {
   it("todas são security definer com search_path fixo em public, pg_temp", () => {
     for (const sql of [MIGRATION_0907, BASELINE]) {
       for (const assinatura of FUNCOES_0907) {
@@ -144,7 +149,7 @@ describe("0907: padrão de segurança das cinco funções novas", () => {
     }
   });
 
-  it("o bloco da role agent_worker revoga execute das cinco funções novas", () => {
+  it("o bloco da role agent_worker revoga execute das seis funções novas", () => {
     for (const sql of [MIGRATION_0907, extraiBloco0907Baseline()]) {
       expect(sql).toMatch(/if exists \(select 1 from pg_roles where rolname = 'agent_worker'\) then/);
       for (const assinatura of FUNCOES_0907) {
@@ -152,7 +157,7 @@ describe("0907: padrão de segurança das cinco funções novas", () => {
         expect(sql).toMatch(new RegExp(`public\\.${nome}\\(`));
       }
       expect(sql).toMatch(
-        /revoke execute on function public\.fn_billing_dar_carencia\(uuid, integer\), public\.fn_billing_definir_modo\(text, uuid\), public\.fn_billing_trava_carencia_contrato_novo\(\), public\.fn_billing_trava_carencia_troca_de_plano\(\), public\.fn_billing_bloqueia\(uuid, text, uuid\) from agent_worker/,
+        /revoke execute on function public\.fn_billing_dar_carencia\(uuid, integer\), public\.fn_billing_definir_modo\(text, uuid\), public\.fn_billing_trava_carencia_contrato_novo\(\), public\.fn_billing_trava_carencia_troca_de_plano\(\), public\.fn_billing_bloqueia\(uuid, text, uuid\), public\.fn_billing_bloqueio_ativo\(uuid\) from agent_worker/,
       );
     }
   });
@@ -963,7 +968,11 @@ describe("0907 parte 4 (Tarefa 7, banco): o gatilho de bloqueio em crm_leads", (
       // O begin/exception da soma só começa DEPOIS do "end if" do raise.
       const posRaise = corpo.indexOf("raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';");
       const posEndIfRaise = corpo.indexOf("end if;", posRaise);
-      const posBeginSoma = corpo.indexOf("\n    begin\n");
+      // Revisão pós-auditoria da F3 (achado médio 1): o begin/exception da
+      // soma ganhou mais um nível de indentação, porque agora fica DENTRO de
+      // "if public.fn_billing_bloqueio_ativo(...) then" (a soma só acontece
+      // com o bloqueio ativo de verdade); daí os 6 espaços em vez de 4.
+      const posBeginSoma = corpo.indexOf("\n      begin\n");
       expect(posRaise).toBeGreaterThan(-1);
       expect(posEndIfRaise).toBeGreaterThan(posRaise);
       expect(posBeginSoma, "begin/exception da soma tem que vir DEPOIS do end if do raise PT402").toBeGreaterThan(posEndIfRaise);
@@ -1016,8 +1025,11 @@ describe("0907 parte 4 (Tarefa 7, banco): o gatilho de bloqueio em crm_leads", (
       const inicio = sql.indexOf("create or replace function public.fn_billing_bloqueia_crm_leads()");
       const corpo = sql.slice(inicio, sql.indexOf("$$;", inicio));
       const posRaisePT402 = corpo.indexOf("raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';");
-      const posBeginSoma = corpo.indexOf("\n    begin\n", posRaisePT402);
-      const posExceptionSoma = corpo.indexOf("exception\n      when others then", posBeginSoma);
+      // Revisão pós-auditoria da F3 (achado médio 1): mais um nível de
+      // indentação (ver o comentário do caso acima), 6 espaços para o
+      // "begin", 8 para o "when others then" dentro do exception dele.
+      const posBeginSoma = corpo.indexOf("\n      begin\n", posRaisePT402);
+      const posExceptionSoma = corpo.indexOf("exception\n        when others then", posBeginSoma);
       const posWarningSoma = corpo.indexOf("raise warning 'billing_bloqueia_crm_leads_somar_falhou", posExceptionSoma);
       expect(posRaisePT402).toBeGreaterThan(-1);
       expect(posBeginSoma, "begin da soma tem que vir DEPOIS do raise PT402 (fora do bloco que engole)").toBeGreaterThan(posRaisePT402);

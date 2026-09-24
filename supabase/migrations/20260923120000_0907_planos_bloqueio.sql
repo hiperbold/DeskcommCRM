@@ -440,6 +440,96 @@ revoke execute on function public.fn_billing_bloqueia(uuid, text, uuid) from pub
 grant execute on function public.fn_billing_bloqueia(uuid, text, uuid) to service_role;
 
 -- ============================================================================
+-- 6b. fn_billing_bloqueio_ativo: só o INTERRUPTOR, sem contar nem travar
+-- (revisão pós-auditoria da F3, achado médio 1).
+-- ============================================================================
+--
+-- Racional completo (ver também o comentário editado NO LUGAR em
+-- fn_billing_trava_crm_leads, 0905): a correção A1 moveu a soma do contador
+-- de leads inteira para o BEFORE (fn_billing_bloqueia_crm_leads, logo
+-- abaixo), incondicional de modo. Isso fechou o furo do A1 (lote passando do
+-- teto no modo bloquear), mas abriu um deadlock novo: num comando de várias
+-- linhas (fn_mover_leads_em_lote, um PATCH em massa), a trava do contador
+-- (dentro de fn_billing_conferir_teto, que o BEFORE chama por baixo) passa a
+-- ser disputada no MEIO do comando, uma vez por linha, em vez de só no FIM
+-- (como um AFTER ROW faz). Um arrasto simultâneo em OUTRO lead do mesmo lote,
+-- que também precisa da mesma trava do contador desta organização, pode
+-- entrar em deadlock com ela (Postgres derruba uma das duas transações; a
+-- pessoa tenta de novo). Documentado como D-062 em hiperbold/DEBITO.md: só
+-- existe quando o bloqueio está DE FATO ativo (é o preço de somar linha a
+-- linha, que só é necessário ali).
+--
+-- Correção: os dois gatilhos de leads passam a se perguntar, cada um, se o
+-- bloqueio está ATIVO para esta organização, as MESMAS quatro condições de
+-- fn_billing_bloqueia, MENOS a contagem em si: modo = 'bloquear' E
+-- bloqueio_a_partir_de preenchido e VENCIDO E teto de leads não nulo. Com o
+-- bloqueio ativo, é o BEFORE quem soma (só ali a ordem estrita linha a linha
+-- existe, e só ali o defeito do A1 acontecia) e o AFTER NÃO soma. Sem o
+-- bloqueio ativo (avisar, desligado, ou dentro da carência), NINGUÉM pega a
+-- trava do contador no meio do comando: o BEFORE fica calado e quem soma
+-- volta a ser o AFTER, exatamente como era ANTES da correção A1 e antes da
+-- fase F3 inteira (o comportamento que o modo avisar tem que preservar sem
+-- mudar nada, hiperbold/planos/fase-F3-tarefas.md, linha 5). O AFTER continua
+-- SEMPRE subtraindo no fechamento e na exclusão, nos dois casos: fechar
+-- sempre libera vaga, nunca disputa lock com ninguém.
+--
+-- STABLE, não VOLATILE: ao contrário de fn_billing_bloqueia e
+-- fn_billing_conferir_teto, esta função NUNCA pega lock nem conta (só lê três
+-- colunas de duas tabelas pequenas), então não precisa da garantia de
+-- "enxergar linha commitada no mesmo comando" que justifica VOLATILE nas
+-- outras duas.
+create or replace function public.fn_billing_bloqueio_ativo(p_org uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_modo text;
+  v_bloqueio_a_partir_de timestamptz;
+  v_teto integer;
+begin
+  select modo into v_modo from public.billing_settings where id = 1;
+
+  if v_modo is distinct from 'bloquear' then
+    return false;
+  end if;
+
+  select bc.bloqueio_a_partir_de into v_bloqueio_a_partir_de
+  from public.billing_contracts bc
+  where bc.organization_id = p_org;
+
+  -- Nulo = não bloqueia; data no futuro = ainda em carência (mesma regra de
+  -- fn_billing_bloqueia, decisão 2 da fase).
+  if v_bloqueio_a_partir_de is null or v_bloqueio_a_partir_de > now() then
+    return false;
+  end if;
+
+  v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'leads')::integer;
+
+  if v_teto is null then
+    return false;
+  end if;
+
+  return true;
+exception
+  when others then
+    -- Falha interna devolve "não ativo" (mesma doutrina de liberar em vez de
+    -- travar por acidente): pior caso, a soma cai no AFTER, como sempre foi
+    -- antes da fase F3.
+    raise warning 'billing_bloqueio_ativo_falhou: organizacao=%, sqlerrm=%', p_org, sqlerrm;
+    return false;
+end;
+$$;
+
+comment on function public.fn_billing_bloqueio_ativo(uuid) is
+  'Revisão pós-auditoria da F3, achado médio 1: só o interruptor de bloqueio (modo bloquear, carência vencida, teto de leads não nulo), SEM contar nem travar. Usada por fn_billing_trava_crm_leads (0905, AFTER) e fn_billing_bloqueia_crm_leads (abaixo, BEFORE) para decidir QUEM soma o contador de leads: com o bloqueio ativo, o BEFORE soma (fecha o furo do A1, que só existe ali); sem o bloqueio ativo (avisar/desligado/carência), o AFTER volta a somar, exatamente como antes da correção A1. Fecha o deadlock de D-062 (lote reabrindo leads x arrasto simultâneo) para todo modo que não seja bloquear de verdade.';
+
+revoke execute on function public.fn_billing_bloqueio_ativo(uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_bloqueio_ativo(uuid) to service_role;
+
+-- ============================================================================
 -- 7. agent_worker não define modo, não dá carência nem decide bloqueio pelas
 -- peças novas desta migration (mesmo racional de todo bloco análogo em
 -- 0904/0905/0906): por alter default privileges ela ganharia execute em
@@ -448,7 +538,7 @@ grant execute on function public.fn_billing_bloqueia(uuid, text, uuid) to servic
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'agent_worker') then
-    execute 'revoke execute on function public.fn_billing_dar_carencia(uuid, integer), public.fn_billing_definir_modo(text, uuid), public.fn_billing_trava_carencia_contrato_novo(), public.fn_billing_trava_carencia_troca_de_plano(), public.fn_billing_bloqueia(uuid, text, uuid) from agent_worker';
+    execute 'revoke execute on function public.fn_billing_dar_carencia(uuid, integer), public.fn_billing_definir_modo(text, uuid), public.fn_billing_trava_carencia_contrato_novo(), public.fn_billing_trava_carencia_troca_de_plano(), public.fn_billing_bloqueia(uuid, text, uuid), public.fn_billing_bloqueio_ativo(uuid) from agent_worker';
   end if;
 end
 $$;
@@ -1031,34 +1121,37 @@ begin
       raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'leads';
     end if;
 
-    -- Correção A1 pós-auditoria (achado alto): a soma do contador (e a
-    -- conferência do AVISO, que precisa da mesma semântica "antes de somar"
-    -- que fn_billing_trava_crm_leads, 0905, já usa) SAEM do AFTER e entram
-    -- aqui, no BEFORE, logo depois de aprovar esta linha. Motivo: AFTER ROW
-    -- só dispara no FIM do comando inteiro, não linha a linha: um insert de
-    -- 50 linhas, um PATCH em massa reabrindo lead, ou fn_mover_leads_em_lote
-    -- com vários leads faziam TODAS as 50 checagens de fn_billing_bloqueia
-    -- lerem o MESMO contador ainda não somado (o AFTER só rodaria depois) e
-    -- passavam juntas por cima do teto (provado: teto 9, contador 8, 50
-    -- inseridos, os 50 entravam). BEFORE ROW dispara imediatamente por
-    -- linha, então somar AQUI faz a linha seguinte do MESMO comando já
-    -- enxergar o valor somado por esta. Roda incondicional de modo (decisão
-    -- 11, 0905: o contador tem que ficar certo sempre, mesmo em avisar ou
-    -- desligado); fn_billing_conferir_teto e o próprio upsert já são seguros
-    -- por si (idempotentes, capturados), mas um erro aqui não pode derrubar
-    -- a criação do lead, por isso o begin/exception próprio.
-    begin
-      perform public.fn_billing_conferir_teto(new.organization_id, 'leads', null);
+    -- Revisão pós-auditoria da F3 (achado médio 1, ver o comentário completo
+    -- em fn_billing_bloqueio_ativo, acima): a correção A1 somava aqui
+    -- INCONDICIONAL de modo, e isso abriu um deadlock (D-062, hiperbold/
+    -- DEBITO.md) num lote concorrente com um arrasto, mesmo em avisar (onde a
+    -- soma linha a linha nunca foi necessária: só serve para o teto de
+    -- verdade não ser furado por um lote, e sem bloqueio ativo não há teto de
+    -- verdade a furar). Por isso a soma só acontece AQUI quando
+    -- fn_billing_bloqueio_ativo diz que o bloqueio está DE FATO ativo para
+    -- esta organização: é o único caso em que a ordem estrita por linha
+    -- (BEFORE ROW dispara imediatamente, ao contrário de um AFTER ROW) é
+    -- necessária para a linha seguinte do MESMO comando já enxergar o valor
+    -- somado por esta (o defeito que o A1 corrigiu). Sem o bloqueio ativo,
+    -- quem soma volta a ser o AFTER (fn_billing_trava_crm_leads, 0905),
+    -- exatamente como antes da correção A1.
+    if public.fn_billing_bloqueio_ativo(new.organization_id) then
+      -- fn_billing_conferir_teto e o próprio upsert já são seguros por si
+      -- (idempotentes, capturados), mas um erro aqui não pode derrubar a
+      -- criação do lead, por isso o begin/exception próprio.
+      begin
+        perform public.fn_billing_conferir_teto(new.organization_id, 'leads', null);
 
-      insert into public.billing_usage_counters (organization_id, item, valor)
-      values (new.organization_id, 'leads', 1)
-      on conflict (organization_id, item) do update
-        set valor = public.billing_usage_counters.valor + 1,
-            updated_at = now();
-    exception
-      when others then
-        raise warning 'billing_bloqueia_crm_leads_somar_falhou: organizacao=%, sqlerrm=%', new.organization_id, sqlerrm;
-    end;
+        insert into public.billing_usage_counters (organization_id, item, valor)
+        values (new.organization_id, 'leads', 1)
+        on conflict (organization_id, item) do update
+          set valor = public.billing_usage_counters.valor + 1,
+              updated_at = now();
+      exception
+        when others then
+          raise warning 'billing_bloqueia_crm_leads_somar_falhou: organizacao=%, sqlerrm=%', new.organization_id, sqlerrm;
+      end;
+    end if;
   end if;
 
   return new;
@@ -1066,7 +1159,7 @@ end;
 $$;
 
 comment on function public.fn_billing_bloqueia_crm_leads() is
-  '0907, Tarefa 7 (decisão 5): gatilho BEFORE de bloqueio de verdade em crm_leads, na transição para aberto (insert com status open, ou reabertura de won/lost para open). Roda DEPOIS de trg_crm_lead_close_on_stage na ordem alfabética dos BEFORE (ver o cabeçalho desta parte 4 para a conta byte a byte), então enxerga new.status já resolvido pelo autor. Chama fn_billing_bloqueia(org, leads, null) e levanta PT402 FORA de qualquer bloco exception quando ela diz true. Correção A1 pós-auditoria (achado alto): depois de aprovar a linha, este BEFORE também confere o aviso (fn_billing_conferir_teto) e SOMA o contador (billing_usage_counters), sob um begin/exception próprio que nunca derruba o lead. Antes, quem somava era o AFTER (fn_billing_trava_crm_leads, 0905), que só dispara no FIM do comando inteiro: um lote de várias linhas via insert, PATCH em massa ou fn_mover_leads_em_lote fazia toda linha ler o MESMO contador desatualizado e passar por cima do teto. Fechar (aberto -> ganho/perdido) nunca bloqueia nem soma aqui (continua só no AFTER, subtraindo). Modos avisar/desligado não mudam nada: fn_billing_bloqueia e fn_billing_conferir_teto já leem o modo antes de qualquer lock, e o upsert do contador roda sempre, no mesmo custo de hoje (só mudou de trigger, não de trabalho).';
+  '0907, Tarefa 7 (decisão 5): gatilho BEFORE de bloqueio de verdade em crm_leads, na transição para aberto (insert com status open, ou reabertura de won/lost para open). Roda DEPOIS de trg_crm_lead_close_on_stage na ordem alfabética dos BEFORE (ver o cabeçalho desta parte 4 para a conta byte a byte), então enxerga new.status já resolvido pelo autor. Chama fn_billing_bloqueia(org, leads, null) e levanta PT402 FORA de qualquer bloco exception quando ela diz true. Correção A1 pós-auditoria (achado alto): depois de aprovar a linha, este BEFORE também confere o aviso (fn_billing_conferir_teto) e SOMA o contador (billing_usage_counters), sob um begin/exception próprio que nunca derruba o lead. Revisão pós-auditoria da F3 (achado médio 1): essa soma agora só acontece quando fn_billing_bloqueio_ativo(organizacao) é true (modo bloquear, carência vencida, teto não nulo), só ali a ordem estrita por linha é necessária (o defeito do A1). Sem o bloqueio ativo (avisar/desligado/carência), este BEFORE fica calado e quem soma volta a ser o AFTER (fn_billing_trava_crm_leads, 0905), fechando o deadlock D-062 (hiperbold/DEBITO.md) para todo modo que não seja bloquear de verdade. Fechar (aberto -> ganho/perdido) nunca bloqueia nem soma aqui (continua só no AFTER, subtraindo, sempre).';
 
 revoke execute on function public.fn_billing_bloqueia_crm_leads() from public, anon, authenticated;
 grant execute on function public.fn_billing_bloqueia_crm_leads() to service_role;

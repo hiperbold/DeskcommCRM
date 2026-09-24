@@ -137,12 +137,50 @@ export function deveConsultarCarteira(d: {
 }
 
 /**
+ * O nome do mês em português do `ciclo` (primeiro dia do ciclo,
+ * `fn_billing_ia_pode_responder` sempre devolve isso), sem depender de locale
+ * de servidor: array fixo, mesmo padrão de `fn_billing_avisar_carteira`
+ * (migration 0906, SQL) para o aviso de limiar da carteira, `to_char` com
+ * 'Month' segue o locale do cluster.
+ */
+const MESES_PT_BR = [
+  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+] as const;
+
+/**
+ * "setembro de 2026", ou `null` quando `ciclo` não vem no formato esperado
+ * (nunca deveria acontecer, mas o texto do aviso não pode quebrar por isso).
+ */
+function mesDoCiclo(ciclo: string | null): string | null {
+  if (!ciclo) return null;
+  const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(ciclo);
+  if (!m) return null;
+  const ano = Number(m[1]);
+  const mesIndice = Number(m[2]) - 1;
+  const nome = MESES_PT_BR[mesIndice];
+  return nome ? `${nome} de ${ano}` : null;
+}
+
+/**
  * O título do aviso crítico, próprio, e não `BLOQUEIO_TITULO` do orçamento em
  * dólar: são dois vetos diferentes, e um operador que lê "o limite de gasto foi
  * atingido" quando o que acabou foi a carteira de tokens do plano vai procurar o
  * conserto no lugar errado (Uso de IA › Orçamento em vez de Plano e uso).
+ *
+ * Revisão da F3 (achado baixo 7): o título agora embute o CICLO (mesmo molde
+ * do aviso de limiar de `fn_billing_avisar_carteira`, que embute o mês no
+ * título para dedup POR MÊS). Antes, a dedup de `run-model-call.ts` era só
+ * "existe item aberto com ref_kind=billing_carteira?", sem olhar o título: um
+ * aviso de agosto nunca fechado (ninguém marcou como resolvido) impedia o
+ * aviso de setembro de nascer, mesmo a carteira tendo zerado de novo num mês
+ * novo. Com o ciclo no título, cada mês tem o SEU aviso, e o de um mês
+ * anterior aberto não bloqueia o do mês atual.
  */
-export const CARTEIRA_BLOQUEIO_TITULO = 'Os tokens de IA do mês acabaram';
+export function carteiraBloqueioTitulo(ciclo: string | null): string {
+  const mes = mesDoCiclo(ciclo);
+  return mes ? `Os tokens de IA do mês acabaram (${mes})` : 'Os tokens de IA do mês acabaram';
+}
 
 /**
  * O corpo do aviso: diz o que aconteceu (a fila humana assumiu), não convida a

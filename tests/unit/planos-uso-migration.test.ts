@@ -422,42 +422,54 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     }
   });
 
-  it("o AFTER de crm_leads (0905) só subtrai por update simples (greatest) ao fechar/apagar; a soma saiu daqui (correção A1, foi para o BEFORE da 0907)", () => {
-    // Correção A1 pós-auditoria da F3 (achado alto): a soma da transição PARA
-    // aberto SAIU deste AFTER (AFTER ROW só dispara no FIM do comando
-    // inteiro, o furo que deixava lote passar por cima do teto) e foi para o
-    // BEFORE (fn_billing_bloqueia_crm_leads, 0907, conferido em
-    // tests/unit/planos-bloqueio-migration.test.ts). Este AFTER (0905, só
-    // ele) não pode mais ter "if v_status_novo = 'open'" nem o upsert +1: só
-    // a subtração ao sair de open (fechamento ou exclusão) continua aqui.
+  it("revisão pós-auditoria da F3 (achado médio 1): o AFTER de crm_leads (0905) soma quando o bloqueio NÃO está ativo, e sempre subtrai ao fechar/apagar", () => {
+    // Correção A1 pós-auditoria da F3 (achado alto) tinha tirado a soma da
+    // transição PARA aberto DESTE AFTER por inteiro, incondicional de modo,
+    // e movido tudo para o BEFORE (fn_billing_bloqueia_crm_leads, 0907). A
+    // revisão pós-auditoria (achado médio 1) achou um deadlock nisso (D-062)
+    // e devolveu a soma para ESTE AFTER sempre que
+    // fn_billing_bloqueio_ativo(v_org) diz que o bloqueio NÃO está ativo
+    // (avisar/desligado/carência), exatamente o comportamento de antes da
+    // A1. Com o bloqueio ativo, a soma continua no BEFORE (0907, conferido em
+    // tests/unit/planos-bloqueio-migration.test.ts). A subtração ao sair de
+    // open (fechamento ou exclusão) nunca mudou: sempre update simples
+    // (greatest), nos dois modos.
     const inicioMigracao = MIGRATION.indexOf("create or replace function public.fn_billing_trava_crm_leads(");
     const corpoMigracao = MIGRATION.slice(inicioMigracao, MIGRATION.indexOf("$$;", inicioMigracao));
-    expect(corpoMigracao).not.toMatch(/if v_status_novo = 'open' then/);
-    expect(corpoMigracao).not.toMatch(/set valor = public\.billing_usage_counters\.valor \+ 1,/);
     expect(corpoMigracao).toMatch(
-      /if v_status_antigo = 'open' and v_status_novo is distinct from 'open' then/,
+      /if v_status_novo = 'open' and v_status_antigo is distinct from 'open' then/,
+    );
+    expect(corpoMigracao).toMatch(/if not public\.fn_billing_bloqueio_ativo\(v_org\) then/);
+    expect(corpoMigracao).toMatch(/set valor = public\.billing_usage_counters\.valor \+ 1,/);
+    expect(corpoMigracao).toMatch(
+      /elsif v_status_antigo = 'open' and v_status_novo is distinct from 'open' then/,
     );
     expect(corpoMigracao).toMatch(/set valor = greatest\(valor - 1, 0\),/);
-    expect(corpoMigracao).not.toMatch(/insert into public\.billing_usage_counters/);
+
+    // A soma (quando acontece) é upsert (nasce a linha se faltar); a
+    // subtração continua só update (senão recriaria a linha no meio de uma
+    // exclusão em cascata de organização), os dois continuam no mesmo
+    // corpo, sem se misturar.
+    const posSoma = corpoMigracao.indexOf("set valor = public.billing_usage_counters.valor + 1,");
+    const posSubtracao = corpoMigracao.indexOf("set valor = greatest(valor - 1, 0),");
+    expect(posSoma).toBeGreaterThan(-1);
+    expect(posSubtracao).toBeGreaterThan(posSoma);
 
     for (const sql of [MIGRATION, BASELINE]) {
-      // A subtração é só update: não pode existir um "insert into
-      // billing_usage_counters" no ramo de subtração (senão recriaria a
-      // linha no meio de uma exclusão em cascata de organização).
       const ocorrenciasDeInsert = [
         ...sql.matchAll(/insert into public\.billing_usage_counters/g),
       ].length;
       if (sql === MIGRATION) {
-        // Só o preenchimento inicial da parte 1 e o ramo "sem linha" de
-        // fn_billing_conferir_contador (achado 3): a soma do gatilho de
-        // leads não mora mais na 0905 (foi para a 0907, correção A1).
-        expect(ocorrenciasDeInsert).toBe(2);
-      } else {
-        // BASELINE é o arquivo INTEIRO: soma as duas ocorrências da 0905
-        // acima com a soma nova do BEFORE de crm_leads na 0907 (correção
-        // A1, conferida em planos-bloqueio-migration.test.ts). O TOTAL não
-        // mudou (só mudou de bloco): 3.
+        // Preenchimento inicial da parte 1, a soma condicional deste AFTER
+        // (revisão pós-auditoria, achado médio 1) e o ramo "sem linha" de
+        // fn_billing_conferir_contador (achado 3).
         expect(ocorrenciasDeInsert).toBe(3);
+      } else {
+        // BASELINE é o arquivo INTEIRO: as três ocorrências da 0905 acima
+        // MAIS a soma do BEFORE de crm_leads na 0907 (que continua existindo
+        // para o caso em que o bloqueio ESTÁ ativo, conferida em
+        // planos-bloqueio-migration.test.ts). Total: 4.
+        expect(ocorrenciasDeInsert).toBe(4);
       }
     }
   });
@@ -643,21 +655,24 @@ describe("0905 parte 4 (revisão fase F2, achados M1 e M2 da auditoria de segura
     }
   });
 
-  it("M2: duas policies RESTRICTIVE em agent_inbox_items (insert e delete), prefixo billing_, vetando ref_kind = 'billing_limite'", () => {
+  it("M2 (revisão pós-auditoria da F3, achado baixo 9): duas policies RESTRICTIVE em agent_inbox_items (insert e delete), prefixo billing_, vetando ref_kind em (billing_limite, billing_carteira)", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       expect(sql).toMatch(
-        /create policy billing_agent_inbox_items_insert on public\.agent_inbox_items\s+as restrictive for insert\s+to authenticated\s+with check \(ref_kind is distinct from 'billing_limite'\);/,
+        /create policy billing_agent_inbox_items_insert on public\.agent_inbox_items\s+as restrictive for insert\s+to authenticated\s+with check \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira'\)\);/,
       );
       expect(sql).toMatch(
-        /create policy billing_agent_inbox_items_delete on public\.agent_inbox_items\s+as restrictive for delete\s+to authenticated\s+using \(ref_kind is distinct from 'billing_limite'\);/,
+        /create policy billing_agent_inbox_items_delete on public\.agent_inbox_items\s+as restrictive for delete\s+to authenticated\s+using \(ref_kind is null or ref_kind not in \('billing_limite', 'billing_carteira'\)\);/,
       );
     }
   });
 
-  it("M2: o gatilho de update em agent_inbox_items é before update, sem lista de colunas (compara to_jsonb menos status/resolved_at)", () => {
+  it("M2: o gatilho de update em agent_inbox_items é before update, sem lista de colunas (compara to_jsonb menos status/resolved_at), cobrindo billing_limite E billing_carteira", () => {
     for (const sql of [MIGRATION, BASELINE]) {
       expect(sql).toMatch(
         /create trigger\s+trg_billing_trava_agent_inbox_items_update\s+before update on public\.agent_inbox_items/,
+      );
+      expect(sql).toMatch(
+        /\(old\.ref_kind in \('billing_limite', 'billing_carteira'\) or new\.ref_kind in \('billing_limite', 'billing_carteira'\)\)/,
       );
       expect(sql).toMatch(
         /\(to_jsonb\(old\) - array\['status', 'resolved_at'\]\) is distinct from \(to_jsonb\(new\) - array\['status', 'resolved_at'\]\)/,

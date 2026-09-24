@@ -11,6 +11,7 @@ import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { esquemaDoAjusteDeLimites, type AjusteDeLimites } from "@/lib/billing/planos/limites";
+import { instanteDe } from "@/lib/agenda/fuso";
 
 /**
  * As duas escritas do admin da plataforma sobre o plano de uma organização
@@ -64,15 +65,35 @@ const entradaAjustarLimites = z.object({
 });
 
 /**
- * `novaData` chega como "AAAA-MM-DD" (o valor cru de um `<input type="date">`)
- * e é lida como meia-noite UTC daquele dia, o mesmo horário para qualquer
- * fuso de quem administra, e evita que a validação de "no máximo 90 dias"
- * mude conforme o fuso do navegador.
+ * `novaData` chega como "AAAA-MM-DD" (o valor cru de um `<input type="date">`).
+ *
+ * Revisão pós-auditoria da F3 (achado médio 3-b): o regex sozinho aceita
+ * "2026-02-31" (fevereiro não tem 31 dias): `new Date("2026-02-31T...")`
+ * não lança, o motor V8 SOMA os dias que sobram ao mês seguinte (vira 3 de
+ * março), e a tela mostrava uma data diferente da que a pessoa digitou, sem
+ * aviso nenhum. `dataCalendarioValida` (abaixo) reconstrói ano/mês/dia a
+ * partir do MESMO texto e confere que baterem de novo: só a técnica clássica
+ * de validação de data de calendário (o "overflow" do `Date` é o próprio
+ * detector).
  */
 const entradaCarenciaExtra = z.object({
   organizationId: z.string().uuid(),
   novaData: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "formato de data inválido"),
 });
+
+/**
+ * "AAAA-MM-DD" é uma data de calendário REAL (não veio de um overflow do
+ * `Date`, tipo 31/02). `Date.UTC` normaliza meses/dias fora do intervalo em
+ * vez de lançar; comparar os componentes de volta é como pegar isso.
+ */
+function dataCalendarioValida(ano: number, mes: number, dia: number): boolean {
+  const reconstruida = new Date(Date.UTC(ano, mes - 1, dia));
+  return (
+    reconstruida.getUTCFullYear() === ano &&
+    reconstruida.getUTCMonth() === mes - 1 &&
+    reconstruida.getUTCDate() === dia
+  );
+}
 
 const MS_POR_DIA = 24 * 60 * 60 * 1000;
 const MAXIMO_DE_DIAS_DE_CARENCIA_EXTRA = 90;
@@ -226,12 +247,28 @@ export async function darCarenciaExtra(input: {
     return { ok: false, error: "Dados inválidos." };
   }
 
-  const alvo = new Date(`${parsed.data.novaData}T00:00:00.000Z`);
+  const [anoTexto, mesTexto, diaTexto] = parsed.data.novaData.split("-");
+  const ano = Number(anoTexto);
+  const mes = Number(mesTexto);
+  const dia = Number(diaTexto);
+
+  // Achado médio 3-b da revisão: 31/02 (ou qualquer dia que o mês não tem)
+  // passava no regex e o `Date` normalizava em silêncio para o mês seguinte.
+  if (!dataCalendarioValida(ano, mes, dia)) {
+    return { ok: false, error: "Data inválida." };
+  }
+
+  // Achado médio 3-c: a carência vale o DIA INTEIRO que a tela mostra, no
+  // fuso America/Sao_Paulo (o mesmo de todo cálculo de ciclo/carência da fase
+  // de planos, `lib/leads/aviso-limite-de-leads.ts`), não meia-noite UTC:
+  // meia-noite UTC é 21h da VÉSPERA em São Paulo, então a organização perdia
+  // as últimas três horas do dia que o admin escolheu na tela. `instanteDe`
+  // (`lib/agenda/fuso.ts`) é a mesma conversão de hora de parede para instante que
+  // a agenda usa, e já lida com a borda do horário de verão (hoje extinto no
+  // Brasil, mas o motor não assume isso).
+  const alvo = instanteDe({ ano, mes, dia, hora: 23, minuto: 59, segundo: 59 }, "America/Sao_Paulo");
   const agora = Date.now();
 
-  if (Number.isNaN(alvo.getTime())) {
-    return { ok: false, error: "Dados inválidos." };
-  }
   if (alvo.getTime() <= agora) {
     return { ok: false, error: "A nova data precisa estar no futuro." };
   }
@@ -273,10 +310,19 @@ export async function darCarenciaExtra(input: {
   const antes = contrato.bloqueio_a_partir_de;
   const depois = alvo.toISOString();
 
-  const { error: erroEscrita } = await admin
+  // Achado médio 3-a: sem condicionar ao valor LIDO, duas abas do admin (ou
+  // um segundo clique) liam o "antes" da MESMA linha e a segunda escrita
+  // vencia sem avisar que a primeira tinha acontecido, o clássico "perdeu a
+  // escrita". `.eq("bloqueio_a_partir_de", antes)` faz o UPDATE só valer
+  // contra o valor que ESTA chamada leu; `.select("id")` devolve a linha
+  // afetada (vazio quando o `eq` não bateu em nada, porque a carência já
+  // mudou entre a leitura e a escrita), e é isso que decide sucesso.
+  const { data: escrita, error: erroEscrita } = await admin
     .from("billing_contracts")
     .update({ bloqueio_a_partir_de: depois })
-    .eq("id", contrato.id);
+    .eq("id", contrato.id)
+    .eq("bloqueio_a_partir_de", antes)
+    .select("id");
 
   if (erroEscrita) {
     logger.error("[planoDaOrganizacao] erro ao gravar a carência extra", {
@@ -284,6 +330,12 @@ export async function darCarenciaExtra(input: {
       message: erroEscrita.message ?? null,
     });
     return { ok: false, error: "Não foi possível salvar. Tente de novo." };
+  }
+  if (!escrita || escrita.length === 0) {
+    return {
+      ok: false,
+      error: "A carência desta organização mudou enquanto você editava. Recarregue a página e tente de novo.",
+    };
   }
 
   const { requestId, ip, userAgent } = await contextoDaRequisicao();

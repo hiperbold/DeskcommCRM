@@ -302,7 +302,36 @@ export async function POST(req: NextRequest): Promise<Response> {
         err instanceof ApiError &&
         (err.status === 404 || err.status === 422 || err.status === STATUS_RECUSA_DO_PLANO)
       ) {
-        return fail(err.code, err.message, err.status, { requestId });
+        // Achado da revisão da F3 (baixo 8): um PT402 no MEIO da planilha
+        // (linha 7 de 300, por exemplo) devolvia 402 "no escuro", sem dizer
+        // quantas linhas já tinham entrado (`resumo.criados`, só na memória
+        // local, era descartado neste `return` antecipado) e sem auditoria
+        // nenhuma (o `audit()` do fim da função só roda depois do loop
+        // inteiro, nunca alcançado por este `return`). Quem recebe o 402 não
+        // tinha como saber se reimportar a planilha inteira duplicava os N
+        // já criados. Agora: o resumo PARCIAL (mesmo formato de
+        // `ResumoDaImportacao`) vai junto no corpo da recusa
+        // (`details.resumo`), e a auditoria grava o que de fato aconteceu
+        // antes da recusa, com `parcial: true` para não se confundir com uma
+        // importação completa.
+        resumo.total_linhas = lido.leads.length + lido.erros.length;
+        await audit({
+          organizationId: orgId,
+          actorUserId: authz.user.id,
+          action: "lead.imported",
+          resourceType: "crm_leads",
+          requestId,
+          metadata: {
+            pipeline_id: pipelineId,
+            stage_id: stageId,
+            total_linhas: resumo.total_linhas,
+            criados: resumo.criados,
+            recusadas: resumo.erros.length,
+            parcial: true,
+            motivo_da_interrupcao: err.code,
+          },
+        });
+        return fail(err.code, err.message, err.status, { requestId, details: { resumo } });
       }
       resumo.erros.push({
         linha: linha.linha,

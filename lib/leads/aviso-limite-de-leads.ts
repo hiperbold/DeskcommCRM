@@ -60,15 +60,40 @@ export async function avisarLimiteDeLeadsAtingido(
 ): Promise<void> {
   const titulo = tituloDoDia(agora);
   try {
-    const { data: jaAberto } = await admin
+    // Achado da revisão da F3 (médio 2): `.maybeSingle()` explode quando a
+    // consulta devolve MAIS de uma linha. Duas rajadas do mesmo dia (duas
+    // mensagens quase juntas, cada uma tentando avisar) podem gravar dois
+    // avisos iguais antes de qualquer um deles enxergar o outro (não há
+    // unique constraint aqui, só a checagem "já existe?" abaixo, que roda sem
+    // trava nenhuma), a PARTIR daí, toda recusa seguinte no mesmo dia lê
+    // duas linhas, `maybeSingle()` lança, o catch abaixo intercepta, e o
+    // código (antes desta correção) seguia para o INSERT do mesmo jeito,
+    // empilhando mais um aviso duplicado a cada recusa. `.limit(1)` sem
+    // `maybeSingle()` nunca lança por "mais de uma linha": lê no máximo uma,
+    // e a deduplicação continua funcionando (só precisa saber SE existe
+    // alguma, não quantas). Se mesmo assim a LEITURA falhar (banco fora,
+    // erro de rede), a doutrina muda aqui: como este helper não pode
+    // distinguir "não existe aviso" de "não sei se existe", inserir às cegas
+    // arriscaria duplicar; por isso NÃO insere, só loga e segue (o card já
+    // foi recusado e a mensagem/contato/conversa já estão gravados, perder
+    // este aviso específico é o lado mais barato do que duplicá-lo).
+    const { data: linhas, error: erroLeitura } = await admin
       .from("agent_inbox_items")
       .select("id")
       .eq("organization_id", organizationId)
       .eq("kind", KIND)
       .eq("ref_kind", REF_KIND)
       .eq("title", titulo)
-      .maybeSingle();
-    if (jaAberto) return;
+      .limit(1);
+
+    if (erroLeitura) {
+      logger.warn("aviso-limite-de-leads: leitura falhou, aviso NÃO gravado (evita duplicar às cegas)", {
+        organization_id: organizationId,
+        detail: erroLeitura.message.slice(0, 160),
+      });
+      return;
+    }
+    if (linhas && linhas.length > 0) return;
 
     const { error } = await admin.from("agent_inbox_items").insert({
       organization_id: organizationId,

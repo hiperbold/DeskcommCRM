@@ -59,6 +59,7 @@ import {
   linhasDaTelaDePlano,
   type ChaveDaTelaDePlano,
 } from "./linhas-da-tela-de-plano";
+import { modoDeBillingCacheado } from "./modo-cacheado";
 import { podeCriar } from "./pode-criar";
 import { planoDaOrganizacao } from "./plano-da-organizacao";
 import { usoDaOrganizacao } from "./uso-da-organizacao";
@@ -171,14 +172,13 @@ export async function estadoDoBloqueio(
   let carenciaAte: string | null;
 
   try {
-    const { data: settings, error: erroSettings } = await admin
-      .from("billing_settings")
-      .select("modo")
-      .eq("id", 1)
-      .maybeSingle();
-    if (erroSettings) throw new Error(`ler billing_settings: ${erroSettings.message}`);
+    // Revisão da F3 (achado baixo 4): cacheado 60s por processo, mesmo padrão
+    // de `modoDeBillingPeloDb` (run-model-call.ts), sem isto, cada carga da
+    // tela (Plano e uso, aba do admin) pagava uma consulta PostgREST a mais
+    // para uma linha que quase nunca muda.
+    const { modo: modoLido, error: mensagemDeErro } = await modoDeBillingCacheado(admin);
+    if (mensagemDeErro) throw new Error(`ler billing_settings: ${mensagemDeErro}`);
 
-    const modoLido = (settings as { modo?: string } | null)?.modo;
     modo = ehModoValido(modoLido) ? modoLido : "avisar";
 
     if (modo !== "bloquear") {

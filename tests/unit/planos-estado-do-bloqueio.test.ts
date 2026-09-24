@@ -132,6 +132,15 @@ describe("estadoDoBloqueio", () => {
     expect(chamadas).toEqual(["from:billing_settings"]);
   });
 
+  it("revisão da F3 (achado baixo 4): duas chamadas seguidas com o MESMO admin fazem uma leitura só de billing_settings", async () => {
+    const { admin, chamadas } = criarAdminFalso({ modo: "avisar" });
+
+    await estadoDoBloqueio(admin, ORG);
+    await estadoDoBloqueio(admin, ORG);
+
+    expect(chamadas).toEqual(["from:billing_settings"]);
+  });
+
   it("modo desligado: mesma saída antecipada de avisar", async () => {
     const { admin, chamadas } = criarAdminFalso({ modo: "desligado" });
 

@@ -92,6 +92,20 @@ create trigger trg_billing_usage_counters_updated_at
 -- organização. on conflict do update (não do nothing) para a migration ficar
 -- idempotente por resultado: rodar de novo recalcula o valor real, não soma
 -- nem duplica.
+--
+-- D-053 (2), revisitado na revisão pós-auditoria da F3 (achado baixo 5): a
+-- correção 1 daquela revisão (fn_billing_bloqueio_ativo, ver 0907 e o
+-- comentário editado NO LUGAR em fn_billing_trava_crm_leads, logo abaixo) só
+-- muda QUAL gatilho soma um lead durante a operação normal do banco; não
+-- toca em NADA deste `insert ... select ... on conflict` de preenchimento
+-- inicial, que roda toda vez que esta migration (ou o baseline.sql inteiro)
+-- é reaplicada em produção. A janela continua existindo tal como o D-053
+-- descreveu: sem `select ... for update` nem trava nenhuma entre a FOTO
+-- (`count(*)` desta consulta) e a ESCRITA (o upsert), um lead confirmado
+-- exatamente nesse intervalo pode ficar de fora da contagem recalculada até
+-- fn_billing_conferir_contador (o conferidor diário) corrigir. Registrado
+-- como D-063 em hiperbold/DEBITO.md (a correção 1 não fecha esta janela,
+-- fecha uma OUTRA, de deadlock em operação normal, ver D-062).
 insert into public.billing_usage_counters (organization_id, item, valor)
 select cl.organization_id, 'leads', count(*)
 from public.crm_leads cl
@@ -839,22 +853,57 @@ begin
     return null;
   end if;
 
-  -- Fase F3 (migration 0907, correção A1 pós-auditoria): a soma da transição
-  -- PARA aberto SAIU DAQUI. AFTER ROW só dispara no FIM DO COMANDO inteiro,
-  -- não linha a linha (racional completo no cabeçalho da parte 5 da 0907):
-  -- um insert de 50 linhas, um PATCH em massa reabrindo lead, ou
-  -- fn_mover_leads_em_lote com vários leads faziam TODAS as linhas lerem o
-  -- MESMO contador ainda não somado (o AFTER só rodaria depois, no fim do
-  -- comando inteiro) e passavam juntas por cima do teto, mesmo no modo
-  -- bloquear. Quem soma agora é fn_billing_bloqueia_crm_leads (0907), no
-  -- BEFORE, imediatamente após aprovar CADA linha: BEFORE ROW dispara
-  -- imediatamente por linha (diferente de AFTER ROW), então a PRÓXIMA linha
-  -- do mesmo comando já enxerga o valor somado pela anterior. Este AFTER
-  -- continua tratando só o FECHAMENTO (aberto -> ganho ou perdido) e a
-  -- EXCLUSÃO, que nunca precisam da ordem estrita por linha: fechar sempre
-  -- LIBERA vaga, nunca ocupa, então não há teto para burlar fechando várias
-  -- linhas juntas.
-  if v_status_antigo = 'open' and v_status_novo is distinct from 'open' then
+  -- Revisão pós-auditoria da F3 (achado médio 1, corrigida junto com a 0907):
+  -- a correção A1 tinha tirado a soma da transição PARA aberto DAQUI de
+  -- vez, incondicional de modo, e movido tudo para o BEFORE
+  -- (fn_billing_bloqueia_crm_leads, 0907). Isso fechou o furo do A1 (lote
+  -- passando do teto no modo bloquear), mas abriu um deadlock novo: num
+  -- comando de várias linhas em QUALQUER modo, a trava do contador (dentro de
+  -- fn_billing_conferir_teto, que o BEFORE chama) passava a ser disputada no
+  -- MEIO do comando, uma vez por linha, e um arrasto simultâneo de OUTRO lead
+  -- do mesmo lote podia entrar em deadlock com ela (D-062, hiperbold/
+  -- DEBITO.md). fn_billing_bloqueio_ativo(v_org) (0907, definida perto de
+  -- fn_billing_bloqueia) devolve as MESMAS quatro condições de
+  -- fn_billing_bloqueia, sem contar nem travar: só quando ela diz TRUE (modo
+  -- bloquear, carência vencida, teto de leads não nulo) é que a soma linha a
+  -- linha do BEFORE é realmente necessária (só ali existe o defeito do A1).
+  -- Nos outros três casos (avisar, desligado, dentro da carência) NINGUÉM
+  -- pega a trava do contador no meio do comando: o BEFORE fica calado (ver o
+  -- `if` dele, 0907) e quem soma volta a ser ESTE AFTER, exatamente como era
+  -- ANTES da correção A1 e antes da fase F3 inteira, o comportamento que o
+  -- modo avisar tem que preservar sem mudar nada (hiperbold/planos/fase-F3-
+  -- tarefas.md, linha 5).
+  --
+  -- Janela rara, documentada e não corrigida (custo/benefício da revisão): se
+  -- o modo mudar de bloquear para avisar (ou o inverso) NO MEIO de um comando
+  -- de várias linhas, linhas diferentes do MESMO comando podem ler valores
+  -- diferentes de fn_billing_bloqueio_ativo, e uma soma pode ficar por conta
+  -- de nenhum dos dois gatilhos (ou dos dois). fn_billing_conferir_contador
+  -- (o conferidor diário) corrige o contador dessa organização no dia
+  -- seguinte; trocar o modo pela tela do admin não é operação de todo
+  -- instante, e a janela exige coincidir exatamente com um comando de várias
+  -- linhas.
+  if v_status_novo = 'open' and v_status_antigo is distinct from 'open' then
+    if not public.fn_billing_bloqueio_ativo(v_org) then
+      -- Confere o aviso e soma, na mesma ordem "conta antes de somar" de
+      -- sempre (achado 2 da revisão fase F2): comportamento IDÊNTICO ao de
+      -- antes da correção A1, palavra por palavra.
+      perform public.fn_billing_conferir_teto(v_org, 'leads', null);
+
+      insert into public.billing_usage_counters (organization_id, item, valor)
+      values (v_org, 'leads', 1)
+      on conflict (organization_id, item) do update
+        set valor = public.billing_usage_counters.valor + 1,
+            updated_at = now();
+    end if;
+    -- Com o bloqueio ATIVO (fn_billing_bloqueio_ativo = true), esta soma fica
+    -- por conta do BEFORE (fn_billing_bloqueia_crm_leads, 0907): é a correção
+    -- A1 de verdade, e só é necessária ali (ordem estrita por linha).
+  elsif v_status_antigo = 'open' and v_status_novo is distinct from 'open' then
+    -- Fechamento (aberto -> ganho/perdido) e exclusão: sempre SUBTRAI aqui,
+    -- nos dois modos, sem condição nenhuma. Fechar sempre LIBERA vaga, nunca
+    -- ocupa, então não há teto a burlar fechando várias linhas juntas, e por
+    -- isso o AFTER (que só dispara no FIM do comando) sempre basta.
     update public.billing_usage_counters
       set valor = greatest(valor - 1, 0),
           updated_at = now()
@@ -870,7 +919,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_crm_leads() is
-  'Gatilho de plano (Tarefa 3, decisão 6): after insert/update/delete SEM lista de colunas em crm_leads, porque trg_crm_lead_close_on_stage (before, do autor) muda o status na troca de etapa e um gatilho com lista de colunas não veria essa mudança; só o valor final da linha resolve. Fase F3 (migration 0907, correção A1 pós-auditoria, achado alto): a soma da transição PARA aberto SAIU DAQUI (foi para o BEFORE, fn_billing_bloqueia_crm_leads, que soma imediatamente após aprovar cada linha, sem esperar o fim do comando inteiro como um AFTER ROW faz). Este AFTER só subtrai (greatest(valor - 1, 0)) no FECHAMENTO (aberto -> ganho/perdido) e na EXCLUSÃO, nunca recriando a linha (decisão 11, exclusão em cascata de organização). Captura qualquer erro (decisão 11).';
+  'Gatilho de plano (Tarefa 3, decisão 6): after insert/update/delete SEM lista de colunas em crm_leads, porque trg_crm_lead_close_on_stage (before, do autor) muda o status na troca de etapa e um gatilho com lista de colunas não veria essa mudança; só o valor final da linha resolve. Revisão pós-auditoria da F3 (achado médio 1): a soma da transição PARA aberto só acontece AQUI quando fn_billing_bloqueio_ativo(organizacao) é falso (avisar, desligado, ou dentro da carência), exatamente o comportamento de ANTES da correção A1. Com o bloqueio ativo, quem soma é o BEFORE (fn_billing_bloqueia_crm_leads, 0907), linha a linha, porque só ali existe o defeito do A1 (lote passando do teto). Fechamento (aberto -> ganho/perdido) e exclusão sempre subtraem AQUI (greatest(valor - 1, 0)), nos dois casos, nunca recriando a linha (decisão 11, exclusão em cascata de organização). Captura qualquer erro (decisão 11). Fecha o deadlock D-062 (hiperbold/DEBITO.md) para todo modo que não seja bloquear de verdade.';
 
 revoke execute on function public.fn_billing_trava_crm_leads() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_crm_leads() to service_role;
@@ -1144,28 +1193,38 @@ create trigger trg_billing_trava_user_organizations_provisorio
 -- um gatilho de UPDATE. Nomes com prefixo billing_ para não colidir com o
 -- padrão support_write_* (mesma tabela, mesmo formato, propósito diferente:
 -- aquele é o modo readonly do suporte, este é o dono do dado de plano).
+--
+-- Revisão pós-auditoria da F3 (achado baixo 9): a MESMA proteção passa a
+-- cobrir também ref_kind = 'billing_carteira' (o aviso crítico de saldo
+-- zerado da carteira de tokens, `run-model-call.ts`, decisão 7 da fase). Sem
+-- isto, um membro forjava/apagava/reescrevia o aviso de carteira do jeito
+-- exato que o M2 original fechou para o de limite de plano, mesma tabela,
+-- mesmo vetor, dono diferente do dado. `not in (...)`/`in (...)` no lugar do
+-- antigo `is distinct from`/`=` de um valor só; idempotente (create or
+-- replace / drop policy if exists, como o resto do bloco).
 drop policy if exists billing_agent_inbox_items_insert on public.agent_inbox_items;
 create policy billing_agent_inbox_items_insert on public.agent_inbox_items
   as restrictive for insert
   to authenticated
-  with check (ref_kind is distinct from 'billing_limite');
+  with check (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira'));
 
 drop policy if exists billing_agent_inbox_items_delete on public.agent_inbox_items;
 create policy billing_agent_inbox_items_delete on public.agent_inbox_items
   as restrictive for delete
   to authenticated
-  using (ref_kind is distinct from 'billing_limite');
+  using (ref_kind is null or ref_kind not in ('billing_limite', 'billing_carteira'));
 
 -- O UPDATE não dá para travar só com RESTRICTIVE (não há coluna para
 -- comparar old x new numa USING/WITH CHECK), por isso é gatilho: recusa
--- reescrever qualquer coluna de um aviso de plano (old ou new com ref_kind =
--- 'billing_limite') que não seja status ou resolved_at: as DUAS colunas de
--- estado/resolução que app/api/v1/ai/inbox/[id]/route.ts (PATCH, um membro
--- marcando ack/resolved/open) e app/api/v1/ai/inbox/resolve-all/route.ts
--- (resolver todos de uma vez) gravam ao encerrar um item; nenhuma das duas
--- rotas toca título, corpo, kind, severity, ref_kind nem ref_id. O membro
--- pode marcar como resolvido (ou reabrir), não pode transformar outro item
--- num aviso de plano nem reescrever o texto de um aviso real.
+-- reescrever qualquer coluna de um aviso de plano (old ou new com ref_kind em
+-- billing_limite/billing_carteira) que não seja status ou resolved_at: as
+-- DUAS colunas de estado/resolução que app/api/v1/ai/inbox/[id]/route.ts
+-- (PATCH, um membro marcando ack/resolved/open) e
+-- app/api/v1/ai/inbox/resolve-all/route.ts (resolver todos de uma vez)
+-- gravam ao encerrar um item; nenhuma das duas rotas toca título, corpo,
+-- kind, severity, ref_kind nem ref_id. O membro pode marcar como resolvido
+-- (ou reabrir), não pode transformar outro item num aviso de plano/carteira
+-- nem reescrever o texto de um aviso real.
 create or replace function public.fn_billing_trava_agent_inbox_items_update()
 returns trigger
 language plpgsql
@@ -1174,7 +1233,7 @@ set search_path = public, pg_temp
 as $$
 begin
   if current_user not in ('postgres', 'service_role', 'supabase_admin')
-     and (old.ref_kind = 'billing_limite' or new.ref_kind = 'billing_limite')
+     and (old.ref_kind in ('billing_limite', 'billing_carteira') or new.ref_kind in ('billing_limite', 'billing_carteira'))
      and (to_jsonb(old) - array['status', 'resolved_at']) is distinct from (to_jsonb(new) - array['status', 'resolved_at'])
   then
     raise exception 'aviso de plano: só status e resolved_at podem mudar fora do servidor' using errcode = '42501';
@@ -1185,7 +1244,7 @@ end;
 $$;
 
 comment on function public.fn_billing_trava_agent_inbox_items_update() is
-  'M2 (revisão fase F2): quando old.ref_kind ou new.ref_kind é billing_limite, recusa update de QUALQUER coluna fora de status e resolved_at (as duas que o app grava ao encerrar um item, app/api/v1/ai/inbox/[id]/route.ts e .../resolve-all/route.ts), fora do servidor. security invoker de propósito (mesmo racional do M1): precisa ver a role real de quem grava. Compara to_jsonb(old)/to_jsonb(new) menos as duas colunas permitidas, para nenhuma coluna nova do futuro escapar despercebida desta trava.';
+  'M2 (revisão fase F2), estendida na revisão da F3 (achado baixo 9): quando old.ref_kind ou new.ref_kind é billing_limite OU billing_carteira, recusa update de QUALQUER coluna fora de status e resolved_at (as duas que o app grava ao encerrar um item, app/api/v1/ai/inbox/[id]/route.ts e .../resolve-all/route.ts), fora do servidor. security invoker de propósito (mesmo racional do M1): precisa ver a role real de quem grava. Compara to_jsonb(old)/to_jsonb(new) menos as duas colunas permitidas, para nenhuma coluna nova do futuro escapar despercebida desta trava.';
 
 revoke execute on function public.fn_billing_trava_agent_inbox_items_update() from public, anon, authenticated;
 grant execute on function public.fn_billing_trava_agent_inbox_items_update() to service_role;

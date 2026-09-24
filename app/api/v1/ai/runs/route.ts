@@ -45,6 +45,13 @@ const O_QUE_FAZER: Record<string, string> = {
   // caso em que o silêncio é intencional.
   orcamento_esgotado:
     "A IA parou porque o gasto do mês atingiu o limite que você definiu. Ajuste o limite (ou desligue a parada) em Uso de IA › Orçamento.",
+  // Revisão da F3 (achado baixo 6): a carteira de TOKENS (decisão 7 da fase,
+  // `LlmCarteiraEsgotadaError`) é um veto DIFERENTE do orçamento em dólar
+  // acima, dono diferente (o plano contratado, não um teto que a própria
+  // organização escolhe), e sem esta linha o operador via o código cru
+  // `carteira_de_tokens_esgotada` na tela sem nenhuma orientação do que fazer.
+  carteira_de_tokens_esgotada:
+    "Os tokens de IA do plano acabaram neste ciclo. As conversas foram para a fila de atendimento humano. Para a IA voltar a responder ainda neste mês, contrate mais tokens em Configurações › Plano e uso.",
   // A outra recusa deliberada: o ponto aponta para um endereço escolhido pela
   // empresa, e a chave que ia junto era a da instalação (decisão 22-a).
   endereco_exige_chave_da_empresa:

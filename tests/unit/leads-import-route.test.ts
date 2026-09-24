@@ -38,6 +38,7 @@ import { createLeadHandler } from "@/app/api/v1/leads/_handler";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
@@ -309,6 +310,30 @@ describe("POST /api/v1/leads/import", () => {
 
     expect(res.status).toBe(404);
     expect(vi.mocked(createLeadHandler)).toHaveBeenCalledTimes(1);
+  });
+
+  it("achado baixo 8: um PT402 na linha 2 de 3 devolve o resumo PARCIAL (1 criado) e audita, em vez de recusar no escuro", async () => {
+    fazerSupabase(null);
+    vi.mocked(createLeadHandler)
+      .mockResolvedValueOnce({ id: "lead-1" } as never)
+      .mockRejectedValueOnce(
+        new ApiError(STATUS_RECUSA_DO_PLANO, "plano_limite_atingido", undefined, "rid", "Limite do plano atingido."),
+      );
+    const { POST } = await import("@/app/api/v1/leads/import/route");
+
+    const res = await POST(pedido("nome\nAna\nBruno\nCarla"));
+    const corpo = (await res.json()) as { error: { code: string; details?: { resumo?: { criados: number } } } };
+
+    expect(res.status).toBe(STATUS_RECUSA_DO_PLANO);
+    expect(vi.mocked(createLeadHandler)).toHaveBeenCalledTimes(2);
+    expect(corpo.error.details?.resumo?.criados).toBe(1);
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "lead.imported",
+        organizationId: ORG,
+        metadata: expect.objectContaining({ criados: 1, parcial: true }),
+      }),
+    );
   });
 
   it("o mesmo telefone em três linhas vira UM contato", async () => {
