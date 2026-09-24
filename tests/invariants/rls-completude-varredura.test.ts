@@ -365,6 +365,37 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "por `permission denied` ao SELECT e ao INSERT (medido sob `set " +
       "role`/JWT real), mesmo desenho deny-all de billing_payments.",
   },
+  // ─── billing_customers e billing_orders (migration 0909, fork Hiperbold, fase F5) ───
+  //
+  // Mesmo desenho deny-all de billing_payments/billing_contract_eventos,
+  // acima: RLS ligada, ZERO policy, privilégio NENHUM para `anon`,
+  // `authenticated` e `agent_worker` (medido por `set role`); `service_role`
+  // só SELECT, a escrita é só por função (Tarefa 3 em diante, fora da
+  // migration 0909).
+  {
+    tabela: "billing_customers",
+    razao:
+      "tests/invariants/planos-asaas.test.ts (fork Hiperbold, 0909, Tarefa " +
+      "2): `anon`, `authenticated` e `agent_worker` barrados por `permission " +
+      "denied` ao SELECT (medido sob `set role`), `service_role` com SELECT " +
+      "e sem nenhum privilégio de escrita, mesmo desenho deny-all de " +
+      "billing_payments.",
+  },
+  {
+    tabela: "billing_orders",
+    razao:
+      "tests/invariants/planos-asaas.test.ts (fork Hiperbold, 0909, Tarefa " +
+      "2): mesmo describe.each da linha acima. O pedido de compra (assinatura " +
+      "ou pacote de tokens), ponte entre o CRM e o Asaas.",
+  },
+  {
+    tabela: "asaas_webhook_events",
+    razao:
+      "tests/invariants/planos-asaas.test.ts (fork Hiperbold, 0909, Tarefa " +
+      "2): mesmo describe.each das duas linhas acima. organization_id aqui é " +
+      "NULLABLE e SEM chave estrangeira (de propósito: o roteamento do " +
+      "webhook pode não achar organização nenhuma), mas o mesmo deny-all vale.",
+  },
 ];
 
 /**
