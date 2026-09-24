@@ -63,6 +63,20 @@ const entradaAjustarLimites = z.object({
   nota: z.string().trim().max(500).optional(),
 });
 
+/**
+ * `novaData` chega como "AAAA-MM-DD" (o valor cru de um `<input type="date">`)
+ * e é lida como meia-noite UTC daquele dia, o mesmo horário para qualquer
+ * fuso de quem administra, e evita que a validação de "no máximo 90 dias"
+ * mude conforme o fuso do navegador.
+ */
+const entradaCarenciaExtra = z.object({
+  organizationId: z.string().uuid(),
+  novaData: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "formato de data inválido"),
+});
+
+const MS_POR_DIA = 24 * 60 * 60 * 1000;
+const MAXIMO_DE_DIAS_DE_CARENCIA_EXTRA = 90;
+
 export type ResultadoDaAcaoDoPlano =
   | { ok: true; antes: unknown; depois: unknown }
   | { ok: false; error: string };
@@ -168,6 +182,126 @@ export async function trocarPlanoDaOrganizacao(input: {
 
   revalidatePath(caminhoDaAbaDePlano(parsed.data.organizationId));
   return { ok: true, antes: resultado.antes, depois: resultado.depois };
+}
+
+/**
+ * A carência extra de UMA organização (fase F3, tarefa 10, decisão 11):
+ * adia `billing_contracts.bloqueio_a_partir_de` para uma data futura
+ * informada, no máximo 90 dias a partir de agora. Só ADIA, nunca antecipa
+ * uma carência que a organização já tem, e nunca cria carência do nada para
+ * quem não bloqueia hoje (organização com `bloqueio_a_partir_de` nulo não
+ * bloqueia, decisão 2 da fase; "estender" sem uma data para estender não
+ * tem sentido, e a ação recusa com frase fixa).
+ *
+ * ── Por que não existe função nova no banco aqui ─────────────────────────────
+ *
+ * `billing_contracts` tem `grant all ... to service_role` desde a migration
+ * 0904, o mesmo caso de `definirDiasDeCarencia` em `bloqueioDosPlanos.ts`: o
+ * `service_role` ignora RLS, e o cliente admin já escreve direto em tabela
+ * protegida por RLS em outros pontos do repositório (`platform_settings`,
+ * `platform_config`). Uma função dedicada, com `for update`, evitaria a
+ * janela entre a leitura do `antes` e a escrita do `depois` numa troca
+ * concorrente; para uma ação rara e feita por um humano (o admin da
+ * plataforma abrindo uma exceção pontual), o mesmo risco que
+ * `gravarComportamentoDaInstalacao` já assume pareceu aceitável, e não vi
+ * motivo para propor uma migration nesta tarefa (proibida de tocar
+ * `supabase/`).
+ */
+export async function darCarenciaExtra(input: {
+  organizationId: string;
+  novaData: string;
+}): Promise<ResultadoDaAcaoDoPlano> {
+  const { user, platformAdmin } = await requirePlatformAdmin();
+
+  if (platformAdmin.scope !== "full") {
+    return { ok: false, error: "Seu acesso de suporte não permite estender a carência." };
+  }
+
+  if (await mfaEmDivida()) {
+    return { ok: false, error: "Confirme a verificação em duas etapas." };
+  }
+
+  const parsed = entradaCarenciaExtra.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Dados inválidos." };
+  }
+
+  const alvo = new Date(`${parsed.data.novaData}T00:00:00.000Z`);
+  const agora = Date.now();
+
+  if (Number.isNaN(alvo.getTime())) {
+    return { ok: false, error: "Dados inválidos." };
+  }
+  if (alvo.getTime() <= agora) {
+    return { ok: false, error: "A nova data precisa estar no futuro." };
+  }
+  if (alvo.getTime() > agora + MAXIMO_DE_DIAS_DE_CARENCIA_EXTRA * MS_POR_DIA) {
+    return { ok: false, error: "A carência extra vai no máximo até 90 dias a partir de hoje." };
+  }
+
+  const admin = createAdminClient();
+
+  const { data: linha, error: erroLeitura } = await admin
+    .from("billing_contracts")
+    .select("id, bloqueio_a_partir_de")
+    .eq("organization_id", parsed.data.organizationId)
+    .maybeSingle();
+
+  if (erroLeitura) {
+    logger.error("[planoDaOrganizacao] erro ao ler a carência atual", {
+      code: erroLeitura.code ?? null,
+      message: erroLeitura.message ?? null,
+    });
+    return { ok: false, error: "Não foi possível salvar. Tente de novo." };
+  }
+
+  const contrato = linha as { id: string; bloqueio_a_partir_de: string | null } | null;
+
+  if (!contrato) {
+    return { ok: false, error: "Organização não encontrada." };
+  }
+  if (!contrato.bloqueio_a_partir_de) {
+    return {
+      ok: false,
+      error: "Esta organização não tem bloqueio programado; não há carência para estender.",
+    };
+  }
+  if (alvo.getTime() <= new Date(contrato.bloqueio_a_partir_de).getTime()) {
+    return { ok: false, error: "A nova data precisa ser depois da carência atual." };
+  }
+
+  const antes = contrato.bloqueio_a_partir_de;
+  const depois = alvo.toISOString();
+
+  const { error: erroEscrita } = await admin
+    .from("billing_contracts")
+    .update({ bloqueio_a_partir_de: depois })
+    .eq("id", contrato.id);
+
+  if (erroEscrita) {
+    logger.error("[planoDaOrganizacao] erro ao gravar a carência extra", {
+      code: erroEscrita.code ?? null,
+      message: erroEscrita.message ?? null,
+    });
+    return { ok: false, error: "Não foi possível salvar. Tente de novo." };
+  }
+
+  const { requestId, ip, userAgent } = await contextoDaRequisicao();
+  await audit({
+    action: "billing.grace_extended",
+    actorUserId: user.id,
+    actingAsPlatformAdmin: true,
+    organizationId: parsed.data.organizationId,
+    resourceType: "organization",
+    resourceId: parsed.data.organizationId,
+    metadata: { antes, depois },
+    requestId,
+    ip,
+    userAgent,
+  });
+
+  revalidatePath(caminhoDaAbaDePlano(parsed.data.organizationId));
+  return { ok: true, antes, depois };
 }
 
 export async function ajustarLimitesDaOrganizacao(input: {

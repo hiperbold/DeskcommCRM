@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import {
   ajustarLimitesDaOrganizacao,
+  darCarenciaExtra,
   trocarPlanoDaOrganizacao,
 } from "@/app/actions/admin/planoDaOrganizacao";
 import {
@@ -85,6 +86,8 @@ interface TenantPlanoClientProps {
   leituraFalhou: boolean;
   limitesEmVigor: Limites;
   limitesDoPlano: Limites;
+  /** `billing_contracts.bloqueio_a_partir_de` (fase F3, tarefa 10). `null` = organização não bloqueia. */
+  carenciaAtual: string | null;
   ajusteAtual: AjusteDeLimites;
   notaAtual: string | null;
   planosAtivos: PlanoAtivo[];
@@ -216,6 +219,7 @@ export function TenantPlanoClient({
   leituraFalhou,
   limitesEmVigor,
   limitesDoPlano,
+  carenciaAtual,
   ajusteAtual,
   notaAtual,
   planosAtivos,
@@ -228,6 +232,10 @@ export function TenantPlanoClient({
   const t = useT();
   const router = useRouter();
   const tagDoIdioma = useTagDeIdioma();
+  // `Date.now()` lido uma vez (lazy initializer): chamar `Date.now()` direto
+  // no corpo do componente é impuro para o React Compiler. Usado só para
+  // comparar a carência do plano (fase F3, tarefa 10) contra "agora".
+  const [agora] = useState(() => Date.now());
 
   // ── Trocar plano ──────────────────────────────────────────────────────
   // Sem contrato lido direito (leituraFalhou), `plano.code` é o fallback
@@ -266,6 +274,27 @@ export function TenantPlanoClient({
         return;
       }
       toast.success(t("Plano trocado."));
+      router.refresh();
+    });
+  }
+
+  // ── Carência extra (fase F3, tarefa 10) ─────────────────────────────────
+  const [novaDataDeCarencia, setNovaDataDeCarencia] = useState("");
+  const [estendendoCarencia, iniciarExtensaoDeCarencia] = useTransition();
+
+  function estenderCarencia() {
+    if (!novaDataDeCarencia) {
+      toast.error(t("Escolha uma data."));
+      return;
+    }
+    iniciarExtensaoDeCarencia(async () => {
+      const r = await darCarenciaExtra({ organizationId, novaData: novaDataDeCarencia });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Carência estendida."));
+      setNovaDataDeCarencia("");
       router.refresh();
     });
   }
@@ -512,6 +541,50 @@ export function TenantPlanoClient({
               "Nesta fase nenhum limite bloqueia; eles só passam a valer quando o bloqueio for ligado.",
             )}
           </p>
+
+          {/* Carência do bloqueio de verdade (fase F3, tarefa 10). */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">{t("Bloqueio do plano")}:</span>
+            {carenciaAtual === null ? (
+              <Badge variant="neutral">{t("Sem bloqueio programado")}</Badge>
+            ) : (
+              <Badge variant={new Date(carenciaAtual).getTime() <= agora ? "error" : "warning"}>
+                {new Date(carenciaAtual).getTime() <= agora
+                  ? t("Carência vencida em")
+                  : t("Em carência até")}{" "}
+                {new Date(carenciaAtual).toLocaleDateString(tagDoIdioma)}
+              </Badge>
+            )}
+          </div>
+
+          {podeEscrever && (
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="nova-data-de-carencia">{t("Dar carência extra até")}</Label>
+                <Input
+                  id="nova-data-de-carencia"
+                  type="date"
+                  className="w-44"
+                  value={novaDataDeCarencia}
+                  onChange={(e) => setNovaDataDeCarencia(e.target.value)}
+                  disabled={estendendoCarencia || carenciaAtual === null}
+                />
+              </div>
+              <Button
+                data-testid="dar-carencia-extra"
+                variant="outline"
+                onClick={estenderCarencia}
+                disabled={estendendoCarencia || carenciaAtual === null}
+              >
+                {t("Estender carência")}
+              </Button>
+              {carenciaAtual === null && (
+                <p className="text-xs text-text-muted">
+                  {t("Esta organização não tem bloqueio programado: nada para estender.")}
+                </p>
+              )}
+            </div>
+          )}
 
           {!podeEscrever && (
             <p className="text-sm text-text-muted">

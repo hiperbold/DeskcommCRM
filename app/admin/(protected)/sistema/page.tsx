@@ -1,12 +1,13 @@
 import { notFound } from "next/navigation";
 
 import { loadAuthUser } from "@/lib/auth/server";
+import { carregarBloqueioDosPlanos } from "@/lib/billing/planos/bloqueio-da-instalacao";
 import { carregarComportamentoDaInstalacao } from "@/lib/instalacao/comportamento-servidor";
 import { modulosLigados } from "@/lib/instalacao/modulos";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
 
-import { FormularioDeComportamento, FormularioDeModulos } from "./_form";
+import { FormularioDeBloqueioDosPlanos, FormularioDeComportamento, FormularioDeModulos } from "./_form";
 
 export const metadata = { title: "Comportamento da instalação" };
 export const dynamic = "force-dynamic";
@@ -41,11 +42,14 @@ export default async function Page() {
   const usuario = await loadAuthUser();
   if (!usuario?.is_platform_admin) notFound();
 
+  const admin = createAdminClient();
+
   // O valor EFETIVO (linha acima, `.env` como piso): a tela mostra o que está
   // valendo de verdade, e não o que a linha diria se ela existisse.
-  const [comportamento, ligados] = await Promise.all([
+  const [comportamento, ligados, bloqueio] = await Promise.all([
     carregarComportamentoDaInstalacao(),
-    modulosLigados(createAdminClient()),
+    modulosLigados(admin),
+    carregarBloqueioDosPlanos(admin),
   ]);
 
   return (
@@ -62,6 +66,7 @@ export default async function Page() {
         </p>
       </div>
       <FormularioDeComportamento inicial={comportamento} />
+      <FormularioDeBloqueioDosPlanos inicial={bloqueio} />
       <FormularioDeModulos ligados={ligados} />
     </div>
   );

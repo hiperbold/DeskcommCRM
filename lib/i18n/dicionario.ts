@@ -11749,6 +11749,56 @@ export const DICIONARIO: Traducoes = {
   "Por que este ajuste existe. Não coloque dado pessoal: fica registrado e nunca é apagado.": {
     es: "Por qué existe este ajuste. No pongas datos personales: queda registrado y nunca se borra.",
   },
+
+  // ── Bloqueio dos planos, admin da plataforma (fase F3, tarefa 10) ─────────
+  "Bloqueio dos planos": { es: "Bloqueo de los planes" },
+  "O bloqueio de verdade dos limites de plano: funis, etapas, conexões, integrações webhook, membros e leads param de ser criados quando a organização passa do teto contratado, depois da carência dela.": {
+    es: "El bloqueo de verdad de los límites del plan: embudos, etapas, conexiones, integraciones webhook, miembros y leads dejan de poder crearse cuando la organización pasa el tope contratado, después de su período de gracia.",
+  },
+  "A variável PLANOS_BLOQUEIO do servidor só alcança a IA (o teto de tokens). Ela não trava funil, etapa, conexão, webhook, membro nem lead: quem decide isso é o modo abaixo.": {
+    es: "La variable PLANOS_BLOQUEIO del servidor solo alcanza a la IA (el tope de tokens). No bloquea embudo, etapa, conexión, webhook, miembro ni lead: quien decide eso es el modo de abajo.",
+  },
+  "Chave de emergência para as travas do banco: se algo bloquear errado, mude o modo para Só avisa aqui. As travas do banco não leem variável de ambiente nenhuma.": {
+    es: "Llave de emergencia para los bloqueos de la base de datos: si algo bloquea mal, cambia el modo a Solo avisa aquí. Los bloqueos de la base de datos no leen ninguna variable de entorno.",
+  },
+  "Modo do bloqueio": { es: "Modo del bloqueo" },
+  "Bloquear recusa criar acima do teto, depois da carência de cada organização.": {
+    es: "Bloquear rechaza crear por encima del tope, después del período de gracia de cada organización.",
+  },
+  "Bloquear de verdade": { es: "Bloquear de verdad" },
+  "Só avisa, nunca bloqueia": { es: "Solo avisa, nunca bloquea" },
+  "Dias de carência": { es: "Días de gracia" },
+  "Quanto tempo uma organização tem, a partir de agora, antes do bloqueio valer para ela. De 0 a 90 dias.": {
+    es: "Cuánto tiempo tiene una organización, a partir de ahora, antes de que el bloqueo valga para ella. De 0 a 90 días.",
+  },
+  "Informe um número inteiro de 0 a 90.": { es: "Ingresa un número entero de 0 a 90." },
+  "Organizações em carência": { es: "Organizaciones en período de gracia" },
+  "Com carência vencida": { es: "Con período de gracia vencido" },
+  "Não foi possível ler o estado do bloqueio agora. Os números acima podem não refletir a realidade: recarregue a página antes de decidir qualquer coisa com base neles.": {
+    es: "No se pudo leer el estado del bloqueo ahora. Los números de arriba pueden no reflejar la realidad: recarga la página antes de decidir algo con base en ellos.",
+  },
+  "Ligar o bloqueio de verdade dos planos?": { es: "¿Activar el bloqueo de verdad de los planes?" },
+  "A partir de agora, toda organização sem carência ganha uma: ela poderá continuar criando normalmente até a data abaixo, e só depois dela o teto do plano passa a valer de verdade.": {
+    es: "A partir de ahora, toda organización sin período de gracia gana uno: podrá seguir creando normalmente hasta la fecha de abajo, y solo después de ella el tope del plan empieza a valer de verdad.",
+  },
+  "Organizações que ganham carência agora": { es: "Organizaciones que ganan período de gracia ahora" },
+  "Carência até": { es: "Período de gracia hasta" },
+  "Ligar o bloqueio": { es: "Activar el bloqueo" },
+  "Modo do bloqueio atualizado.": { es: "Modo del bloqueo actualizado." },
+  "Dias de carência atualizados.": { es: "Días de gracia actualizados." },
+
+  // ── Carência da organização, aba Plano do admin (fase F3, tarefa 10) ──────
+  "Bloqueio do plano": { es: "Bloqueo del plan" },
+  "Sem bloqueio programado": { es: "Sin bloqueo programado" },
+  "Carência vencida em": { es: "Período de gracia vencido el" },
+  "Em carência até": { es: "En período de gracia hasta" },
+  "Dar carência extra até": { es: "Dar período de gracia extra hasta" },
+  "Estender carência": { es: "Extender período de gracia" },
+  "Esta organização não tem bloqueio programado: nada para estender.": {
+    es: "Esta organización no tiene bloqueo programado: nada para extender.",
+  },
+  "Escolha uma data.": { es: "Elige una fecha." },
+  "Carência estendida.": { es: "Período de gracia extendido." },
 };
 
 /**

@@ -904,6 +904,21 @@ export const AUDIT_ACTIONS = [
   "billing.tokens_credited",
   "billing.addon_changed",
   "billing.tokens_adjusted",
+
+  // O bloqueio de verdade dos planos, ligado pelo admin da plataforma (fase
+  // F3, tarefa 10, decisão 11). Três ações porque respondem perguntas
+  // diferentes: `mode_changed` é "quando o bloqueio foi ligado, avisado ou
+  // desligado, e quantas organizações ganharam carência agora" (o metadata
+  // carrega o que `fn_billing_definir_modo` devolveu, nunca uma releitura);
+  // `grace_days_changed` é "quantos dias de carência esta instalação dá
+  // hoje, de quanto para quanto"; `grace_extended` é "quem adiou o bloqueio
+  // de UMA organização, de que data para que data". As três são o rastro que
+  // responde "por que o bloqueio começou a valer para todo mundo às 14h de
+  // terça", pergunta que só faz sentido aqui, porque a mudança não deixa
+  // rastro em nenhuma outra tabela além de `billing_settings`/`billing_contracts`.
+  "billing.mode_changed",
+  "billing.grace_days_changed",
+  "billing.grace_extended",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

@@ -69,7 +69,10 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
     // `planoDaOrganizacao` devolve.
     admin
       .from("billing_contracts")
-      .select("billing_plans(limits)")
+      // `bloqueio_a_partir_de` (fase F3, tarefa 10) entra na MESMA leitura dos
+      // limites crus: é a mesma linha de `billing_contracts`, e não vale abrir
+      // um round trip a mais só para ela.
+      .select("billing_plans(limits), bloqueio_a_partir_de")
       .eq("organization_id", id)
       .maybeSingle(),
     admin
@@ -127,7 +130,7 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
   // que É todo `null`), então a coluna "do plano" usa os mesmos limites em vez
   // de ficar vazia: o valor bate com o que a organização recebe na prática.
   const linhaContratoCru = contratoCruRes.data as
-    | { billing_plans: { limits: unknown } | null }
+    | { billing_plans: { limits: unknown } | null; bloqueio_a_partir_de: string | null }
     | null;
   const limitesDoPlanoParseados = esquemaDoPlanoDeLimites.safeParse(
     linhaContratoCru?.billing_plans?.limits,
@@ -184,6 +187,7 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
       leituraFalhou={algumaLeituraFalhou(leituras)}
       limitesEmVigor={resultado.limites}
       limitesDoPlano={limitesDoPlano}
+      carenciaAtual={linhaContratoCru?.bloqueio_a_partir_de ?? null}
       ajusteAtual={ajusteAtual}
       notaAtual={ajusteRow?.note ?? null}
       planosAtivos={planosAtivos}
