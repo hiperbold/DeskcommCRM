@@ -27,7 +27,11 @@ export type DesfechoDaCaptacao = "criado" | "duplicado" | "recusado";
 export type MotivoDaRecusa =
   | "sem_campo_mapeavel"
   | "assinatura_invalida"
-  | "erro_ao_criar_lead";
+  | "erro_ao_criar_lead"
+  // F3, decisão 5 (Tarefa 7): o gatilho de crm_leads recusou por PT402 (teto
+  // de leads do plano). Motivo próprio: "erro_ao_criar_lead" sugeriria falha
+  // de configuração do funil/etapa da fonte, e aqui o problema é outro.
+  | "limite_do_plano";
 
 /** O que a tela mostra para cada motivo, em português de gente. */
 export const MOTIVO_DA_RECUSA_LABEL: Record<MotivoDaRecusa, string> = {
@@ -37,6 +41,8 @@ export const MOTIVO_DA_RECUSA_LABEL: Record<MotivoDaRecusa, string> = {
     "A assinatura não conferiu. Quem enviou não usou o segredo configurado nesta fonte.",
   erro_ao_criar_lead:
     "Os dados chegaram, mas o lead não pôde ser criado — confira se o funil e a etapa da fonte ainda existem.",
+  limite_do_plano:
+    "Os dados chegaram, mas o plano desta organização já está no limite de leads. Fale com o suporte para ampliar.",
 };
 
 export interface CaptacaoParaRegistrar {

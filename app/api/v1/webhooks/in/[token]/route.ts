@@ -37,6 +37,8 @@ import { origemDaPagina, registrarCaptacao } from "@/lib/webhooks/captacao";
 import { ipDoClienteParaInet } from "@/lib/http/ip-do-cliente";
 import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 import { ApiError } from "@/lib/api/types";
+import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
+import { avisarLimiteDeLeadsAtingido } from "@/lib/leads/aviso-limite-de-leads";
 import { autorizarContatoParaIA } from "@/lib/ai/elegibilidade/autorizacao";
 import { kickLocalPipeline } from "@/lib/dev/kick-local-pipeline";
 
@@ -555,13 +557,23 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
           return respondWithLead(vencedor.id);
         }
       }
+      // F3, decisão 5 (Tarefa 7): este webhook é uma origem AUTOMÁTICA de
+      // lead (N18/N22: toda origem para no teto). O contato e o log de
+      // recepção (webhook_events_log, gravado no topo desta rota) já estão a
+      // salvo, gravados ANTES desta chamada; o que falta é não confundir esta
+      // recusa com "erro_ao_criar_lead" genérico e avisar a Central,
+      // deduplicado por organização e por dia.
+      const ehLimiteDoPlano = err.status === STATUS_RECUSA_DO_PLANO;
+      if (ehLimiteDoPlano) {
+        await avisarLimiteDeLeadsAtingido(admin, source.organization_id as string);
+      }
       await registrarCaptacao(admin, {
         ...fonteDaCaptacao,
         ...origemDaCaptacao,
         ...dadosDaCaptacao,
         contactId: contactId ?? null,
         outcome: "recusado",
-        rejectReason: "erro_ao_criar_lead",
+        rejectReason: ehLimiteDoPlano ? "limite_do_plano" : "erro_ao_criar_lead",
       });
       return fail(err.code, err.message ?? "erro", err.status, { requestId });
     }

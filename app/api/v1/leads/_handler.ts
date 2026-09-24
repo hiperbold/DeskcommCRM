@@ -11,6 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { resolveOwnerPatch, type OwnerPatch, type OwnerPatchInput } from "@/lib/leads/owner-patch";
 import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
@@ -353,6 +354,19 @@ export async function createLeadHandler(
     .single();
 
   if (insErr || !lead) {
+    // F3, decisão 5 (Tarefa 7): criar lead acima do teto do plano vem como
+    // PT402 do gatilho `trg_crm_leads_billing_bloqueio`, reconhecido pelo
+    // `code` (decisão 9), nunca pelo texto do Postgres. `createLeadHandler` é
+    // a MESMA porta da tela de criar, do clone, da importação, do webhook de
+    // captação (automático) e do MCP: aqui é o único lugar que precisa
+    // reconhecer o código para os quatro caminhos de PESSOA ganharem a frase
+    // fixa. Os caminhos AUTOMÁTICOS (webhook, prospecção) capturam este
+    // `ApiError` no próprio ponto de chamada para não perder o resto do
+    // efeito e avisar a Central: ver lib/leads/aviso-limite-de-leads.ts.
+    const recusa = insErr ? recusaDoPlano(insErr) : null;
+    if (recusa) {
+      throw new ApiError(STATUS_RECUSA_DO_PLANO, "plano_limite_atingido", undefined, ctx.requestId, recusa.mensagem);
+    }
     throw new ApiError(
       500,
       "internal_error",
@@ -727,7 +741,21 @@ export async function moveLeadHandler(
     .maybeSingle();
 
   if (updErr) {
-    // Rede de segurança (#917) — mesma da rota de arrasto: recusa do banco por
+    // F3, decisão 5 (Tarefa 7): reabrir um lead (mover de ganho/perdido para
+    // uma etapa aberta) acima do teto de leads também recusa com PT402, pelo
+    // MESMO gatilho de crm_leads. Vai ANTES da recusa por motivo da perda:
+    // são gatilhos diferentes, e o de plano é BEFORE (roda primeiro).
+    const recusaDoTeto = recusaDoPlano(updErr);
+    if (recusaDoTeto) {
+      throw new ApiError(
+        STATUS_RECUSA_DO_PLANO,
+        "plano_limite_atingido",
+        undefined,
+        ctx.requestId,
+        recusaDoTeto.mensagem,
+      );
+    }
+    // Rede de segurança (#917), mesma da rota de arrasto: recusa do banco por
     // motivo da perda vira recusa de negócio, nunca 500.
     const recusa = recusaDeMotivoDaPerdaPeloBanco(updErr, ctx.idioma);
     if (recusa) {

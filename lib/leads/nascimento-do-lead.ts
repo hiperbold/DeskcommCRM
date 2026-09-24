@@ -57,6 +57,7 @@ import { lerClientePelaAgenda } from "@/lib/contacts/cliente-pela-agenda";
 import { ehIdentificadorTecnico, rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
 
 import { emitLeadActivity } from "./activity-emitter";
+import { avisarLimiteDeLeadsAtingido } from "./aviso-limite-de-leads";
 
 /**
  * O rótulo que aparece no card do funil quando o lead nasceu de um clique em
@@ -107,6 +108,7 @@ export type MotivoSemLead =
   | "contato_bloqueado" // pediu para sair; criar oportunidade seria desrespeito registrado
   | "sem_funil_de_entrada" // a organização não tem funil padrão — falha de configuração, visível
   | "sem_etapa" // o funil existe e não tem etapa utilizável
+  | "limite_do_plano" // PT402: o teto de leads do plano está atingido (F3, decisão 5)
   | "erro"; // qualquer falha de escrita
 
 export type NascimentoDoLead =
@@ -395,6 +397,18 @@ export async function garantirLeadDaConversa(
   });
 
   if (error) {
+    // F3, decisão 5: o gatilho `trg_crm_leads_billing_bloqueio` recusa a
+    // criação com PT402 quando o teto de leads do plano está atingido (modo
+    // `bloquear`, carência vencida). "O chat nunca para": a mensagem, o
+    // contato e a conversa já foram gravados ANTES desta chamada (é uma RPC
+    // separada, não a mesma transação): o que falta aqui é não confundir
+    // "sem lead porque o plano acabou" com uma falha de escrita qualquer, e
+    // avisar a Central (deduplicado por dia) para alguém tomar ciência. Este
+    // reconhecimento é pelo `code` (nunca pelo texto do Postgres, decisão 9).
+    if ((error as { code?: string }).code === "PT402") {
+      await avisarLimiteDeLeadsAtingido(db, organizationId);
+      return { criado: false, motivo: "limite_do_plano" };
+    }
     return { criado: false, motivo: "erro", detalhe: error.message.slice(0, 120) };
   }
   // NULL não é falha: é a segunda mensagem encontrando o card que a primeira

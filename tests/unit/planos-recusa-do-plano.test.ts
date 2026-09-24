@@ -1,7 +1,8 @@
 /**
- * Tarefas 5 e 6 da fase F3 (hiperbold/planos/fase-F3-tarefas.md, decisões 3,
- * 4 e 9): `recusaDoPlano` reconhece o erro PT402 nos dois formatos que o
- * Node recebe (supabase-js e pg) e nunca vaza o texto cru do Postgres.
+ * Tarefas 5, 6 e 7 da fase F3 (hiperbold/planos/fase-F3-tarefas.md, decisões
+ * 3, 4, 5 e 9): `recusaDoPlano` reconhece o erro PT402 nos dois formatos que
+ * o Node recebe (supabase-js e pg) e nunca vaza o texto cru do Postgres.
+ * `leads` (Tarefa 7) entrou na lista de itens conhecidos.
  */
 import { describe, expect, it } from "vitest";
 
@@ -34,7 +35,7 @@ describe("recusaDoPlano", () => {
     );
   });
 
-  it("cobre os cinco itens desta fase, cada um com frase própria", () => {
+  it("cobre os seis itens desta fase, cada um com frase própria", () => {
     const mensagens = new Set<string>();
     for (const item of ITENS_RECUSADOS_PELO_PLANO) {
       const recusa = recusaDoPlano({ code: "PT402", detail: item });
@@ -42,12 +43,21 @@ describe("recusaDoPlano", () => {
       expect(recusa?.mensagem).toContain(item === "etapas_por_funil" ? "etapas por funil" : "");
       mensagens.add(recusa!.mensagem);
     }
-    // cinco frases DIFERENTES — ninguém compartilha a mesma mensagem genérica.
+    // seis frases DIFERENTES: ninguém compartilha a mesma mensagem genérica.
     expect(mensagens.size).toBe(ITENS_RECUSADOS_PELO_PLANO.length);
   });
 
-  it("detail desconhecido (ex.: 'leads', fora desta tarefa) cai na mensagem genérica, sem lançar", () => {
+  it("reconhece 'leads' (Tarefa 7, decisão 5), com frase própria", () => {
     const recusa = recusaDoPlano({ code: "PT402", detail: "leads" });
+    expect(recusa).not.toBeNull();
+    expect(recusa?.item).toBe("leads");
+    expect(recusa?.mensagem).toBe(
+      "O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar.",
+    );
+  });
+
+  it("detail desconhecido cai na mensagem genérica, sem lançar", () => {
+    const recusa = recusaDoPlano({ code: "PT402", detail: "algo_futuro" });
     expect(recusa).not.toBeNull();
     expect(recusa?.item).toBeNull();
     expect(recusa?.mensagem).toMatch(/limite contratado/);

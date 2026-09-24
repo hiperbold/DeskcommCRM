@@ -21,13 +21,19 @@
  * isso esta função lê os dois nomes de campo e nunca olha para `status`.
  */
 
-/** Os cinco itens que esta tarefa trata (leads fica para a Tarefa 7, fora daqui). */
+/**
+ * Os seis itens que esta função reconhece. `leads` entrou na Tarefa 7 (F3,
+ * decisão 5): o gatilho `trg_crm_leads_billing_bloqueio` (migration 0907,
+ * parte 4) levanta o mesmo PT402 com `detail = 'leads'` em toda criação ou
+ * reabertura de lead acima do teto, de qualquer origem.
+ */
 export const ITENS_RECUSADOS_PELO_PLANO = [
   "funis",
   "etapas_por_funil",
   "conexoes",
   "integracoes_webhook",
   "membros",
+  "leads",
 ] as const;
 
 export type ItemRecusadoPeloPlano = (typeof ITENS_RECUSADOS_PELO_PLANO)[number];
@@ -52,9 +58,10 @@ const MENSAGEM_POR_ITEM: Record<ItemRecusadoPeloPlano, string> = {
   integracoes_webhook:
     "O plano desta organização chegou ao limite de integrações de webhook. Fale com o suporte para ampliar.",
   membros: "O plano desta organização chegou ao limite de membros. Fale com o suporte para ampliar.",
+  leads: "O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar.",
 };
 
-/** Mensagem para um `detail` que não é nenhum dos cinco itens conhecidos (defensivo). */
+/** Mensagem para um `detail` que não é nenhum dos itens conhecidos (defensivo). */
 const MENSAGEM_GENERICA =
   "O plano desta organização chegou a um limite contratado. Fale com o suporte para ampliar.";
 

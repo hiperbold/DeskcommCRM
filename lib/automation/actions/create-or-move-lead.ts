@@ -13,6 +13,9 @@ import { registerAction } from "@/lib/automation/actions";
 import { nomeDoContato } from "@/lib/contacts/rotulo-do-contato";
 import type { ActionCtx, ActionResultDetail } from "@/lib/automation/types";
 import type { HandlerCtx } from "@/lib/api/handlers/types";
+import { ApiError } from "@/lib/api/types";
+import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
+import { avisarLimiteDeLeadsAtingido } from "@/lib/leads/aviso-limite-de-leads";
 import { createLeadHandler, moveLeadHandler } from "@/app/api/v1/leads/_handler";
 import {
   escolheEtapaDeDestino,
@@ -109,6 +112,17 @@ async function execute(ctx: ActionCtx, config: Record<string, unknown>): Promise
     }
     return { type: "create_or_move_lead", status: "skipped", detail: { reason: "no_lead_or_contact" } };
   } catch (err) {
+    // F3, decisão 5 (Tarefa 7): a regra é um caminho AUTOMÁTICO de criação ou
+    // reabertura de lead, e o teto do plano acima não pode virar um erro
+    // opaco na aba Atividade nem fazer o engine reprocessar (esta ação já
+    // falha "para dentro": engine.ts não reexecuta uma regra por causa de uma
+    // ação com status "failed"). Avisa a Central antes de devolver, com o
+    // MESMO helper que os outros caminhos automáticos usam, deduplicado por
+    // organização e por dia.
+    if (err instanceof ApiError && err.status === STATUS_RECUSA_DO_PLANO) {
+      await avisarLimiteDeLeadsAtingido(ctx.admin, ctx.organizationId);
+      return { type: "create_or_move_lead", status: "failed", error: "plano_limite_atingido" };
+    }
     return {
       type: "create_or_move_lead",
       status: "failed",

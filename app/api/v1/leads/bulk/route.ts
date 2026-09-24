@@ -14,6 +14,7 @@ import { type NextRequest } from "next/server";
 import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { resolveOwnerPatch } from "@/lib/leads/owner-patch";
 import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
@@ -209,6 +210,18 @@ export async function POST(req: NextRequest): Promise<Response> {
         p_lost_reason: (motivoDoLote ?? "").trim() || null,
       });
       if (error) {
+        // F3, decisão 5 (Tarefa 7): reabrir um lead ganho/perdido para uma
+        // etapa aberta, dentro do lote, também esbarra no teto de leads
+        // (mesmo gatilho de crm_leads). A função move tudo numa transação só
+        // ("todos ou nenhum"), então basta UMA linha estourar o teto para o
+        // lote inteiro voltar sem mover nada. Sem pré-checagem de quantidade
+        // aqui: o caso comum de lote é mover entre etapas abertas, que não
+        // conta para o teto (só reabertura conta), e ficou de fora desta
+        // tarefa (ver o relatório).
+        const recusaDoTeto = recusaDoPlano(error);
+        if (recusaDoTeto) {
+          return fail("plano_limite_atingido", recusaDoTeto.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+        }
         // Rede de segurança (#917): a recusa do banco por motivo da perda (o
         // motivo veio, mas não é do vocabulário deste funil) vira recusa de
         // negócio. Qualquer outro erro continua 500 com o texto do Postgres.

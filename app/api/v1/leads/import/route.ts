@@ -29,6 +29,8 @@ import { type NextRequest } from "next/server";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import { CSV_MAX_BYTES, CSV_MAX_DATA_ROWS, decodificarCsv } from "@/lib/contacts/csv";
@@ -176,6 +178,31 @@ export async function POST(req: NextRequest): Promise<Response> {
     stageId = (primeiraEtapa as { id: string }).id;
   }
 
+  // F3, decisão 5 (Tarefa 7): confere a QUANTIDADE antes de começar a criar
+  // linha por linha. O gatilho `trg_crm_leads_billing_bloqueio` segura a
+  // criação UMA A UMA (READ COMMITTED enxerga a linha já commitada), então
+  // sem este pré-cheque uma planilha maior que o espaço restante do plano
+  // criaria as N primeiras e recusaria as demais, uma por uma, com o MESMO
+  // PT402 repetido em cada linha. `podeCriar` (fail-open em leitura falha,
+  // mesma regra de sempre): teto nulo = sem limite, e leitura que falhou
+  // libera em vez de travar a importação por um alarme de leitura.
+  const capacidade = await podeCriar(supabase, orgId, "leads");
+  if (
+    capacidade.teto !== null &&
+    capacidade.atual !== null &&
+    capacidade.atual + lido.leads.length > capacidade.teto
+  ) {
+    const restam = Math.max(0, capacidade.teto - capacidade.atual);
+    return fail(
+      "plano_limite_atingido",
+      restam > 0
+        ? `${t("O plano desta organização só tem espaço para mais")} ${restam} ${t("lead(s), e esta planilha tem")} ${lido.leads.length}. ${t("Fale com o suporte para ampliar o limite, ou reduza a planilha.")}`
+        : t("O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar."),
+      STATUS_RECUSA_DO_PLANO,
+      { requestId },
+    );
+  }
+
   const resumo: ResumoDaImportacao = {
     total_linhas: lido.leads.length + lido.erros.length,
     criados: 0,
@@ -252,8 +279,15 @@ export async function POST(req: NextRequest): Promise<Response> {
     } catch (err) {
       // A ETAPA ERRADA DERRUBA A IMPORTAÇÃO INTEIRA, e de propósito: se a etapa
       // não é desta organização, ela não será na linha 2 nem na 300. Seguir
-      // gastaria 300 tentativas para dar o mesmo erro 300 vezes.
-      if (err instanceof ApiError && (err.status === 404 || err.status === 422)) {
+      // gastaria 300 tentativas para dar o mesmo erro 300 vezes. O PT402
+      // (F3, Tarefa 7) entra no mesmo balaio pelo mesmo motivo: se o teto foi
+      // atingido na linha 7, a linha 8 recusa igual, e o pré-cheque de
+      // quantidade acima só cobre o caso comum (ninguém mais criando leads ao
+      // mesmo tempo); esta é a rede de segurança da corrida.
+      if (
+        err instanceof ApiError &&
+        (err.status === 404 || err.status === 422 || err.status === STATUS_RECUSA_DO_PLANO)
+      ) {
         return fail(err.code, err.message, err.status, { requestId });
       }
       resumo.erros.push({
