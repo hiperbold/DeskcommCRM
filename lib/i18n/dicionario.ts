@@ -4070,6 +4070,9 @@ export const DICIONARIO: Traducoes = {
     es: "El contacto pidió no recibir mensajes (opt-out).",
   },
   "O contato não tem telefone cadastrado.": { es: "El contacto no tiene teléfono registrado." },
+  "O lead não foi criado porque o plano chegou ao limite de leads.": {
+    es: "El lead no se creó porque el plan llegó al límite de leads.",
+  },
   "Falta preencher alguma configuração desta ação — abra a automação e revise.": {
     es: "Falta completar algún ajuste de esta acción. Abre la automatización y revísala.",
   },

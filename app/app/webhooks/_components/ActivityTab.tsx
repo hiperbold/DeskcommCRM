@@ -74,6 +74,9 @@ const MOTIVO_DA_PARADA: Record<string, string> = {
   no_contact: "Esse lead entrou sem contato vinculado, então não havia para quem escrever.",
   contact_blocked: "O contato pediu para não receber mensagens (opt-out).",
   no_phone: "O contato não tem telefone cadastrado.",
+  // Fase F3 dos planos: a automação não criou o lead porque o plano da
+  // organização chegou ao limite de leads (só com o bloqueio ligado).
+  plano_limite_atingido: "O lead não foi criado porque o plano chegou ao limite de leads.",
   missing_config: "Falta preencher alguma configuração desta ação — abra a automação e revise.",
   fora_da_janela_de_envio:
     "Está fora da janela de envio configurada para esse número. A mensagem sai sozinha quando ela reabrir.",

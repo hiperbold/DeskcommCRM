@@ -45,7 +45,19 @@ const REF_KIND = "billing_limite";
 const FUSO_DE_PLANOS = "America/Sao_Paulo";
 
 function tituloDoDia(agora: Date): string {
-  const data = agora.toLocaleDateString("pt-BR", { timeZone: FUSO_DE_PLANOS });
+  // Dia no fuso de São Paulo montado das partes (formato fixo dd/mm/aaaa), sem
+  // passar idioma para o formatador: o título é gravado uma vez no banco e
+  // também é a chave da deduplicação diária, então não pode variar com o
+  // idioma de quem está logado (a regra de i18n do projeto proíbe fixar
+  // "pt-BR" em data formatada fora da camada de idioma).
+  const partes = new Intl.DateTimeFormat("en-US", {
+    timeZone: FUSO_DE_PLANOS,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(agora);
+  const parte = (tipo: string) => partes.find((p) => p.type === tipo)?.value ?? "";
+  const data = `${parte("day")}/${parte("month")}/${parte("year")}`;
   return `Um lead não foi criado em ${data} porque o plano chegou ao limite de leads`;
 }
 

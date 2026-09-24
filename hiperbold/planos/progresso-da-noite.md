@@ -2,7 +2,7 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: F2
+Fase atual: FIM (F1, F2, F2-B e F3 feitas; F4 em diante dependem do Filipe)
 Etapa da fase: F2 em portões completos (cópia separada `~/projects/deskcommcrm-portoes`, commit 28d21a3, resumo em F:\temp\2026-09-23\planos-noite\logs\f2-resumo.txt). F2-B já começou em paralelo no repositório principal: plano revisado (f163a7c), tarefa 1 (migração 0906 parte 1) em execução.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
@@ -18,7 +18,7 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 | F1 | **feita**: 6 tarefas, revisão e auditoria sem achado alto, todos os portões verdes | 8fa4893 | 23/09/2026 09:44 |
 | F2 | **feita**: 8 tarefas, revisão e auditoria sem achado alto (médios corrigidos em duas levas), todos os portões verdes | 28d21a3 | 23/09/2026 15:20 |
 | F2-B | **feita**: 8 tarefas, revisão (2 altos) e auditoria (1 alto) corrigidas; portões no commit 3898b63 com os vermelhos abaixo, todos corrigidos e reconferidos | a0f7d60 | 23/09/2026 21:05 |
-| F3 | 10 tarefas feitas; auditoria (3 altos) e revisão (3 médios) corrigidas e provadas no banco; portões completos rodando na cópia separada no commit 2f4bcc3 | 2f4bcc3 | |
+| F3 | **feita**: 10 tarefas; auditoria (3 altos) e revisão (3 médios) corrigidas e provadas no banco; portões no commit 2f4bcc3 com 2 vermelhos de teste do autor, corrigidos e reconferidos | ver abaixo | 24/09/2026 04:05 |
 | F6 | registrada (pedido do Filipe, 23/09 à tarde): site de vendas, `/precos`, Termos e Privacidade. Fica depois das fases do loop; não começa sem confirmação | ff34e69 | |
 
 ## Tarefas da fase atual
@@ -97,6 +97,16 @@ Fechamento da F1, 23/09/2026 08:20 a 09:44, no commit 8fa4893:
 | build | verde, 38 s de compilação |
 
 O servidor de desenvolvimento na porta 3300 sobreviveu ao build.
+
+Fechamento da F3, 24/09/2026 02:25 a 03:50, na cópia separada, no commit 2f4bcc3:
+
+| Portão | Resultado |
+|---|---|
+| typecheck, lint, lint:channels, build | verdes |
+| test:db | 260 arquivos, 2.438 testes verdes |
+| unitários | 13.817 verdes, 3 vermelhos: o de ambiente (`e2e-parte-4`, Redis) e 2 testes do autor quebrados por código nosso: `i18n-a-data-segue-o-idioma` (data com "pt-BR" fixo no título do aviso de lead recusado) e `motivo-de-parada-tem-frase` (motivo `plano_limite_atingido` da automação sem frase na aba Atividade). Os dois corrigidos logo depois e reconferidos verdes |
+
+Depois do commit dos portões entrou só a prova de banco do aviso de tokens esgotados (5d0f31a, 75 testes verdes no arquivo) e as duas correções acima.
 
 Fechamento da F2-B, 23/09/2026 19:20 a 21:05, na cópia separada, no commit 3898b63:
 
