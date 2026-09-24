@@ -80,16 +80,20 @@ import "server-only";
  *
  * ─── `cancelarAssinaturaDoCliente`: o marcador de encerramento ────────────
  *
- * A decisão 22 do plano da fase diz que `billing_contracts.
- * asaas_assinatura_encerrada_em` deveria ser gravado também "quando o
- * DELETE feito pelo próprio CRM dá certo". A função de banco disponível
- * para isto (`fn_billing_cancelar_no_fim_do_periodo`, migração 0908) NÃO
- * grava esse marcador (só liga `cancel_at_period_end`); esta tarefa não cria
- * função de banco nova (fora de escopo, `supabase/` não é tocado aqui). O
- * marcador continua sendo gravado só pelo aplicador de eventos confirmados
- * (`SUBSCRIPTION_DELETED`/404, Tarefa 6, ainda não implementada) ou pela
- * conciliação diária (Tarefa 16). Isto está relatado no retorno desta
- * tarefa para a sessão principal decidir o que fazer.
+ * Decisão 22: depois de um `DELETE /subscriptions/{id}` bem sucedido feito
+ * pelo próprio CRM, `cancelarAssinaturaDoCliente` chama primeiro
+ * `fn_billing_cancelar_no_fim_do_periodo` (0908) e só depois
+ * `fn_billing_asaas_marcar_assinatura_encerrada` (0909, Tarefa 6): a
+ * primeira já liga `cancel_at_period_end` e grava o evento de auditoria
+ * (`billing_contract_eventos`, tipo `cancelar_no_fim`); a segunda, chamada
+ * DEPOIS, encontra `cancel_at_period_end` já `true` e não grava um segundo
+ * evento redundante (ela só insere quando o valor anterior era `false`), só
+ * grava `asaas_assinatura_encerrada_em` e cancela pedido aberto daquela
+ * assinatura. Uma falha em `marcarAssinaturaEncerrada` só é logada (não
+ * derruba a resposta ao cliente, que já teve o `DELETE` e o
+ * `cancel_at_period_end` aplicados de verdade): o marcador fica pendente
+ * para a conciliação diária (Tarefa 16) ou para um futuro
+ * `SUBSCRIPTION_DELETED` confirmado gravarem depois.
  */
 import type { ClienteAsaasHttp } from "./cliente";
 import type { AmbienteAsaas, ConfigAsaas } from "./config";
@@ -275,6 +279,13 @@ export interface DbCompra {
 
   /** `fn_billing_cancelar_no_fim_do_periodo` (migração 0908). */
   cancelarNoFimDoPeriodo(org: string, sim: boolean, actor: string): Promise<RpcResultado<{ cancelAtPeriodEnd: boolean }>>;
+
+  /** `fn_billing_asaas_marcar_assinatura_encerrada` (migração 0909, Tarefa 6, decisão 22). */
+  marcarAssinaturaEncerrada(
+    org: string,
+    asaasSubscriptionId: string,
+    actor: string,
+  ): Promise<RpcResultado<{ jaRegistrado: boolean; asaasAssinaturaEncerradaEm: string }>>;
 }
 
 export interface LoggerCompra {
@@ -834,6 +845,15 @@ export async function cancelarAssinaturaDoCliente(
   if (cancelado.error || !cancelado.data) {
     deps.logger.error("asaas_cancelar_no_banco_falhou", { org: organizationId, codigo: cancelado.error?.code });
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+  }
+
+  const marcado = await deps.db.marcarAssinaturaEncerrada(organizationId, asaasSubscriptionId, actorId);
+  if (marcado.error || !marcado.data) {
+    // Decisão 22: o DELETE no Asaas e o cancel_at_period_end já foram
+    // aplicados de verdade; o marcador fica pendente para a conciliação
+    // diária (Tarefa 16) ou para um SUBSCRIPTION_DELETED confirmado gravarem
+    // depois. Não derruba a resposta ao cliente por isso.
+    deps.logger.error("asaas_cancelar_marcar_encerrada_falhou", { org: organizationId, codigo: marcado.error?.code });
   }
 
   return { tipo: "ok", cancelAtPeriodEnd: cancelado.data.cancelAtPeriodEnd };

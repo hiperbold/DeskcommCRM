@@ -194,7 +194,7 @@ describe("processarEventosAsaas", () => {
     const resumo = await processarEventosAsaas(deps({ db, asaas }));
 
     expect(asaas.buscarCobranca).not.toHaveBeenCalled();
-    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-2", "lease-2", null);
+    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-2", "lease-2", { pre_roteamento: "outro_app" });
     // Nunca concede nada, e não fica escondido como "aplicado".
     expect(resumo.aplicados).toBe(0);
   });

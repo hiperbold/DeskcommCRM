@@ -187,6 +187,10 @@ function dbFalso(pedidoInicial: PedidoLinha, opts: { vinculo?: string | null } =
     }),
     lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null }, error: null })),
     cancelarNoFimDoPeriodo: vi.fn(async () => ({ data: { cancelAtPeriodEnd: true }, error: null })),
+    marcarAssinaturaEncerrada: vi.fn(async () => ({
+      data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
+      error: null,
+    })),
   };
 
   return { db, getPedido: () => pedido };
@@ -208,6 +212,7 @@ function dbStubVazio(): DbCompra {
     marcarPedido: naoDeveriaSerChamado("marcarPedido") as DbCompra["marcarPedido"],
     lerContrato: naoDeveriaSerChamado("lerContrato") as DbCompra["lerContrato"],
     cancelarNoFimDoPeriodo: naoDeveriaSerChamado("cancelarNoFimDoPeriodo") as DbCompra["cancelarNoFimDoPeriodo"],
+    marcarAssinaturaEncerrada: naoDeveriaSerChamado("marcarAssinaturaEncerrada") as DbCompra["marcarAssinaturaEncerrada"],
   };
 }
 
@@ -511,7 +516,7 @@ describe("iniciarCompra: logs nunca carregam dado sensível", () => {
 });
 
 describe("cancelarAssinaturaDoCliente", () => {
-  it("primeiro remove no Asaas, só depois marca cancel_at_period_end no banco", async () => {
+  it("primeiro remove no Asaas, depois marca cancel_at_period_end, depois marca a assinatura encerrada", async () => {
     const ordem: string[] = [];
     const asaas = asaasFalso({
       removerAssinatura: vi.fn(async () => {
@@ -525,13 +530,18 @@ describe("cancelarAssinaturaDoCliente", () => {
         ordem.push("banco_cancelar");
         return { data: { cancelAtPeriodEnd: true }, error: null };
       }),
+      marcarAssinaturaEncerrada: vi.fn(async () => {
+        ordem.push("marcar_encerrada");
+        return { data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" }, error: null };
+      }),
     };
     const { deps } = montarDeps(db, asaas);
 
     const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
 
     expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
-    expect(ordem).toEqual(["asaas_delete", "banco_cancelar"]);
+    expect(ordem).toEqual(["asaas_delete", "banco_cancelar", "marcar_encerrada"]);
+    expect(db.marcarAssinaturaEncerrada).toHaveBeenCalledWith("org-1", "sub_ativo123", "actor-1");
   });
 
   it("DELETE no Asaas falhando nunca marca nada no banco", async () => {
@@ -541,10 +551,12 @@ describe("cancelarAssinaturaDoCliente", () => {
       }),
     });
     const cancelarNoFimDoPeriodo = vi.fn();
+    const marcarAssinaturaEncerrada = vi.fn();
     const db: DbCompra = {
       ...dbStubVazio(),
       lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null }, error: null })),
       cancelarNoFimDoPeriodo: cancelarNoFimDoPeriodo as DbCompra["cancelarNoFimDoPeriodo"],
+      marcarAssinaturaEncerrada: marcarAssinaturaEncerrada as DbCompra["marcarAssinaturaEncerrada"],
     };
     const { deps } = montarDeps(db, asaas);
 
@@ -552,6 +564,7 @@ describe("cancelarAssinaturaDoCliente", () => {
 
     expect(resultado.tipo).toBe("erro");
     expect(cancelarNoFimDoPeriodo).not.toHaveBeenCalled();
+    expect(marcarAssinaturaEncerrada).not.toHaveBeenCalled();
   });
 
   it("404 do Asaas (assinatura já removida) é tratado como sucesso pelo cliente HTTP e segue o cancelamento", async () => {
@@ -561,12 +574,32 @@ describe("cancelarAssinaturaDoCliente", () => {
       ...dbStubVazio(),
       lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ja_removida", asaasAssinaturaEncerradaEm: null }, error: null })),
       cancelarNoFimDoPeriodo: vi.fn(async () => ({ data: { cancelAtPeriodEnd: true }, error: null })),
+      marcarAssinaturaEncerrada: vi.fn(async () => ({
+        data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
+        error: null,
+      })),
     };
     const { deps } = montarDeps(db, asaas);
 
     const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
 
     expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+  });
+
+  it("falha ao marcar a assinatura como encerrada só loga; a resposta ao cliente continua ok", async () => {
+    const asaas = asaasFalso();
+    const db: DbCompra = {
+      ...dbStubVazio(),
+      lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null }, error: null })),
+      cancelarNoFimDoPeriodo: vi.fn(async () => ({ data: { cancelAtPeriodEnd: true }, error: null })),
+      marcarAssinaturaEncerrada: vi.fn(async () => ({ data: null, error: { code: "P0002", message: "billing_contrato_nao_encontrado" } })),
+    };
+    const { deps, linhas } = montarDeps(db, asaas);
+
+    const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+    expect(linhas.some((l) => l.nivel === "error" && l.msg === "asaas_cancelar_marcar_encerrada_falhou")).toBe(true);
   });
 
   it("sem assinatura Asaas na organização, não chama o Asaas nem o banco de escrita", async () => {

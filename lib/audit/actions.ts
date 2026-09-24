@@ -979,6 +979,29 @@ export const AUDIT_ACTIONS = [
   // plano/pacote, o ciclo, o método e o resultado da operação.
   "billing.order_created",
   "billing.subscription_cancel_requested",
+
+  // As cinco escritas do admin da PLATAFORMA sobre a cobrança do Asaas (fase
+  // F5, tarefa 17, `app/actions/admin/cobrancaAsaas.ts`), diferente das duas
+  // ações acima (que são do admin da PRÓPRIA organização): aqui é o admin de
+  // suporte, mexendo na instalação inteira ou na organização de QUALQUER
+  // cliente. `asaas_self_service_toggled` é "quem ligou ou desligou a compra
+  // pelo próprio cliente" (a metade da chave de compra que mora no banco,
+  // decisão 18); `asaas_plan_for_sale_toggled` é "que plano entrou ou saiu de
+  // venda"; `asaas_event_reprocessed` é "que evento do webhook foi reaberto
+  // para o cron tentar de novo" (o `metadata` carrega só os `resultado`
+  // anterior/novo, nunca o payload do evento); `asaas_order_canceled` é "que
+  // pedido o admin cancelou, e se havia cobrança/assinatura no Asaas para
+  // remover antes" (decisão 10: a remoção no Asaas acontece ANTES desta
+  // auditoria, nunca depois); `asaas_subscription_canceled` é "o admin
+  // cancelou a assinatura Asaas de qual organização" (mesma ação que
+  // `subscription_cancel_requested` faz para o cliente, só que pelo admin).
+  // Nenhuma das cinco carrega CPF/CNPJ, e-mail, celular, chave de API, token
+  // de webhook ou payload de evento no metadata (decisão 16 da fase).
+  "billing.asaas_self_service_toggled",
+  "billing.asaas_plan_for_sale_toggled",
+  "billing.asaas_event_reprocessed",
+  "billing.asaas_order_canceled",
+  "billing.asaas_subscription_canceled",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

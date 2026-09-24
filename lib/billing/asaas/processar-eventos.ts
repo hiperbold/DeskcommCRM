@@ -47,35 +47,20 @@ import "server-only";
  * `billing_customers`). Pulando o `GET`, o evento nunca é aplicado: forjar o
  * payload não abre acesso.
  *
- * ═══ Lacuna conhecida: "outro_app" sem GET para evento de dinheiro ═══
+ * ═══ "outro_app" sem GET para evento de dinheiro (M8) ═══
  *
- * `fn_billing_asaas_aplicar_evento` (migração 0909, Tarefa 5, já revisada e
- * FORA do escopo desta tarefa) só tem DOIS resultados possíveis para um
- * evento de dinheiro sem `p_confirmacao` de verdade: `aguardando` (quando
- * `p_confirmacao` é nulo ou sem status confirmado) ou o despacho completo
- * para `fn_billing_asaas_aplicar_pagamento` (que exige um objeto CONFIRMADO
- * por GET). Não existe hoje um caminho para marcar `outro_app` num evento de
- * dinheiro SEM ter feito o GET - só a função de roteamento interna
- * (`fn_billing_asaas_rotear_pagamento`, chamada de DENTRO de
- * `fn_billing_asaas_aplicar_pagamento`) decide `outro_app`, e ela só roda
- * depois que `p_confirmacao` já chegou.
- *
- * Por isso, quando `ehCandidatoAoGet` decide que o evento NÃO é nosso, este
- * processador chama `fn_billing_asaas_aplicar_evento` com `p_confirmacao:
- * null` (o único caminho seguro que a função já revisada oferece): o evento
- * vira `aguardando` (nunca concede nada, decisão 6) e volta a ser reservado
- * no próximo minuto, sem NUNCA gastar um `GET` - a garantia de segurança da
- * decisão 6/M8/risco 15 continua de pé. O efeito colateral é que um evento de
- * outro app nunca "descansa": ele fica `aguardando` para sempre, sem virar
- * `erro` (`tentativas` só é incrementado por `fn_billing_asaas_registrar_
- * falha`, nunca por este ramo) e sem nunca aparecer nos alarmes de dinheiro
- * da tela do admin - o que bate com a intenção da decisão 6 ("fica fora dos
- * alarmes de dinheiro"), mas custa 1 dos até 50 eventos do próximo lote a
- * cada rodada, para sempre, se o mesmo Asaas realmente for compartilhado por
- * outro produto (HiperTrack/HiperStudio) com tráfego relevante. Relatado
- * explicitamente no retorno desta tarefa para a sessão principal decidir se
- * a Tarefa 6 (ou um ajuste futuro na migração) deve acrescentar um resultado
- * `outro_app` dedicado, sem GET, na própria `fn_billing_asaas_aplicar_evento`.
+ * Quando `ehCandidatoAoGet` decide que o evento NÃO é nosso, este processador
+ * chama `fn_billing_asaas_aplicar_evento` (migração 0909, Tarefa 6) com o
+ * SENTINELA `p_confirmacao: {"pre_roteamento":"outro_app"}` (nenhum outro
+ * campo): a função fecha o evento como `outro_app` DIRETO, sem despachar para
+ * `fn_billing_asaas_aplicar_pagamento` e sem gastar nenhum `GET` - a garantia
+ * de segurança da decisão 6/M8/risco 15 continua de pé (pular o `GET` nunca
+ * concede nada sozinho). Isto substitui a versão anterior desta tarefa, que
+ * mandava `p_confirmacao: null` (o evento ficava `aguardando` para sempre,
+ * sem nunca "descansar", porque a função ainda não tinha o ramo do
+ * sentinela); com o sentinela, o evento vira `outro_app` de uma vez, fora dos
+ * alarmes de dinheiro (decisão 6) e sem custar uma vaga do lote a cada rodada
+ * para sempre.
  *
  * ═══ Erro do Asaas nunca segura a rodada inteira (decisão 20) ═══
  *
@@ -353,6 +338,17 @@ async function aplicarSemConfirmacao(deps: DepsProcessarEventosAsaas, evento: Ev
   return finalizarAplicacao(deps, evento, aplicado);
 }
 
+/**
+ * Pré-roteamento decidiu, só pelo payload já guardado, que o evento não é
+ * nosso (decisão 6/M8): fecha como `outro_app` direto, sem gastar `GET`,
+ * pelo sentinela que `fn_billing_asaas_aplicar_evento` (0909, Tarefa 6)
+ * reconhece por igualdade estrutural do jsonb.
+ */
+async function aplicarComoOutroApp(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<ResultadoDeUmEvento> {
+  const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, { pre_roteamento: "outro_app" });
+  return finalizarAplicacao(deps, evento, aplicado);
+}
+
 async function finalizarAplicacao(
   deps: DepsProcessarEventosAsaas,
   evento: EventoReservado,
@@ -429,10 +425,9 @@ async function processarEventoDeDinheiro(
   const candidato = await ehCandidatoAoGet(deps.db, evento.resourceId, referencia);
   if (!candidato) {
     // Decisão 6/M8: payload não bate com nada conhecido, e não começa com
-    // "HC:". NENHUM GET é feito (ver a lacuna documentada no cabeçalho deste
-    // arquivo sobre por que isto aplica com confirmação nula em vez de um
-    // "outro_app" dedicado).
-    return aplicarSemConfirmacao(deps, evento);
+    // "HC:". NENHUM GET é feito; fecha como outro_app pelo sentinela (ver o
+    // cabeçalho deste arquivo).
+    return aplicarComoOutroApp(deps, evento);
   }
 
   if (!evento.resourceId) {

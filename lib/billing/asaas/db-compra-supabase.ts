@@ -282,5 +282,20 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
       if (!d) return { data: null, error: null };
       return { data: { cancelAtPeriodEnd: d.cancel_at_period_end }, error: null };
     },
+
+    async marcarAssinaturaEncerrada(org, asaasSubscriptionId, actor) {
+      const { data, error } = await admin.rpc("fn_billing_asaas_marcar_assinatura_encerrada" as never, {
+        p_org: org,
+        p_asaas_subscription_id: asaasSubscriptionId,
+        p_actor: actor,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { ja_registrado: boolean; asaas_assinatura_encerrada_em: string } | null;
+      if (!d) return { data: null, error: null };
+      return {
+        data: { jaRegistrado: d.ja_registrado, asaasAssinaturaEncerradaEm: d.asaas_assinatura_encerrada_em },
+        error: null,
+      };
+    },
   };
 }
