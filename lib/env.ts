@@ -434,6 +434,32 @@ const schema = z.object({
     .default("false")
     .transform((v) => v === "true"),
 
+  /**
+   * Asaas (fase F5, `hiperbold/planos/fase-F5-tarefas.md`): cobrança de
+   * assinatura e pacote de tokens. As cinco entram juntas porque
+   * `configDoAsaas()` (lib/billing/asaas/config.ts) as lê de uma vez e recusa
+   * combinação incoerente ANTES de qualquer chamada de rede (decisão 14): a
+   * base só pode ser uma das duas oficiais e o prefixo da chave
+   * (`$aact_hmlg_`/`$aact_prod_`) tem de casar com ela.
+   *
+   * `ASAAS_ENABLED` é a PRIMEIRA das duas chaves da decisão 18 (a outra é
+   * `billing_settings.compra_pelo_cliente`, no banco): sem as duas ligadas ao
+   * mesmo tempo, a compra pelo próprio cliente não sai do papel. `z.enum` aqui
+   * é seguro, ao contrário dos kill switches (`AI_BUDGET_ENFORCEMENT` etc.
+   * acima): esta chave NASCE desligada, e um valor torto cair em erro de boot
+   * é falha fechada correta para "ainda não decidi vender por aqui", não é
+   * uma alavanca de emergência que precisa aceitar qualquer grafia.
+   */
+  ASAAS_ENABLED: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false")
+    .transform((v) => v === "true"),
+  ASAAS_BASE_URL: z.string().optional().default(""),
+  ASAAS_API_KEY: z.string().optional().default(""),
+  ASAAS_WEBHOOK_TOKEN: z.string().optional().default(""),
+  ASAAS_WEBHOOK_ID: z.string().optional().default(""),
+
   // App URLs
   NEXT_PUBLIC_APP_URL: z
     .string()
