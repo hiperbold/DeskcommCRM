@@ -1031,3 +1031,234 @@ begin
   end if;
 end
 $$;
+
+-- ============================================================================
+-- PARTE 3 (Tarefa 3): catálogo de pacotes de tokens vendidos na mão, e o
+-- fechamento do D-046 (registro falso na auditoria).
+-- ============================================================================
+--
+-- Racional completo em hiperbold/planos/fase-F4-tarefas.md, decisões 10 e 11
+-- e "Tarefa 3", e em hiperbold/DEBITO.md, D-046.
+--
+-- Decisão 10 (catálogo de pacotes):
+-- billing_token_pacotes é o CATÁLOGO do que o admin da plataforma vende na
+-- mão (código no mesmo formato de billing_plans.code, nome, tokens, ativo).
+-- Não confundir com billing_token_adicionais (0906, assinatura MENSAL
+-- recorrente, concedida todo ciclo) nem com o crédito avulso já existente,
+-- fn_billing_creditar_tokens (0906): billing_token_pacotes é só a lista de
+-- produtos vendáveis, fn_billing_creditar_pacote (abaixo) é a ponte entre um
+-- item do catálogo e aquele crédito. preco_cents fica NULO até o Filipe
+-- definir (N9): esta migração não semeia pacote nenhum, nem código nem
+-- preço, o admin cadastra pela tela (Tarefa 5). Sem grant para
+-- anon/authenticated (a tela lê pelo servidor, mesmo padrão de
+-- billing_payments); service_role com select, insert e update (o admin
+-- cadastra e desativa), sem delete: um pacote já vendido fica no histórico
+-- (o crédito em billing_token_ledger continua referindo um código que precisa
+-- seguir existindo, mesmo desativado).
+--
+-- fn_billing_creditar_pacote(p_org, p_pacote, p_valor_cents, p_chave, p_nota,
+-- p_actor): pacote inexistente é P0002; pacote com ativo=false é 22023 (não
+-- se vende mais, mesmo que ainda apareça no histórico); o valor creditado é
+-- preco_cents do catálogo quando preenchido, senão p_valor_cents informado na
+-- hora pelo admin, e os DOIS ausentes é 22023 (nunca inventa preço, N9,
+-- mesma doutrina do padrão do arquivo). Delega a fn_billing_creditar_tokens
+-- (0906) com os tokens do pacote: reaproveita a mesma trava por organização e
+-- a mesma idempotência por p_chave daquela função, sem duplicar nenhuma das
+-- duas.
+--
+-- Decisão 11 (D-046, api_audit_log): a política `audit_log_insert_tenant_member`
+-- do AUTOR (baseline.sql, FOR INSERT TO authenticated, sem exigir
+-- actor_user_id = auth.uid() nem organization_id preenchido) NÃO é editada
+-- (regra do briefing: nunca no lugar). Em vez disso, api_audit_log ganha uma
+-- política RESTRICTIVE própria desta migração, `for insert to authenticated
+-- with check (false)`: pelo modelo de RLS do Postgres, uma linha só passa
+-- quando satisfaz PELO MENOS UMA permissive E TODAS as restrictive da mesma
+-- ação, então esta política sozinha fecha o insert de `authenticated` por
+-- completo, mesmo com a permissive do autor de pé.
+--
+-- Mapa de quem grava api_audit_log hoje (conferido por grep antes desta
+-- migração, nenhum gravador editado):
+--   - lib/audit/index.ts (audit(), auditForOrganizations()): prefere
+--     createAdminClient() (service_role, bypassrls, ignora esta política) quando
+--     há SUPABASE_SERVICE_ROLE_KEY configurada; SEM a chave (só em
+--     desenvolvimento, isServiceRoleConfigured() falso) cai para
+--     createClient() (sessão do usuário, authenticated) e é o ÚNICO caminho
+--     que esta política passa a recusar. audit() já é fire-and-forget: o
+--     erro do insert vira reportAuditFailure (console.error + Sentry), nunca
+--     propaga para a mutação principal, então o plano B de desenvolvimento
+--     sem chave de serviço passa a só REGISTRAR NO LOG que a auditoria
+--     falhou, sem derrubar nada (mesma previsão da decisão 11 da fase).
+--   - lib/ai/handoff/orchestrator.ts: só grava com createAdminClient()
+--     (service_role); esta política não muda nada para ele.
+--   - Toda função SQL que grava (0906, 0907, 0908 e as do autor) é `security
+--     definer`, então o insert roda como o DONO da função (postgres), não
+--     como `authenticated`; RLS nunca filtra o dono de uma tabela, então
+--     nenhuma dessas funções é afetada.
+-- Nenhum gravador de PRODUÇÃO grava api_audit_log pela sessão do usuário.
+--
+-- agent_worker (se a role existir) perde update, delete e truncate na tabela
+-- (mesmo vocabulário da migration 0258, que já fez isso para
+-- anon/authenticated/service_role no baseline): defesa em profundidade, essa
+-- role nunca teve select/insert concedido nela por nenhuma migração deste
+-- fork, mas tem bypassrls e ganhou update/delete no provisionamento
+-- (`grant select, insert, update, delete on all tables in schema public to
+-- agent_worker`, hiperbold/scripts/role-agent-worker.sql) antes de qualquer
+-- revoke específico existir.
+--
+-- Mesmo padrão de segurança das partes anteriores: security definer,
+-- search_path fixo em public, pg_temp, revoke de public/anon/authenticated,
+-- grant só para service_role, bloco final de agent_worker (se a role
+-- existir).
+--
+-- Idempotente: create table if not exists, create or replace, create policy
+-- protegida por drop policy if exists, revoke/grant repetíveis.
+
+-- ============================================================================
+-- 12. billing_token_pacotes: o catálogo dos pacotes vendidos na mão (decisão
+-- 10).
+-- ============================================================================
+create table if not exists public.billing_token_pacotes (
+  id uuid primary key default gen_random_uuid(),
+  codigo text not null,
+  nome text not null,
+  tokens bigint not null,
+  -- Nulo até o Filipe definir (N9, decisão 10): nenhum preço é inventado.
+  -- fn_billing_creditar_pacote exige p_valor_cents na hora quando este campo
+  -- está nulo.
+  preco_cents integer,
+  ativo boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint billing_token_pacotes_codigo_unique unique (codigo),
+  -- Mesmo formato de billing_plans.code (0904): letra minúscula, depois
+  -- letra/dígito/underscore, até 31 caracteres.
+  constraint billing_token_pacotes_codigo_formato check (codigo ~ '^[a-z][a-z0-9_]{1,30}$'),
+  constraint billing_token_pacotes_tokens_positivo check (tokens > 0),
+  constraint billing_token_pacotes_preco_cents_nao_negativo check (preco_cents is null or preco_cents >= 0)
+);
+
+comment on table public.billing_token_pacotes is
+  'Tarefa 3, decisão 10: catálogo dos pacotes de tokens vendidos NA MÃO pelo admin da plataforma (N24). Não é uma tabela de crédito em si (o crédito é billing_token_ledger, via fn_billing_creditar_pacote); é o CADASTRO do que pode ser vendido. Sem delete (revoke, ver grants): um pacote já vendido fica no histórico, o admin só desativa (ativo=false). Sem grant para anon/authenticated: a tela lê pelo servidor, com service_role.';
+comment on column public.billing_token_pacotes.preco_cents is
+  'Tarefa 3, decisão 10 (N9): nulo até o Filipe definir o preço. Esta migração NÃO semeia nenhum pacote (nem código, nem preço): nenhum valor de produto é inventado. Com preco_cents nulo, fn_billing_creditar_pacote exige p_valor_cents informado na hora pelo admin; com os dois ausentes, 22023.';
+comment on column public.billing_token_pacotes.ativo is
+  'Tarefa 3, decisão 10: pacote inativo não pode mais ser creditado (fn_billing_creditar_pacote recusa com 22023), mas a linha permanece (histórico do que já foi vendido). Não existe delete concedido nesta tabela.';
+
+drop trigger if exists trg_billing_token_pacotes_updated_at on public.billing_token_pacotes;
+create trigger trg_billing_token_pacotes_updated_at
+  before update on public.billing_token_pacotes
+  for each row execute function public.fn_set_updated_at();
+
+alter table public.billing_token_pacotes enable row level security;
+
+revoke all on public.billing_token_pacotes from anon, authenticated;
+
+-- Decisão 10: select, insert e update para service_role (o admin cadastra e
+-- desativa); SEM delete (pacote vendido fica no histórico). O revoke
+-- explícito de delete/truncate fecha o default ACL do Supabase, que concede
+-- os quatro (select/insert/update/delete) mais truncate a service_role na
+-- criação de toda tabela nova, do mesmo jeito que billing_payments (Parte 1)
+-- já faz.
+grant select, insert, update on public.billing_token_pacotes to service_role;
+revoke delete, truncate on public.billing_token_pacotes from service_role;
+
+-- ============================================================================
+-- 13. fn_billing_creditar_pacote: credita um pacote do catálogo (decisão 10).
+-- ============================================================================
+create or replace function public.fn_billing_creditar_pacote(
+  p_org uuid,
+  p_pacote uuid,
+  p_valor_cents integer,
+  p_chave uuid,
+  p_nota text,
+  p_actor uuid
+)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_pacote record;
+  v_valor_cents integer;
+  v_credito jsonb;
+begin
+  select id, tokens, preco_cents, ativo into v_pacote
+    from public.billing_token_pacotes
+    where id = p_pacote;
+
+  if not found then
+    raise exception 'billing_pacote_nao_encontrado' using errcode = 'P0002';
+  end if;
+
+  -- coalesce(..., false): pacote sem linha de ativo definida (não deveria
+  -- existir, a coluna é not null, mas a checagem não confia em três valores
+  -- por acidente) nunca é tratado como "pode creditar".
+  if not coalesce(v_pacote.ativo, false) then
+    raise exception 'billing_pacote_inativo' using errcode = '22023';
+  end if;
+
+  -- Decisão 10: preço do catálogo quando preenchido; senão o valor informado
+  -- na hora. Os DOIS ausentes é 22023, nunca inventa preço (N9).
+  v_valor_cents := coalesce(v_pacote.preco_cents, p_valor_cents);
+
+  if v_valor_cents is null then
+    raise exception 'billing_valor_obrigatorio' using errcode = '22023';
+  end if;
+
+  -- fn_billing_creditar_tokens (0906) já trava por organização
+  -- (pg_advisory_xact_lock('billing_tokens:<org>')) e já é idempotente pela
+  -- mesma p_chave (reenvio não credita duas vezes): esta função não repete
+  -- nenhuma das duas, só resolve tokens/valor a partir do catálogo.
+  v_credito := public.fn_billing_creditar_tokens(p_org, v_pacote.tokens, p_chave, v_valor_cents, p_nota, p_actor);
+
+  return v_credito || jsonb_build_object('pacote_id', v_pacote.id, 'tokens', v_pacote.tokens, 'valor_cents', v_valor_cents);
+end;
+$$;
+
+comment on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) is
+  'Tarefa 3, decisão 10: credita um pacote do catálogo (billing_token_pacotes) pela ponte com fn_billing_creditar_tokens (0906). Pacote inexistente é P0002; pacote inativo é 22023. Valor = preco_cents do catálogo quando preenchido, senão p_valor_cents informado na hora; os DOIS ausentes é 22023 (N9, nenhum preço inventado). Idempotência e trava por organização herdadas de fn_billing_creditar_tokens. Devolve o jsonb dela acrescido de pacote_id, tokens e valor_cents efetivamente usados.';
+
+revoke execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) to service_role;
+
+-- ============================================================================
+-- 14. agent_worker não cadastra, não desativa nem credita pacote pelas peças
+-- novas desta parte 3 (mesmo racional de todo bloco análogo acima).
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke select, insert, update on public.billing_token_pacotes from agent_worker';
+    execute 'revoke execute on function public.fn_billing_creditar_pacote(uuid, uuid, integer, uuid, text, uuid) from agent_worker';
+  end if;
+end
+$$;
+
+-- ============================================================================
+-- 15. D-046: api_audit_log ganha uma policy RESTRICTIVE que fecha o insert de
+-- authenticated (decisão 11). A policy do AUTOR (audit_log_insert_tenant_member)
+-- NÃO é tocada, só esta acrescenta.
+-- ============================================================================
+drop policy if exists api_audit_log_insert_authenticated_restritiva on public.api_audit_log;
+create policy api_audit_log_insert_authenticated_restritiva on public.api_audit_log
+  as restrictive
+  for insert to authenticated
+  with check (false);
+
+comment on policy api_audit_log_insert_authenticated_restritiva on public.api_audit_log is
+  'D-046 (hiperbold/DEBITO.md), Tarefa 3 da fase F4: RESTRICTIVE que fecha o insert de authenticated por completo (with check(false) numa restrictive é AND com toda permissive da mesma ação, nenhuma linha passa), sem editar a policy permissive do autor audit_log_insert_tenant_member. Todo gravador de produção usa service_role (bypassrls) ou função security definer, nenhum depende do insert de authenticated (ver o comentário da Parte 3, acima); o único caminho fechado é o plano B de desenvolvimento sem chave de serviço (lib/audit/index.ts), que já é fire-and-forget e passa a só registrar a falha no log.';
+
+-- ============================================================================
+-- 16. agent_worker perde update, delete e truncate em api_audit_log (mesmo
+-- vocabulário da migration 0258, defesa em profundidade: ver o comentário da
+-- Parte 3, acima).
+-- ============================================================================
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke update, delete, truncate on public.api_audit_log from agent_worker';
+  end if;
+end
+$$;

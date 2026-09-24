@@ -708,3 +708,139 @@ describe("0908 Tarefa 2 (achado da Tarefa 1): estorno duplo fechado por estorna_
     expect(corpo).toMatch(/p_chave, p_nota, p_actor,\s*\n\s*p_pagamento\s*\n\s*\)/);
   });
 });
+
+// ============================================================================
+// Tarefa 3: catálogo de pacotes de tokens e D-046 (hiperbold/DEBITO.md).
+// ============================================================================
+
+describe("0908 Tarefa 3: posição da Parte 3 (depois da Parte 2, antes da VARREDURA anon)", () => {
+  it("PARTE 3 vem depois do bloco de agent_worker de fn_billing_avisar_assinatura e antes da VARREDURA anon", () => {
+    const inicioParte3 = BASELINE.indexOf("-- PARTE 3 (Tarefa 3): catálogo de pacotes de tokens vendidos na mão");
+    const inicioParte2AgentWorker = BASELINE.indexOf(
+      "revoke execute on function public.fn_billing_avisar_assinatura(uuid) from agent_worker",
+    );
+    const varreduraAnon = BASELINE.lastIndexOf("-- ---- VARREDURA anon:");
+    expect(inicioParte3).toBeGreaterThan(-1);
+    expect(inicioParte2AgentWorker).toBeGreaterThan(-1);
+    expect(inicioParte3).toBeGreaterThan(inicioParte2AgentWorker);
+    expect(inicioParte3).toBeLessThan(varreduraAnon);
+  });
+
+  it("o SQL da Parte 3 é igual entre a migração 0908 e o bloco do baseline (ignorando comentários e linhas em branco)", () => {
+    const sqlMigracao = removeComentariosEBrancas(
+      MIGRATION_0908.slice(MIGRATION_0908.indexOf("-- PARTE 3 (Tarefa 3)")),
+    );
+    const sqlBloco = removeComentariosEBrancas(
+      extraiBloco0908Baseline().slice(extraiBloco0908Baseline().indexOf("-- PARTE 3 (Tarefa 3)")),
+    );
+    expect(sqlBloco).toBe(sqlMigracao);
+  });
+});
+
+describe("0908 Tarefa 3: billing_token_pacotes (decisão 10)", () => {
+  it("colunas: codigo único no formato de billing_plans.code, tokens positivo, preco_cents nulo ou não negativo, ativo", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      expect(sql).toMatch(/constraint billing_token_pacotes_codigo_unique unique \(codigo\)/);
+      expect(sql).toMatch(
+        /constraint billing_token_pacotes_codigo_formato check \(codigo ~ '\^\[a-z\]\[a-z0-9_\]\{1,30\}\$'\)/,
+      );
+      expect(sql).toMatch(/constraint billing_token_pacotes_tokens_positivo check \(tokens > 0\)/);
+      expect(sql).toMatch(
+        /constraint billing_token_pacotes_preco_cents_nao_negativo check \(preco_cents is null or preco_cents >= 0\)/,
+      );
+      expect(sql).toMatch(/ativo boolean not null default true,/);
+    }
+  });
+
+  it("RLS ligada, nenhum grant para anon/authenticated, service_role com select+insert+update e SEM delete/truncate", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      expect(sql).toMatch(/alter table public\.billing_token_pacotes enable row level security;/);
+      expect(sql).toMatch(/revoke all on public\.billing_token_pacotes from anon, authenticated;/);
+      expect(sql).toMatch(/grant select, insert, update on public\.billing_token_pacotes to service_role;/);
+      expect(sql).toMatch(/revoke delete, truncate on public\.billing_token_pacotes from service_role;/);
+    }
+  });
+
+  it("nenhuma policy para authenticated (a tela lê pelo servidor) e nenhum semear de pacote (N9, nenhum preço inventado)", () => {
+    const parte3 = MIGRATION_0908.slice(MIGRATION_0908.indexOf("-- PARTE 3 (Tarefa 3)"));
+    expect(parte3).not.toMatch(/create policy[^;]*on public\.billing_token_pacotes/);
+    expect(parte3).not.toMatch(/insert into public\.billing_token_pacotes/);
+  });
+
+  it("agent_worker perde select/insert/update na tabela", () => {
+    for (const sql of [MIGRATION_0908, extraiBloco0908Baseline()]) {
+      expect(sql).toMatch(/revoke select, insert, update on public\.billing_token_pacotes from agent_worker/);
+    }
+  });
+});
+
+describe("0908 Tarefa 3: fn_billing_creditar_pacote (decisão 10)", () => {
+  it("é security definer, volatile, com search_path fixo, revoga de public/anon/authenticated e concede só a service_role", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      const inicio = sql.indexOf("create or replace function public.fn_billing_creditar_pacote(");
+      expect(inicio, "fn_billing_creditar_pacote não encontrada").toBeGreaterThan(-1);
+      const trecho = sql.slice(inicio, inicio + 400);
+      expect(trecho).toMatch(/returns jsonb/);
+      expect(trecho).toMatch(/\bvolatile\b/);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/set search_path = public, pg_temp/);
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_creditar_pacote\(uuid, uuid, integer, uuid, text, uuid\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_creditar_pacote\(uuid, uuid, integer, uuid, text, uuid\) to service_role;/,
+      );
+    }
+  });
+
+  it("pacote inexistente é P0002; pacote inativo é 22023 (coalesce(..., false))", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_creditar_pacote");
+    expect(corpo).toMatch(/if not found then\s*\n\s*raise exception 'billing_pacote_nao_encontrado' using errcode = 'P0002';/);
+    expect(corpo).toMatch(
+      /if not coalesce\(v_pacote\.ativo, false\) then\s*\n\s*raise exception 'billing_pacote_inativo' using errcode = '22023';/,
+    );
+  });
+
+  it("valor = preco_cents do catálogo, senão p_valor_cents; os dois ausentes é 22023 (N9)", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_creditar_pacote");
+    expect(corpo).toMatch(/v_valor_cents := coalesce\(v_pacote\.preco_cents, p_valor_cents\);/);
+    expect(corpo).toMatch(
+      /if v_valor_cents is null then\s*\n\s*raise exception 'billing_valor_obrigatorio' using errcode = '22023';/,
+    );
+  });
+
+  it("delega para fn_billing_creditar_tokens (0906) com os tokens do pacote", () => {
+    const corpo = corpoDaFuncao(MIGRATION_0908, "fn_billing_creditar_pacote");
+    expect(corpo).toMatch(
+      /v_credito := public\.fn_billing_creditar_tokens\(p_org, v_pacote\.tokens, p_chave, v_valor_cents, p_nota, p_actor\);/,
+    );
+  });
+
+  it("agent_worker perde execute em fn_billing_creditar_pacote", () => {
+    for (const sql of [MIGRATION_0908, extraiBloco0908Baseline()]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_creditar_pacote\(uuid, uuid, integer, uuid, text, uuid\) from agent_worker/,
+      );
+    }
+  });
+});
+
+describe("0908 Tarefa 3: D-046 fechado (hiperbold/DEBITO.md)", () => {
+  it("api_audit_log ganha a policy RESTRICTIVE for insert to authenticated with check (false), sem editar a policy do autor", () => {
+    for (const sql of [MIGRATION_0908, BASELINE]) {
+      expect(sql).toMatch(
+        /create policy api_audit_log_insert_authenticated_restritiva on public\.api_audit_log\s*\n\s*as restrictive\s*\n\s*for insert to authenticated\s*\n\s*with check \(false\);/,
+      );
+    }
+    // A policy do autor continua no baseline, intocada (mesmo texto de sempre).
+    expect(BASELINE).toMatch(
+      /CREATE POLICY "audit_log_insert_tenant_member" ON "public"\."api_audit_log" FOR INSERT TO "authenticated" WITH CHECK/,
+    );
+  });
+
+  it("agent_worker perde update, delete e truncate em api_audit_log", () => {
+    for (const sql of [MIGRATION_0908, extraiBloco0908Baseline()]) {
+      expect(sql).toMatch(/revoke update, delete, truncate on public\.api_audit_log from agent_worker/);
+    }
+  });
+});
