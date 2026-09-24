@@ -2,6 +2,9 @@ import type pg from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createContactHandler } from "@/app/api/v1/contacts/_handler";
 import { createLeadHandler } from "@/app/api/v1/leads/_handler";
+import { ApiError } from "@/lib/api/types";
+import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
+import { avisarLimiteDeLeadsAtingido } from "@/lib/leads/aviso-limite-de-leads";
 import { loadActiveRouter } from "@/lib/agent-engine/agent/router-config";
 import { loadPublishedAgentConfig } from "@/lib/agent-engine/agent/agent-config";
 import { createLeadSchema } from "@/lib/schemas/leads";
@@ -363,21 +366,40 @@ export async function activateCampaign(
         leadId = existing.rows[0]?.id ?? null;
       }
       if (!leadId) {
-        const lead = await createLeadHandler(admin, ctx, {
-          ...createLeadSchema.parse({
-            pipeline_id: config.pipeline_id,
-            stage_id: config.stage_id,
-            title: p.data.name,
-            contact_id: contactId,
-            owner_agent_id: config.agent_id,
-            source: "prospecting",
-            description: `Campanha: ${c.name}\nQualificação: ${config.qualification}`.slice(
-              0,
-              2000,
-            ),
-          }),
-          external_id: p.id,
-        });
+        // F3, decisão 5 (Tarefa 7): o teto de leads do plano NÃO pode
+        // derrubar a campanha inteira. O candidato recusado marca o motivo
+        // (mesmo vocabulário de 'skipped' que os dois `continue` acima já
+        // usam para "não processei este, mas por um motivo de negócio") e o
+        // laço segue para o próximo candidato; a Central recebe um aviso,
+        // deduplicado por dia, para o dono da organização perceber.
+        let lead: Record<string, unknown>;
+        try {
+          lead = await createLeadHandler(admin, ctx, {
+            ...createLeadSchema.parse({
+              pipeline_id: config.pipeline_id,
+              stage_id: config.stage_id,
+              title: p.data.name,
+              contact_id: contactId,
+              owner_agent_id: config.agent_id,
+              source: "prospecting",
+              description: `Campanha: ${c.name}\nQualificação: ${config.qualification}`.slice(
+                0,
+                2000,
+              ),
+            }),
+            external_id: p.id,
+          });
+        } catch (err) {
+          if (err instanceof ApiError && err.status === STATUS_RECUSA_DO_PLANO) {
+            await avisarLimiteDeLeadsAtingido(admin, org);
+            await db.query(
+              "update prospecting_candidates set status='skipped',error='Plano no limite de leads; candidato não processado.' where organization_id=$1 and id=$2",
+              [org, p.id],
+            );
+            continue;
+          }
+          throw err;
+        }
         leadId = String(lead.id);
         await db.query(
           "update prospecting_candidates set lead_id=$3 where organization_id=$1 and id=$2",

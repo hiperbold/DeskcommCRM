@@ -14,6 +14,7 @@ import { type NextRequest } from "next/server";
 import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { resolveOwnerPatch } from "@/lib/leads/owner-patch";
@@ -123,9 +124,12 @@ export async function POST(req: NextRequest): Promise<Response> {
   // `lost_reason` entra no select por causa da decisão de perda (issue #917): o
   // motivo que o negócio JÁ tem é metade da pergunta "esta escrita o deixa perdido
   // sem motivo?" — e perguntar card a card depois custaria N consultas.
+  // `status` entra por causa da pré-checagem de quantidade da F3 (decisão 5,
+  // Tarefa 7, abaixo): é o que diz quais destes leads ESTÃO fechados agora,
+  // ou seja, quais a mudança de etapa REABRIRIA.
   const { data: scoped } = await supabase
     .from("crm_leads")
-    .select("id, organization_id, tags, stage_id, pipeline_id, contact_id, lost_reason")
+    .select("id, organization_id, tags, stage_id, pipeline_id, contact_id, lost_reason, status")
     .eq("organization_id", organizationId)
     .in("id", input.lead_ids);
 
@@ -155,9 +159,12 @@ export async function POST(req: NextRequest): Promise<Response> {
       // resposta também: recusa de negócio, nomeando os cards, ANTES de o banco
       // tentar. Card que já tem motivo passa: trocar de "Perdido" para outra
       // etapa de perda não é uma perda nova.
+      // `is_won` entra junto com `is_lost` porque a pré-checagem de
+      // quantidade (F3, decisão 5, abaixo) precisa saber se o DESTINO é uma
+      // etapa ABERTA (nem ganho, nem perda): só reabertura conta para o teto.
       const { data: etapaDeDestino, error: etapaErr } = await supabase
         .from("crm_stages")
-        .select("id, name, is_lost")
+        .select("id, name, is_lost, is_won")
         .eq("id", input.params.stage_id)
         .maybeSingle();
       if (etapaErr) return fail("internal_error", etapaErr.message, 500, { requestId });
@@ -187,6 +194,39 @@ export async function POST(req: NextRequest): Promise<Response> {
         });
       }
 
+      // F3, decisão 5 (Tarefa 7): pré-checagem de QUANTIDADE antes da RPC. Só
+      // conta quem REABRE — leads que ESTÃO ganho/perdido agora e vão para
+      // uma etapa aberta (nem ganho, nem perda). Mover entre etapas abertas
+      // (o caso comum do lote) nunca conta para o teto, e por isso nunca cai
+      // aqui. `fn_mover_leads_em_lote` roda numa transação só: sem isto, uma
+      // única linha estourando o teto devolveria o gatilho PT402 genérico
+      // (tratado abaixo, na chamada) sem dizer QUANTOS cabem.
+      const etapaDeDestinoEstaAberta = !etapaDeDestino.is_won && !etapaDeDestino.is_lost;
+      if (etapaDeDestinoEstaAberta) {
+        const reabrindo = visible.filter((linha) => linha.status !== "open").length;
+        if (reabrindo > 0) {
+          // `createAdminClient()` (service_role): `fn_billing_pode_criar` só
+          // executa como service_role (revoke de authenticated na migration
+          // 0905) — o cliente da sessão do usuário não teria como chamá-la.
+          const capacidade = await podeCriar(createAdminClient(), organizationId, "leads");
+          if (
+            capacidade.teto !== null &&
+            capacidade.atual !== null &&
+            capacidade.atual + reabrindo > capacidade.teto
+          ) {
+            const restam = Math.max(0, capacidade.teto - capacidade.atual);
+            return fail(
+              "plano_limite_atingido",
+              restam > 0
+                ? `${t("O plano desta organização só tem espaço para mais")} ${restam} ${t("lead(s), e este lote reabriria")} ${reabrindo}. ${t("Fale com o suporte para ampliar o limite, ou reduza o lote.")}`
+                : t("O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar."),
+              STATUS_RECUSA_DO_PLANO,
+              { requestId },
+            );
+          }
+        }
+      }
+
       // Migration 0209: quem posiciona é o banco. Escrever aqui um
       // `position_in_stage` escalar para N linhas dava a TODOS os cards do lote
       // o mesmo número, e `midpoint(prev, next)` devolve NaN quando os vizinhos
@@ -210,14 +250,14 @@ export async function POST(req: NextRequest): Promise<Response> {
         p_lost_reason: (motivoDoLote ?? "").trim() || null,
       });
       if (error) {
-        // F3, decisão 5 (Tarefa 7): reabrir um lead ganho/perdido para uma
-        // etapa aberta, dentro do lote, também esbarra no teto de leads
-        // (mesmo gatilho de crm_leads). A função move tudo numa transação só
-        // ("todos ou nenhum"), então basta UMA linha estourar o teto para o
-        // lote inteiro voltar sem mover nada. Sem pré-checagem de quantidade
-        // aqui: o caso comum de lote é mover entre etapas abertas, que não
-        // conta para o teto (só reabertura conta), e ficou de fora desta
-        // tarefa (ver o relatório).
+        // F3, decisão 5 (Tarefa 7): rede de segurança da pré-checagem acima.
+        // A pré-checagem lê a quantidade ANTES do lote (bom para a mensagem:
+        // diz quantos cabem), mas entre a leitura e esta RPC outra escrita
+        // pode ter ocupado a vaga (corrida) — e a função move tudo numa
+        // transação só ("todos ou nenhum"), então basta UMA linha estourar o
+        // teto para o lote inteiro voltar sem mover nada. Aqui a mensagem já
+        // não sabe quantos cabem (o gatilho não devolve isso), mas nunca é
+        // 500: PT402 vira recusa de negócio do mesmo jeito.
         const recusaDoTeto = recusaDoPlano(error);
         if (recusaDoTeto) {
           return fail("plano_limite_atingido", recusaDoTeto.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });

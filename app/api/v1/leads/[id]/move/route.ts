@@ -14,6 +14,7 @@ import { type NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { moveLeadSchema, validateRequest } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -126,6 +127,15 @@ export async function POST(
     .maybeSingle();
 
   if (updErr) {
+    // F3, decisão 5 (Tarefa 7): esta é a rota que o BOARD usa para arrastar o
+    // card (comentário abaixo confirma). Reabrir um lead ganho/perdido para
+    // etapa aberta acima do teto de leads recusa com PT402, pelo mesmo
+    // gatilho de crm_leads que já vale no handler. Vai ANTES da recusa por
+    // motivo da perda: são gatilhos diferentes, e o de plano é BEFORE.
+    const recusaDoTeto = recusaDoPlano(updErr);
+    if (recusaDoTeto) {
+      return fail("plano_limite_atingido", recusaDoTeto.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    }
     // Rede de segurança (issue #917): se o banco recusar por motivo da perda mesmo
     // com a decisão acima, quem está na tela recebe a recusa de negócio. Sem isto,
     // qualquer caminho novo que escreva `stage_id` sem passar pela decisão volta a
