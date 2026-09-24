@@ -129,6 +129,17 @@ CRONS="
 # folgado evita o `curl -m` cortar uma rodada que, por algum motivo raro,
 # tenha muito para recuperar.
 25 5 * * *|90|api/v1/cron/conferir-carteira-de-tokens
+# O VENCIMENTO DA ASSINATURA (F4, Tarefa 5). 05:40 UTC (este container roda
+# com TZ: UTC, docker-compose.prod.yml), que são 02:40 em América/São_Paulo:
+# ainda dentro do MESMO dia civil paulista, mesmo fuso fixo (Brasil não tem
+# mais horário de verão) dos dois conferidores de billing acima. 15 minutos
+# depois de conferir-carteira-de-tokens (05:25, até 90s de execução): folga
+# de sobra para as três rodadas diárias de billing não disputarem a mesma
+# janela de I/O no banco. Só uma RPC por organização (fn_billing_conferir_
+# vencimento, ver lib/billing/assinatura/conferir-vencimentos.ts), sem passo
+# extra tipo o débito pendente da carteira: teto de 60s, igual ao irmão mais
+# simples (conferir-contadores-de-plano).
+40 5 * * *|60|api/v1/cron/conferir-vencimentos
 # AS RECORRÊNCIAS. Uma vez ao dia é o bastante: o que ela gera é uma conta a
 # pagar, e a diferença entre nascer às 5h ou às 17h não muda nada para quem paga.
 # Barato: uma consulta por instalação, e quem não tem molde nenhum sai na hora.

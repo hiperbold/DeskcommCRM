@@ -919,6 +919,33 @@ export const AUDIT_ACTIONS = [
   "billing.mode_changed",
   "billing.grace_days_changed",
   "billing.grace_extended",
+
+  // A assinatura de UMA organização, mexida à mão pelo admin da plataforma
+  // (fase F4, tarefa 5, migração 0908): pagamento na mão (N24), estorno,
+  // correção de período por erro de digitação, transição manual de estado e
+  // a marca de "cancela no fim do período". Cinco ações porque respondem
+  // perguntas diferentes: `payment_registered` é "quanto entrou e até
+  // quando o período foi renovado"; `payment_refunded` é "qual pagamento
+  // voltou atrás" (o período em si só muda com `period_corrected`, decisão 2
+  // da fase: o estorno nunca mexe sozinho no período); `period_corrected` é
+  // "o fim do período mudou por engano de digitação, e por quê" (o `motivo`
+  // vai no metadata: a função SQL não grava, quem audita é este arquivo,
+  // comentário da própria `fn_billing_corrigir_periodo`); `subscription_
+  // state_changed` cobre tanto a transição manual quanto `porEmAvaliacao`
+  // (que grava o período antes de mudar para `avaliacao`, duas RPCs, duas
+  // ações possíveis: `period_corrected` e esta); `cancel_at_period_end_
+  // changed` é "a organização vai renovar sozinha ou parar no fim do
+  // período contratado". O `metadata` carrega os números e o que a função
+  // devolveu, NUNCA a `nota` livre de `registrarPagamento`/
+  // `estornarPagamento` (pode ter dado do cliente, mesma régua da carteira
+  // de tokens); o `motivo` de `period_corrected`/`subscription_state_
+  // changed` não é essa nota, é a justificativa que a função pede para
+  // autorizar a escrita, e por isso vai no metadata.
+  "billing.payment_registered",
+  "billing.payment_refunded",
+  "billing.period_corrected",
+  "billing.subscription_state_changed",
+  "billing.cancel_at_period_end_changed",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */
