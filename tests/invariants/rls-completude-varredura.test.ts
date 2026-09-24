@@ -333,6 +333,23 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "dedup dos avisos de carteira (decisões 14 e 15), só de acréscimo, sem " +
       "policy nenhuma para `authenticated`.",
   },
+  // ─── billing_payments (migration 0908, fork Hiperbold, fase F4) ───
+  //
+  // Mesmo desenho deny-all de billing_token_ledger, acima: privilégio NENHUM
+  // para `authenticated`, a tela lê pelo servidor com `service_role`.
+  // `billing_token_pacotes` (mesma migração, decisão 10) NÃO entra aqui: é um
+  // CATÁLOGO global, sem coluna `organization_id` (não aparece no
+  // `inventario()` desta varredura), embora também tenha privilégio NENHUM
+  // para `authenticated` (provado no mesmo arquivo, caso 6).
+  {
+    tabela: "billing_payments",
+    razao:
+      "tests/invariants/planos-assinatura-estados.test.ts, caso 1 (fork Hiperbold, " +
+      "0908, decisão 1): `authenticated` barrado por `permission denied` ao " +
+      "SELECT e ao INSERT (medido sob `set role`/JWT real), e um caso à parte " +
+      "prova que nem `service_role` tem update/delete (o livro-caixa de " +
+      "pagamentos é só de acréscimo, mesmo desenho de billing_token_ledger).",
+  },
 ];
 
 /**
