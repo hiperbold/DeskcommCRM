@@ -1387,3 +1387,396 @@ describe("0909 Tarefa 5: limpeza", () => {
     expect(restam).toBe("0");
   });
 });
+
+// ============================================================================
+// TAREFA 6: estorno, chargeback, fim de assinatura, remoção (decisões 9, 10,
+// 22, 23; correções M1, M2, M3, M4, B2, B4, B8, M8).
+// ============================================================================
+
+function registrarEAplicarTipo(eventId: string, eventType: string, resourceId: string, confirmacaoSql: string | null): string {
+  sql(
+    `select public.fn_billing_asaas_registrar_evento('${eventId}', '${eventType}', '${resourceId}', 'sandbox', 'webhook', '{}'::jsonb);`,
+  );
+  const { id, lease } = reservarPorEventId(eventId);
+  return sql(
+    `select public.fn_billing_asaas_aplicar_evento('${id}'::uuid, '${lease}'::uuid, ${confirmacaoSql ?? "null"});`,
+  );
+}
+
+const ORG_T6_ESTORNO_PACOTE = "09090006-a5aa-4000-8000-000000000001";
+const ORG_T6_ESTORNO_ASSINATURA = "09090006-a5aa-4000-8000-000000000002";
+const ORG_T6_M2 = "09090006-a5aa-4000-8000-000000000003";
+const ORG_T6_CHARGEBACK_CONVIVE = "09090006-a5aa-4000-8000-000000000004";
+const ORG_T6_REVERSAO = "09090006-a5aa-4000-8000-000000000005";
+const ORG_T6_SUB_DELETED = "09090006-a5aa-4000-8000-000000000006";
+const ORG_T6_INACTIVE = "09090006-a5aa-4000-8000-000000000007";
+const ORG_T6_404 = "09090006-a5aa-4000-8000-000000000008";
+const ORG_T6_OVERDUE = "09090006-a5aa-4000-8000-000000000009";
+const ORG_T6_PAYMENT_DELETED = "09090006-a5aa-400a-8000-000000000010";
+const ORG_T6_M4_ANTES = "09090006-a5aa-400a-8000-000000000011";
+const ORG_T6_M8 = "09090006-a5aa-400a-8000-000000000012";
+
+const ORGS_T6 = [
+  ORG_T6_ESTORNO_PACOTE, ORG_T6_ESTORNO_ASSINATURA, ORG_T6_M2, ORG_T6_CHARGEBACK_CONVIVE,
+  ORG_T6_REVERSAO, ORG_T6_SUB_DELETED, ORG_T6_INACTIVE, ORG_T6_404, ORG_T6_OVERDUE,
+  ORG_T6_PAYMENT_DELETED, ORG_T6_M4_ANTES, ORG_T6_M8,
+];
+
+describe("0909 Tarefa 6: setup comum (organizações, compra ligada, pro à venda, pacote de teste)", () => {
+  it("cria as organizações e liga o necessário", () => {
+    sql(`
+      ${ORGS_T6.map((id) => `insert into public.organizations (id, slug, legal_name, display_name) values ('${id}', 't6-${id.slice(-6)}', 't6 LTDA', 't6') on conflict (id) do nothing;`).join("\n")}
+      select public.fn_billing_definir_compra_pelo_cliente(true, null);
+      select public.fn_billing_definir_a_venda('pro', true, null);
+      insert into public.billing_token_pacotes (codigo, nome, tokens, preco_cents, ativo)
+        values ('t6pacote', 'Pacote de teste T6', 50000, 3000, true)
+        on conflict (codigo) do update set preco_cents = 3000, ativo = true, tokens = 50000;
+    `);
+    const contagem = sql(
+      `select count(*) from public.organizations where id = any(array[${ORGS_T6.map((id) => `'${id}'`).join(",")}]::uuid[]);`,
+    ).trim();
+    expect(contagem).toBe(String(ORGS_T6.length));
+  });
+});
+
+describe("0909 Tarefa 6: grants das três peças novas (funções internas sem grant nenhum, função pública só service_role)", () => {
+  it("fn_billing_asaas_aplicar_estorno é deny-all para TODOS, inclusive service_role", () => {
+    for (const papel of ["anon", "authenticated", "service_role"]) {
+      expect(privilegiosDaFuncao(papel, "fn_billing_asaas_aplicar_estorno")).toBe("NENHUM");
+    }
+  });
+
+  it("fn_billing_asaas_aplicar_fim_da_assinatura é deny-all para TODOS, inclusive service_role", () => {
+    for (const papel of ["anon", "authenticated", "service_role"]) {
+      expect(privilegiosDaFuncao(papel, "fn_billing_asaas_aplicar_fim_da_assinatura")).toBe("NENHUM");
+    }
+  });
+
+  it("fn_billing_asaas_marcar_assinatura_encerrada: anon/authenticated sem execute, service_role com execute", () => {
+    expect(privilegiosDaFuncao("anon", "fn_billing_asaas_marcar_assinatura_encerrada")).toBe("NENHUM");
+    expect(privilegiosDaFuncao("authenticated", "fn_billing_asaas_marcar_assinatura_encerrada")).toBe("NENHUM");
+    expect(privilegiosDaFuncao("service_role", "fn_billing_asaas_marcar_assinatura_encerrada")).toContain("EXECUTE");
+  });
+});
+
+describe("0909 Tarefa 6: estorno não mexe em período nem em tokens (decisão 9)", () => {
+  it("pacote de tokens pago e depois estornado: carteira intacta, pedido vira estornado", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_ESTORNO_PACOTE}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ESTORNO_PACOTE}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ESTORNO_PACOTE}'::uuid, '${pedidoId}'::uuid, 'pay_t6_001', null, null);`);
+
+    const confPagamento = `jsonb_build_object('id','pay_t6_001','status','RECEIVED','value',30.00,'dueDate','2026-10-01','externalReference','HC:ord:${pedidoId}')`;
+    const pago = registrarEAplicarTipo("evt-t6-001a", "PAYMENT_RECEIVED", "pay_t6_001", confPagamento);
+    expect(pago).toContain('"resultado": "aplicado"');
+    expect(sql(`select creditado from public.billing_token_wallets where organization_id = '${ORG_T6_ESTORNO_PACOTE}' and fonte = 'avulso' and ciclo is null;`).trim()).toBe("50000");
+
+    const confEstorno = `jsonb_build_object('id','pay_t6_001','status','REFUNDED','value',30.00)`;
+    const estornado = registrarEAplicarTipo("evt-t6-001b", "PAYMENT_REFUNDED", "pay_t6_001", confEstorno);
+    expect(estornado).toContain('"resultado": "aplicado"');
+    expect(estornado).toContain('"alarme": "estorno_confirmado"');
+
+    // tokens intactos.
+    expect(sql(`select creditado from public.billing_token_wallets where organization_id = '${ORG_T6_ESTORNO_PACOTE}' and fonte = 'avulso' and ciclo is null;`).trim()).toBe("50000");
+    // pedido vira estornado.
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("estornado");
+    // duas linhas em billing_payments (RECEIVED + REFUNDED), a de estorno sem asaas_payment_id e sem período.
+    const linhas = sql(`select status, asaas_payment_id is null, billing_period_start is null from public.billing_payments where organization_id = '${ORG_T6_ESTORNO_PACOTE}' order by created_at;`);
+    expect(linhas).toContain("RECEIVED|f|t");
+    expect(linhas).toContain("REFUNDED|t|t");
+  });
+
+  it("assinatura paga e depois estornada: current_period_end intacto", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_ESTORNO_ASSINATURA}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ESTORNO_ASSINATURA}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ESTORNO_ASSINATURA}'::uuid, '${pedidoId}'::uuid, 'pay_t6_002', null, null);`);
+
+    const confPagamento = `jsonb_build_object('id','pay_t6_002','status','CONFIRMED','value',199.00,'dueDate','2026-10-01','externalReference','HC:ord:${pedidoId}')`;
+    registrarEAplicarTipo("evt-t6-002a", "PAYMENT_CONFIRMED", "pay_t6_002", confPagamento);
+    const fimAntes = sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T6_ESTORNO_ASSINATURA}';`).trim();
+    expect(fimAntes.length).toBeGreaterThan(0);
+
+    const confEstorno = `jsonb_build_object('id','pay_t6_002','status','REFUNDED','value',199.00)`;
+    const estornado = registrarEAplicarTipo("evt-t6-002b", "PAYMENT_REFUNDED", "pay_t6_002", confEstorno);
+    expect(estornado).toContain('"resultado": "aplicado"');
+
+    const fimDepois = sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T6_ESTORNO_ASSINATURA}';`).trim();
+    expect(fimDepois).toBe(fimAntes);
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("estornado");
+  });
+});
+
+describe("0909 Tarefa 6: M2, estorno antes do pagamento local (objeto já chega estornado)", () => {
+  it("sem linha original gravada: grava o original SEM CONCEDER e o estorno, na mesma transação", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_M2}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_M2}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_M2}'::uuid, '${pedidoId}'::uuid, 'pay_t6_003', null, null);`);
+
+    // NENHUM PAYMENT_CONFIRMED/RECEIVED aplicado antes: o objeto confirmado já chega REFUNDED.
+    const confEstorno = `jsonb_build_object('id','pay_t6_003','status','REFUNDED','value',30.00,'externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-t6-003", "PAYMENT_REFUNDED", "pay_t6_003", confEstorno);
+    expect(resultado).toContain('"resultado": "aplicado"');
+
+    const linhas = sql(`select status, asaas_payment_id, contract_id is not null from public.billing_payments where organization_id = '${ORG_T6_M2}' order by created_at;`);
+    expect(linhas).toContain("RECEIVED|pay_t6_003|t");
+    expect(linhas).toContain("REFUNDED||t");
+    // não concedeu: carteira NUNCA foi creditada, pedido não passou por pago.
+    const creditado = sql(`select count(*) from public.billing_token_wallets where organization_id = '${ORG_T6_M2}';`).trim();
+    expect(creditado).toBe("0");
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("estornado");
+  });
+});
+
+describe("0909 Tarefa 6: chargeback e depois estorno real convivem (índice único só em REFUNDED)", () => {
+  it("CHARGEBACK_REQUESTED seguido de REFUNDED do MESMO pagamento original: as duas linhas existem, sem erro", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_CHARGEBACK_CONVIVE}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_CHARGEBACK_CONVIVE}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_CHARGEBACK_CONVIVE}'::uuid, '${pedidoId}'::uuid, 'pay_t6_004', null, null);`);
+    const confPagamento = `jsonb_build_object('id','pay_t6_004','status','RECEIVED','value',199.00,'dueDate','2026-10-01','externalReference','HC:ord:${pedidoId}')`;
+    registrarEAplicarTipo("evt-t6-004a", "PAYMENT_RECEIVED", "pay_t6_004", confPagamento);
+
+    const confChargeback = `jsonb_build_object('id','pay_t6_004','status','CHARGEBACK_REQUESTED','value',199.00)`;
+    const chargeback = registrarEAplicarTipo("evt-t6-004b", "PAYMENT_CHARGEBACK_REQUESTED", "pay_t6_004", confChargeback);
+    expect(chargeback).toContain('"resultado": "aplicado"');
+    expect(chargeback).toContain('"alarme": "chargeback_confirmado"');
+
+    const confRefund = `jsonb_build_object('id','pay_t6_004','status','REFUNDED','value',199.00)`;
+    const refund = registrarEAplicarTipo("evt-t6-004c", "PAYMENT_REFUNDED", "pay_t6_004", confRefund);
+    expect(refund).toContain('"resultado": "aplicado"');
+
+    const contagens = sql(
+      `select status, count(*) from public.billing_payments where organization_id = '${ORG_T6_CHARGEBACK_CONVIVE}' group by status order by status;`,
+    );
+    expect(contagens).toContain("CHARGEBACK_REQUESTED|1");
+    expect(contagens).toContain("REFUNDED|1");
+    expect(contagens).toContain("RECEIVED|1");
+  });
+});
+
+describe("0909 Tarefa 6: reversão de chargeback só alarma (N43)", () => {
+  it("PAYMENT_AWAITING_CHARGEBACK_REVERSAL não grava billing_payments nem mexe em nada, só alarma", () => {
+    const antes = sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T6_REVERSAO}';`).trim();
+    const conf = `jsonb_build_object('id','pay_t6_005','status','AWAITING_CHARGEBACK_REVERSAL','value',199.00)`;
+    const resultado = registrarEAplicarTipo("evt-t6-005", "PAYMENT_AWAITING_CHARGEBACK_REVERSAL", "pay_t6_005", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "reversao_de_chargeback"');
+    const depois = sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T6_REVERSAO}';`).trim();
+    expect(depois).toBe(antes);
+  });
+});
+
+describe("0909 Tarefa 6: SUBSCRIPTION_DELETED liga cancelar no fim e grava o marcador (decisão 10/22)", () => {
+  it("confirmado (removida = true): cancel_at_period_end = true, marcador preenchido, pedido aberto cancelado", () => {
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6006', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+       where organization_id = '${ORG_T6_SUB_DELETED}';
+      insert into public.billing_orders (organization_id, ambiente, tipo, plan_id, ciclo, metodo, amount_cents, chave, asaas_subscription_id, status)
+        select '${ORG_T6_SUB_DELETED}', 'sandbox', 'assinatura', bc.plan_id, 'monthly', 'CREDIT_CARD', 19900, gen_random_uuid(), 'sub_t6006', 'aguardando_pagamento'
+        from public.billing_contracts bc where bc.organization_id = '${ORG_T6_SUB_DELETED}';
+    `);
+
+    const conf = `jsonb_build_object('id','sub_t6006','removida',true)`;
+    const resultado = registrarEAplicarTipo("evt-t6-006", "SUBSCRIPTION_DELETED", "sub_t6006", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+
+    const linha = sql(`select cancel_at_period_end, asaas_assinatura_encerrada_em is not null from public.billing_contracts where organization_id = '${ORG_T6_SUB_DELETED}';`);
+    expect(linha).toBe("t|t");
+
+    const pedido = sql(`select status from public.billing_orders where organization_id = '${ORG_T6_SUB_DELETED}' and asaas_subscription_id = 'sub_t6006';`).trim();
+    expect(pedido).toBe("cancelado");
+  });
+});
+
+describe("0909 Tarefa 6: SUBSCRIPTION_INACTIVATED liga sem marcador; SUBSCRIPTION_UPDATED ACTIVE desliga (M3)", () => {
+  it("INACTIVATED (removida=false, status=INACTIVE): cancel_at_period_end=true, marcador continua nulo; UPDATED ACTIVE desliga de novo", () => {
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6007', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+       where organization_id = '${ORG_T6_INACTIVE}';
+    `);
+
+    const confInactive = `jsonb_build_object('id','sub_t6007','removida',false,'status','INACTIVE')`;
+    const resultadoInactive = registrarEAplicarTipo("evt-t6-007a", "SUBSCRIPTION_INACTIVATED", "sub_t6007", confInactive);
+    expect(resultadoInactive).toContain('"resultado": "aplicado"');
+
+    const linha1 = sql(`select cancel_at_period_end, asaas_assinatura_encerrada_em is null from public.billing_contracts where organization_id = '${ORG_T6_INACTIVE}';`);
+    expect(linha1, "M3: INACTIVE puro liga cancel_at_period_end mas NÃO grava o marcador").toBe("t|t");
+
+    const confActive = `jsonb_build_object('id','sub_t6007','removida',false,'status','ACTIVE')`;
+    const resultadoActive = registrarEAplicarTipo("evt-t6-007b", "SUBSCRIPTION_UPDATED", "sub_t6007", confActive);
+    expect(resultadoActive).toContain('"resultado": "aplicado"');
+
+    const cancelDepois = sql(`select cancel_at_period_end from public.billing_contracts where organization_id = '${ORG_T6_INACTIVE}';`).trim();
+    expect(cancelDepois).toBe("f");
+  });
+});
+
+describe("0909 Tarefa 6: 404 na confirmação conta como removida (decisão 10)", () => {
+  it("removida=true numa SUBSCRIPTION_INACTIVATED (simulando 404 no GET) grava o marcador do mesmo jeito que DELETED", () => {
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6008', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+       where organization_id = '${ORG_T6_404}';
+    `);
+    const conf = `jsonb_build_object('id','sub_t6008','removida',true,'status',null)`;
+    const resultado = registrarEAplicarTipo("evt-t6-008", "SUBSCRIPTION_INACTIVATED", "sub_t6008", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    const linha = sql(`select cancel_at_period_end, asaas_assinatura_encerrada_em is not null from public.billing_contracts where organization_id = '${ORG_T6_404}';`);
+    expect(linha).toBe("t|t");
+  });
+});
+
+describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido com o alarme remover_cobranca_pendente (A1)", () => {
+  it("pedido avulso aguardando pagamento, confirmado OVERDUE: status vencido, alarme gravado", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_OVERDUE}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_OVERDUE}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_OVERDUE}'::uuid, '${pedidoId}'::uuid, 'pay_t6_009', null, null);`);
+
+    const conf = `jsonb_build_object('id','pay_t6_009','status','OVERDUE','externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-t6-009", "PAYMENT_OVERDUE", "pay_t6_009", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "remover_cobranca_pendente"');
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("vencido");
+    // não mexe no contrato (decisão 10).
+    expect(sql(`select status from public.billing_contracts where organization_id = '${ORG_T6_OVERDUE}';`).trim()).toBe("ativa");
+  });
+});
+
+describe("0909 Tarefa 6: PAYMENT_DELETED confirmado cancela o pedido", () => {
+  it("removida=true: pedido cancelado, contrato intacto", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_PAYMENT_DELETED}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_PAYMENT_DELETED}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_PAYMENT_DELETED}'::uuid, '${pedidoId}'::uuid, 'pay_t6_010', null, null);`);
+
+    const conf = `jsonb_build_object('id','pay_t6_010','removida',true,'externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-t6-010", "PAYMENT_DELETED", "pay_t6_010", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("cancelado");
+  });
+});
+
+describe("0909 Tarefa 6: M1, reassinatura depois do cancelamento passa em fn_billing_criar_pedido", () => {
+  it("com o marcador preenchido (reusa ORG_T6_SUB_DELETED), um pedido novo do mesmo tipo é aceito", () => {
+    const resultado = sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_SUB_DELETED}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    expect(resultado).toContain('"ja_existia": false');
+  });
+});
+
+describe("0909 Tarefa 6: trava de delete respeita o marcador gravado por SUBSCRIPTION_DELETED", () => {
+  it("com o marcador preenchido (ORG_T6_SUB_DELETED), apagar o contrato agora FUNCIONA", () => {
+    const erro = erroSob("service_role", `delete from public.billing_contracts where organization_id = '${ORG_T6_SUB_DELETED}'`);
+    expect(erro, `o delete deveria ter passado, o marcador já está preenchido: ${erro}`).toBeNull();
+    expect(sql(`select count(*) from public.billing_contracts where organization_id = '${ORG_T6_SUB_DELETED}';`).trim()).toBe("0");
+  });
+});
+
+describe("0909 Tarefa 6 (B2): fn_billing_estornar_pagamento recusa linha de origem asaas", () => {
+  it("pagamento origem=asaas: 22023 billing_pagamento_nao_e_manual", () => {
+    const pagamentoId = sql(
+      `select id from public.billing_payments where organization_id = '${ORG_T6_ESTORNO_ASSINATURA}' and status = 'CONFIRMED';`,
+    ).trim();
+    expect(pagamentoId.length).toBeGreaterThan(0);
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_estornar_pagamento('${ORG_T6_ESTORNO_ASSINATURA}'::uuid, '${pagamentoId}'::uuid, gen_random_uuid(), 'teste B2', null)`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_pagamento_nao_e_manual");
+  });
+});
+
+describe("0909 Tarefa 6 (M4): fn_billing_mudar_estado recusa cancelada manual com assinatura Asaas viva", () => {
+  it("sem o marcador: 22023 billing_cancele_no_asaas_antes; com o marcador: sucesso", () => {
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6m4', asaas_assinatura_encerrada_em = null
+       where organization_id = '${ORG_T6_M4_ANTES}';
+    `);
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_mudar_estado('${ORG_T6_M4_ANTES}'::uuid, 'cancelada', 'teste M4', null)`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_cancele_no_asaas_antes");
+
+    sql(`update public.billing_contracts set asaas_assinatura_encerrada_em = now() where organization_id = '${ORG_T6_M4_ANTES}';`);
+    const resultado = sql(
+      `select public.fn_billing_mudar_estado('${ORG_T6_M4_ANTES}'::uuid, 'cancelada', 'teste M4', null);`,
+    );
+    expect(resultado).toContain('"estado_novo": "cancelada"');
+  });
+});
+
+describe("0909 Tarefa 6 (M8): sentinela pre_roteamento:outro_app fecha sem GET e sem conceder", () => {
+  it("p_confirmacao = {\"pre_roteamento\":\"outro_app\"} fecha outro_app, sem tocar em billing_payments", () => {
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t6-011', 'PAYMENT_CONFIRMED', 'pay_t6_011', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const { id, lease } = reservarPorEventId("evt-t6-011");
+    const resultado = sql(
+      `select public.fn_billing_asaas_aplicar_evento('${id}'::uuid, '${lease}'::uuid, '{"pre_roteamento":"outro_app"}'::jsonb);`,
+    );
+    expect(resultado).toContain('"resultado": "outro_app"');
+    expect(sql(`select resultado, tentativas, proxima_tentativa_em is null from public.asaas_webhook_events where event_id = 'evt-t6-011';`)).toBe(
+      "outro_app|0|t",
+    );
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_t6_011';`).trim()).toBe("0");
+  });
+});
+
+describe("0909 Tarefa 6 (M8): aguardando ganha backoff, não é reservado de novo sem limite, e vira erro na décima", () => {
+  it("primeira vez sem confirmação: tentativas=1, proxima_tentativa_em no futuro, e a reserva imediata NÃO pega o evento de novo", () => {
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t6-012', 'PAYMENT_CONFIRMED', 'pay_t6_012', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const { id, lease } = reservarPorEventId("evt-t6-012");
+    const resultado = sql(`select public.fn_billing_asaas_aplicar_evento('${id}'::uuid, '${lease}'::uuid, null);`);
+    expect(resultado).toContain('"resultado": "aguardando"');
+
+    const linha = sql(`select tentativas, proxima_tentativa_em > now(), lease_token is null from public.asaas_webhook_events where id = '${id}';`);
+    expect(linha).toBe("1|t|t");
+
+    // reserva imediata: proxima_tentativa_em ainda está no futuro (backoff mínimo de 2 minutos), então NÃO pega este evento.
+    sql(`select public.fn_billing_asaas_reservar_eventos(50, 300);`);
+    const leaseDepois = sql(`select lease_token is null from public.asaas_webhook_events where id = '${id}';`).trim();
+    expect(leaseDepois, "evento aguardando foi reservado de novo IMEDIATAMENTE, sem respeitar o backoff (o defeito do M8)").toBe("t");
+  });
+
+  it("na décima tentativa sem confirmação, vira erro e sai do índice dos pendentes", () => {
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-t6-013', 'PAYMENT_CONFIRMED', 'pay_t6_013', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const eventoId = sql(`select id from public.asaas_webhook_events where event_id = 'evt-t6-013';`).trim();
+
+    // simula as nove tentativas anteriores (tentativas=9) sem esperar o backoff de verdade: dá um lease direto e chama aplicar_evento.
+    sql(`update public.asaas_webhook_events set tentativas = 9 where id = '${eventoId}';`);
+    sql(`select public.fn_billing_asaas_reservar_eventos(50, 300);`);
+    const linha = sql(`select id, lease_token from public.asaas_webhook_events where event_id = 'evt-t6-013';`);
+    const [id, lease] = linha.split("|");
+
+    const resultado = sql(`select public.fn_billing_asaas_aplicar_evento('${id.trim()}'::uuid, '${lease.trim()}'::uuid, null);`);
+    expect(resultado).toContain('"resultado": "erro"');
+
+    const linhaFinal = sql(`select resultado, tentativas, proxima_tentativa_em is null from public.asaas_webhook_events where id = '${eventoId}';`);
+    expect(linhaFinal).toBe("erro|10|t");
+  });
+});
+
+describe("0909 Tarefa 6: limpeza", () => {
+  it("apaga as organizações de teste (billing_contracts primeiro, sem assinatura Asaas) e os eventos", () => {
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = null, asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+       where organization_id = any(array[${ORGS_T6.map((id) => `'${id}'`).join(",")}]::uuid[]);
+      delete from public.organizations where id = any(array[${ORGS_T6.map((id) => `'${id}'`).join(",")}]::uuid[]);
+      delete from public.asaas_webhook_events where event_id like 'evt-t6-%';
+    `);
+    const restam = sql(
+      `select count(*) from public.organizations where id = any(array[${ORGS_T6.map((id) => `'${id}'`).join(",")}]::uuid[]);`,
+    ).trim();
+    expect(restam).toBe("0");
+  });
+});
