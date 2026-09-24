@@ -192,3 +192,41 @@ describe("conectar", () => {
     expect(screen.queryByText(/Segredo \(assinatura\)/)).not.toBeInTheDocument();
   });
 });
+
+describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Conectar»", () => {
+  it("desconectado, com o bloqueio valendo, o botão fica desabilitado e mostra o motivo", async () => {
+    getMock.mockResolvedValue(desconectado);
+    render(<CanalParceiroClient bloqueio={{ desabilitado: true, motivo: "2 de 2 conexões do plano Starter" }} />);
+
+    const botao = await screen.findByRole("button", { name: /conectar/i });
+    fireEvent.change(screen.getByLabelText("Conta"), { target: { value: "acc_1" } });
+    fireEvent.change(screen.getByLabelText(/Chave de API/), { target: { value: "sk_live_x" } });
+
+    expect(botao).toBeDisabled();
+    expect(botao).toHaveAttribute("title", "2 de 2 conexões do plano Starter");
+    expect(screen.getByText("2 de 2 conexões do plano Starter")).toBeInTheDocument();
+  });
+
+  it("sem a prop `bloqueio`, o botão continua habilitado como hoje (preenchido)", async () => {
+    getMock.mockResolvedValue(desconectado);
+    render(<CanalParceiroClient />);
+
+    const botao = await screen.findByRole("button", { name: /conectar/i });
+    fireEvent.change(screen.getByLabelText("Conta"), { target: { value: "acc_1" } });
+    fireEvent.change(screen.getByLabelText(/Chave de API/), { target: { value: "sk_live_x" } });
+
+    expect(botao).toBeEnabled();
+    expect(botao).not.toHaveAttribute("title");
+  });
+
+  it("já conectado, o bloqueio NÃO trava «Reconectar» (reconectar não conta contra o teto)", async () => {
+    getMock.mockResolvedValue(conectado);
+    render(<CanalParceiroClient bloqueio={{ desabilitado: true, motivo: "2 de 2 conexões do plano Starter" }} />);
+
+    const botao = await screen.findByRole("button", { name: /reconectar/i });
+    // A conta já vem preenchida do estado carregado; a chave é a única coisa
+    // que falta para o botão sair do `disabled` por campo vazio.
+    fireEvent.change(await screen.findByLabelText(/Chave de API/), { target: { value: "sk_live_x" } });
+    expect(botao).toBeEnabled();
+  });
+});

@@ -86,7 +86,7 @@ export function PipelinesClient({
     // rodou, ou em que ninguém foi ainda ao quadro criar o primeiro.
     return (
       <Card className="p-6 text-sm leading-relaxed text-muted-foreground">
-        {t("Você ainda não tem nenhum funil. Enquanto for assim, o agente atende normalmente, mas não tem para onde levar o card de ninguém — não há etapas para onde mover. Criar o funil é feito por quem instalou o sistema, direto no banco; depois ele aparece aqui para você escolher a etapa de cada passo.")}
+        {t("Você ainda não tem nenhum funil. Enquanto for assim, o agente atende normalmente, mas não tem para onde levar o card de ninguém: não há etapas para onde mover. Crie o funil em Funis, no menu lateral; depois ele aparece aqui para você escolher a etapa de cada passo.")}
       </Card>
     );
   }

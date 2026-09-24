@@ -178,3 +178,40 @@ describe("Novo Lead pelo funil — o lead nasce com contato", () => {
     expect(screen.queryByText(/não recebe WhatsApp/i)).toBeNull();
   });
 });
+
+describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Criar lead»", () => {
+  it("com o bloqueio valendo, o botão fica desabilitado e mostra o motivo", async () => {
+    render(
+      <NewLeadDialog
+        open
+        onOpenChange={() => {}}
+        pipelineId="33333333-3333-4333-8333-333333333333"
+        stages={ETAPAS}
+        contactId={MICHELLE.id}
+        bloqueio={{ desabilitado: true, motivo: "3 de 3 leads do plano Starter" }}
+      />,
+    );
+
+    const botao = await screen.findByRole("button", { name: "Criar lead" });
+    expect(botao).toBeDisabled();
+    expect(botao).toHaveAttribute("title", "3 de 3 leads do plano Starter");
+    expect(screen.getByText("3 de 3 leads do plano Starter")).toBeInTheDocument();
+    expect(criarLead).not.toHaveBeenCalled();
+  });
+
+  it("sem a prop `bloqueio`, o botão continua habilitado como hoje", async () => {
+    render(
+      <NewLeadDialog
+        open
+        onOpenChange={() => {}}
+        pipelineId="33333333-3333-4333-8333-333333333333"
+        stages={ETAPAS}
+        contactId={MICHELLE.id}
+      />,
+    );
+
+    const botao = await screen.findByRole("button", { name: "Criar lead" });
+    expect(botao).toBeEnabled();
+    expect(botao).not.toHaveAttribute("title");
+  });
+});

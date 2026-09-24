@@ -140,6 +140,49 @@ describe("o botão da gaveta", () => {
   });
 });
 
+describe("Fase F3, tarefa 9 — bloqueio do plano no botão «Novo funil»", () => {
+  const VIVO: FunilDaLista = {
+    id: "funil-vivo",
+    name: "Comercial",
+    slug: "comercial",
+    description: null,
+    position: 1,
+    is_default: true,
+  };
+
+  it("com o bloqueio valendo, o botão fica desabilitado e mostra o motivo", () => {
+    render(
+      comQuery(
+        <FunisClient
+          funis={[VIVO]}
+          arquivados={[]}
+          podeGerenciar
+          podeImportar
+          bloqueio={{ desabilitado: true, motivo: "3 de 3 funis do plano Starter" }}
+        />,
+      ),
+    );
+
+    const botao = screen.getByTestId("novo-funil");
+    expect(botao).toBeDisabled();
+    expect(botao).toHaveAttribute("title", "3 de 3 funis do plano Starter");
+    expect(screen.getByTestId("funis-bloqueio-motivo-lista")).toHaveTextContent(
+      "3 de 3 funis do plano Starter",
+    );
+  });
+
+  it("sem a prop `bloqueio`, o botão continua habilitado como hoje", () => {
+    render(
+      comQuery(<FunisClient funis={[VIVO]} arquivados={[]} podeGerenciar podeImportar />),
+    );
+
+    const botao = screen.getByTestId("novo-funil");
+    expect(botao).toBeEnabled();
+    expect(botao).not.toHaveAttribute("title");
+    expect(screen.queryByTestId("funis-bloqueio-motivo-lista")).toBeNull();
+  });
+});
+
 describe("o erro da linha", () => {
   it("não usa o mesmo testid dos dois lados da tela quando o funil está nos dois", async () => {
     const user = userEvent.setup();
