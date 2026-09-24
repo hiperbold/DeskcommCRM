@@ -52,6 +52,10 @@ import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import {
+  estadoDaAssinatura,
+  type ResultadoEstadoDaAssinatura,
+} from "@/lib/billing/assinatura/estado-da-assinatura";
 import { estadoDoBloqueio, type EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   linhasDaTelaDePlano,
@@ -116,7 +120,7 @@ export default async function PlanoEUsoPage() {
   const tagDoIdioma = tagDeIdioma(idioma);
 
   const admin = createAdminClient();
-  const [usoResultado, planoResultado, saldoResultado, bloqueio] = await Promise.all([
+  const [usoResultado, planoResultado, saldoResultado, bloqueio, assinatura] = await Promise.all([
     usoDaOrganizacao(admin, activeOrg.orgId, logger),
     planoDaOrganizacao(admin, activeOrg.orgId, logger),
     saldoDaOrganizacao(admin, activeOrg.orgId, logger),
@@ -126,6 +130,11 @@ export default async function PlanoEUsoPage() {
     // duplica o custo das duas leituras acima em toda instalação no modo
     // `avisar` de hoje.
     estadoDoBloqueio(admin, activeOrg.orgId, {}, logger),
+    // Fase F4, tarefa 8: o estado da assinatura (em dia, em avaliação,
+    // atrasada, suspensa, cancelada), o período e, quando o modo leitura
+    // (decisão 5) está valendo de verdade para esta organização, o aviso do
+    // que parou e do que continua.
+    estadoDaAssinatura(admin, activeOrg.orgId, logger),
   ]);
 
   const leituraFalhou = usoResultado.leituraFalhou || planoResultado.leituraFalhou;
@@ -159,6 +168,8 @@ export default async function PlanoEUsoPage() {
         )}
       </header>
 
+      <CartaoDaAssinatura assinatura={assinatura} t={t} tagDoIdioma={tagDoIdioma} />
+
       <BannerDoBloqueio bloqueio={bloqueio} t={t} tagDoIdioma={tagDoIdioma} />
 
       {leituraFalhou && (
@@ -186,6 +197,116 @@ export default async function PlanoEUsoPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+/** Rótulo de cada estado do contrato (fase F4, tarefa 8), mesmo vocabulário da aba do admin. */
+function rotuloDoEstadoDaAssinatura(status: string, t: (texto: string) => string): string {
+  switch (status) {
+    case "avaliacao":
+      return t("Em avaliação");
+    case "ativa":
+      return t("Em dia");
+    case "atrasada":
+      return t("Atrasada");
+    case "suspensa":
+      return t("Suspensa");
+    case "cancelada":
+      return t("Cancelada");
+    default:
+      return status;
+  }
+}
+
+const ESTADO_DA_ASSINATURA_VARIANT: Record<string, "success" | "info" | "warning" | "error" | "neutral"> = {
+  avaliacao: "info",
+  ativa: "success",
+  atrasada: "warning",
+  suspensa: "error",
+  cancelada: "error",
+};
+
+/**
+ * O que PARA e o que CONTINUA no modo leitura (decisão 5 da fase F4): texto
+ * fixo, na mesma ordem do comentário da migração 0908, parte 2. Nunca traz
+ * valor nem dado de pagamento (mesma régua dos avisos da Central,
+ * `fn_billing_avisar_assinatura`).
+ */
+function CartaoDaAssinatura({
+  assinatura,
+  t,
+  tagDoIdioma,
+}: {
+  assinatura: ResultadoEstadoDaAssinatura;
+  t: (texto: string) => string;
+  tagDoIdioma: string;
+}) {
+  if (assinatura.leituraFalhou) {
+    return (
+      <div className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive">
+        {t("Não foi possível ler o estado da assinatura agora. Recarregue a página antes de decidir qualquer coisa com base nele.")}
+      </div>
+    );
+  }
+
+  if (!assinatura.contrato) return null;
+
+  const { contrato, modoLeituraValendo } = assinatura;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("Assinatura")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <Badge variant={ESTADO_DA_ASSINATURA_VARIANT[contrato.status] ?? "neutral"}>
+            {rotuloDoEstadoDaAssinatura(contrato.status, t)}
+          </Badge>
+          {contrato.status === "avaliacao" && contrato.currentPeriodEnd && (
+            <span className="text-sm text-muted-foreground">
+              {t("até")} {new Date(contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma)}
+            </span>
+          )}
+          {contrato.status === "atrasada" && contrato.dataPrevistaDaSuspensao && (
+            <span className="text-sm text-muted-foreground">
+              {t("modo leitura a partir de")}{" "}
+              {new Date(contrato.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma)}
+            </span>
+          )}
+        </div>
+
+        {contrato.currentPeriodEnd && (
+          <p className="text-sm text-muted-foreground">
+            {t("Próximo vencimento")}:{" "}
+            <span className="font-medium text-text">
+              {new Date(contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma)}
+            </span>
+            {contrato.cancelAtPeriodEnd && (
+              <span className="ml-2">{t("(a assinatura cancela no fim deste período)")}</span>
+            )}
+          </p>
+        )}
+
+        {modoLeituraValendo && (
+          <div className="space-y-1.5 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            <p className="font-medium">
+              {t("O acesso desta organização está em modo leitura por falta de pagamento.")}
+            </p>
+            <p>
+              {t(
+                "Param: a IA, as automações, as campanhas de disparo, os follow-ups e a criação de funil, etapa, integração e convite.",
+              )}
+            </p>
+            <p>
+              {t(
+                "Continuam: receber mensagem, responder à mão, ler tudo e criar lead.",
+              )}
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -13,8 +13,17 @@ import {
   ajustarTokens,
   cancelarAdicional,
   contratarAdicional,
+  creditarPacote,
   creditarTokens,
 } from "@/app/actions/admin/carteiraDeTokens";
+import {
+  cancelarNoFimDoPeriodo,
+  corrigirPeriodo,
+  estornarPagamento,
+  mudarEstadoDaAssinatura,
+  porEmAvaliacao,
+  registrarPagamento,
+} from "@/app/actions/admin/assinaturaDaOrganizacao";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,6 +47,10 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
+import type {
+  PagamentoDaAssinatura,
+  ResultadoEstadoDaAssinatura,
+} from "@/lib/billing/assinatura/estado-da-assinatura";
 import type { EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   ajusteDoFormulario,
@@ -79,6 +92,15 @@ export interface AdicionalAtivo {
   created_at: string;
 }
 
+/** Uma linha de `billing_token_pacotes` com `ativo = true` (fase F4, tarefa 8, decisão 10). */
+export interface PacoteAtivo {
+  id: string;
+  codigo: string;
+  nome: string;
+  tokens: number;
+  preco_cents: number | null;
+}
+
 interface TenantPlanoClientProps {
   organizationId: string;
   podeEscrever: boolean;
@@ -99,6 +121,12 @@ interface TenantPlanoClientProps {
   margem: ResultadoPainelDeMargem;
   adicionaisAtivos: AdicionalAtivo[];
   leituraDosAdicionaisFalhou: boolean;
+  /** Fase F4, tarefa 8: estado, período, cancel_at_period_end e modo leitura da assinatura. */
+  assinatura: ResultadoEstadoDaAssinatura;
+  pagamentos: PagamentoDaAssinatura[];
+  leituraDosPagamentosFalhou: boolean;
+  pacotesAtivos: PacoteAtivo[];
+  leituraDosPacotesFalhou: boolean;
 }
 
 /** Nome legível de cada fonte da carteira, na mesma ordem de `FONTES_DA_CARTEIRA`. */
@@ -232,6 +260,11 @@ export function TenantPlanoClient({
   margem,
   adicionaisAtivos,
   leituraDosAdicionaisFalhou,
+  assinatura,
+  pagamentos,
+  leituraDosPagamentosFalhou,
+  pacotesAtivos,
+  leituraDosPacotesFalhou,
 }: TenantPlanoClientProps) {
   const t = useT();
   const router = useRouter();
@@ -507,6 +540,202 @@ export function TenantPlanoClient({
     });
   }
 
+  // ── Assinatura (fase F4, tarefa 8) ──────────────────────────────────────
+  //
+  // Cada formulário segue o mesmo molde da carteira de tokens acima: chave
+  // idempotente nascida na montagem (`useState(() => randomId())`), trocada
+  // por uma nova depois de CADA envio bem-sucedido.
+  const [chavePagamento, setChavePagamento] = useState(() => randomId());
+  const [fimPagamento, setFimPagamento] = useState("");
+  const [valorPagamento, setValorPagamento] = useState("");
+  const [notaPagamento, setNotaPagamento] = useState("");
+  const [registrando, iniciarRegistro] = useTransition();
+
+  function registrar() {
+    if (!fimPagamento) {
+      toast.error(t("Escolha a data de fim do período."));
+      return;
+    }
+    const valorCents = parseReaisToCents(valorPagamento);
+    if (valorCents === null || valorCents <= 0) {
+      toast.error(t("Informe um valor válido."));
+      return;
+    }
+    iniciarRegistro(async () => {
+      const r = await registrarPagamento({
+        organizationId,
+        fim: fimPagamento,
+        valorCents,
+        chave: chavePagamento,
+        nota: notaPagamento.trim().length > 0 ? notaPagamento.trim() : undefined,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já registrado antes: nada foi lançado de novo.") : t("Pagamento registrado."));
+      setFimPagamento("");
+      setValorPagamento("");
+      setNotaPagamento("");
+      setChavePagamento(randomId());
+      router.refresh();
+    });
+  }
+
+  const [estornandoId, setEstornandoId] = useState<string | null>(null);
+  const [estornando, iniciarEstorno] = useTransition();
+
+  function estornar(pagamentoId: string) {
+    setEstornandoId(pagamentoId);
+    iniciarEstorno(async () => {
+      const r = await estornarPagamento({ organizationId, pagamentoId, chave: randomId() });
+      if (!r.ok) {
+        toast.error(r.error);
+        setEstornandoId(null);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já estava estornado.") : t("Pagamento estornado."));
+      setEstornandoId(null);
+      router.refresh();
+    });
+  }
+
+  const [fimCorrecao, setFimCorrecao] = useState("");
+  const [motivoCorrecao, setMotivoCorrecao] = useState("");
+  const [corrigindo, iniciarCorrecao] = useTransition();
+
+  function corrigir() {
+    if (!fimCorrecao) {
+      toast.error(t("Escolha a data de fim do período."));
+      return;
+    }
+    if (motivoCorrecao.trim().length === 0) {
+      toast.error(t("O motivo é obrigatório."));
+      return;
+    }
+    iniciarCorrecao(async () => {
+      const r = await corrigirPeriodo({ organizationId, fim: fimCorrecao, motivo: motivoCorrecao.trim() });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Período corrigido."));
+      setFimCorrecao("");
+      setMotivoCorrecao("");
+      router.refresh();
+    });
+  }
+
+  const ESTADOS_DO_CONTRATO = ["avaliacao", "ativa", "atrasada", "suspensa", "cancelada"] as const;
+  const [estadoParaMudar, setEstadoParaMudar] = useState<(typeof ESTADOS_DO_CONTRATO)[number]>("ativa");
+  const [motivoDoEstado, setMotivoDoEstado] = useState("");
+  const [mudandoEstado, iniciarMudancaDeEstado] = useTransition();
+
+  function mudarEstado() {
+    iniciarMudancaDeEstado(async () => {
+      const r = await mudarEstadoDaAssinatura({
+        organizationId,
+        estado: estadoParaMudar,
+        motivo: motivoDoEstado.trim().length > 0 ? motivoDoEstado.trim() : undefined,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Estado da assinatura alterado."));
+      setMotivoDoEstado("");
+      router.refresh();
+    });
+  }
+
+  const [fimAvaliacao, setFimAvaliacao] = useState("");
+  const [motivoAvaliacao, setMotivoAvaliacao] = useState("");
+  const [pondoEmAvaliacao, iniciarAvaliacao] = useTransition();
+
+  function porEmAvaliacaoClick() {
+    if (!fimAvaliacao) {
+      toast.error(t("Escolha a data de fim da avaliação."));
+      return;
+    }
+    if (motivoAvaliacao.trim().length === 0) {
+      toast.error(t("O motivo é obrigatório."));
+      return;
+    }
+    iniciarAvaliacao(async () => {
+      const r = await porEmAvaliacao({
+        organizationId,
+        fim: fimAvaliacao,
+        motivo: motivoAvaliacao.trim(),
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Organização em avaliação."));
+      setFimAvaliacao("");
+      setMotivoAvaliacao("");
+      router.refresh();
+    });
+  }
+
+  const [mudandoCancelamento, iniciarMudancaDeCancelamento] = useTransition();
+
+  function alternarCancelamento(sim: boolean) {
+    iniciarMudancaDeCancelamento(async () => {
+      const r = await cancelarNoFimDoPeriodo({ organizationId, sim });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(sim ? t("A assinatura cancela no fim do período.") : t("O cancelamento no fim do período foi desligado."));
+      router.refresh();
+    });
+  }
+
+  // ── Creditar pacote do catálogo (fase F4, tarefa 8, decisão 10) ─────────
+  const [chavePacote, setChavePacote] = useState(() => randomId());
+  const [pacoteEscolhido, setPacoteEscolhido] = useState<string>(pacotesAtivos[0]?.id ?? "");
+  const [valorPacote, setValorPacote] = useState("");
+  const [notaPacote, setNotaPacote] = useState("");
+  const [creditandoPacote, iniciarCreditoDePacote] = useTransition();
+
+  const pacoteSelecionadoObjeto = pacotesAtivos.find((p) => p.id === pacoteEscolhido) ?? null;
+  const pacotePrecisaDeValor = pacoteSelecionadoObjeto !== null && pacoteSelecionadoObjeto.preco_cents === null;
+
+  function creditarPacoteDoCatalogo() {
+    if (!pacoteEscolhido) {
+      toast.error(t("Escolha um pacote."));
+      return;
+    }
+    let valorCents: number | undefined;
+    if (pacotePrecisaDeValor) {
+      const parsed = parseReaisToCents(valorPacote);
+      if (parsed === null || parsed <= 0) {
+        toast.error(t("Este pacote não tem preço no catálogo: informe o valor recebido."));
+        return;
+      }
+      valorCents = parsed;
+    }
+    iniciarCreditoDePacote(async () => {
+      const r = await creditarPacote({
+        organizationId,
+        pacoteId: pacoteEscolhido,
+        chave: chavePacote,
+        valorCents,
+        nota: notaPacote.trim().length > 0 ? notaPacote.trim() : undefined,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(r.jaRegistrado ? t("Já registrado antes: nada foi creditado de novo.") : t("Pacote creditado."));
+      setValorPacote("");
+      setNotaPacote("");
+      setChavePacote(randomId());
+      router.refresh();
+    });
+  }
+
   return (
     <div className="space-y-6">
       {/* Cabeçalho: plano atual, versão e estado do contrato */}
@@ -618,6 +847,295 @@ export function TenantPlanoClient({
           )}
         </CardContent>
       </Card>
+
+      {/* ── Assinatura (fase F4, tarefa 8) ────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Assinatura")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {assinatura.leituraFalhou ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler a assinatura agora.")}</p>
+          ) : !assinatura.contrato ? (
+            <p className="text-sm text-text-muted">{t("Sem contrato gravado.")}</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant={CONTRATO_STATUS_VARIANT[assinatura.contrato.status] ?? "neutral"}>
+                  {rotuloDoStatusDoContrato(assinatura.contrato.status, t)}
+                </Badge>
+                {assinatura.contrato.cancelAtPeriodEnd && (
+                  <Badge variant="warning">{t("Cancela no fim do período")}</Badge>
+                )}
+                {assinatura.modoLeituraValendo && (
+                  <Badge variant="error">{t("Modo leitura valendo")}</Badge>
+                )}
+              </div>
+              <p className="text-sm text-text-muted">
+                {t("Período")}:{" "}
+                {assinatura.contrato.currentPeriodStart
+                  ? new Date(assinatura.contrato.currentPeriodStart).toLocaleDateString(tagDoIdioma)
+                  : "-"}{" "}
+                {t("até")}{" "}
+                {assinatura.contrato.currentPeriodEnd
+                  ? new Date(assinatura.contrato.currentPeriodEnd).toLocaleDateString(tagDoIdioma)
+                  : "-"}
+              </p>
+              {assinatura.contrato.dataPrevistaDaSuspensao && (
+                <p className="text-sm text-text-muted">
+                  {t("Data prevista do modo leitura")}:{" "}
+                  {new Date(assinatura.contrato.dataPrevistaDaSuspensao).toLocaleDateString(tagDoIdioma)}
+                </p>
+              )}
+            </div>
+          )}
+
+          {podeEscrever && (
+            <div className="grid gap-3 border-t border-border/60 pt-4 sm:grid-cols-2">
+              <div className="flex flex-wrap items-end gap-2">
+                <Select
+                  value={estadoParaMudar}
+                  onValueChange={(v) => setEstadoParaMudar(v as (typeof ESTADOS_DO_CONTRATO)[number])}
+                >
+                  <SelectTrigger className="w-44">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ESTADOS_DO_CONTRATO.map((estado) => (
+                      <SelectItem key={estado} value={estado}>
+                        {rotuloDoStatusDoContrato(estado, t)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  className="w-52"
+                  placeholder={t("Motivo (opcional)")}
+                  value={motivoDoEstado}
+                  onChange={(e) => setMotivoDoEstado(e.target.value)}
+                />
+                <Button data-testid="mudar-estado" onClick={mudarEstado} disabled={mudandoEstado}>
+                  {t("Mudar estado")}
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-2">
+                <Button
+                  data-testid="ligar-cancelamento"
+                  variant="outline"
+                  disabled={mudandoCancelamento || assinatura.contrato?.cancelAtPeriodEnd === true}
+                  onClick={() => alternarCancelamento(true)}
+                >
+                  {t("Cancelar no fim do período")}
+                </Button>
+                <Button
+                  data-testid="desligar-cancelamento"
+                  variant="outline"
+                  disabled={mudandoCancelamento || assinatura.contrato?.cancelAtPeriodEnd === false}
+                  onClick={() => alternarCancelamento(false)}
+                >
+                  {t("Não cancelar")}
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-2 sm:col-span-2">
+                <Input type="date" className="w-40" value={fimAvaliacao} onChange={(e) => setFimAvaliacao(e.target.value)} />
+                <Input
+                  className="w-64"
+                  placeholder={t("Motivo (obrigatório)")}
+                  value={motivoAvaliacao}
+                  onChange={(e) => setMotivoAvaliacao(e.target.value)}
+                />
+                <Button data-testid="por-em-avaliacao" variant="outline" onClick={porEmAvaliacaoClick} disabled={pondoEmAvaliacao}>
+                  {t("Pôr em avaliação até")}
+                </Button>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-2 sm:col-span-2">
+                <Input type="date" className="w-40" value={fimCorrecao} onChange={(e) => setFimCorrecao(e.target.value)} />
+                <Input
+                  className="w-64"
+                  placeholder={t("Motivo (obrigatório)")}
+                  value={motivoCorrecao}
+                  onChange={(e) => setMotivoCorrecao(e.target.value)}
+                />
+                <Button data-testid="corrigir-periodo" variant="outline" onClick={corrigir} disabled={corrigindo}>
+                  {t("Corrigir período")}
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Registrar pagamento */}
+      {podeEscrever && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("Registrar pagamento")}</CardTitle>
+            <CardDescription>{t("Pagamento recebido na mão (fora do Asaas). Renova o período e volta o estado para ativa.")}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="pagamento-fim">{t("Fim do novo período")}</Label>
+                <Input
+                  id="pagamento-fim"
+                  type="date"
+                  className="w-40"
+                  value={fimPagamento}
+                  onChange={(e) => setFimPagamento(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="pagamento-valor">{t("Valor recebido")}</Label>
+                <Input
+                  id="pagamento-valor"
+                  className="w-40"
+                  placeholder="R$"
+                  value={valorPagamento}
+                  onChange={(e) => setValorPagamento(e.target.value)}
+                />
+              </div>
+              <Button data-testid="registrar-pagamento" onClick={registrar} disabled={registrando}>
+                {t("Registrar")}
+              </Button>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="pagamento-nota">{t("Nota (opcional)")}</Label>
+              <Textarea
+                id="pagamento-nota"
+                value={notaPagamento}
+                onChange={(e) => setNotaPagamento(e.target.value)}
+                maxLength={500}
+                placeholder={t("Não coloque dado pessoal aqui: a nota fica registrada e nunca é apagada.")}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pagamentos e estornos */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("Pagamentos e estornos")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {leituraDosPagamentosFalhou ? (
+            <p className="text-sm text-destructive">{t("Não foi possível ler os pagamentos agora.")}</p>
+          ) : pagamentos.length === 0 ? (
+            <p className="text-sm text-text-muted">{t("Nenhum pagamento registrado.")}</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("Status")}</TableHead>
+                  <TableHead>{t("Valor")}</TableHead>
+                  <TableHead>{t("Período")}</TableHead>
+                  <TableHead>{t("Data")}</TableHead>
+                  <TableHead>{t("Nota")}</TableHead>
+                  <TableHead>{t("Autor")}</TableHead>
+                  {podeEscrever && <TableHead />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pagamentos.map((p: PagamentoDaAssinatura) => (
+                  <TableRow key={p.id}>
+                    <TableCell>
+                      <Badge variant={p.status === "REFUNDED" ? "error" : "success"}>
+                        {p.status === "REFUNDED" ? t("Estornado") : t("Recebido")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{formatCentsBRL(p.grossCents)}</TableCell>
+                    <TableCell>
+                      {new Date(p.billingPeriodStart).toLocaleDateString(tagDoIdioma)} - {new Date(p.billingPeriodEnd).toLocaleDateString(tagDoIdioma)}
+                    </TableCell>
+                    <TableCell>{new Date(p.createdAt).toLocaleDateString(tagDoIdioma)}</TableCell>
+                    <TableCell className="max-w-xs truncate">{p.nota ?? "-"}</TableCell>
+                    <TableCell>{p.autorNome ?? p.autorEmail ?? "-"}</TableCell>
+                    {podeEscrever && (
+                      <TableCell>
+                        {p.status === "RECEIVED_IN_CASH" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={estornando && estornandoId === p.id}
+                            onClick={() => estornar(p.id)}
+                          >
+                            {t("Estornar")}
+                          </Button>
+                        )}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Creditar pacote do catálogo (decisão 10) */}
+      {podeEscrever && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("Creditar pacote do catálogo")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {leituraDosPacotesFalhou ? (
+              <p className="text-sm text-destructive">{t("Não foi possível ler o catálogo de pacotes agora.")}</p>
+            ) : pacotesAtivos.length === 0 ? (
+              <p className="text-sm text-text-muted">{t("Nenhum pacote ativo no catálogo.")}</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pacote-escolhido">{t("Pacote")}</Label>
+                    <Select value={pacoteEscolhido} onValueChange={setPacoteEscolhido}>
+                      <SelectTrigger id="pacote-escolhido" className="w-72">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {pacotesAtivos.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {`${p.nome} · ${p.tokens.toLocaleString(tagDoIdioma)} tokens`}
+                            {p.preco_cents !== null && ` · ${formatCentsBRL(p.preco_cents)}`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {pacotePrecisaDeValor && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pacote-valor">{t("Valor recebido")}</Label>
+                      <Input
+                        id="pacote-valor"
+                        className="w-40"
+                        placeholder="R$"
+                        value={valorPacote}
+                        onChange={(e) => setValorPacote(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <Button data-testid="creditar-pacote" onClick={creditarPacoteDoCatalogo} disabled={creditandoPacote}>
+                    {t("Creditar")}
+                  </Button>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="pacote-nota">{t("Nota (opcional)")}</Label>
+                  <Textarea
+                    id="pacote-nota"
+                    value={notaPacote}
+                    onChange={(e) => setNotaPacote(e.target.value)}
+                    maxLength={500}
+                    placeholder={t("Não coloque dado pessoal aqui: a nota fica registrada e nunca é apagada.")}
+                  />
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Tabela de limites: do plano, do ajuste, em vigor */}
       <Card>

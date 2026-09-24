@@ -1,5 +1,9 @@
 import { createLogger } from "@/lib/agent-engine/obs/logger";
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import {
+  estadoDaAssinatura,
+  pagamentosDaAssinatura,
+} from "@/lib/billing/assinatura/estado-da-assinatura";
 import { estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   CHAVES_DE_LIMITE,
@@ -63,7 +67,17 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
   const admin = createAdminClient();
   const log = createLogger();
 
-  const [resultado, contratoCruRes, ajusteRes, planosRes, saldoResultadoRaw, bloqueio] = await Promise.all([
+  const [
+    resultado,
+    contratoCruRes,
+    ajusteRes,
+    planosRes,
+    saldoResultadoRaw,
+    bloqueio,
+    assinatura,
+    pagamentosResultado,
+    pacotesAtivosRes,
+  ] = await Promise.all([
     planoDaOrganizacao(admin, id, log),
     // Os limites CRUS do plano CONTRATADO (coluna "do plano" da tabela),
     // separados dos limites EM VIGOR (que já aplicam o ajuste) que
@@ -98,6 +112,18 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
     // (desligado, em carência, ou valendo), para o texto fixo da aba parar de
     // dizer "nenhum limite bloqueia" quando o admin já ligou o bloqueio.
     estadoDoBloqueio(admin, id, {}, log),
+    // Fase F4, tarefa 8: estado da assinatura (estado, período,
+    // cancel_at_period_end, modo leitura) e os pagamentos/estornos.
+    estadoDaAssinatura(admin, id, log),
+    pagamentosDaAssinatura(admin, id, log),
+    // Catálogo de pacotes ATIVOS (decisão 10), para "creditar pacote do
+    // catálogo": mesmo padrão de `planosAtivos` acima (só o que pode ser
+    // vendido hoje entra no formulário).
+    admin
+      .from("billing_token_pacotes")
+      .select("id, codigo, nome, tokens, preco_cents")
+      .eq("ativo", true)
+      .order("nome", { ascending: true }),
   ]);
 
   const cicloDoSaldo =
@@ -183,12 +209,38 @@ export default async function TenantPlanoPage({ params }: TenantPlanoPageProps) 
     leituraDosPlanosAtivosFalhou: Boolean(planosRes.error),
   };
 
+  // Fase F4, tarefa 8: pacotes ATIVOS do catálogo, para "creditar pacote do
+  // catálogo". Mesma régua ADITIVA dos adicionais de tokens acima: uma falha
+  // aqui não tira a escrita do resto da aba, só esvazia esta lista própria.
+  if (pacotesAtivosRes.error) {
+    log.error("alarme_planos_leitura", {
+      organization_id: id,
+      etapa: "pacotes_ativos_do_catalogo",
+      error: pacotesAtivosRes.error.message.slice(0, 300),
+    });
+  }
+  const leituraDosPacotesFalhou = Boolean(pacotesAtivosRes.error);
+  const pacotesAtivos = leituraDosPacotesFalhou
+    ? []
+    : ((pacotesAtivosRes.data ?? []) as {
+        id: string;
+        codigo: string;
+        nome: string;
+        tokens: number;
+        preco_cents: number | null;
+      }[]);
+
   return (
     <TenantPlanoClient
       organizationId={id}
       podeEscrever={podeEscreverNaAba(platformAdmin.scope, leituras)}
       plano={resultado.plano}
       contrato={resultado.contrato}
+      assinatura={assinatura}
+      pagamentos={pagamentosResultado.pagamentos}
+      leituraDosPagamentosFalhou={pagamentosResultado.leituraFalhou}
+      pacotesAtivos={pacotesAtivos}
+      leituraDosPacotesFalhou={leituraDosPacotesFalhou}
       leituraFalhou={algumaLeituraFalhou(leituras)}
       limitesEmVigor={resultado.limites}
       limitesDoPlano={limitesDoPlano}

@@ -946,6 +946,25 @@ export const AUDIT_ACTIONS = [
   "billing.period_corrected",
   "billing.subscription_state_changed",
   "billing.cancel_at_period_end_changed",
+
+  // Crédito de um pacote do CATÁLOGO (fase F4, tarefa 8, decisão 10):
+  // "creditar pacote do catálogo" na aba do admin, ponte de
+  // `fn_billing_creditar_pacote` (migração 0908, parte 3) até
+  // `fn_billing_creditar_tokens` (0906). O `metadata` carrega o pacote, os
+  // tokens, o valor efetivamente usado (do catálogo ou informado na hora) e
+  // a chave idempotente, NUNCA a nota (mesma régua de `tokens_credited`,
+  // decisão 16 da F2-B).
+  "billing.token_pack_credited",
+
+  // O CADASTRO do catálogo de pacotes (fase F4, tarefa 8, decisão 10):
+  // criar um pacote novo e desativar um existente, pela tela da instalação
+  // (`app/actions/admin/pacotesDeTokens.ts`). Duas ações porque respondem
+  // perguntas diferentes: `token_pack_created` é "que pacote entrou no
+  // catálogo, com que código, nome, tokens e preço"; `token_pack_deactivated`
+  // é "qual pacote parou de poder ser vendido" (a linha continua existindo,
+  // só `ativo` muda).
+  "billing.token_pack_created",
+  "billing.token_pack_deactivated",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

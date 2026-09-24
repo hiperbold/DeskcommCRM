@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { definirDiasDeCarencia, definirModoDeBloqueio } from "@/app/actions/admin/bloqueioDosPlanos";
+import { criarPacote, desativarPacote } from "@/app/actions/admin/pacotesDeTokens";
 import { updateComportamento } from "@/app/actions/settings/updateComportamento";
 import { updateModuloDaInstalacao } from "@/app/actions/settings/updateModuloDaInstalacao";
 import {
@@ -30,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import type { BloqueioDosPlanos, ModoDeBloqueio } from "@/lib/billing/planos/bloqueio-da-instalacao";
@@ -38,6 +40,7 @@ import type {
   ComportamentoDaInstalacao,
 } from "@/lib/instalacao/comportamento";
 import type { ModuloOpcional } from "@/lib/instalacao/modulos";
+import { formatCentsBRL, parseReaisToCents } from "@/lib/money";
 
 /**
  * Cada interruptor salva na hora, sem botão de confirmar — mesmo desenho do
@@ -188,6 +191,215 @@ export function FormularioDeComportamento({ inicial }: { inicial: ComportamentoD
           <p className="text-sm text-destructive" role="alert">
             {erro}
           </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Um pacote do catálogo, ativo ou não (fase F4, tarefa 8, decisão 10). */
+interface PacoteDoCadastro {
+  id: string;
+  codigo: string;
+  nome: string;
+  tokens: number;
+  preco_cents: number | null;
+  ativo: boolean;
+}
+
+/**
+ * O cadastro simples do catálogo de pacotes de tokens vendidos na mão (fase
+ * F4, tarefa 8, decisão 10): criar um pacote novo e desativar um existente.
+ * Sem `delete` concedido em `billing_token_pacotes` (migração 0908, parte 3):
+ * um pacote já vendido fica no histórico, só desativa.
+ *
+ * ── Por que o preço fica de fora do formulário quando ninguém digita nada ──
+ *
+ * N9: nenhum preço é inventado. O campo é opcional; deixado em branco, o
+ * pacote nasce com `preco_cents` nulo, e `fn_billing_creditar_pacote`
+ * (migração 0908, parte 3) já sabe pedir o valor na hora de creditar.
+ */
+export function FormularioDeCadastroDePacotes({
+  pacotes,
+  leituraFalhou,
+}: {
+  pacotes: PacoteDoCadastro[];
+  leituraFalhou: boolean;
+}) {
+  const t = useT();
+  const router = useRouter();
+  const tagDoIdioma = useTagDeIdioma();
+
+  const [codigo, setCodigo] = useState("");
+  const [nome, setNome] = useState("");
+  const [tokens, setTokens] = useState("");
+  const [precoCents, setPrecoCents] = useState("");
+  const [criando, iniciarCriacao] = useTransition();
+
+  function criar() {
+    const codigoLimpo = codigo.trim();
+    if (!/^[a-z][a-z0-9_]{1,30}$/.test(codigoLimpo)) {
+      toast.error(t("Código inválido: letras minúsculas, dígitos e _, começando por letra."));
+      return;
+    }
+    if (nome.trim().length === 0) {
+      toast.error(t("O nome é obrigatório."));
+      return;
+    }
+    const tokensNumero = Number(tokens);
+    if (!Number.isInteger(tokensNumero) || tokensNumero <= 0) {
+      toast.error(t("Informe uma quantidade de tokens válida."));
+      return;
+    }
+    // N9: nenhum preço é inventado. Vazio vira nulo no banco.
+    const precoLimpo = precoCents.trim();
+    const precoCentsNumero = precoLimpo.length > 0 ? parseReaisToCents(precoLimpo) : undefined;
+    if (precoLimpo.length > 0 && precoCentsNumero === null) {
+      toast.error(t("Preço inválido."));
+      return;
+    }
+    iniciarCriacao(async () => {
+      const r = await criarPacote({
+        codigo: codigoLimpo,
+        nome: nome.trim(),
+        tokens: tokensNumero,
+        precoCents: precoCentsNumero ?? undefined,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Pacote cadastrado."));
+      setCodigo("");
+      setNome("");
+      setTokens("");
+      setPrecoCents("");
+      router.refresh();
+    });
+  }
+
+  const [desativandoId, setDesativandoId] = useState<string | null>(null);
+  const [desativando, iniciarDesativacao] = useTransition();
+
+  function desativar(pacoteId: string) {
+    setDesativandoId(pacoteId);
+    iniciarDesativacao(async () => {
+      const r = await desativarPacote({ pacoteId });
+      if (!r.ok) {
+        toast.error(r.error);
+        setDesativandoId(null);
+        return;
+      }
+      toast.success(t("Pacote desativado."));
+      setDesativandoId(null);
+      router.refresh();
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("Catálogo de pacotes de tokens")}</CardTitle>
+        <CardDescription>
+          {t(
+            "Os pacotes que o admin de cada organização pode creditar na aba Plano. Sem preço, quem credita informa o valor na hora.",
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="pacote-codigo">{t("Código")}</Label>
+            <Input
+              id="pacote-codigo"
+              className="w-40"
+              placeholder={t("pacote_100k")}
+              value={codigo}
+              onChange={(e) => setCodigo(e.target.value)}
+              disabled={criando}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pacote-nome">{t("Nome")}</Label>
+            <Input
+              id="pacote-nome"
+              className="w-48"
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              disabled={criando}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pacote-tokens">{t("Tokens")}</Label>
+            <Input
+              id="pacote-tokens"
+              className="w-32"
+              inputMode="numeric"
+              value={tokens}
+              onChange={(e) => setTokens(e.target.value)}
+              disabled={criando}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pacote-preco">{t("Preço (opcional)")}</Label>
+            <Input
+              id="pacote-preco"
+              className="w-32"
+              placeholder="R$"
+              value={precoCents}
+              onChange={(e) => setPrecoCents(e.target.value)}
+              disabled={criando}
+            />
+          </div>
+          <Button data-testid="criar-pacote" onClick={criar} disabled={criando}>
+            {t("Cadastrar")}
+          </Button>
+        </div>
+
+        {leituraFalhou ? (
+          <p className="text-sm text-destructive" role="alert">
+            {t("Não foi possível ler o catálogo de pacotes agora.")}
+          </p>
+        ) : pacotes.length === 0 ? (
+          <p className="text-sm text-muted-foreground">{t("Nenhum pacote cadastrado ainda.")}</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("Código")}</TableHead>
+                <TableHead>{t("Nome")}</TableHead>
+                <TableHead>{t("Tokens")}</TableHead>
+                <TableHead>{t("Preço")}</TableHead>
+                <TableHead>{t("Status")}</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {pacotes.map((p) => (
+                <TableRow key={p.id}>
+                  <TableCell className="font-mono text-xs">{p.codigo}</TableCell>
+                  <TableCell>{p.nome}</TableCell>
+                  <TableCell className="tabular-nums">{p.tokens.toLocaleString(tagDoIdioma)}</TableCell>
+                  <TableCell>{p.preco_cents !== null ? formatCentsBRL(p.preco_cents) : t("a combinar")}</TableCell>
+                  <TableCell>
+                    <Badge variant={p.ativo ? "success" : "neutral"}>{p.ativo ? t("Ativo") : t("Inativo")}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    {p.ativo && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={desativando && desativandoId === p.id}
+                        onClick={() => desativar(p.id)}
+                      >
+                        {t("Desativar")}
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </CardContent>
     </Card>

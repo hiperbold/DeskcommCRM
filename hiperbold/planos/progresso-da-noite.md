@@ -3,7 +3,7 @@
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
 Fase atual: F4 (autorizada pelo Filipe em 24/09; F5 e F6 depois)
-Etapa da fase: F4, plano revisado; tarefa 1 (pagamentos, estados, conferidor) em execução.
+Etapa da fase: F4, tarefas 1 a 7 commitadas (a0bbc02 provas de banco, a7ad236 follow-ups); tarefa 8 (telas) em execução; plano da F5 em rascunho. Para a revisão da F4 olhar: `lib/followup/aplicar-inbound.ts` enfileira `followup_turn` sem o portão de modo leitura (o turno passa pelo `run-model-call`, que barra a IA, conferir se há passo de texto fixo por esse caminho).
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
 

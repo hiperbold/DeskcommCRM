@@ -74,6 +74,17 @@ const entradaCreditar = z.object({
   nota: NOTA.optional(),
 });
 
+const entradaCreditarPacote = z.object({
+  organizationId: UUID,
+  pacoteId: UUID,
+  chave: UUID,
+  // Só entra quando o pacote não tem preço no catálogo (decisão 10, N9):
+  // `fn_billing_creditar_pacote` usa o preço do catálogo quando ele existe,
+  // e recusa (22023) se os dois estiverem ausentes.
+  valorCents: z.coerce.number().int().nonnegative().max(TETO_DE_VALOR_CENTS).optional(),
+  nota: NOTA.optional(),
+});
+
 const entradaContratar = z.object({
   organizationId: UUID,
   tokensPorCiclo: z.coerce.number().int().positive().max(TETO_DE_TOKENS),
@@ -162,8 +173,15 @@ function mensagemDoErroDeTokens(error: { code?: string; message?: string } | nul
     if (msg.includes("ajuste_tokens_nao_pode_ser_zero")) return "A quantidade de tokens do ajuste não pode ser zero.";
     if (msg.includes("ajuste_fonte_invalida")) return "Fonte inválida.";
     if (msg.includes("ajuste_precisa_de_nota")) return "O ajuste precisa de uma nota.";
+    if (msg.includes("billing_pacote_inativo")) return "Este pacote não está mais à venda.";
+    if (msg.includes("billing_valor_obrigatorio")) {
+      return "Este pacote não tem preço no catálogo: informe o valor recebido.";
+    }
   }
-  if (error?.code === "P0002" && msg.includes("adicional_nao_encontrado")) return "Adicional não encontrado.";
+  if (error?.code === "P0002") {
+    if (msg.includes("adicional_nao_encontrado")) return "Adicional não encontrado.";
+    if (msg.includes("billing_pacote_nao_encontrado")) return "Pacote não encontrado.";
+  }
   if (error?.code === "42501") {
     // As duas mensagens (adicional de outra organização, linha de
     // compensação inválida) nunca revelam se a linha existe em outra
@@ -230,6 +248,84 @@ export async function creditarTokens(input: {
       resourceType: "organization",
       resourceId: parsed.data.organizationId,
       metadata: { tokens: parsed.data.tokens, chave: parsed.data.chave, valor_cents: parsed.data.valorCents ?? null },
+      requestId,
+      ip,
+      userAgent,
+    });
+  }
+
+  revalidatePath(caminhoDaAbaDePlano(parsed.data.organizationId));
+  return { ok: true, jaRegistrado: !resultado.creditado, dados: resultado };
+}
+
+/**
+ * Credita um pacote do CATÁLOGO (fase F4, tarefa 8, decisão 10:
+ * `billing_token_pacotes`), pela RPC `fn_billing_creditar_pacote` (migração
+ * 0908, parte 3), que é a ponte até `fn_billing_creditar_tokens` (0906).
+ * Mesma régua das outras três escritas deste arquivo: escopo `full`, MFA em
+ * dia, zod no servidor, errcode do Postgres vira frase fixa, sucesso audita
+ * SEM a nota (`billing.token_pack_credited`, acrescentado ao fim de
+ * `lib/audit/actions.ts`) e só quando a RPC diz que ESTA chamada creditou de
+ * fato (reenvio com a mesma chave não audita de novo).
+ */
+export async function creditarPacote(input: {
+  organizationId: string;
+  pacoteId: string;
+  chave: string;
+  valorCents?: number;
+  nota?: string;
+}): Promise<ResultadoDaAcaoDeTokens> {
+  const { user, platformAdmin } = await requirePlatformAdmin();
+
+  if (platformAdmin.scope !== "full") {
+    return { ok: false, error: "Seu acesso de suporte não permite creditar um pacote do catálogo." };
+  }
+  if (await mfaEmDivida()) {
+    return { ok: false, error: "Confirme a verificação em duas etapas." };
+  }
+
+  const parsed = entradaCreditarPacote.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: "Dados inválidos." };
+  }
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("fn_billing_creditar_pacote" as never, {
+    p_org: parsed.data.organizationId,
+    p_pacote: parsed.data.pacoteId,
+    p_valor_cents: parsed.data.valorCents ?? null,
+    p_chave: parsed.data.chave,
+    p_nota: parsed.data.nota ?? null,
+    p_actor: user.id,
+  } as never);
+
+  if (error) {
+    return { ok: false, error: mensagemDoErroDeTokens(error as { code?: string; message?: string }) };
+  }
+
+  const resultado = data as {
+    creditado: boolean;
+    saldo_avulso: number;
+    pacote_id: string;
+    tokens: number;
+    valor_cents: number;
+  };
+
+  if (resultado.creditado) {
+    const { requestId, ip, userAgent } = await contextoDaRequisicao();
+    await audit({
+      action: "billing.token_pack_credited",
+      actorUserId: user.id,
+      actingAsPlatformAdmin: true,
+      organizationId: parsed.data.organizationId,
+      resourceType: "organization",
+      resourceId: parsed.data.organizationId,
+      metadata: {
+        pacote_id: resultado.pacote_id,
+        tokens: resultado.tokens,
+        valor_cents: resultado.valor_cents,
+        chave: parsed.data.chave,
+      },
       requestId,
       ip,
       userAgent,
