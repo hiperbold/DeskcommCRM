@@ -49,7 +49,7 @@ function adminStub(opts: { modo: string | null; modoLeitura: boolean }) {
         };
       }
       // `createAdminClient()` é chamado de novo mais adiante na rota (config
-      // do `call_webhook` e o insert do run novo) — mesmo dublê responde aos
+      // do `call_webhook` e o insert do run novo); mesmo dublê responde aos
       // dois usos.
       if (tabela === "automation_rule_runs") {
         return {
