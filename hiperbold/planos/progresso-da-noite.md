@@ -182,7 +182,7 @@ Commits da faixa: ce99bf7, b04bfba, 8487304, 97e7be9, 73973bc, 5cbb69d, 0a750ec,
 
 | Portão | Resultado |
 |---|---|
-| portões completos em c6caa73 | [RESULTADO] |
+| portões completos em c6caa73 | verdes em 25/09/2026 às 03:11 (install, test:db, typecheck, lint, lint:channels, build ok; unitários 14.540 verdes; só o vermelho de ambiente do Redis em `e2e-parte-4-fala-com-os-servicos-do-runner`) |
 
 ## Perguntas em aberto para o Filipe (consolidado final)
 
