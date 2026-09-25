@@ -2,7 +2,7 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: entrega final. F4 e F5 fechadas; F6 entregue para revisão visual do Filipe.
+Fase atual: F7 em fechamento. F4, F5 e F7 fechadas ou em fechamento; F6 entregue para revisão visual do Filipe.
 Etapa da fase: F5 fechada, 22 tarefas do plano `hiperbold/planos/fase-F5-tarefas.md` feitas entre os commits ce99bf7 e c6caa73, revisão de código e auditoria de segurança do núcleo concluídas, mais duas rodadas de revisão das correções, todos os achados corrigidos. F6 entregue para revisão visual em `http://localhost:4321/`, projeto `F:\github-projects\hipercrm-site`, commit local 2ba4c37, sem remoto.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
@@ -20,8 +20,9 @@ Portões da F2 na cópia separada: install, test:db inteiro, typecheck, lint e l
 | F2-B | **feita**: 8 tarefas, revisão (2 altos) e auditoria (1 alto) corrigidas; portões no commit 3898b63 com os vermelhos abaixo, todos corrigidos e reconferidos | a0f7d60 | 23/09/2026 21:05 |
 | F3 | **feita**: 10 tarefas; auditoria (3 altos) e revisão (3 médios) corrigidas e provadas no banco; portões no commit 2f4bcc3 com 2 vermelhos de teste do autor, corrigidos e reconferidos | ver abaixo | 24/09/2026 04:05 |
 | F4 | fechada em 24/09/2026: 8 tarefas, revisão, auditoria, duas rodadas de correção, portões completos verdes em de8ed83 (só o vermelho de ambiente do Redis) | de8ed83 | 24/09 |
-| F5 | pendente (Asaas: construir contra o manual, com dublês; nenhuma chamada real, nem sandbox, sem autorização explícita) | | |
+| F5 | **feita**: 22 tarefas, revisão e auditoria do núcleo, todas as correções aplicadas | c6caa73 | 25/09/2026 |
 | F6 | registrada (pedido do Filipe, 23/09 à tarde): site de vendas, `/precos`, Termos e Privacidade. Fica depois das fases do loop; não começa sem confirmação | ff34e69 | |
+| F7 | em fechamento: saneamento técnico, 5 lotes | ver abaixo | 25/09/2026 |
 
 ## Tarefas da fase atual
 
@@ -219,3 +220,33 @@ Commits da faixa: ce99bf7, b04bfba, 8487304, 97e7be9, 73973bc, 5cbb69d, 0a750ec,
 - **D-050.** Autorizar a leitura do banco de produção antes de publicar, para conferir o gasto de IA de cada organização contra o teto antes de ligar o catálogo de preço.
 - **D-056.** Integrar o provedor GLM e cadastrar preço de GLM e DeepSeek em `ai_models`.
 - **Quando publicar**: push na `main` dispara o deploy sozinho. Nada desta branch foi publicado.
+
+## F7: saneamento técnico (25/09/2026)
+
+Aberta com autorização do Filipe para seguir a noite toda sem perguntar. Plano em `hiperbold/planos/fase-F7-tarefas.md`, 5 lotes, tudo em commits locais na branch feat/planos-assinatura, sem push. Ficaram de fora, por dependerem de decisão do Filipe, produção ou terceiro: D-008, D-028, D-045, D-050, D-056, D-057, D-059, D-064, D-067, D-071.
+
+Commits da fase: c1e736f, 0743180, 9044ae2, 9a85be9, 085e217, 0fe488c, ac261c4, ed1e77d.
+
+Achados da auditoria da F7 e o que foi feito com cada um:
+
+- **D-069** (`service_role` com escrita direta em `billing_payments` e `billing_contracts`): revogada; a carência passou para `fn_billing_estender_carencia` (0743180, ed1e77d, migração 0910).
+- **D-070 e D-060** (funções com `p_org` qualquer): sem vetor de ataque, as únicas roles que as executam (`postgres`, `service_role`, `agent_worker`) já têm `bypassrls` (0743180, prova em `tests/invariants/planos-saneamento.test.ts`).
+- **D-047** (TRUNCATE de `anon`/`authenticated`): revogado nas tabelas atuais e futuras, inclusive no privilégio padrão do `supabase_admin` (0743180, ed1e77d).
+- **D-055** (gatilho de leads engolindo erro): falha passou a gravar em `billing_trigger_alarmes`, sem impedir o lead (0743180).
+- **D-068** (prova de atualização da 0905 antiga para a 0908): prova manual em transação com rollback, roteiro em `F:\temp\2026-09-25\f7\prova-d068.sql` (0743180).
+- **D-072** (segunda validação da URL da fatura): quando falha, remove o recurso no Asaas e marca o pedido (c1e736f).
+- **D-065** (agente de voz sem teste do portão da conta suspensa): guarda de entrada e teste do portão feitos (c1e736f).
+- **D-066** (pausa de prospecção sem auditoria): auditada como `prospecting.paused` (c1e736f).
+- **D-035**: já resolvido desde ca31fb5 (22/09); só o registro estava aberto.
+- **D-040**: já resolvido desde ca31fb5 (22/09); só o registro estava aberto.
+- **D-043** (opção "exigir assinatura no webhook" sem chegar à rota de canal): a rota de canal passou a ler a opção no processo frio; vale para os servidores que assinam o corpo (a UAZAPI não assina e segue protegida pelo token da instância), e a tela passou a dizer isso (9044ae2, 0fe488c).
+- **D-044** (`resolveSessionRef` sem ramo para `wacalls`): passou a cobrir `wacalls` (9a85be9).
+- **D-048** (admin de suporte escrevendo em `organizations`): escrita passou a exigir escopo `full`; suspender, reativar organização e resolver incidente também passaram a exigir escopo `full` e MFA (085e217, 0fe488c).
+- **D-061** (falso positivo): `fn_finish_channel_connection` já limpa `archived_at`, o gatilho de teto já disparava ali; a tentativa de correção foi revertida para o corpo da 0232 (ed1e77d).
+- **D-063** (janela de contagem no baseline): o recálculo do contador na reaplicação da baseline nunca diminui um valor que um incremento concorrente elevou; a direção oposta continua coberta pelo conferidor diário (085e217).
+
+Continuam abertos, com atualização: D-036 (IP da auditoria já passa pelo helper único, falta medir o cabeçalho real em produção antes de declarar `TRUSTED_PROXY_COUNT`), D-042 (dedup de evento da UAZAPI por processo, não cobre várias réplicas), D-062 (sem correção, análise na 0910 e no MANIFEST), D-073 (menu recolhível do site feito, subida do Astro em avaliação).
+
+Novos: D-074 (`billing_trigger_alarmes` sem retenção nem tela), D-075 (checklist de publicação da branch, alta prioridade).
+
+portões completos da F7 em ed1e77d: [RESULTADO]
