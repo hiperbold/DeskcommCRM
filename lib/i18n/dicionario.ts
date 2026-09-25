@@ -12022,6 +12022,70 @@ export const DICIONARIO: Traducoes = {
     es: "La suscripción sigue vigente hasta el fin del período ya pagado; después de eso, Asaas deja de cobrar. Esta acción no se puede deshacer.",
   },
   "Assinatura cancelada no Asaas.": { es: "Suscripción cancelada en Asaas." },
+
+  // Fase F5, Tarefas 20 e 21: telas do CLIENTE (assinar/comprar e o pedido).
+  "Assinar ou comprar": { es: "Suscribirse o comprar" },
+  "Peça a um administrador desta organização para assinar um plano ou comprar um pacote de tokens.": {
+    es: "Pide a un administrador de esta organización que suscriba un plan o compre un paquete de tokens.",
+  },
+  "A compra pela tela ainda não está disponível. Fale com o suporte.": {
+    es: "La compra por la pantalla todavía no está disponible. Habla con soporte.",
+  },
+  "Planos disponíveis": { es: "Planes disponibles" },
+  "Pacotes de tokens": { es: "Paquetes de tokens" },
+  "Nenhum plano ou pacote está à venda no momento.": { es: "Ningún plan o paquete está a la venta en este momento." },
+  "Não foi possível carregar os planos à venda agora. Atualize a página.": {
+    es: "No se pudieron cargar los planes a la venta ahora. Actualiza la página.",
+  },
+  Ciclo: { es: "Ciclo" },
+  "Cartão de crédito": { es: "Tarjeta de crédito" },
+  Pix: { es: "Pix" },
+  "Dados de quem paga": { es: "Datos de quien paga" },
+  "Só usados para emitir a cobrança no Asaas. Não ficam guardados neste sistema.": {
+    es: "Solo se usan para emitir el cobro en Asaas. No quedan guardados en este sistema.",
+  },
+  "CPF ou CNPJ": { es: "CPF o CNPJ" },
+  "E-mail (opcional)": { es: "Correo electrónico (opcional)" },
+  "Celular (opcional)": { es: "Celular (opcional)" },
+  Assinar: { es: "Suscribirse" },
+  Comprar: { es: "Comprar" },
+  "Assinatura e pagamento": { es: "Suscripción y pago" },
+  "Assinar um plano": { es: "Suscribirse a un plan" },
+  "Comprar pacote de tokens": { es: "Comprar paquete de tokens" },
+  "Cancelar assinatura": { es: "Cancelar suscripción" },
+  "Cancelar a assinatura?": { es: "¿Cancelar la suscripción?" },
+  "Vale a partir do fim do período já pago: o acesso continua até lá, sem reembolso do que já foi pago.": {
+    es: "Vale a partir del fin del período ya pagado: el acceso continúa hasta entonces, sin reembolso de lo que ya se pagó.",
+  },
+  "Cancelamento registrado.": { es: "Cancelación registrada." },
+  "Seu pedido": { es: "Tu pedido" },
+  "Aguardando pagamento": { es: "Esperando el pago" },
+  "aguardando a confirmação do pagamento": { es: "esperando la confirmación del pago" },
+  "Pague com Pix para confirmar": { es: "Paga con Pix para confirmar" },
+  "QR code do Pix": { es: "Código QR del Pix" },
+  "Pix copia e cola": { es: "Pix copia y pega" },
+  "Pagamento confirmado": { es: "Pago confirmado" },
+  "O pagamento pelo Pix foi confirmado.": { es: "El pago por Pix fue confirmado." },
+  "Este pedido não está mais aguardando pagamento. Atualize a página ou fale com o suporte.": {
+    es: "Este pedido ya no está esperando el pago. Actualiza la página o habla con soporte.",
+  },
+  "Não foi possível continuar: o endereço de pagamento não é reconhecido.": {
+    es: "No se pudo continuar: la dirección de pago no es reconocida.",
+  },
+  "Não foi possível concluir a compra agora. Tente novamente em instantes.": {
+    es: "No se pudo completar la compra ahora. Intenta de nuevo en instantes.",
+  },
+  "Informe o nome de quem paga.": { es: "Informa el nombre de quien paga." },
+  "Informe um CPF ou CNPJ válido.": { es: "Informa un CPF o CNPJ válido." },
+  "Informe um e-mail válido, ou deixe em branco.": { es: "Informa un correo válido, o déjalo en blanco." },
+  "Ver pedido": { es: "Ver pedido" },
+  "Abrir a fatura no Asaas": { es: "Abrir la factura en Asaas" },
+  "Ainda não recebemos a confirmação. Você pode acompanhar este pedido depois.": {
+    es: "Todavía no recibimos la confirmación. Puedes seguir este pedido después.",
+  },
+  "Ainda não recebemos a confirmação. Atualize a página mais tarde.": {
+    es: "Todavía no recibimos la confirmación. Actualiza la página más tarde.",
+  },
 };
 
 /**

@@ -48,6 +48,7 @@
  * une os TRÊS resultados com o mesmo racional do `||` acima: qualquer um
  * falhando, a seção inteira mostra só o aviso.
  */
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
@@ -57,6 +58,12 @@ import {
   ultimoDiaDoPeriodo,
   type ResultadoEstadoDaAssinatura,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
+import {
+  asaasDaOrganizacao,
+  estadoDasChavesAsaas,
+  type AssinaturaAsaasDaOrganizacao,
+  type EstadoDasChavesAsaas,
+} from "@/lib/billing/asaas/leitura";
 import { estadoDoBloqueio, type EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
   linhasDaTelaDePlano,
@@ -74,7 +81,9 @@ import {
 import { saldoDaOrganizacao, type FonteCarteira } from "@/lib/billing/tokens/saldo-da-organizacao";
 import { linhasDeTokensDeIA, type LinhasDeTokensDeIA } from "@/lib/billing/tokens/linhas-da-tela";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { BotaoCancelarAssinatura } from "./_botao-cancelar-assinatura";
 import {
   Table,
   TableBody,
@@ -164,6 +173,17 @@ export default async function PlanoEUsoPage() {
 
   const linhasTokens = linhasDeTokensDeIA(saldoResultado, extratoResultado, estimativaResultado);
 
+  // Fase F5, Tarefa 21: o cartão "Assinatura e pagamento" (links para
+  // assinar/comprar, e cancelar) só existe para quem PODE comprar e cancelar
+  // (N41, decisão 17): o papel `admin`. Ler as duas chaves da decisão 18 e o
+  // vínculo Asaas da organização custaria uma leitura a mais em toda
+  // instalação para quem nunca vai ver o cartão, então só roda quando faz
+  // sentido.
+  const souAdminDaOrganizacao = ROLE_RANK[activeOrg.role] >= ROLE_RANK.admin;
+  const [chavesAsaas, asaasOrg] = souAdminDaOrganizacao
+    ? await Promise.all([estadoDasChavesAsaas(admin, logger), asaasDaOrganizacao(admin, activeOrg.orgId, logger)])
+    : [null, null];
+
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
       <header className="space-y-1">
@@ -179,6 +199,10 @@ export default async function PlanoEUsoPage() {
       </header>
 
       <CartaoDaAssinatura assinatura={assinatura} t={t} tagDoIdioma={tagDoIdioma} />
+
+      {souAdminDaOrganizacao && chavesAsaas && asaasOrg && !asaasOrg.leituraFalhou && (
+        <CartaoDeAssinaturaEPagamento chaves={chavesAsaas} assinaturaAsaas={asaasOrg.assinatura} t={t} />
+      )}
 
       <BannerDoBloqueio bloqueio={bloqueio} t={t} tagDoIdioma={tagDoIdioma} />
 
@@ -322,6 +346,55 @@ function CartaoDaAssinatura({
             </p>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * "Assinatura e pagamento" (fase F5, Tarefa 21): links para assinar um plano
+ * ou comprar um pacote de tokens, só quando a compra pelo cliente está
+ * LIGADA (as duas chaves da decisão 18), e "Cancelar assinatura", só quando
+ * existe assinatura Asaas ativa e não encerrada (`asaas_assinatura_
+ * encerrada_em` nulo, decisão 22). Só renderizado para o papel `admin`
+ * (`page.tsx` já filtra isso antes de montar os dois objetos que este
+ * componente recebe).
+ */
+function CartaoDeAssinaturaEPagamento({
+  chaves,
+  assinaturaAsaas,
+  t,
+}: {
+  chaves: EstadoDasChavesAsaas;
+  assinaturaAsaas: AssinaturaAsaasDaOrganizacao | null;
+  t: (texto: string) => string;
+}) {
+  const podeComprar = chaves.habilitado && chaves.erroConfiguracao === null && chaves.compraPeloCliente;
+  const podeCancelar =
+    chaves.habilitado && chaves.erroConfiguracao === null && assinaturaAsaas !== null && assinaturaAsaas.encerradaEm === null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("Assinatura e pagamento")}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {podeComprar ? (
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href="/app/settings/plano/assinar#planos">{t("Assinar um plano")}</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link href="/app/settings/plano/assinar#pacotes">{t("Comprar pacote de tokens")}</Link>
+            </Button>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {t("A compra pela tela ainda não está disponível. Fale com o suporte.")}
+          </p>
+        )}
+
+        {podeCancelar && <BotaoCancelarAssinatura />}
       </CardContent>
     </Card>
   );
