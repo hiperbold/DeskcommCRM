@@ -2,7 +2,7 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: F7 em fechamento. F4, F5 e F7 fechadas ou em fechamento; F6 entregue para revisão visual do Filipe.
+Fase atual: F7 fechada; próximo passo depende do Filipe (respostas, revisão visual do site, checklist de publicação D-075). F4, F5 e F7 fechadas ou em fechamento; F6 entregue para revisão visual do Filipe.
 Etapa da fase: F5 fechada, 22 tarefas do plano `hiperbold/planos/fase-F5-tarefas.md` feitas entre os commits ce99bf7 e c6caa73, revisão de código e auditoria de segurança do núcleo concluídas, mais duas rodadas de revisão das correções, todos os achados corrigidos. F6 entregue para revisão visual em `http://localhost:4321/`, projeto `F:\github-projects\hipercrm-site`, commit local 2ba4c37, sem remoto.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
@@ -249,4 +249,4 @@ Continuam abertos, com atualização: D-036 (IP da auditoria já passa pelo help
 
 Novos: D-074 (`billing_trigger_alarmes` sem retenção nem tela), D-075 (checklist de publicação da branch, alta prioridade).
 
-portões completos da F7 em ed1e77d: [RESULTADO]
+portões completos da F7 em ed1e77d: verdes em 25/09/2026 às 08:03 no commit 8c1d56b (a rodada em ed1e77d pegou dois testes de cerca, corrigidos em 8c1d56b: constraint de tipo reconstruída num bloco só e contagem de inserts sem a definição superada); install, test:db, typecheck, lint, lint:channels e build ok; unitários 14.633 verdes; só o vermelho de ambiente do Redis
