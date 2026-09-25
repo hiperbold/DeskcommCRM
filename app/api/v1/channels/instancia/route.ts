@@ -27,6 +27,7 @@ import {
 } from "@/lib/channels/instancia";
 import { env } from "@/lib/env";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -52,8 +53,10 @@ function baseDoCrm(req: NextRequest): string {
 }
 
 function contextoDaRequisicao(req: NextRequest) {
+  // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+  // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
   return {
-    ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    ip: ipDoCliente(req.headers),
     userAgent: req.headers.get("user-agent") ?? null,
   };
 }

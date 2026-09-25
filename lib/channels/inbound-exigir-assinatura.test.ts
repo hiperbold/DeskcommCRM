@@ -1,15 +1,19 @@
 /**
  * D-043: "exigir assinatura no webhook" (`platform_settings.exigir_assinatura_no_webhook`,
- * gravada em `/admin/sistema`) não alcançava `verifyInboundWebhookSignature`, o
- * portão da rota genérica de canal. A UAZAPI não assina o corpo: o que ela tem
- * é um token repetido dentro do payload, e só para o evento `messages`, então
- * com a opção ligada o admin acreditava que toda entrada exigia assinatura, e a
- * UAZAPI seguia entrando sem.
+ * gravada em `/admin/sistema`) vale para os servidores de canal que ASSINAM o
+ * corpo com um segredo criptográfico: WAHA (`lib/waha/webhook-auth.ts`) e
+ * Zernio. A UAZAPI não assina o corpo, e a opção NÃO se aplica a ela: sua
+ * proteção estrutural (o token do evento, conferido incondicionalmente por
+ * `verificaTokenUazapiNoPortao`) não muda com esta escolha.
  *
- * Este arquivo prova o portão sozinho, manipulando a MEMÓRIA do processo do
- * jeito que `carregarComportamento` a preenche (o mesmo caminho real da rota,
- * sem precisar montar o banco inteiro). Ver
- * `lib/instalacao/comportamento.ts` e `tests/unit/portao-do-webhook-le-a-instalacao-no-processo-frio.test.ts`
+ * Uma versão anterior fazia a opção ligada recusar a UAZAPI inteira, achando
+ * que "sem assinatura para conferir" devia virar recusa; na prática isso
+ * derrubava o WhatsApp assim que o admin ligasse a opção pensando em
+ * endurecer só o WAHA/Zernio. Este arquivo prova que a opção não alcança a
+ * UAZAPI, manipulando a MEMÓRIA do processo do jeito que `carregarComportamento`
+ * a preenche (o mesmo caminho real da rota, sem precisar montar o banco
+ * inteiro). Ver `lib/instalacao/comportamento.ts` e
+ * `tests/unit/portao-do-webhook-le-a-instalacao-no-processo-frio.test.ts`
  * para o defeito irmão (WAHA) que motivou o padrão.
  */
 import { createHmac } from "node:crypto";
@@ -62,22 +66,31 @@ beforeEach(() => {
   esquecerComportamento();
 });
 
-describe("opção LIGADA: a UAZAPI não sabe assinar, então é recusada", () => {
-  it("evento de mensagem com token CERTO no corpo ainda assim é recusado", async () => {
+describe("opção LIGADA: não alcança a UAZAPI, que não sabe assinar", () => {
+  it("evento de mensagem com token CERTO no corpo passa, a opção não muda nada para este canal", async () => {
     await ligarExigenciaDeAssinatura(true);
     const raw = corpoDeMensagemUazapi();
+
+    expect(verifyInboundWebhookSignature(CHANNEL_PROVIDER_UAZAPI, raw, new Headers(), TOKEN)).toBe(
+      true,
+    );
+  });
+
+  it("evento de mensagem com token ERRADO continua recusado, como sempre", async () => {
+    await ligarExigenciaDeAssinatura(true);
+    const raw = corpoDeMensagemUazapi(TOKEN.replace(/a/g, "b"));
 
     expect(verifyInboundWebhookSignature(CHANNEL_PROVIDER_UAZAPI, raw, new Headers(), TOKEN)).toBe(
       false,
     );
   });
 
-  it("evento que antes passava sem token nenhum (`connection`) também é recusado", async () => {
+  it("evento que não repete token (`connection`) passa igual, a camada fraca é a mesma de sempre", async () => {
     await ligarExigenciaDeAssinatura(true);
     const raw = JSON.stringify({ EventType: "connection", owner: "553599990000" });
 
     expect(verifyInboundWebhookSignature(CHANNEL_PROVIDER_UAZAPI, raw, new Headers(), TOKEN)).toBe(
-      false,
+      true,
     );
   });
 

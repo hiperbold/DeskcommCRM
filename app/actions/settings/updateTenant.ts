@@ -9,6 +9,7 @@ import { audit } from "@/lib/audit";
 import { tenantSchema, type TenantInput } from "@/lib/schemas/settings";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { paisesOferecidos } from "@/lib/legal/perfil-do-pais";
 
 export type UpdateTenantResult =
@@ -52,7 +53,9 @@ export async function updateTenant(input: TenantInput): Promise<UpdateTenantResu
   const supabase = createAdminClient();
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+  // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+  const ip = ipDoCliente(hdrs);
   const userAgent = hdrs.get("user-agent") ?? null;
 
   // O país só entra se tiver PERFIL REVISADO (issue #1033): `paisesOferecidos()`

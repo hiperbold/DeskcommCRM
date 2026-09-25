@@ -12,6 +12,7 @@ import {
   modoDeCadastro,
   type ModoDeCadastro,
 } from "@/lib/auth/politica-de-cadastro";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 
 export type UpdateSignupModeResult = { ok: true } | { ok: false; error: string };
 
@@ -61,7 +62,9 @@ export async function updateSignupMode(
     resourceType: "platform_settings",
     metadata: { de: anterior, para: parsed.data.signup_mode },
     requestId: hdrs.get("x-request-id"),
-    ip: hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+    // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+    ip: ipDoCliente(hdrs),
     userAgent: hdrs.get("user-agent"),
   });
 

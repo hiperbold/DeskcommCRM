@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { mfaEmDivida } from "@/lib/auth/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
@@ -38,6 +39,19 @@ export async function POST(
     adminCtx = await requirePlatformAdmin();
   } catch {
     return fail("forbidden", "Platform admin required", 403, { requestId });
+  }
+
+  // Achado da auditoria: `requirePlatformAdmin()` aceita qualquer escopo, e
+  // esta rota escreve em `organizations` pelo cliente de serviço. Sem este
+  // portão, um admin `support_readonly` reativava qualquer organização.
+  // Mesmo padrão de `POST /api/v1/admin/tenants`.
+  if (adminCtx.platformAdmin.scope !== "full") {
+    return fail("forbidden", "Seu acesso de suporte não permite reativar organizações", 403, {
+      requestId,
+    });
+  }
+  if (await mfaEmDivida()) {
+    return fail("mfa_required", "Confirme a verificação em duas etapas", 403, { requestId });
   }
 
   // Validate body

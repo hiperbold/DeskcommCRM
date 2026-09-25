@@ -20,15 +20,12 @@ import { CHANNEL_PROVIDER_SOCIAL } from "./capabilities";
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { exigirAssinaturaNoWebhookDaInstalacao } from "@/lib/instalacao/comportamento";
-
 import { CHANNEL_PROVIDER_UAZAPI, CHANNEL_PROVIDER_ZERNIO } from "./capabilities";
-import { pisoDeExigenciaDeAssinaturaNoWebhook } from "./exigencia-de-assinatura";
 import { sincronizarSaudeDaConexao } from "./health";
 import { lerConexaoUazapi, parseUazapiConexao } from "./uazapi/conexao-evento";
 import { lerEnvelopeUazapi } from "./uazapi/envelope";
 import { ingestUazapiMensagem } from "./uazapi/ingest";
-import { chaveDoEventoUazapi, eventoUazapiRepetido } from "./uazapi/replay-guard";
+import { chaveDoEventoUazapi, eventoUazapiRepetido, marcarEventoUazapiVisto } from "./uazapi/replay-guard";
 import { aplicarStatusUazapi, lerAtualizacaoUazapi, parseUazapiAtualizacao } from "./uazapi/status";
 import { parseUazapiMensagem, tokenDoEventoConfere } from "./uazapi/webhook";
 import {
@@ -125,24 +122,26 @@ function verificaTokenUazapiNoPortao(raw: string, secret: string | null): boolea
 /**
  * Authenticate before archiving raw payloads. The handler repeats this guard for non-HTTP callers.
  *
- * ─── D-043: "exigir assinatura no webhook" não alcançava este portão ────────
+ * ─── D-043: "exigir assinatura no webhook" NÃO se aplica à UAZAPI ───────────
  *
  * A opção de `/admin/sistema` (`platform_settings.exigir_assinatura_no_webhook`)
- * já valia para o WAHA (`lib/waha/webhook-auth.ts`), mas esta rota, por onde
- * entram os canais oficiais, nunca a lia. Com a opção ligada, o admin
- * acreditava que TODA entrada exigia assinatura, e a UAZAPI continuava
- * entrando sem: `verificaTokenUazapiNoPortao` compara um TOKEN repetido no
- * corpo, o que não é uma assinatura (não cobre `messages_update`/`connection`,
- * e não depende de segredo criptográfico nenhum).
+ * decide se o servidor de canal precisa ASSINAR o corpo com um segredo
+ * criptográfico. Isso vale para quem assina de fato: WAHA
+ * (`lib/waha/webhook-auth.ts`) e Zernio (linha de baixo, incondicional). A
+ * UAZAPI não assina o corpo, e nunca assinou: sua proteção estrutural é outra
+ *, o token secreto sorteado por conexão (que já filtra quem chega até esta
+ * função) mais `verificaTokenUazapiNoPortao`, que compara o TOKEN repetido no
+ * corpo do evento `messages`, e a conferência de dono em `uazapiInbound`.
  *
- * Com a opção ligada, a leitura honesta para um canal que estruturalmente não
- * assina é RECUSAR, não continuar com a verificação fraca de sempre. A
- * Zernio já exige assinatura incondicionalmente (linha de baixo) e não muda
- * de comportamento com esta opção.
+ * Uma versão anterior fazia a opção ligada RECUSAR a UAZAPI inteira, por não
+ * ter assinatura para conferir. Na prática isso derrubava o canal de
+ * WhatsApp assim que o admin ligasse a opção pensando em endurecer o WAHA ou
+ * a Zernio, sem nenhum ganho de segurança, porque a UAZAPI já não confiava
+ * em assinatura nenhuma. Decisão: a opção é decorativa para este canal, e a
+ * verificação é sempre a mesma, ligada ou desligada.
  */
 export function verifyInboundWebhookSignature(provider: string, raw: string, headers: Headers, secret: string | null): boolean {
   if (provider === CHANNEL_PROVIDER_UAZAPI) {
-    if (exigirAssinaturaNoWebhookDaInstalacao(pisoDeExigenciaDeAssinaturaNoWebhook())) return false;
     return verificaTokenUazapiNoPortao(raw, secret);
   }
   return acceptsInboundWebhook(provider) && !!secret && secret.length >= MIN_SECRET_LEN &&
@@ -292,12 +291,20 @@ async function uazapiInbound(
   // conexão não duplica aviso). `messages` fica de fora deste portão: tem
   // token próprio no corpo (achado 4 acima), e quem cobre a reentrega dele é o
   // `external_id` único da mensagem, não este guard.
+  //
+  // A chave só é MARCADA como vista depois que o processamento do evento
+  // termina sem lançar (`marcarEventoUazapiVisto`, mais abaixo em cada ramo).
+  // Marcar aqui, antes de processar, descartava a reentrega legítima de um
+  // evento cujo processamento anterior tinha falhado (5xx): o corpo idêntico
+  // chegava de novo e era recusado como "repetido" sem nunca ter sido
+  // aplicado. Ver o porquê em `uazapi/replay-guard.ts`.
   const tipoDoEvento = envelope.EventType ?? "";
-  if (tipoDoEvento === "messages_update" || tipoDoEvento === "connection") {
-    const chaveDoEvento = chaveDoEventoUazapi(input.session.id, tipoDoEvento, input.rawBody);
-    if (eventoUazapiRepetido(chaveDoEvento)) {
-      return { ok: true, body: { status: "ignored", reason: "evento_repetido" } };
-    }
+  const usaGuardaDeReplay = tipoDoEvento === "messages_update" || tipoDoEvento === "connection";
+  const chaveDoEvento = usaGuardaDeReplay
+    ? chaveDoEventoUazapi(input.session.id, tipoDoEvento, input.rawBody)
+    : null;
+  if (chaveDoEvento && eventoUazapiRepetido(chaveDoEvento)) {
+    return { ok: true, body: { status: "ignored", reason: "evento_repetido" } };
   }
 
   // ─── Desfecho de entrega: move o estado, não cria linha ────────────────────
@@ -314,6 +321,9 @@ async function uazapiInbound(
       externalIds: desfecho.atualizacao.externalIds,
       status: desfecho.atualizacao.status,
     });
+    // Só chega aqui se `aplicarStatusUazapi` não lançou: processado de
+    // verdade, agora sim marca a chave.
+    if (chaveDoEvento) marcarEventoUazapiVisto(chaveDoEvento);
     return { ok: true, body: { status: "status", desfecho: desfecho.atualizacao.status, ...aplicado } };
   }
 
@@ -344,6 +354,8 @@ async function uazapiInbound(
       // varredura não fecha o que ele abriu.
       "empurrao",
     );
+    // Só chega aqui se `sincronizarSaudeDaConexao` não lançou.
+    if (chaveDoEvento) marcarEventoUazapiVisto(chaveDoEvento);
     return { ok: true, body: { status: "saude", estado: conexao.conexao.estado, desfecho } };
   }
 

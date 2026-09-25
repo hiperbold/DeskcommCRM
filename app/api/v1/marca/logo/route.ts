@@ -72,6 +72,7 @@ import {
 } from "@/lib/branding/logo";
 import { extensaoDe, farejarTipo, pareceSvg, podeApagar } from "@/lib/branding/logo-arquivo";
 import { marcaDaOrganizacaoDeSettings } from "@/lib/branding/organizacao";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -318,7 +319,10 @@ async function registrarAuditoria(
   requestId: string,
   acao: "definido" | "removido",
 ): Promise<void> {
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  // D-036: o primeiro salto do `x-forwarded-for` é o que o CLIENTE escreve, e
+  // pode ser forjado. `ipDoCliente` lê o salto confiável (o que o proxy da
+  // instalação acrescentou), ver `lib/http/ip-do-cliente.ts`.
+  const ip = ipDoCliente(req.headers);
   const userAgent = req.headers.get("user-agent") ?? null;
   // FORMA, nunca IDENTIDADE — mesma disciplina de `resolve.ts`. O caminho do
   // arquivo não entra: a trilha é lida por quem opera a plataforma inteira.

@@ -11,6 +11,7 @@ import {
   type ProfileInput,
 } from "@/lib/schemas/settings";
 import { resolveActiveOrg, loadAuthUser } from "@/lib/auth/server";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 
 export type UpdateProfileResult =
   | { ok: true }
@@ -28,7 +29,9 @@ export async function updateProfile(input: ProfileInput): Promise<UpdateProfileR
   const supabase = await createClient();
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+  // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+  const ip = ipDoCliente(hdrs);
   const userAgent = hdrs.get("user-agent") ?? null;
 
   const { error } = await supabase.auth.updateUser({

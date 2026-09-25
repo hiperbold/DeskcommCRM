@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { resetPasswordSchema, type ResetPasswordInput } from "@/lib/auth/schemas";
 import { audit } from "@/lib/audit";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 
 export type UpdatePasswordResult = {
   ok: false;
@@ -44,7 +45,9 @@ export async function updatePassword(
 
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+  // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+  const ip = ipDoCliente(hdrs);
   const userAgent = hdrs.get("user-agent") ?? null;
 
   // Conta com MFA: a sessão de recovery entra em AAL1, mas o GoTrue recusa a

@@ -7,6 +7,7 @@ import { safeNext } from "@/lib/auth/safe-next";
 
 import { createClient } from "@/lib/supabase/server";
 import { audit } from "@/lib/audit";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { cookieSecure } from "@/lib/supabase/cookie-secure";
 
 export type VerifyMfaResult =
@@ -30,7 +31,9 @@ export async function verifyMfa(code: string, next?: string): Promise<VerifyMfaR
   const supabase = await createClient();
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
+  // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+  // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+  const ip = ipDoCliente(hdrs);
   const userAgent = hdrs.get("user-agent") ?? null;
 
   const {

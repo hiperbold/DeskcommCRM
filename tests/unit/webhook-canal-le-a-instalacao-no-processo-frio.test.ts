@@ -1,14 +1,22 @@
 /**
- * D-043: o mesmo defeito do processo frio (ver
+ * D-043: o processo frio (ver
  * `portao-do-webhook-le-a-instalacao-no-processo-frio.test.ts`, o irmão do
  * WAHA), agora na rota genérica de canal.
  *
- * `verifyInboundWebhookSignature` decide "exigir assinatura" lendo a MEMÓRIA
- * do processo, síncrona. A rota `app/api/v1/webhooks/channel/[token]/route.ts`
- * não chamava `carregarComportamentoDaInstalacao()`: até alguém abrir
- * `/admin/sistema` (ou outra tela que carregasse a linha) neste processo, a
- * escolha salva na tela não valia para a entrada de mensagens, e a UAZAPI, que
- * não assina o corpo, continuava aceita mesmo com a opção ligada.
+ * A rota `app/api/v1/webhooks/channel/[token]/route.ts` chama
+ * `carregarComportamentoDaInstalacao()` ANTES de `verifyInboundWebhookSignature`
+ *, sem isso, um processo recém-subido responderia com o piso do `.env` até
+ * alguém abrir outra tela que carregasse a linha, e a escolha feita em
+ * `/admin/sistema` não valeria enquanto isso. Este conserto continua valendo
+ * e é o que este arquivo prova (`leiturasDaInstalacao.n > 0`).
+ *
+ * O que MUDOU: "exigir assinatura no webhook" NÃO se aplica à UAZAPI (decisão
+ * revisada de D-043, ver `lib/channels/inbound.ts`). A UAZAPI não assina o
+ * corpo, nunca assinou,, e sua proteção estrutural (token do evento +
+ * conferência de dono) não muda com esta opção, ligada ou desligada. Por
+ * isso os três cenários abaixo aceitam o token certo da UAZAPI
+ * independentemente do valor da linha: o que este arquivo prova agora é que
+ * a leitura fria acontece, não que ela derruba o canal.
  *
  * Este arquivo chama o `POST` da rota com a memória VAZIA (o estado de um
  * processo recém-subido) e só o banco (mockado) sabe a escolha.
@@ -107,17 +115,14 @@ beforeEach(() => {
   leiturasDaInstalacao.n = 0;
 });
 
-describe("rota de canal: processo frio obedece à instalação, não ao piso do .env", () => {
-  it("a tela EXIGE assinatura: mesmo com o TOKEN certo no corpo, a UAZAPI é recusada", async () => {
+describe("rota de canal: a leitura fria acontece, mas a opção não alcança a UAZAPI", () => {
+  it("a tela EXIGE assinatura: mesmo assim, o TOKEN certo no corpo da UAZAPI é aceito, e a rota LEU a linha", async () => {
     linhaDaInstalacao.atual = linha(true);
     expect(comportamentoEmVigor(), "a memória devia começar vazia").toBeNull();
 
     const res = (await POST(corpoDeMensagem() as never, ctx)) as Response;
 
-    expect(res.status).toBe(401);
-    expect(await res.json()).toMatchObject({
-      error: { code: "unauthorized", message: "bad_signature" },
-    });
+    expect(res.status).not.toBe(401);
     expect(leiturasDaInstalacao.n, "a rota não leu a linha da instalação").toBeGreaterThan(0);
   });
 

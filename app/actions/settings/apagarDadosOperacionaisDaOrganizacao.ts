@@ -12,6 +12,7 @@ import {
   apagarDadosOperacionaisDaOrg,
   type ContagensApagadas,
 } from "@/lib/settings/apagar-dados-operacionais";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const entradaSchema = z.object({ confirmNome: z.string().min(1).max(200) });
@@ -96,7 +97,9 @@ export async function apagarDadosOperacionaisDaOrganizacao(input: {
     resourceType: "organization",
     resourceId: activeOrg.orgId,
     requestId: hdrs.get("x-request-id"),
-    ip: hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+    // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+    ip: ipDoCliente(hdrs),
     userAgent: hdrs.get("user-agent") ?? null,
     bypassedRls: true,
     actingAsPlatformAdmin: authUser.is_platform_admin,

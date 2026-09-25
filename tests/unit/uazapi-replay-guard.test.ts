@@ -25,6 +25,7 @@ import {
   chaveDoEventoUazapi,
   esquecerEventosUazapiVistos,
   eventoUazapiRepetido,
+  marcarEventoUazapiVisto,
   JANELA_DE_REPLAY_MS,
 } from "@/lib/channels/uazapi/replay-guard";
 
@@ -80,6 +81,32 @@ function adminDeStatus() {
   return { from: () => chain } as never;
 }
 
+/**
+ * Mesmo dublê de `adminDeStatus`, mas a primeira chamada de `select()` (fim de
+ * `aplicarStatusUazapi`) rejeita, como um banco fora do ar faria; a segunda
+ * chamada em diante funciona normal. Serve para provar que a chave do
+ * replay-guard só é marcada DEPOIS do processamento ter sucesso.
+ */
+function adminDeStatusComFalhaNaPrimeiraChamada() {
+  let chamadas = 0;
+  const chain: Record<string, unknown> = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === "select") {
+          return () => {
+            chamadas += 1;
+            if (chamadas === 1) return Promise.reject(new Error("banco fora do ar"));
+            return Promise.resolve({ data: [{ id: "m1" }], error: null });
+          };
+        }
+        return () => chain;
+      },
+    },
+  );
+  return { from: () => chain } as never;
+}
+
 /** Dublê mínimo para `sincronizarSaudeDaConexao`: sem episódio aberto, sem escrita a conferir aqui. */
 function adminDeSaude() {
   const chain: Record<string, unknown> = new Proxy(
@@ -98,20 +125,23 @@ function adminDeSaude() {
 describe("replay-guard puro", () => {
   beforeEach(() => esquecerEventosUazapiVistos());
 
-  it("primeira vez que vê a chave: não é repetido, e passa a valer", () => {
+  it("primeira vez que vê a chave, sem marcar: não é repetido, e continua não sendo depois de checar de novo", () => {
     const chave = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
+    expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
+    // `eventoUazapiRepetido` só LÊ: checar de novo sem marcar não muda nada.
     expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
   });
 
-  it("mesma chave dentro da janela: repetido", () => {
+  it("depois de marcada, a chave é repetida dentro da janela", () => {
     const chave = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
     expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
+    marcarEventoUazapiVisto(chave, 1_000);
     expect(eventoUazapiRepetido(chave, 1_000 + JANELA_DE_REPLAY_MS - 1)).toBe(true);
   });
 
-  it("mesma chave depois que a janela vence: processa de novo", () => {
+  it("depois que a janela vence, a chave marcada deixa de ser repetida", () => {
     const chave = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
-    expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
+    marcarEventoUazapiVisto(chave, 1_000);
     expect(eventoUazapiRepetido(chave, 1_000 + JANELA_DE_REPLAY_MS + 1)).toBe(false);
   });
 
@@ -124,7 +154,8 @@ describe("replay-guard puro", () => {
   it("mesmo corpo, sessão diferente: chaves diferentes, uma não bloqueia a outra", () => {
     const a = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
     const b = chaveDoEventoUazapi("sess-2", "connection", "corpo-a");
-    expect(eventoUazapiRepetido(a, 1_000)).toBe(false);
+    marcarEventoUazapiVisto(a, 1_000);
+    expect(eventoUazapiRepetido(a, 1_000)).toBe(true);
     expect(eventoUazapiRepetido(b, 1_000)).toBe(false);
   });
 });
@@ -232,6 +263,25 @@ describe("D-042 na integração: handleInboundWebhook recusa o corpo repetido", 
       secret: TOKEN,
     });
     expect(depoisDaJanela).toMatchObject({ ok: true, body: { status: "saude" } });
+  });
+
+  it("messages_update: se o processamento falhar, a reentrega com o corpo idêntico é processada de verdade", async () => {
+    const raw = corpoDeAtualizacao();
+    const admin = adminDeStatusComFalhaNaPrimeiraChamada();
+
+    await expect(
+      handleInboundWebhook(admin, { session: sessao(), rawBody: raw, headers: new Headers(), secret: TOKEN }),
+    ).rejects.toThrow("banco fora do ar");
+
+    // A chave NÃO foi marcada: o processamento nunca terminou. A reentrega com
+    // o corpo idêntico não pode ser descartada como "repetida".
+    const reentrega = await handleInboundWebhook(admin, {
+      session: sessao(),
+      rawBody: raw,
+      headers: new Headers(),
+      secret: TOKEN,
+    });
+    expect(reentrega).toMatchObject({ ok: true, body: { status: "status" } });
   });
 
   it("messages (com token) não passa por este portão: reenviar o mesmo corpo continua sendo ingerido", async () => {

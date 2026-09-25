@@ -6,6 +6,7 @@ import { z } from "zod";
 import { invalidarCredencialDoGoogle } from "@/lib/agenda/google/config";
 import { audit } from "@/lib/audit";
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptWebhookSecret } from "@/lib/webhooks/secrets";
 
@@ -118,7 +119,9 @@ export async function updateGoogleOAuth(input: GoogleOAuthInput): Promise<Update
     // e a trilha ficaria sem a linha — sem sintoma em tela nenhuma.
     resourceId: null,
     requestId: cabecalhos.get("x-request-id") ?? undefined,
-    ip: cabecalhos.get("x-forwarded-for") ?? undefined,
+    // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+    // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+    ip: ipDoCliente(cabecalhos) ?? undefined,
     userAgent: cabecalhos.get("user-agent") ?? undefined,
     actingAsPlatformAdmin: true,
     metadata: {

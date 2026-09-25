@@ -122,7 +122,7 @@ export function FormularioDeComportamento({ inicial }: { inicial: ComportamentoD
             </Label>
             <p className="text-sm text-muted-foreground">
               {t(
-                "Ligado, toda entrega de webhook precisa vir assinada com o segredo da sessão. Desligado por padrão porque nem todo servidor de canal assina: ligar sem que ele assine corta a entrada de mensagens.",
+                "Vale para os servidores de canal que assinam o corpo do webhook: ligado, a entrega precisa vir assinada com o segredo da sessão. Um servidor que não assina o corpo não é afetado por esta opção: a proteção dele vem de outro mecanismo (token da conexão mais a conferência de dono), que já roda sempre.",
               )}
             </p>
           </div>

@@ -28,6 +28,17 @@
  * múltiplas réplicas do processo, cada uma tem sua própria memória, e um
  * reenvio dirigido a réplicas diferentes não é pego: mitigação parcial, não
  * garantia, e está anotada aqui para quem for fechar D-042 de vez.
+ *
+ * ─── Por que checar e marcar são duas funções, não uma ──────────────────────
+ *
+ * A versão anterior marcava a chave como vista DENTRO da própria checagem, ou
+ * seja: antes de `uazapiInbound` processar o evento. Se o processamento
+ * lançasse (banco fora do ar, por exemplo), a rota respondia 500, o sinal
+ * certo para o servidor reentregar, mas a chave já estava marcada, e a
+ * reentrega com o corpo idêntico era descartada como "repetida" sem nunca ter
+ * sido de fato processada. Um evento de verdade sumia depois de uma falha
+ * transitória. Agora `eventoUazapiRepetido` só LÊ, e quem chama marca com
+ * `marcarEventoUazapiVisto` depois que o processamento terminou sem lançar.
  */
 import { createHash } from "node:crypto";
 
@@ -61,19 +72,31 @@ export function chaveDoEventoUazapi(channelSessionId: string, eventType: string,
 
 /**
  * `true` = já visto dentro da janela, e quem chama deve recusar como repetido.
- * `false` = novo (ou a janela anterior já venceu): registra e deixa passar.
+ * `false` = novo (ou a janela anterior já venceu, ou nunca chegou a ser
+ * marcado como visto porque o processamento anterior falhou).
  *
- * `agoraMs` é injetável só para teste; produção sempre usa `Date.now()`.
+ * Só LÊ, não marca. Quem chama, depois de processar com sucesso, marca com
+ * `marcarEventoUazapiVisto`. `agoraMs` é injetável só para teste; produção
+ * sempre usa `Date.now()`.
  */
 export function eventoUazapiRepetido(chave: string, agoraMs: number = Date.now()): boolean {
   const mapa = mapaDeVistos();
   if (mapa.size > LIMITE_ANTES_DE_LIMPAR) limparVencidos(mapa, agoraMs);
 
   const expiraEm = mapa.get(chave);
-  if (expiraEm !== undefined && expiraEm > agoraMs) return true;
+  return expiraEm !== undefined && expiraEm > agoraMs;
+}
 
+/**
+ * Marca a chave como vista por `JANELA_DE_REPLAY_MS`. Chamar SÓ depois que o
+ * processamento do evento terminou sem lançar, é isso que distingue
+ * "processado" de "só recebido", e é a diferença entre este guard e a versão
+ * anterior que marcava antes de processar (ver o porquê acima).
+ */
+export function marcarEventoUazapiVisto(chave: string, agoraMs: number = Date.now()): void {
+  const mapa = mapaDeVistos();
+  if (mapa.size > LIMITE_ANTES_DE_LIMPAR) limparVencidos(mapa, agoraMs);
   mapa.set(chave, agoraMs + JANELA_DE_REPLAY_MS);
-  return false;
 }
 
 /** Só para teste: devolve o processo ao estado de quem nunca viu evento nenhum. */

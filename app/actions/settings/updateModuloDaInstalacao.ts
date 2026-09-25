@@ -11,6 +11,7 @@ import {
   gravarModulo,
   moduloLigado,
 } from "@/lib/instalacao/modulos";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type UpdateModuloResult = { ok: true } | { ok: false; error: string };
@@ -55,7 +56,9 @@ export async function updateModuloDaInstalacao(
     resourceType: "platform_config",
     metadata: { modulo, de: antes, para: ligado },
     requestId: hdrs.get("x-request-id"),
-    ip: hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+    // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+    ip: ipDoCliente(hdrs),
     userAgent: hdrs.get("user-agent"),
   });
 

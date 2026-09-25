@@ -10,12 +10,16 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
+
 /** Mesma lição de `lib/auth/rate-limit.ts`: sem IP identificável, não conta —
- * um balde global aqui trancaria a landing page da instalação inteira. */
+ * um balde global aqui trancaria a landing page da instalação inteira.
+ *
+ * D-036: lia o primeiro salto do `x-forwarded-for` na mão, que é o que o
+ * CLIENTE escreve e pode forjar. `ipDoCliente` lê o salto confiável (ver
+ * `lib/http/ip-do-cliente.ts`). */
 export function clientIp(req: NextRequest): string | null {
-  const encaminhado = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  if (encaminhado) return encaminhado;
-  return req.headers.get("x-real-ip")?.trim() || null;
+  return ipDoCliente(req.headers);
 }
 
 /**

@@ -2538,8 +2538,8 @@ export const DICIONARIO: Traducoes = {
   "Exigir assinatura nas entregas do canal": {
     es: "Exigir firma en las entregas del canal",
   },
-  "Ligado, toda entrega de webhook precisa vir assinada com o segredo da sessão. Desligado por padrão porque nem todo servidor de canal assina: ligar sem que ele assine corta a entrada de mensagens.": {
-    es: "Si está activado, cada entrega de webhook debe llegar firmada con el secreto de la sesión. Viene desactivado por defecto porque no todos los servidores de canal firman: activarlo sin que firmen corta la entrada de mensajes.",
+  "Vale para os servidores de canal que assinam o corpo do webhook: ligado, a entrega precisa vir assinada com o segredo da sessão. Um servidor que não assina o corpo não é afetado por esta opção: a proteção dele vem de outro mecanismo (token da conexão mais a conferência de dono), que já roda sempre.": {
+    es: "Aplica a los servidores de canal que firman el cuerpo del webhook: activada, la entrega debe llegar firmada con el secreto de la sesión. Un servidor que no firma el cuerpo no se ve afectado por esta opción: su protección viene de otro mecanismo (token de la conexión más la verificación del dueño), que ya funciona siempre.",
   },
   "Divulgação de pagamento no atendimento": {
     es: "Divulgación de pago en la atención",

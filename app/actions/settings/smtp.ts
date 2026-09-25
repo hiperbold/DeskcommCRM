@@ -5,6 +5,7 @@ import { audit } from "@/lib/audit";
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
 import { checkSmtpConfiguration } from "@/lib/email/smtp";
 import { saveSmtpConfig } from "@/lib/email/config";
+import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 
 const schema = z.object({
   host: z.string().trim().max(253),
@@ -50,7 +51,9 @@ export async function updateSmtp(input: z.input<typeof schema>) {
     actorUserId: user.id,
     resourceType: "platform_smtp_settings",
     requestId: requestHeaders.get("x-request-id") ?? undefined,
-    ip: requestHeaders.get("x-forwarded-for") ?? undefined,
+    // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
+    // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).
+    ip: ipDoCliente(requestHeaders) ?? undefined,
     userAgent: requestHeaders.get("user-agent") ?? undefined,
     actingAsPlatformAdmin: true,
     metadata: {
