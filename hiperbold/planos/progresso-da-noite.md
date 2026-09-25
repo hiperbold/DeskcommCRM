@@ -2,8 +2,8 @@
 
 Início: 23/09/2026 01:21
 Branch: feat/planos-assinatura (a partir de fix/debitos-pequenos-2026-09-22, commit e5231de)
-Fase atual: F5 (F4 fechada em 24/09/2026 às 16:51; F6 com 3 modelos de página em design)
-Etapa da fase: F5 em implementação pelo plano revisado (`hiperbold/planos/fase-F5-tarefas.md`): tarefas 1 a 4, 10, 11 e 12 commitadas (ce99bf7, b04bfba, 8487304, 97e7be9, 73973bc); tarefa 5 (aplicar pagamento) e 14 (serviço de compra) em execução.
+Fase atual: entrega final. F4 e F5 fechadas; F6 entregue para revisão visual do Filipe.
+Etapa da fase: F5 fechada, 22 tarefas do plano `hiperbold/planos/fase-F5-tarefas.md` feitas entre os commits ce99bf7 e c6caa73, revisão de código e auditoria de segurança do núcleo concluídas, mais duas rodadas de revisão das correções, todos os achados corrigidos. F6 entregue para revisão visual em `http://localhost:4321/`, projeto `F:\github-projects\hipercrm-site`, commit local 2ba4c37, sem remoto.
 
 F2, tarefas: 1 (registro, D-050), 2 (a977b56), 3 (SQL d78572d; testes de banco c1ba1e6), 4 (d281a8f, teto MCP no banco, D-034 resolvido), 5 (ced16d1, conferidor diário), 6 (35f0ebf), 7 (db8792a, tela em /app/settings/plano), 8 (76774e6, telemetria sem custo; D-051). Correções da revisão (e3ae0bc) e da auditoria (28d21a3); test:db dos arquivos da fase 317 de 317.
 
@@ -173,3 +173,49 @@ Faixa 8ea9098..9afb775 (tarefas 1 a 6 e 10 a 18). Commits: ce99bf7, b04bfba, 848
 - Auditoria: sem crítico. Altos: o processador não confirma por GET os eventos que não são pagamento (estorno, chargeback, vencimento, fim de assinatura morrem em `aguardando`/`erro`); o estorno confia no tipo do evento e não no status confirmado. Médios: retentativa com consulta falha faz POST (cobrança dobrada); cancelar pedido sem recurso registrado deixa assinatura viva; N39 não remove a assinatura do primeiro pagamento vencido e o primeiro pagamento sobrescreve assinatura viva; evento de produção gravado como sandbox; pagamento sandbox concede plano real. Baixos: id `conc:` sequestrável, rota do pedido para viewer, payload de outro app guardado, retomada de pedido de outra oferta, escrita direta do service_role em `billing_payments`/`billing_contracts` (vai para o DEBITO), gate do admin da plataforma na compra, tamanho do token, `pedido_marcar` reabrindo.
 - Revisão: além dos mesmos, renovação fechada como `outro_app` quando a leitura falha, evento preso por `resultado` fora do CHECK, pedido estornado casando como primeiro pagamento, pedido sem fatura travado, alarme de 3 dias por organização, contrato voltando a `ativa` vencido, estados definitivos tratados como espera.
 - Correções em execução: SQL (parte 7), TS do processador e conciliação, TS da compra e ações. Decisões novas: `billing_settings.asaas_sandbox_concede` (padrão falso: pagamento de sandbox não concede em produção); `billing_contracts.asaas_ambiente`; N39 passa a "remove sozinho" também no processador.
+
+## F5 fechada
+
+As 22 tarefas do plano `hiperbold/planos/fase-F5-tarefas.md` feitas entre os commits ce99bf7 e c6caa73. Revisão de código e auditoria de segurança do núcleo feitas, mais duas rodadas de revisão das correções, todos os achados corrigidos (partes 7 e 8 da migração 0909 e correções de TS). Nenhuma chamada real ao Asaas nem ao sandbox: tudo testado com dublês. A compra pelo cliente nasce desligada por duas chaves (`ASAAS_ENABLED` e `billing_settings.compra_pelo_cliente`); pagamento de ambiente sandbox não concede sem `billing_settings.asaas_sandbox_concede`.
+
+Commits da faixa: ce99bf7, b04bfba, 8487304, 97e7be9, 73973bc, 5cbb69d, 0a750ec, c14e510, eeb261b, 7186080, 889aac0, 107538e, 3345adc, 9afb775, até c6caa73 (correções finais das partes 7 e 8 da 0909 e de TS).
+
+| Portão | Resultado |
+|---|---|
+| portões completos em c6caa73 | [RESULTADO] |
+
+## Perguntas em aberto para o Filipe (consolidado final)
+
+- **N3.** Cache de saldo a 10% e conferências internas de IA (visão, embedding, transcrição) devem contar no gasto. Ainda sem resposta (D-057).
+- **N8.** Preço anual dos planos. Padrão usado: nulo no catálogo (`price_yearly_cents`) até o Filipe responder.
+- **N9.** Preço e tamanho do pacote de tokens. Padrão usado: sem preço até o Filipe definir; plano ou pacote sem preço não aparece para compra.
+- **N19.** Carência de 7 dias antes da suspensão. Padrão usado: `grace_days` padrão de 7 dias por organização.
+- **N20.** Mídia não para quando os tokens do mês zeram. Padrão usado: mídia continua, só a IA para.
+- **N21.** Quando ligar o bloqueio, hoje em `avisar`. Sem padrão, decisão do Filipe.
+- **A a D (seção 12 do plano mestre)**: suspensão, avaliação, contatos, onde digitar o cartão, tolerância, cancelamento, estorno. Ainda abertas.
+- **N23.** Na conta suspensa, a pessoa ainda cria lead à mão? Padrão usado: sim, e o lead que chega sozinho também.
+- **N24.** Quem registra o pagamento enquanto não há Asaas? Padrão usado: o admin da plataforma, na aba Plano.
+- **N25.** O lembrete de agendamento ao cliente final continua na conta suspensa? Padrão usado: continua, porque atende o cliente do cliente.
+- **N26.** Eventos de automação durante a suspensão se perdem? Padrão usado: sim, são consumidos e registrados como parados; reativar não dispara mensagem velha.
+- **N27.** Envio pela API key e pelas ferramentas MCP continua na conta suspensa? Padrão usado: continua, por ser ação de pessoa.
+- **N28.** Chamadas de IA que não respondem ao cliente (descrição de mídia, montagem do quadro, embeddings) continuam na conta suspensa? Padrão usado: continuam, porque servem a quem atende à mão.
+- **N29.** Exigir MFA (aal2) em toda escrita de cobrança do admin? Padrão usado: não agora, porque travaria o admin sem fator cadastrado. Registrada como D-064.
+- **N30.** Cartão pela fatura hospedada ou pelo Checkout Asaas? Padrão usado: fatura hospedada (`invoiceUrl`).
+- **N31.** Estorno ou chargeback corta o acesso sozinho? Padrão usado: não, registra e avisa o admin, que decide.
+- **N32.** Pacote de tokens estornado tira os tokens? Padrão usado: não sozinho, o admin ajusta.
+- **N33.** Trocar de plano com assinatura Asaas ativa? Padrão usado: não pela tela nesta fase, o admin cancela e o cliente assina de novo, sem pró-rata.
+- **N34.** O cliente cancela pela tela? Padrão usado: sim, vale no fim do período pago, sem estorno.
+- **N35.** Quem é o pagador, e o CRM guarda o CPF/CNPJ? Padrão usado: o que o admin da organização informar na primeira compra; o documento fica só no Asaas.
+- **N36.** Organização nova começa em avaliação? Padrão usado: não, nasce no Ilimitado e o onboarding não muda.
+- **N37.** Suspender ou arquivar a organização cancela a assinatura no Asaas? Padrão usado: não sozinho, a tela avisa e apagar com assinatura ativa é recusado.
+- **N38.** Por quanto tempo guardar o payload dos eventos? Padrão usado: 180 dias, depois só os metadados.
+- **N39.** Assinatura que nunca recebeu o primeiro pagamento? Padrão usado: `PAYMENT_OVERDUE` libera pedido novo e o processador remove a assinatura sozinho no Asaas, sem cobrar a mais.
+- **N40.** Notificações do Asaas ao pagador (e-mail e SMS de fatura)? Padrão usado: o padrão da conta; o CRM não manda `notificationDisabled`.
+- **N41.** Quem compra e cancela na organização? Padrão usado: só o papel admin.
+- **N42.** Assinar com período já pago? Padrão usado: `nextDueDate` nasce no dia seguinte a `current_period_end`; a troca de plano espera o primeiro pagamento.
+- **N43.** Chargeback revertido devolve algo sozinho? Padrão usado: não, fica registrado com alarme e o admin decide.
+- **F6, decisões para conferir** (`hiperbold/planos/fase-F6-tarefas.md`): a seção "03 · Funil e agenda" virou versão clara em vez de escura, para manter a regra de três seções claras para uma escura; essa seção usa o quadro de funil da opção A sem a agenda; a paleta da página inteira segue a base da opção B (creme, azul-marinho, azul, verde), inclusive nas seções vindas da opção A; falta menu recolhível para o celular.
+- **F6, espaços reservados do site**: razão social, CNPJ, endereço, e-mail, WhatsApp, encarregado de dados, link de cadastro, preço do pacote de tokens, regra de fidelidade e data dos textos legais.
+- **D-050.** Autorizar a leitura do banco de produção antes de publicar, para conferir o gasto de IA de cada organização contra o teto antes de ligar o catálogo de preço.
+- **D-056.** Integrar o provedor GLM e cadastrar preço de GLM e DeepSeek em `ai_models`.
+- **Quando publicar**: push na `main` dispara o deploy sozinho. Nada desta branch foi publicado.

@@ -1,6 +1,6 @@
 # Status do fork Hiperbold
 
-Atualizado em 22/09/2026, fim do dia.
+Atualizado em 25/09/2026.
 
 ## Onde está tudo agora
 
@@ -49,9 +49,16 @@ Os 8 novos vieram da junção, e a maioria é colisão com escolhas nossas, não
 
 **Por que isso importa**: CI permanentemente vermelho é CI que ninguém lê, e o próximo defeito de verdade entra sem alarme.
 
-## Planos e assinatura: F1, F2, F2-B e F3 implementadas, nada em produção
+## Planos e assinatura: F1 a F5 fechadas, F6 em revisão visual, nada em produção
 
-Branch `feat/planos-assinatura`, criada de `fix/debitos-pequenos-2026-09-22` (commit e5231de). Tudo em commit local, sem push e sem nada em produção. Migrações novas: 0904 (planos), 0905 (uso e trava), 0906 (carteira de tokens), 0907 (bloqueio). O banco local de desenvolvimento está no modo `avisar`. Faltam as fases F4 (planos à venda), F5 (Asaas) e F6 (site de vendas, pedido do Filipe em 23/09).
+Branch `feat/planos-assinatura`, criada de `fix/debitos-pequenos-2026-09-22` (commit e5231de). Tudo em commit local, sem push e sem nada em produção. Migrações novas: 0904 (planos), 0905 (uso e trava), 0906 (carteira de tokens), 0907 (bloqueio), 0908 (estados da assinatura, F4), 0909 (cobrança pelo Asaas, F5, com as partes 1 a 8). O banco local de desenvolvimento está no modo `avisar`.
+
+- F1, F2, F2-B, F3: fechadas.
+- F4 (estados da assinatura, pagamento registrado pelo admin, modo leitura, catálogo de pacotes, D-046): fechada em 24/09/2026 às 16:51. Portões completos verdes no commit de8ed83 (só o vermelho de ambiente do Redis).
+- F5 (cobrança pelo Asaas): as 22 tarefas do plano `hiperbold/planos/fase-F5-tarefas.md` feitas entre os commits ce99bf7 e c6caa73. Revisão de código e auditoria de segurança do núcleo feitas, mais duas rodadas de revisão das correções, todos os achados corrigidos. Portões completos rodando no commit c6caa73. Nenhuma chamada real ao Asaas nem ao sandbox: tudo testado com dublês. A compra pelo cliente nasce desligada por duas chaves (`ASAAS_ENABLED` e `billing_settings.compra_pelo_cliente`); pagamento de ambiente sandbox não concede sem `billing_settings.asaas_sandbox_concede`.
+- F6 (site de vendas): projeto separado `F:\github-projects\hipercrm-site` (Astro, estático, sem CMS), commit local 2ba4c37, sem remoto. Homepage na composição escolhida pelo Filipe, mais `/precos`, `/termos` e `/privacidade` em rascunho para revisão jurídica. Build ok, revisão visual pelo Filipe em `http://localhost:4321/`.
+
+**O que depende do Filipe**: ativar o Asaas de verdade (conta, chaves de sandbox e produção, webhook, homologação no sandbox, preços N8 e N9, `for_sale` plano a plano); as decisões de produto ainda abertas (ver `hiperbold/planos/progresso-da-noite.md`); revisar a homepage e as decisões da F6; e autorizar a leitura do banco de produção antes de publicar (D-050). Detalhe completo em `hiperbold/HANDOFF.md` e `hiperbold/DEBITO.md`.
 
 O que o módulo faz hoje:
 
