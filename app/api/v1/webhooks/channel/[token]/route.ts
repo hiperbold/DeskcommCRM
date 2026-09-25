@@ -39,6 +39,7 @@ import {
   fecharArquivoDoWebhook,
 } from "@/lib/channels/arquivo-de-webhook";
 import { acceptsInboundWebhook, handleInboundWebhook, verifyInboundWebhookSignature, inboundPayloadBelongsToSession } from "@/lib/channels/inbound";
+import { carregarComportamentoDaInstalacao } from "@/lib/instalacao/comportamento-servidor";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 
@@ -141,6 +142,15 @@ export async function POST(
     rawBody,
     headers: req.headers,
   });
+
+  // D-043: `verifyInboundWebhookSignature` lê "exigir assinatura no webhook" da
+  // MEMÓRIA do processo, de forma síncrona. Sem carregar a linha da instalação
+  // aqui, um processo recém-subido responde com o piso do `.env` até alguém
+  // abrir outra tela que a carregue, e a escolha feita em /admin/sistema não
+  // valeria para a entrada de mensagens. Mesmo conserto já aplicado às rotas
+  // de webhook por token do outro transporte de canal; o memo de 30s faz
+  // disto no máximo uma leitura por janela, e nunca lança.
+  await carregarComportamentoDaInstalacao();
 
   if (!verifyInboundWebhookSignature(sessao.provider, rawBody, req.headers, secret)) {
     await fecharArquivoDoWebhook(admin, arquivo, {

@@ -20,7 +20,10 @@ import { CHANNEL_PROVIDER_SOCIAL } from "./capabilities";
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { exigirAssinaturaNoWebhookDaInstalacao } from "@/lib/instalacao/comportamento";
+
 import { CHANNEL_PROVIDER_UAZAPI, CHANNEL_PROVIDER_ZERNIO } from "./capabilities";
+import { pisoDeExigenciaDeAssinaturaNoWebhook } from "./exigencia-de-assinatura";
 import { sincronizarSaudeDaConexao } from "./health";
 import { lerConexaoUazapi, parseUazapiConexao } from "./uazapi/conexao-evento";
 import { lerEnvelopeUazapi } from "./uazapi/envelope";
@@ -120,9 +123,27 @@ function verificaTokenUazapiNoPortao(raw: string, secret: string | null): boolea
 
 /**
  * Authenticate before archiving raw payloads. The handler repeats this guard for non-HTTP callers.
+ *
+ * ─── D-043: "exigir assinatura no webhook" não alcançava este portão ────────
+ *
+ * A opção de `/admin/sistema` (`platform_settings.exigir_assinatura_no_webhook`)
+ * já valia para o WAHA (`lib/waha/webhook-auth.ts`), mas esta rota, por onde
+ * entram os canais oficiais, nunca a lia. Com a opção ligada, o admin
+ * acreditava que TODA entrada exigia assinatura, e a UAZAPI continuava
+ * entrando sem: `verificaTokenUazapiNoPortao` compara um TOKEN repetido no
+ * corpo, o que não é uma assinatura (não cobre `messages_update`/`connection`,
+ * e não depende de segredo criptográfico nenhum).
+ *
+ * Com a opção ligada, a leitura honesta para um canal que estruturalmente não
+ * assina é RECUSAR, não continuar com a verificação fraca de sempre. A
+ * Zernio já exige assinatura incondicionalmente (linha de baixo) e não muda
+ * de comportamento com esta opção.
  */
 export function verifyInboundWebhookSignature(provider: string, raw: string, headers: Headers, secret: string | null): boolean {
-  if (provider === CHANNEL_PROVIDER_UAZAPI) return verificaTokenUazapiNoPortao(raw, secret);
+  if (provider === CHANNEL_PROVIDER_UAZAPI) {
+    if (exigirAssinaturaNoWebhookDaInstalacao(pisoDeExigenciaDeAssinaturaNoWebhook())) return false;
+    return verificaTokenUazapiNoPortao(raw, secret);
+  }
   return acceptsInboundWebhook(provider) && !!secret && secret.length >= MIN_SECRET_LEN &&
     verifyZernioSignature(raw, headers.get("x-zernio-signature"), secret);
 }
