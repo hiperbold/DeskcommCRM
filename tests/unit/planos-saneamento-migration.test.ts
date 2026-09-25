@@ -172,3 +172,118 @@ describe("0910 D-068: prova de atualização documentada, sem SQL nesta migraç�
     expect(MIGRATION_0910).toContain("é só prova de banco (roteiro fora desta migration, em transação com");
   });
 });
+
+describe("0910 PARTE 2 (lote 4b): posição e igualdade do trecho novo no baseline", () => {
+  it("a PARTE 2 está presente na migração e no bloco do baseline, igual ignorando comentários e linhas em branco", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toContain("PARTE 2 (fase F7, lote 4b): D-048, D-061 e D-062/D-063.");
+    }
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION_0910);
+    const sqlBloco = removeComentariosEBrancas(extraiBloco0910Baseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+  });
+});
+
+describe("0910 D-048: orgs_write_platform_admin passa a exigir escopo full", () => {
+  it("cria fn_is_platform_admin_full com o mesmo corpo de fn_is_platform_admin mais scope = full", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      const posicao = sql.lastIndexOf("create or replace function public.fn_is_platform_admin_full()");
+      expect(posicao).toBeGreaterThan(-1);
+      const trecho = sql.slice(posicao, posicao + 500);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/user_id = auth\.uid\(\) and revoked_at is null and scope = 'full'/);
+    }
+  });
+
+  it("revoga de public/anon e concede a authenticated e service_role, no molde de fn_is_platform_admin", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(/revoke execute on function public\.fn_is_platform_admin_full\(\) from public, anon;/);
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_is_platform_admin_full\(\) to authenticated, service_role;/,
+      );
+    }
+  });
+
+  it("redefine orgs_write_platform_admin (drop + create) usando fn_is_platform_admin_full nos dois lados", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(
+        /drop policy if exists orgs_write_platform_admin on public\.organizations;/,
+      );
+      const posicao = sql.lastIndexOf("create policy orgs_write_platform_admin on public.organizations");
+      expect(posicao).toBeGreaterThan(-1);
+      const trecho = sql.slice(posicao, posicao + 300);
+      expect(trecho).toMatch(/using \(public\.fn_is_platform_admin_full\(\)\)/);
+      expect(trecho).toMatch(/with check \(public\.fn_is_platform_admin_full\(\)\)/);
+    }
+  });
+
+  it("não toca na política de leitura orgs_select (o achado do D-048 é só escrita)", () => {
+    expect(MIGRATION_0910).not.toMatch(/(drop|create) policy[^;]*\borgs_select\b/);
+  });
+});
+
+describe("0910 D-061: fn_reserve_channel_connection limpa archived_at e conta no teto ao reaproveitar", () => {
+  it("redefine a função (última definição vale) com o update que zera archived_at dentro do ramo de onboarding", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      const posicao = sql.lastIndexOf(
+        "create or replace function public.fn_reserve_channel_connection(p_org uuid,p_key uuid,p_hash text,p_display_name text default null,p_onboarding boolean default false)",
+      );
+      expect(posicao).toBeGreaterThan(-1);
+      const trecho = sql.slice(posicao, posicao + 3500);
+
+      const posOnboarding = trecho.indexOf("if p_onboarding then");
+      const posBuscaArquivada = trecho.indexOf("where organization_id=p_org and provider='waha'");
+      const posUpdateArchivedAt = trecho.indexOf("update public.channel_sessions set archived_at=null,updated_at=now()");
+      const posInsertNovoCanal = trecho.indexOf("if channel.id is null then");
+
+      // A limpeza de archived_at mora DENTRO do ramo de onboarding, DEPOIS da
+      // busca pela sessão arquivada e ANTES do insert de canal novo (só
+      // insere quando a reativação não achou nada para reaproveitar).
+      expect(posOnboarding).toBeGreaterThan(-1);
+      expect(posBuscaArquivada).toBeGreaterThan(posOnboarding);
+      expect(posUpdateArchivedAt).toBeGreaterThan(posBuscaArquivada);
+      expect(posInsertNovoCanal).toBeGreaterThan(posUpdateArchivedAt);
+
+      expect(trecho).toMatch(/if channel\.id is not null and channel\.archived_at is not null then/);
+      expect(trecho).toMatch(/security definer/);
+    }
+  });
+
+  it("mantém os mesmos grants de execução da 0232 (authenticated), sem alargar nem restringir", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(
+        /revoke all on function public\.fn_reserve_channel_connection\(uuid,uuid,text,text,boolean\) from public,anon;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_reserve_channel_connection\(uuid,uuid,text,text,boolean\) to authenticated;/,
+      );
+    }
+  });
+});
+
+describe("0910 D-062: sem mudança de SQL, só justificativa documentada", () => {
+  it("o comentário cita o D-062 e a razão de não aplicar a correção sugerida", () => {
+    expect(MIGRATION_0910).toContain("D-062");
+    expect(MIGRATION_0910).toContain("SEM MUDANÇA DE SQL");
+    expect(MIGRATION_0910).toContain("fn_mover_leads_em_lote");
+  });
+
+  it("não redefine fn_mover_leads_em_lote nem fn_billing_bloqueia_crm_leads", () => {
+    expect(MIGRATION_0910).not.toMatch(/create or replace function public\.fn_mover_leads_em_lote/);
+    expect(MIGRATION_0910).not.toMatch(/create or replace function public\.fn_billing_bloqueia_crm_leads/);
+  });
+});
+
+describe("0910 D-063: segundo recálculo de billing_usage_counters com merge por greatest", () => {
+  it("repete o recálculo da 0905 trocando a sobrescrita cega por greatest(atual, recalculado)", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(
+        /select cl\.organization_id, 'leads', count\(\*\)\s*\n\s*from public\.crm_leads cl\s*\n\s*where cl\.status = 'open'\s*\n\s*group by cl\.organization_id\s*\n\s*on conflict \(organization_id, item\) do update\s*\n\s*set valor = greatest\(public\.billing_usage_counters\.valor, excluded\.valor\),/,
+      );
+    }
+  });
+
+  it("não usa mais a sobrescrita cega (excluded.valor sozinho) nesta migração", () => {
+    expect(MIGRATION_0910).not.toMatch(/set valor = excluded\.valor,/);
+  });
+});

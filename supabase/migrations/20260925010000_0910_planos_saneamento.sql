@@ -1,10 +1,11 @@
--- 0910, saneamento do módulo de planos (fase F7, lote 1, fork Hiperbold).
+-- 0910, saneamento do módulo de planos (fase F7, lotes 1 e 4b, fork Hiperbold).
 --
 -- Faixa 09xx reservada ao fork (ver 0901). Racional completo em
 -- hiperbold/planos/fase-F7-tarefas.md e nas entradas D-069, D-070, D-060,
--- D-047, D-055 e D-068 de hiperbold/DEBITO.md. D-070 e D-060 NÃO mudam nada
--- nesta migration (justificativa na PARTE 4, abaixo, sem instrução SQL). D-068
--- é só prova de banco (roteiro fora desta migration, em transação com
+-- D-047, D-055 e D-068 de hiperbold/DEBITO.md (PARTE 1, lote 1) e D-048,
+-- D-061, D-062 e D-063 (PARTE 2, lote 4b, abaixo). D-070, D-060 (PARTE 4) e
+-- D-062 (PARTE 2) NÃO mudam nada nesta migration (justificativa em cada
+-- seção, sem instrução SQL). D-068 é só prova de banco (roteiro fora desta migration, em transação com
 -- rollback no banco local de desenvolvimento); nenhuma linha de SQL aqui.
 --
 -- Mesmo padrão de segurança das migrations anteriores da faixa (0904 a 0909):
@@ -271,3 +272,243 @@ $$;
 --
 -- Prova de banco (rolbypassrls das três roles, para o gate travar se algum
 -- dia uma role SEM bypassrls ganhar EXECUTE): tests/invariants/planos-saneamento.test.ts.
+
+-- ============================================================================
+-- PARTE 2 (fase F7, lote 4b): D-048, D-061 e D-062/D-063.
+-- ============================================================================
+--
+-- Três achados da revisão e da auditoria de segurança da F3, fora do lote 1
+-- desta mesma migration (PARTE 1, acima). Racional completo em
+-- hiperbold/planos/fase-F7-tarefas.md e nas entradas D-048, D-061, D-062 e
+-- D-063 de hiperbold/DEBITO.md. D-062 NÃO muda nada nesta migration
+-- (justificativa na própria seção, abaixo, sem instrução SQL).
+
+-- ----------------------------------------------------------------------------
+-- D-048 (achado da auditoria da F1): orgs_write_platform_admin aceita
+-- qualquer admin da plataforma, inclusive escopo support_readonly.
+-- ----------------------------------------------------------------------------
+--
+-- A política orgs_write_platform_admin (baseline.sql, apêndice do dump) usa
+-- fn_is_platform_admin(), que devolve true para qualquer linha não revogada
+-- de platform_admins, sem olhar a coluna scope (full ou support_readonly).
+-- Hoje o insert direto só falha por acaso, porque um gatilho de agendamento
+-- nega EXECUTE antes; sem ele, o insert de um admin support_readonly passa.
+--
+-- O padrão do repositório para "só o admin de escopo full" já existe, mas
+-- sempre dentro de uma função security definer chamada com o ator explícito
+-- em parâmetro (fn_create_tenant_with_owner, migration 0231:
+-- "exists (select 1 from public.platform_admins where user_id = p_actor and
+-- revoked_at is null and scope = 'full')"). Uma política de RLS não recebe
+-- ator por parâmetro, então ganha uma função irmã de fn_is_platform_admin(),
+-- com o mesmo corpo (auth.uid(), stable, security definer, search_path
+-- fixo), só acrescentando a condição de escopo.
+create or replace function public.fn_is_platform_admin_full() returns boolean
+    language sql stable security definer
+    set search_path to 'public'
+    as $$
+  select exists (
+    select 1 from public.platform_admins
+    where user_id = auth.uid() and revoked_at is null and scope = 'full'
+  );
+$$;
+
+revoke execute on function public.fn_is_platform_admin_full() from public, anon;
+grant execute on function public.fn_is_platform_admin_full() to authenticated, service_role;
+
+comment on function public.fn_is_platform_admin_full() is
+  '0910, fase F7, D-048: mesmo corpo de fn_is_platform_admin(), com a condição extra scope = full. Existe porque a política de RLS orgs_write_platform_admin não pode chamar a função com ator explícito (não tem parâmetro), e fn_is_platform_admin() não distingue full de support_readonly.';
+
+-- Redefinição da política (drop + create: RLS não tem "create or replace
+-- policy"), mesmo padrão já em uso no repositório para trocar a condição de
+-- uma policy existente (billing_usage_counters_select, migration 0905).
+-- Redução de escopo pura: quem passava por fn_is_platform_admin() com
+-- scope = full continua passando; quem tinha só support_readonly deixa de
+-- escrever em organizations por esta política. A policy de leitura
+-- (orgs_select) continua aceitando qualquer admin da plataforma: leitura não
+-- é o achado do D-048.
+drop policy if exists orgs_write_platform_admin on public.organizations;
+create policy orgs_write_platform_admin on public.organizations
+  using (public.fn_is_platform_admin_full())
+  with check (public.fn_is_platform_admin_full());
+
+-- ----------------------------------------------------------------------------
+-- D-061 (achado da auditoria de segurança da F3): fn_reserve_channel_connection
+-- reaproveita sessão waha arquivada sem limpar archived_at e sem passar pelo
+-- teto do plano.
+-- ----------------------------------------------------------------------------
+--
+-- No ramo p_onboarding, a função (do autor, nascida na migration 0228,
+-- forward-fix em 0230 e 0232) pode achar uma channel_sessions arquivada do
+-- provider waha e reaproveitá-la sem zerar archived_at. Como a última
+-- atualização do corpo original não toca essa coluna, o gatilho que confere
+-- o teto de conexões do plano (trg_billing_trava_channel_sessions, before
+-- insert or update OF archived_at, migration 0907) nunca dispara para essa
+-- reativação: ele só é acionado quando a coluna archived_at está
+-- literalmente na lista de colunas do comando. WAHA saiu da instalação
+-- (D-029), então o caminho é improvável de ser exercitado hoje, mas a
+-- correção é local e não muda mais nada do corpo.
+--
+-- Assim que o ramo de onboarding acha uma sessão arquivada, um update
+-- próprio zera archived_at (com a coluna presente no set, mesmo que já fosse
+-- nula) antes do resto do corpo. Isso dispara o mesmo gatilho que uma
+-- conexão nova usa, então o reaproveitamento passa a contar no teto igual a
+-- uma conexão criada do zero, exatamente o que D-061 pede. Corpo idêntico ao
+-- da migration 0232 fora deste trecho novo (última definição vale, CLAUDE.md
+-- item 10).
+create or replace function public.fn_reserve_channel_connection(p_org uuid,p_key uuid,p_hash text,p_display_name text default null,p_onboarding boolean default false)
+returns jsonb language plpgsql security definer set search_path=public as $$
+declare receipt public.channel_connection_requests; channel public.channel_sessions; token uuid:=gen_random_uuid();
+begin
+ if auth.uid() is null or not public.fn_role_at_least(p_org,'admin') or not public.fn_support_write_allowed(p_org)
+ then raise exception 'connection_forbidden' using errcode='42501';end if;
+ if not public.fn_session_mfa_proven() then raise exception 'connection_mfa_required' using errcode='42501';end if;
+ if p_key is null or p_hash is null or length(p_hash)<>64 or length(coalesce(p_display_name,''))>100 then
+  raise exception 'connection_invalid_request' using errcode='22023';end if;
+ perform pg_advisory_xact_lock(hashtextextended(p_org::text,2281));
+ delete from public.channel_connection_requests where organization_id=p_org and idempotency_key=p_key
+  and state='succeeded' and updated_at<now()-interval '24 hours';
+ select * into receipt from public.channel_connection_requests where organization_id=p_org and idempotency_key=p_key for update;
+ if found then
+  if receipt.request_hash<>p_hash then raise exception 'idempotency_conflict' using errcode='22023';end if;
+  if receipt.state='succeeded' then
+   select * into channel from public.channel_sessions where organization_id=p_org and id=receipt.channel_session_id;
+   return jsonb_build_object('replay',true,'channel',to_jsonb(channel),'receipt_id',receipt.id);
+  end if;
+  if receipt.state='processing' and receipt.lease_until>now() then
+   raise exception 'connection_in_progress' using errcode='55P03';end if;
+  select * into channel from public.channel_sessions where organization_id=p_org and id=receipt.channel_session_id for update;
+  if not found then raise exception 'connection_reservation_missing' using errcode='P0002';end if;
+ else
+  if p_onboarding then
+   select * into channel from public.channel_sessions where organization_id=p_org and provider='waha'
+    and (metadata->>'onboarding'='true' or waha_session_name='org_'||left(p_org::text,8))
+    order by created_at limit 1 for update;
+   -- D-061: sessão arquivada reaproveitada pelo onboarding conta no teto como
+   -- uma conexão nova, pelo MESMO gatilho que a criação usa.
+   if channel.id is not null and channel.archived_at is not null then
+    update public.channel_sessions set archived_at=null,updated_at=now()
+     where organization_id=p_org and id=channel.id
+     returning * into channel;
+   end if;
+  end if;
+  if channel.id is null then
+   insert into public.channel_sessions(organization_id,waha_session_name,display_name,engine,webhook_path_token,
+     webhook_secret_encrypted,status,last_status_change_at,consecutive_health_fails,daily_message_limit,metadata)
+   values(p_org,'org_'||left(replace(p_org::text,'-',''),8)||'_'||replace(gen_random_uuid()::text,'-',''),p_display_name,'NOWEB',
+     replace(gen_random_uuid()::text,'-',''),'\x00'::bytea,'STARTING',now(),0,250,
+     '{"ai_gate":"allowlist","ai_gate_mode":"pre_go_live","ai_test_phone_numbers":[]}'::jsonb
+     || case when p_onboarding then '{"onboarding":true}'::jsonb else '{}'::jsonb end) returning * into channel;
+  end if;
+  if exists(select 1 from public.channel_connection_requests where organization_id=p_org and channel_session_id=channel.id
+    and (state='processing' and lease_until>now())) then raise exception 'connection_in_progress' using errcode='55P03';end if;
+  insert into public.channel_connection_requests(organization_id,idempotency_key,request_hash,channel_session_id)
+   values(p_org,p_key,p_hash,channel.id) returning * into receipt;
+ end if;
+ if exists(select 1 from public.channel_connection_requests where organization_id=p_org and channel_session_id=channel.id
+   and id<>receipt.id and (state='processing' and lease_until>now())) then raise exception 'connection_in_progress' using errcode='55P03';end if;
+ update public.channel_connection_requests set state='processing',lease_token=token,lease_until=now()+interval '5 minutes',
+  remote_created=false,updated_at=now() where organization_id=p_org and id=receipt.id;
+ update public.channel_sessions set status='STARTING',status_reason='connection_pending',last_status_change_at=now()
+  where organization_id=p_org and id=channel.id returning * into channel;
+ return jsonb_build_object('replay',false,'channel',to_jsonb(channel),'receipt_id',receipt.id,'lease_token',token);
+end;
+$$;
+revoke all on function public.fn_reserve_channel_connection(uuid,uuid,text,text,boolean) from public,anon;
+grant execute on function public.fn_reserve_channel_connection(uuid,uuid,text,text,boolean) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- D-062 (achado médio 1 da revisão da F3): SEM MUDANÇA DE SQL. Justificativa
+-- para o Filipe fechar ou registrar a análise.
+-- ----------------------------------------------------------------------------
+--
+-- Com o bloqueio de fato ativo (fn_billing_bloqueio_ativo = true: modo
+-- bloquear, carência vencida, teto efetivo não nulo), fn_mover_leads_em_lote
+-- (migration 0209, PATCH em massa) faz um único update de várias linhas,
+-- comentado no próprio corpo como o que "torna o lote atômico: move todos ou
+-- nenhum". Cada linha passa pelo gatilho before de bloqueio
+-- (fn_billing_bloqueia_crm_leads, 0907), que com o bloqueio ativo soma o
+-- contador linha a linha sob a trava do contador (pg_advisory_xact_lock
+-- dentro de fn_billing_conferir_teto), disputada no meio desse comando de
+-- várias linhas. Um arrasto simultâneo de outro lead da mesma organização,
+-- que também precisa da mesma trava, pode formar um ciclo de espera com a
+-- ordem de bloqueio de linha do lote e receber 40P01 (deadlock detected) do
+-- Postgres.
+--
+-- A correção sugerida no D-062 (savepoint e nova tentativa automática no
+-- caminho que receber 40P01) só é possível de verdade dentro de um bloco
+-- plpgsql com exception (que abre um savepoint implícito e sobrevive ao erro
+-- sem abortar a transação inteira). Para funcionar aqui,
+-- fn_mover_leads_em_lote precisaria trocar o update único por um laço linha
+-- a linha, cada iteração num bloco próprio de captura e nova tentativa,
+-- porque o update de várias linhas de hoje não tem como capturar um erro no
+-- meio do próprio comando e continuar dali. Essa troca muda a garantia
+-- central da função, documentada no comentário dela e válida em qualquer
+-- modo (avisar, desligado ou bloquear): hoje o lote move todos os leads ou
+-- nenhum; um laço com nova tentativa por linha abriria espaço para um lote
+-- terminar com algumas linhas movidas e outras não, se uma tentativa
+-- esgotasse o limite ou achasse outro erro. Essa é uma mudança de
+-- comportamento da função inteira, não uma mudança isolada ao caminho de
+-- bloqueio ativo, e por isso fica fora do critério desta tarefa (correção
+-- que não muda nada no modo avisar e não reabre o problema que a F3
+-- fechou).
+--
+-- Sem essa troca não há como testar o D-062 de forma determinística: como o
+-- próprio achado registra, o deadlock depende de timing fino entre duas
+-- sessões, e não é reproduzido automaticamente hoje. Fica sem mudança de
+-- código, documentado aqui e em D-062 (hiperbold/DEBITO.md) para o Filipe
+-- decidir se vale reescrever fn_mover_leads_em_lote com outra garantia de
+-- atomicidade antes de aplicar a nova tentativa.
+
+-- ----------------------------------------------------------------------------
+-- D-063 (achado baixo 5 da revisão da F3): janela de contagem na primeira
+-- aplicação do baseline (D-053, item 2) continua existindo.
+-- ----------------------------------------------------------------------------
+--
+-- O preenchimento inicial de billing_usage_counters (migration 0905, roda a
+-- cada reaplicação inteira do baseline em produção) faz um
+-- "insert ... select count(*) ... group by organization_id on conflict do
+-- update set valor = excluded.valor": sem select for update nem trava
+-- nenhuma entre a foto (o count) e a escrita (o upsert), um lead confirmado
+-- exatamente nesse intervalo (via fn_billing_trava_crm_leads, after, soma +1
+-- na mesma linha) pode ter o incremento apagado pela sobrescrita, se o
+-- upsert desta migration terminar depois do incremento concorrente:
+-- "set valor = excluded.valor" troca o valor pela foto desatualizada, mesmo
+-- que a linha já tivesse sido incrementada por um lead legítimo nascido no
+-- meio do caminho.
+--
+-- Travar a tabela inteira, ou repetir a mesma trava por organização que os
+-- gatilhos usam (pg_advisory_xact_lock dentro de fn_billing_conferir_teto),
+-- reabriria exatamente a disputa de lock que o D-062, acima, já descreve (e
+-- que a F3 já fechou para a operação normal): fica fora do critério desta
+-- tarefa.
+--
+-- Correção que cabe sem trava nova nenhuma: repetir o mesmo recálculo aqui,
+-- depois do da 0905 (a mesma organização recebe as duas passadas a cada
+-- reaplicação do arquivo inteiro), trocando a sobrescrita cega por
+-- "greatest(valor atual, valor recalculado)". Sob read committed, o update
+-- de um "on conflict do update" relê a linha atual (já com o incremento
+-- concorrente, se ele já tiver sido commitado) para resolver o conflito:
+-- pegar o maior entre o valor atual e a foto desta passada nunca decresce um
+-- contador que um lead legítimo já elevou durante a janela, e continua
+-- convergindo para o valor real quando a foto é maior que o valor atual
+-- (organização sem incremento concorrente nenhum, o caso comum). Não fecha a
+-- janela por completo (um lead que fecha exatamente na janela, com a foto
+-- desta passada ainda o contando aberto, pode deixar o contador
+-- temporariamente acima do real, na direção oposta à que D-063 descreve):
+-- fn_billing_conferir_contador (o conferidor diário) já corrige as duas
+-- direções todo dia, e essa correção não muda isso. Não toca em nenhum
+-- gatilho, não acrescenta trava nenhuma, e não muda nada no que qualquer
+-- modo (avisar, desligado ou bloquear) decide fazer com o valor do contador:
+-- só muda quão fiel a foto de uma reaplicação de baseline fica de um
+-- incremento concorrente específico.
+--
+-- Prova de banco (a fusão nunca decresce um valor já incrementado, e ainda
+-- sobe até o valor real quando ele é maior): tests/invariants/saneamento-autor.test.ts.
+insert into public.billing_usage_counters (organization_id, item, valor)
+select cl.organization_id, 'leads', count(*)
+from public.crm_leads cl
+where cl.status = 'open'
+group by cl.organization_id
+on conflict (organization_id, item) do update
+  set valor = greatest(public.billing_usage_counters.valor, excluded.valor),
+      updated_at = now();
