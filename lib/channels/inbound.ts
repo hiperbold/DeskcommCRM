@@ -28,6 +28,7 @@ import { sincronizarSaudeDaConexao } from "./health";
 import { lerConexaoUazapi, parseUazapiConexao } from "./uazapi/conexao-evento";
 import { lerEnvelopeUazapi } from "./uazapi/envelope";
 import { ingestUazapiMensagem } from "./uazapi/ingest";
+import { chaveDoEventoUazapi, eventoUazapiRepetido } from "./uazapi/replay-guard";
 import { aplicarStatusUazapi, lerAtualizacaoUazapi, parseUazapiAtualizacao } from "./uazapi/status";
 import { parseUazapiMensagem, tokenDoEventoConfere } from "./uazapi/webhook";
 import {
@@ -277,6 +278,25 @@ async function uazapiInbound(
     // número pela primeira vez.
     if (finalDaConexao && finalDoEvento !== finalDaConexao) {
       return { ok: false, code: "unauthorized", message: "dono_divergente" };
+    }
+  }
+
+  // ─── D-042: nem `messages_update` nem `connection` repetem o token ────────
+  //
+  // A prova deles é só o dono, já conferido acima; sem nonce nem carimbo de
+  // tempo no corpo, um evento capturado válido pode ser reenviado pela mesma
+  // URL quantas vezes quiser. `eventoUazapiRepetido` reduz o ALCANCE disso:
+  // mesma sessão + mesmo tipo + corpo byte a byte igual, dentro de uma janela
+  // curta, é recusado como repetido, sem mudar o EFEITO em si, que já é
+  // idempotente por outra via (`aplicarStatusUazapi` nunca rebaixa; a vigia de
+  // conexão não duplica aviso). `messages` fica de fora deste portão: tem
+  // token próprio no corpo (achado 4 acima), e quem cobre a reentrega dele é o
+  // `external_id` único da mensagem, não este guard.
+  const tipoDoEvento = envelope.EventType ?? "";
+  if (tipoDoEvento === "messages_update" || tipoDoEvento === "connection") {
+    const chaveDoEvento = chaveDoEventoUazapi(input.session.id, tipoDoEvento, input.rawBody);
+    if (eventoUazapiRepetido(chaveDoEvento)) {
+      return { ok: true, body: { status: "ignored", reason: "evento_repetido" } };
     }
   }
 

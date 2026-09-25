@@ -15,7 +15,8 @@ export type ChannelSessionRef =
   | { provider: "waha"; waha_session_name: string }
   | { provider: "meta_cloud"; meta_phone_number_id: string }
   | { provider: "zernio" | "zernio_social"; zernio_account_id: string }
-  | { provider: "uazapi"; uazapi_instance_id: string };
+  | { provider: "uazapi"; uazapi_instance_id: string }
+  | { provider: "wacalls"; wacalls_session_id: string };
 
 /**
  * Colunas que um `select` do PostgREST precisa trazer para `resolveSessionRef`
@@ -23,7 +24,7 @@ export type ChannelSessionRef =
  * nomeia coluna de provider, e ela some da feature junto com a decisão.
  */
 export const CHANNEL_SESSION_REF_COLUMNS =
-  "provider, waha_session_name, meta_phone_number_id, zernio_account_id, uazapi_instance_id";
+  "provider, waha_session_name, meta_phone_number_id, zernio_account_id, uazapi_instance_id, wacalls_session_id";
 
 export function resolveSessionRef(session: ChannelSessionRef): string {
   switch (session.provider) {
@@ -42,5 +43,16 @@ export function resolveSessionRef(session: ChannelSessionRef): string {
     // não. O token de acesso é outra coluna, cifrada, e nunca vira ref.
     case "uazapi":
       return session.uazapi_instance_id;
+    // D-044: `wacalls` não transporta mensagem (é `ProviderDeMensagem`
+    // excluído, ver `lib/channels/types.ts`), mas a linha mora em
+    // `channel_sessions` e o CHECK do banco (`channel_sessions_provider_ref_check`)
+    // já exige `wacalls_session_id` não nulo para este provider. É a mesma
+    // coluna que `lib/wacalls/session.ts`, `lib/wacalls/calls.ts` e
+    // `lib/wacalls/events-bridge.ts` usam para casar o evento com a sessão;
+    // sem este ramo o switch "cobria" o tipo em tempo de compilação (o union
+    // não incluía `wacalls`) mas devolvia `undefined` em silêncio caso uma
+    // linha real de provider `wacalls` chegasse aqui em tempo de execução.
+    case "wacalls":
+      return session.wacalls_session_id;
   }
 }
