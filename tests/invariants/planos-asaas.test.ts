@@ -1596,7 +1596,7 @@ describe("0909 Tarefa 6: reversão de chargeback só alarma (N43)", () => {
 describe("0909 Tarefa 6: SUBSCRIPTION_DELETED liga cancelar no fim e grava o marcador (decisão 10/22)", () => {
   it("confirmado (removida = true): cancel_at_period_end = true, marcador preenchido, pedido aberto cancelado", () => {
     sql(`
-      update public.billing_contracts set asaas_subscription_id = 'sub_t6006', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6006', asaas_ambiente = 'sandbox', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
        where organization_id = '${ORG_T6_SUB_DELETED}';
       insert into public.billing_orders (organization_id, ambiente, tipo, plan_id, ciclo, metodo, amount_cents, chave, asaas_subscription_id, status)
         select '${ORG_T6_SUB_DELETED}', 'sandbox', 'assinatura', bc.plan_id, 'monthly', 'CREDIT_CARD', 19900, gen_random_uuid(), 'sub_t6006', 'aguardando_pagamento'
@@ -1618,7 +1618,7 @@ describe("0909 Tarefa 6: SUBSCRIPTION_DELETED liga cancelar no fim e grava o mar
 describe("0909 Tarefa 6: SUBSCRIPTION_INACTIVATED liga sem marcador; SUBSCRIPTION_UPDATED ACTIVE desliga (M3)", () => {
   it("INACTIVATED (removida=false, status=INACTIVE): cancel_at_period_end=true, marcador continua nulo; UPDATED ACTIVE desliga de novo", () => {
     sql(`
-      update public.billing_contracts set asaas_subscription_id = 'sub_t6007', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6007', asaas_ambiente = 'sandbox', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
        where organization_id = '${ORG_T6_INACTIVE}';
     `);
 
@@ -1641,7 +1641,7 @@ describe("0909 Tarefa 6: SUBSCRIPTION_INACTIVATED liga sem marcador; SUBSCRIPTIO
 describe("0909 Tarefa 6: 404 na confirmação conta como removida (decisão 10)", () => {
   it("removida=true numa SUBSCRIPTION_INACTIVATED (simulando 404 no GET) grava o marcador do mesmo jeito que DELETED", () => {
     sql(`
-      update public.billing_contracts set asaas_subscription_id = 'sub_t6008', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+      update public.billing_contracts set asaas_subscription_id = 'sub_t6008', asaas_ambiente = 'sandbox', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
        where organization_id = '${ORG_T6_404}';
     `);
     const conf = `jsonb_build_object('id','sub_t6008','removida',true,'status',null)`;
@@ -1652,21 +1652,24 @@ describe("0909 Tarefa 6: 404 na confirmação conta como removida (decisão 10)"
   });
 });
 
-describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido, alarme por TIPO de pedido (A1, correção item 4)", () => {
-  // Correção (revisão F5, item 4): o alarme não é mais sempre remover_
-  // cobranca_pendente; pedido de ASSINATURA (primeiro pagamento nunca
-  // recebido) avisa para remover a ASSINATURA no Asaas (remover_assinatura_
-  // pendente, N39, "remove sozinho"); só o pedido AVULSO (pacote de tokens)
-  // continua com remover_cobranca_pendente. Este teste (ORG_T6_OVERDUE) era
-  // "assinatura" e afirmava o alarme antigo por engano (nunca existiu um
-  // caso de pedido avulso vencido nesta suíte); o novo teste logo abaixo
-  // (ORG_T6_OVERDUE_PACOTE) cobre o caso avulso que o nome original prometia.
-  it("pedido de ASSINATURA aguardando pagamento, confirmado OVERDUE: status vencido, alarme remover_assinatura_pendente", () => {
+describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido, alarme por asaas_subscription_id do PEDIDO (A1, PARTE 8 item 2)", () => {
+  // Correção (revisão F5, PARTE 8, item 2): o alarme não olha mais o TIPO do
+  // pedido (PARTE 7, item 4: remover_assinatura_pendente para tipo=assinatura,
+  // remover_cobranca_pendente para pacote_tokens); ele olha se o PEDIDO tem
+  // asaas_subscription_id GRAVADO. Esta suíte (ORG_T6_OVERDUE) simulava um
+  // pedido de CREDIT_CARD sem registrar o asaas_subscription_id (registrar_
+  // cobranca recebia null), o que nunca acontece na prática: o Asaas cria a
+  // assinatura ANTES do primeiro pagamento confirmar, então o pedido de
+  // cartão sempre chega ao OVERDUE com asaas_subscription_id preenchido. O
+  // teste passa a registrar um sub_ de verdade; o caso que a versão antiga
+  // testava por engano (assinatura sem asaas_subscription_id) é o Pix anual,
+  // coberto no describe seguinte.
+  it("pedido de ASSINATURA por CREDIT_CARD (com asaas_subscription_id gravado) aguardando pagamento, confirmado OVERDUE: status vencido, alarme remover_assinatura_pendente", () => {
     sql(
       `select public.fn_billing_criar_pedido('${ORG_T6_OVERDUE}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
     );
     const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_OVERDUE}' and status = 'criado';`).trim();
-    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_OVERDUE}'::uuid, '${pedidoId}'::uuid, 'pay_t6_009', null, null);`);
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_OVERDUE}'::uuid, '${pedidoId}'::uuid, 'pay_t6_009', 'sub_t6009', null);`);
 
     const conf = `jsonb_build_object('id','pay_t6_009','status','OVERDUE','externalReference','HC:ord:${pedidoId}')`;
     const resultado = registrarEAplicarTipo("evt-t6-009", "PAYMENT_OVERDUE", "pay_t6_009", conf);
@@ -1686,6 +1689,79 @@ describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido, alarme por TIPO de pedi
 
     const conf = `jsonb_build_object('id','pay_t6_009b','status','OVERDUE','externalReference','HC:ord:${pedidoId}')`;
     const resultado = registrarEAplicarTipo("evt-t6-009b", "PAYMENT_OVERDUE", "pay_t6_009b", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "remover_cobranca_pendente"');
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("vencido");
+  });
+});
+
+describe("0909 PARTE 8, item 1: fn_billing_pedido_registrar_cobranca completa invoice_url/ids ainda nulos; conflito de verdade continua recusado", () => {
+  const ORG_T8_COMPLETAR = "09090008-a5aa-400a-8000-000000000002";
+
+  it("cria a organização", () => {
+    sql(
+      `insert into public.organizations (id, slug, legal_name, display_name) values ('${ORG_T8_COMPLETAR}', 't8-completar', 't8 LTDA', 't8') on conflict (id) do nothing;`,
+    );
+  });
+
+  it("registra só o payment_id (invoice_url nula); a segunda chamada completa a invoice_url (id batendo) sem virar erro", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T8_COMPLETAR}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T8_COMPLETAR}' and status = 'criado';`).trim();
+
+    const primeira = sql(
+      `select public.fn_billing_pedido_registrar_cobranca('${ORG_T8_COMPLETAR}'::uuid, '${pedidoId}'::uuid, 'pay_t8_completar', null, null);`,
+    );
+    expect(primeira).toContain('"ja_registrado": false');
+    expect(sql(`select invoice_url is null, asaas_payment_id from public.billing_orders where id = '${pedidoId}';`)).toBe("t|pay_t8_completar");
+
+    const segunda = sql(
+      `select public.fn_billing_pedido_registrar_cobranca('${ORG_T8_COMPLETAR}'::uuid, '${pedidoId}'::uuid, 'pay_t8_completar', null, 'https://sandbox.asaas.com/i/completar');`,
+    );
+    expect(segunda).toContain('"ja_registrado": false');
+    expect(sql(`select invoice_url from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("https://sandbox.asaas.com/i/completar");
+  });
+
+  it("chamada seguinte com o MESMO payment_id e a MESMA invoice_url já completada é idempotente (ja_registrado = true)", () => {
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T8_COMPLETAR}' and asaas_payment_id = 'pay_t8_completar';`).trim();
+    const resultado = sql(
+      `select public.fn_billing_pedido_registrar_cobranca('${ORG_T8_COMPLETAR}'::uuid, '${pedidoId}'::uuid, 'pay_t8_completar', null, 'https://sandbox.asaas.com/i/completar');`,
+    );
+    expect(resultado).toContain('"ja_registrado": true');
+  });
+
+  it("invoice_url DIFERENTE da já gravada é conflito de verdade: continua recusando 22023", () => {
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T8_COMPLETAR}' and asaas_payment_id = 'pay_t8_completar';`).trim();
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_pedido_registrar_cobranca('${ORG_T8_COMPLETAR}'::uuid, '${pedidoId}'::uuid, 'pay_t8_completar', null, 'https://sandbox.asaas.com/i/outra')`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_pedido_status_invalido_para_cobranca");
+  });
+});
+
+describe("0909 PARTE 8, item 2: Pix anual (tipo=assinatura, SEM asaas_subscription_id) vencido avisa remover_cobranca_pendente", () => {
+  const ORG_T8_PIX_OVERDUE = "09090008-a5aa-400a-8000-000000000001";
+
+  it("cria a organização e liga o necessário (plano max à venda, com preço anual)", () => {
+    sql(`
+      insert into public.organizations (id, slug, legal_name, display_name) values ('${ORG_T8_PIX_OVERDUE}', 't8-pix-overdue', 't8 LTDA', 't8') on conflict (id) do nothing;
+      select public.fn_billing_definir_a_venda('max', true, null);
+      update public.billing_plans set price_yearly_cents = 399900 where code = 'max' and active and price_yearly_cents is null;
+    `);
+  });
+
+  it("pedido de ASSINATURA por Pix anual (decisão 2: sem assinatura no Asaas) aguardando pagamento, confirmado OVERDUE: alarme remover_cobranca_pendente, NÃO remover_assinatura_pendente", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T8_PIX_OVERDUE}'::uuid, 'assinatura', 'max', 'yearly', null, 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T8_PIX_OVERDUE}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T8_PIX_OVERDUE}'::uuid, '${pedidoId}'::uuid, 'pay_t8_pix_001', null, null);`);
+
+    const conf = `jsonb_build_object('id','pay_t8_pix_001','status','OVERDUE','externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-t8-pix-001", "PAYMENT_OVERDUE", "pay_t8_pix_001", conf);
     expect(resultado).toContain('"resultado": "aplicado"');
     expect(resultado).toContain('"alarme": "remover_cobranca_pendente"');
     expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("vencido");
@@ -1858,8 +1934,8 @@ describe("0909 PARTE 7, item 12: fn_billing_asaas_reprocessar_evento aceita sem_
   });
 });
 
-describe("0909 PARTE 7, item 3: fn_billing_asaas_rotear_pagamento exclui pedido estornado e falhou (não só pago)", () => {
-  it("pedido com status estornado ou falhou nunca casa como categoria=pedido", () => {
+describe("0909 PARTE 7/8, item 3: fn_billing_asaas_rotear_pagamento exclui pago e estornado; falhou com id gravado volta a casar", () => {
+  it("pedido estornado nunca casa como categoria=pedido", () => {
     sql(`
       insert into public.billing_orders (organization_id, ambiente, tipo, plan_id, ciclo, metodo, amount_cents, chave, asaas_payment_id, status)
         select '${ORG_T6_ROTEAMENTO}', 'sandbox', 'assinatura', bc.plan_id, 'monthly', 'CREDIT_CARD', 19900, gen_random_uuid(), 'pay_p7_003a', 'estornado'
@@ -1869,7 +1945,15 @@ describe("0909 PARTE 7, item 3: fn_billing_asaas_rotear_pagamento exclui pedido 
       `select categoria from public.fn_billing_asaas_rotear_pagamento('sandbox', null, null, 'pay_p7_003a');`,
     ).trim();
     expect(rotaEstornado).toBe("sem_vinculo");
+  });
 
+  // Correção (revisão F5, PARTE 8, item 3): a PARTE 7 excluía falhou das três
+  // buscas; isso escondia o caso A1 (decisão 4) de um pedido que o nosso lado
+  // marcou falhou (POST recusado) mas cujo Asaas processou a cobrança do
+  // mesmo jeito (asaas_payment_id gravado localmente): o pagamento tardio
+  // nunca tinha organização para creditar. A busca por asaas_payment_id volta
+  // a casar falhou (só pago e estornado continuam fora).
+  it("pedido falhou que já tem asaas_payment_id gravado volta a casar como categoria=pedido (o cliente pagou, A1)", () => {
     sql(`
       insert into public.billing_orders (organization_id, ambiente, tipo, pacote_id, tokens, metodo, amount_cents, chave, asaas_payment_id, status)
         select '${ORG_T6_ROTEAMENTO}', 'sandbox', 'pacote_tokens', bp.id, bp.tokens, 'PIX', 3000, gen_random_uuid(), 'pay_p7_003b', 'falhou'
@@ -1878,7 +1962,107 @@ describe("0909 PARTE 7, item 3: fn_billing_asaas_rotear_pagamento exclui pedido 
     const rotaFalhou = sql(
       `select categoria from public.fn_billing_asaas_rotear_pagamento('sandbox', null, null, 'pay_p7_003b');`,
     ).trim();
-    expect(rotaFalhou).toBe("sem_vinculo");
+    expect(rotaFalhou).toBe("pedido");
+  });
+
+  it("prova fim a fim: o pagamento confirmado do MESMO pedido falhou concede, com o alarme pago_fora_do_prazo (A1: o cliente pagou)", () => {
+    const pedidoId = sql(
+      `select id from public.billing_orders where organization_id = '${ORG_T6_ROTEAMENTO}' and asaas_payment_id = 'pay_p7_003b';`,
+    ).trim();
+    expect(pedidoId.length).toBeGreaterThan(0);
+
+    const conf = `jsonb_build_object('id','pay_p7_003b','status','RECEIVED','value',30.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-falhou-003b", "PAYMENT_RECEIVED", "pay_p7_003b", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "pago_fora_do_prazo"');
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("pago");
+  });
+});
+
+describe("0909 PARTE 8, item 4: PARTIALLY_REFUNDED e AWAITING_CHARGEBACK_REVERSAL conferem o status confirmado antes de alarmar", () => {
+  it("PARTIALLY_REFUNDED forjado (GET ainda PENDING, nunca confirmou o estorno parcial) fica ignorado, sem alarme", () => {
+    const conf = `jsonb_build_object('id','pay_t8_004a','status','PENDING','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-004a", "PAYMENT_PARTIALLY_REFUNDED", "pay_t8_004a", conf);
+    expect(resultado).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-t8-004a';`).trim()).toBe("status_nao_confirma_evento");
+    expect(sql(`select alarme from public.asaas_webhook_events where event_id = 'evt-t8-004a';`).trim()).toBe("");
+  });
+
+  it("PARTIALLY_REFUNDED confirmado (GET ainda RECEIVED) aplica e alarma parcialmente_estornado", () => {
+    const conf = `jsonb_build_object('id','pay_t8_004b','status','RECEIVED','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-004b", "PAYMENT_PARTIALLY_REFUNDED", "pay_t8_004b", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "parcialmente_estornado"');
+  });
+
+  it("AWAITING_CHARGEBACK_REVERSAL com a disputa AINDA aberta (CHARGEBACK_REQUESTED) fica aguardando, tenta de novo", () => {
+    const conf = `jsonb_build_object('id','pay_t8_004c','status','CHARGEBACK_REQUESTED','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-004c", "PAYMENT_AWAITING_CHARGEBACK_REVERSAL", "pay_t8_004c", conf);
+    expect(resultado).toContain('"resultado": "aguardando"');
+  });
+
+  it("AWAITING_CHARGEBACK_REVERSAL já resolvida (status voltou a RECEIVED) fecha aplicado com o alarme, NÃO fica aguardando até virar erro (segunda metade do item 4)", () => {
+    const conf = `jsonb_build_object('id','pay_t8_004d','status','RECEIVED','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-004d", "PAYMENT_AWAITING_CHARGEBACK_REVERSAL", "pay_t8_004d", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "reversao_de_chargeback"');
+  });
+});
+
+describe("0909 PARTE 8, item 5: PAYMENT_CONFIRMED/RECEIVED cujo GET mostra estado DEFINITIVO que não é pagamento fecha ignorado, nunca aguardando para sempre", () => {
+  it("removida = true no confirmado: ignorado com erro_codigo billing_pagamento_removido_apos_confirmacao", () => {
+    const conf = `jsonb_build_object('id','pay_t8_005a','status','PENDING','removida',true,'value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-005a", "PAYMENT_RECEIVED", "pay_t8_005a", conf);
+    expect(resultado).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-t8-005a';`).trim()).toBe("billing_pagamento_removido_apos_confirmacao");
+  });
+
+  it("status REFUNDED no confirmado: ignorado com erro_codigo billing_pagamento_estornado_apos_confirmacao", () => {
+    const conf = `jsonb_build_object('id','pay_t8_005b','status','REFUNDED','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-005b", "PAYMENT_CONFIRMED", "pay_t8_005b", conf);
+    expect(resultado).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-t8-005b';`).trim()).toBe("billing_pagamento_estornado_apos_confirmacao");
+  });
+
+  it("status CHARGEBACK_REQUESTED no confirmado: ignorado com erro_codigo billing_pagamento_em_chargeback_apos_confirmacao", () => {
+    const conf = `jsonb_build_object('id','pay_t8_005c','status','CHARGEBACK_REQUESTED','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-005c", "PAYMENT_RECEIVED_IN_CASH", "pay_t8_005c", conf);
+    expect(resultado).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-t8-005c';`).trim()).toBe("billing_pagamento_em_chargeback_apos_confirmacao");
+  });
+
+  it("status ainda TRANSITÓRIO (PENDING, sem removida): continua aguardando, como antes", () => {
+    const conf = `jsonb_build_object('id','pay_t8_005d','status','PENDING','value',10.00)`;
+    const resultado = registrarEAplicarTipo("evt-t8-005d", "PAYMENT_CONFIRMED", "pay_t8_005d", conf);
+    expect(resultado).toContain('"resultado": "aguardando"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-t8-005d';`).trim()).toBe("billing_status_confirmado_nao_e_pagamento");
+  });
+});
+
+describe("0909 PARTE 8, item 7: fn_billing_asaas_reprocessar_evento aceita também ignorado/sandbox_nao_concede", () => {
+  it("recusa reprocessar um ignorado com outro erro_codigo (não é sandbox_nao_concede)", () => {
+    const conf = `jsonb_build_object('id','pay_t8_007a','status','PENDING','value',10.00)`;
+    registrarEAplicarTipo("evt-t8-007a", "PAYMENT_CONFIRMED", "pay_t8_007a", conf);
+    // o evento acima fica aguardando (não ignorado, com proxima_tentativa_em
+    // no futuro); busca o id direto pelo event_id (sem reservar de novo:
+    // reservarPorEventId exigiria proxima_tentativa_em já vencido) e força um
+    // ignorado com outro erro_codigo, para provar que o reprocesso continua
+    // recusando fora de sandbox_nao_concede.
+    const id = sql(`select id from public.asaas_webhook_events where event_id = 'evt-t8-007a';`).trim();
+    sql(`update public.asaas_webhook_events set resultado = 'ignorado', erro_codigo = 'status_nao_confirma_evento' where id = '${id}';`);
+    const erro = erroSob("service_role", `select public.fn_billing_asaas_reprocessar_evento('${id}'::uuid, null)`);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_evento_nao_esta_em_erro");
+  });
+
+  it("aceita reprocessar um ignorado com erro_codigo = sandbox_nao_concede (chave religada depois)", () => {
+    const conf = `jsonb_build_object('id','pay_t8_007b','status','PENDING','value',10.00)`;
+    registrarEAplicarTipo("evt-t8-007b", "PAYMENT_CONFIRMED", "pay_t8_007b", conf);
+    const id = sql(`select id from public.asaas_webhook_events where event_id = 'evt-t8-007b';`).trim();
+    sql(`update public.asaas_webhook_events set resultado = 'ignorado', erro_codigo = 'sandbox_nao_concede' where id = '${id}';`);
+    const resultado = sql(`select public.fn_billing_asaas_reprocessar_evento('${id}'::uuid, null);`);
+    expect(resultado).toContain('"resultado_novo": "aguardando"');
+    expect(sql(`select resultado, tentativas, erro_codigo is null from public.asaas_webhook_events where id = '${id}';`).trim()).toBe("aguardando|0|t");
   });
 });
 

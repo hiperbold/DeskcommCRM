@@ -545,8 +545,12 @@ describe("0909 Tarefa 3: fn_billing_vincular_cliente_asaas usa billing:<org>, a 
 });
 
 describe("0909 Tarefa 3: fn_billing_pedido_registrar_cobranca amarra invoice_url ao ambiente do PRÓPRIO pedido (decisão 6, risco de redirecionamento aberto)", () => {
+  // Correção (revisão F5, PARTE 8, item 1): PARTE 8 redefine esta função
+  // (completa invoice_url/ids ainda nulos); ancora na ÚLTIMA definição
+  // (CLAUDE.md, item 10; tests/unit/sonda-do-baseline-ancora-na-ultima-
+  // definicao.test.ts), a que o banco realmente instala.
   it("formatos ^pay_ e ^sub_, e a URL comparada contra v_pedido.ambiente (nunca uma variável global)", () => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_pedido_registrar_cobranca(");
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_pedido_registrar_cobranca(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
 
@@ -554,6 +558,22 @@ describe("0909 Tarefa 3: fn_billing_pedido_registrar_cobranca amarra invoice_url
     expect(corpo).toContain("p_asaas_subscription_id !~ '^sub_'");
     expect(corpo).toMatch(/v_pedido\.ambiente = 'sandbox' and p_invoice_url !~ '\^https:\/\/sandbox\\\.asaas\\\.com\/'/);
     expect(corpo).toMatch(/v_pedido\.ambiente = 'producao' and p_invoice_url !~/);
+  });
+
+  it("PARTE 8 (item 1): invoice_url/ids ainda nulos aceitam completar; conflito de verdade continua recusado", () => {
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_pedido_registrar_cobranca(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    const corpo = MIGRATION_0909.slice(inicio, fim);
+
+    expect(corpo).toMatch(
+      /if \(v_pedido\.asaas_payment_id is not null and p_asaas_payment_id is not null and v_pedido\.asaas_payment_id is distinct from p_asaas_payment_id\)/,
+    );
+    expect(corpo).toMatch(
+      /or \(v_pedido\.invoice_url is not null and p_invoice_url is not null and v_pedido\.invoice_url is distinct from p_invoice_url\)/,
+    );
+    expect(corpo).toMatch(
+      /if v_pedido\.asaas_payment_id is not distinct from p_asaas_payment_id\s*\n\s*and v_pedido\.asaas_subscription_id is not distinct from p_asaas_subscription_id\s*\n\s*and v_pedido\.invoice_url is not distinct from p_invoice_url\s*\n\s*then\s*\n\s*return jsonb_build_object\('ja_registrado', true,/,
+    );
   });
 });
 
@@ -763,16 +783,16 @@ describe("0909 Tarefa 4: fn_billing_asaas_registrar_falha, lease alheio recusado
   });
 });
 
-describe("0909 Tarefa 4: fn_billing_asaas_reprocessar_evento, a partir de erro (PARTE 7, item 12: também sem_vinculo)", () => {
-  // Correção (revisão F5, item 12): PARTE 7 redefine esta função (aceita
-  // também sem_vinculo); ancora na ÚLTIMA definição, a que vale de verdade.
-  it("recusa fora de resultado = erro/sem_vinculo, e zera tentativas/proxima_tentativa_em/erro_codigo/lease", () => {
+describe("0909 Tarefa 4: fn_billing_asaas_reprocessar_evento, a partir de erro (PARTE 7, item 12: também sem_vinculo; PARTE 8, item 7: também ignorado/sandbox_nao_concede)", () => {
+  // Correção (revisão F5, itens 12 e 7): PARTE 7 e PARTE 8 redefinem esta
+  // função; ancora na ÚLTIMA definição, a que vale de verdade.
+  it("recusa fora de resultado = erro/sem_vinculo/ignorado+sandbox_nao_concede, e zera tentativas/proxima_tentativa_em/erro_codigo/lease", () => {
     const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_reprocessar_evento(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
 
     expect(corpo).toMatch(
-      /if v_evento\.resultado not in \('erro', 'sem_vinculo'\) then\s*\n\s*raise exception 'billing_evento_nao_esta_em_erro' using errcode = '22023';/,
+      /if v_evento\.resultado not in \('erro', 'sem_vinculo'\)\s*\n\s*and not \(v_evento\.resultado = 'ignorado' and v_evento\.erro_codigo = 'sandbox_nao_concede'\)\s*\n\s*then\s*\n\s*raise exception 'billing_evento_nao_esta_em_erro' using errcode = '22023';/,
     );
     expect(corpo).toMatch(/tentativas = 0,/);
     expect(corpo).toMatch(/proxima_tentativa_em = now\(\),/);
@@ -907,9 +927,9 @@ describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo (decisão 5)", () => 
   });
 });
 
-describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6; PARTE 7, itens 3 e 10)", () => {
-  // Correção (revisão F5, itens 3 e 10): PARTE 7 redefine esta função; ancora
-  // na ÚLTIMA definição (CLAUDE.md, item 10).
+describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6; PARTE 7, itens 3 e 10; PARTE 8, item 3)", () => {
+  // Correção (revisão F5): PARTE 7 (itens 3 e 10) e PARTE 8 (item 3) redefinem
+  // esta função; ancora na ÚLTIMA definição (CLAUDE.md, item 10).
   const corpo = (() => {
     const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
@@ -924,9 +944,14 @@ describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6; PARTE 7,
     expect(posPedido).toBeLessThan(posRenovacao);
   });
 
-  it("PARTE 7 (item 3): toda busca de pedido exclui pago, estornado E falhou (nunca acha um pedido já honrado, estornado ou que falhou)", () => {
+  it("PARTE 8 (item 3): busca por external_reference (id direto do pedido) continua excluindo pago, estornado E falhou", () => {
     const ocorrencias = corpo.match(/status not in \('pago', 'estornado', 'falhou'\)/g) ?? [];
-    expect(ocorrencias.length).toBeGreaterThanOrEqual(3);
+    expect(ocorrencias.length).toBe(1);
+  });
+
+  it("PARTE 8 (item 3): busca por asaas_subscription_id e por asaas_payment_id voltam a admitir falhou (só pago e estornado ficam de fora)", () => {
+    const ocorrencias = corpo.match(/status not in \('pago', 'estornado'\)/g) ?? [];
+    expect(ocorrencias.length).toBe(2);
   });
 
   it("PARTE 7 (item 10): a busca de renovação por assinatura exige o MESMO ambiente do contrato", () => {
@@ -1194,18 +1219,28 @@ describe("0909 Tarefa 6: fn_billing_asaas_aplicar_estorno (decisão 9, N31, N32,
   });
 });
 
-describe("0909 Tarefa 6: fn_billing_asaas_aplicar_fim_da_assinatura (decisão 10, 22; N39)", () => {
+describe("0909 Tarefa 6: fn_billing_asaas_aplicar_fim_da_assinatura (decisão 10, 22; N39; PARTE 8, itens 2 e 6)", () => {
   const corpo = corpoDaUltimaDefinicao(MIGRATION_0909, "fn_billing_asaas_aplicar_fim_da_assinatura");
 
-  it("PAYMENT_OVERDUE só confirma com status OVERDUE, e marca o pedido vencido (A1; PARTE 7, item 4: alarme por TIPO de pedido)", () => {
+  it("PAYMENT_OVERDUE só confirma com status OVERDUE, e marca o pedido vencido (A1; PARTE 8, item 2: alarme por asaas_subscription_id do pedido, não por tipo)", () => {
     expect(corpo).toMatch(/if coalesce\(p_confirmacao->>'status', ''\) <> 'OVERDUE' then/);
     expect(corpo).toMatch(/update public\.billing_orders set status = 'vencido' where id = v_pedido\.id;/);
-    // Correção (revisão F5, item 4): o alarme não é mais sempre remover_
-    // cobranca_pendente; pedido de ASSINATURA avisa remover_assinatura_
-    // pendente (N39), só o pedido AVULSO continua com remover_cobranca_
-    // pendente.
+    // Correção (revisão F5, PARTE 8, item 2): o alarme não olha mais o TIPO
+    // do pedido (PARTE 7, item 4), e sim se o PEDIDO tem asaas_subscription_
+    // id gravado: Pix anual é tipo=assinatura mas nunca tem assinatura no
+    // Asaas (decisão 2), então também avisa remover_cobranca_pendente, igual
+    // ao pedido avulso.
     expect(corpo).toMatch(
-      /'alarme', case when v_pedido\.tipo = 'assinatura' then 'remover_assinatura_pendente' else 'remover_cobranca_pendente' end,/,
+      /'alarme', case when v_pedido\.asaas_subscription_id is not null then 'remover_assinatura_pendente' else 'remover_cobranca_pendente' end,/,
+    );
+  });
+
+  it("PARTE 8 (item 6): a busca do contrato por assinatura confere também asaas_ambiente = p_ambiente, nos dois pontos", () => {
+    expect(corpo).toMatch(
+      /where asaas_subscription_id = v_subscription_id and asaas_ambiente = p_ambiente;/,
+    );
+    expect(corpo).toMatch(
+      /if not found or v_contract\.asaas_subscription_id is distinct from v_subscription_id or v_contract\.asaas_ambiente is distinct from p_ambiente then/,
     );
   });
 
