@@ -1058,6 +1058,11 @@ describe("0909 Tarefa 5: setup comum (organizações, compra ligada, pro à vend
       ${ORGS_T5.map((id) => `insert into public.organizations (id, slug, legal_name, display_name) values ('${id}', 't5-${id.slice(-4)}', 't5 LTDA', 't5') on conflict (id) do nothing;`).join("\n")}
       select public.fn_billing_definir_compra_pelo_cliente(true, null);
       select public.fn_billing_definir_a_venda('pro', true, null);
+      -- Correção (revisão F5, item 11): sandbox nasce sem conceder acesso
+      -- (billing_settings.asaas_sandbox_concede = false); esta suíte é a
+      -- própria homologação de sandbox, então liga a chave direto (a mesma
+      -- forma que a documentação da coluna manda usar, sem função dedicada).
+      update public.billing_settings set asaas_sandbox_concede = true where id = 1;
       insert into public.billing_token_pacotes (codigo, nome, tokens, preco_cents, ativo)
         values ('t5pacote', 'Pacote de teste T5', 100000, 5000, true)
         on conflict (codigo) do update set preco_cents = 5000, ativo = true, tokens = 100000;
@@ -1165,7 +1170,7 @@ describe("0909 Tarefa 5: renovação estende sem encurtar, evento velho não enc
   it("assinatura de cartão já ativa: renovação estende o período; evento com dueDate anterior não encurta", () => {
     sql(`
       update public.billing_contracts
-         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5003',
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5003', asaas_ambiente = 'sandbox',
              current_period_start = now() - interval '25 days', current_period_end = now() - interval '5 hours',
              status = 'ativa', cancel_at_period_end = true
        where organization_id = '${ORG_T5_RENOVACAO}';
@@ -1316,7 +1321,7 @@ describe("0909 Tarefa 5: corrida com o conferidor da F4 e com fn_billing_registr
 
     sql(`
       update public.billing_contracts
-         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5_corrida',
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5_corrida', asaas_ambiente = 'sandbox',
              current_period_start = now() - interval '20 days', current_period_end = now() + interval '5 days',
              status = 'ativa'
        where organization_id = '${ORG_T5_CORRIDA}';
@@ -1350,7 +1355,7 @@ describe("0909 Tarefa 5: corrida com o conferidor da F4 e com fn_billing_registr
 
     sql(`
       update public.billing_contracts
-         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5_conferidor',
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_t5_conferidor', asaas_ambiente = 'sandbox',
              current_period_start = now() - interval '20 days', current_period_end = now() - interval '2 hours',
              status = 'ativa'
        where organization_id = '${ORG_T5_CONFERIDOR}';
@@ -1415,11 +1420,24 @@ const ORG_T6_OVERDUE = "09090006-a5aa-4000-8000-000000000009";
 const ORG_T6_PAYMENT_DELETED = "09090006-a5aa-400a-8000-000000000010";
 const ORG_T6_M4_ANTES = "09090006-a5aa-400a-8000-000000000011";
 const ORG_T6_M8 = "09090006-a5aa-400a-8000-000000000012";
+const ORG_T6_OVERDUE_PACOTE = "09090006-a5aa-400a-8000-000000000013";
+const ORG_T6_ASSINATURA_DUPLICADA = "09090006-a5aa-400a-8000-000000000014";
+const ORG_T6_AMBIENTE = "09090006-a5aa-400a-8000-000000000015";
+const ORG_T6_PIX_ANUAL = "09090006-a5aa-400a-8000-000000000016";
+const ORG_T6_ESTORNO_FORJADO = "09090006-a5aa-400a-8000-000000000017";
+const ORG_T6_RENOVACAO_OVERDUE = "09090006-a5aa-400a-8000-000000000018";
+const ORG_T6_ROTEAMENTO = "09090006-a5aa-400a-8000-000000000019";
+const ORG_T6_ESTADOS_DEFINITIVOS = "09090006-a5aa-400a-8000-00000000001a";
+const ORG_T6_PEDIDO_MARCAR = "09090006-a5aa-400a-8000-00000000001b";
+const ORG_T6_ATIVA_FUTURO = "09090006-a5aa-400a-8000-00000000001c";
 
 const ORGS_T6 = [
   ORG_T6_ESTORNO_PACOTE, ORG_T6_ESTORNO_ASSINATURA, ORG_T6_M2, ORG_T6_CHARGEBACK_CONVIVE,
   ORG_T6_REVERSAO, ORG_T6_SUB_DELETED, ORG_T6_INACTIVE, ORG_T6_404, ORG_T6_OVERDUE,
-  ORG_T6_PAYMENT_DELETED, ORG_T6_M4_ANTES, ORG_T6_M8,
+  ORG_T6_PAYMENT_DELETED, ORG_T6_M4_ANTES, ORG_T6_M8, ORG_T6_OVERDUE_PACOTE,
+  ORG_T6_ASSINATURA_DUPLICADA, ORG_T6_AMBIENTE, ORG_T6_PIX_ANUAL, ORG_T6_ESTORNO_FORJADO,
+  ORG_T6_RENOVACAO_OVERDUE, ORG_T6_ROTEAMENTO, ORG_T6_ESTADOS_DEFINITIVOS, ORG_T6_PEDIDO_MARCAR,
+  ORG_T6_ATIVA_FUTURO,
 ];
 
 describe("0909 Tarefa 6: setup comum (organizações, compra ligada, pro à venda, pacote de teste)", () => {
@@ -1428,6 +1446,9 @@ describe("0909 Tarefa 6: setup comum (organizações, compra ligada, pro à vend
       ${ORGS_T6.map((id) => `insert into public.organizations (id, slug, legal_name, display_name) values ('${id}', 't6-${id.slice(-6)}', 't6 LTDA', 't6') on conflict (id) do nothing;`).join("\n")}
       select public.fn_billing_definir_compra_pelo_cliente(true, null);
       select public.fn_billing_definir_a_venda('pro', true, null);
+      -- Correção (revisão F5, item 11): mesma razão do setup da Tarefa 5,
+      -- acima.
+      update public.billing_settings set asaas_sandbox_concede = true where id = 1;
       insert into public.billing_token_pacotes (codigo, nome, tokens, preco_cents, ativo)
         values ('t6pacote', 'Pacote de teste T6', 50000, 3000, true)
         on conflict (codigo) do update set preco_cents = 3000, ativo = true, tokens = 50000;
@@ -1631,8 +1652,16 @@ describe("0909 Tarefa 6: 404 na confirmação conta como removida (decisão 10)"
   });
 });
 
-describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido com o alarme remover_cobranca_pendente (A1)", () => {
-  it("pedido avulso aguardando pagamento, confirmado OVERDUE: status vencido, alarme gravado", () => {
+describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido, alarme por TIPO de pedido (A1, correção item 4)", () => {
+  // Correção (revisão F5, item 4): o alarme não é mais sempre remover_
+  // cobranca_pendente; pedido de ASSINATURA (primeiro pagamento nunca
+  // recebido) avisa para remover a ASSINATURA no Asaas (remover_assinatura_
+  // pendente, N39, "remove sozinho"); só o pedido AVULSO (pacote de tokens)
+  // continua com remover_cobranca_pendente. Este teste (ORG_T6_OVERDUE) era
+  // "assinatura" e afirmava o alarme antigo por engano (nunca existiu um
+  // caso de pedido avulso vencido nesta suíte); o novo teste logo abaixo
+  // (ORG_T6_OVERDUE_PACOTE) cobre o caso avulso que o nome original prometia.
+  it("pedido de ASSINATURA aguardando pagamento, confirmado OVERDUE: status vencido, alarme remover_assinatura_pendente", () => {
     sql(
       `select public.fn_billing_criar_pedido('${ORG_T6_OVERDUE}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
     );
@@ -1642,10 +1671,24 @@ describe("0909 Tarefa 6: PAYMENT_OVERDUE vence o pedido com o alarme remover_cob
     const conf = `jsonb_build_object('id','pay_t6_009','status','OVERDUE','externalReference','HC:ord:${pedidoId}')`;
     const resultado = registrarEAplicarTipo("evt-t6-009", "PAYMENT_OVERDUE", "pay_t6_009", conf);
     expect(resultado).toContain('"resultado": "aplicado"');
-    expect(resultado).toContain('"alarme": "remover_cobranca_pendente"');
+    expect(resultado).toContain('"alarme": "remover_assinatura_pendente"');
     expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("vencido");
     // não mexe no contrato (decisão 10).
     expect(sql(`select status from public.billing_contracts where organization_id = '${ORG_T6_OVERDUE}';`).trim()).toBe("ativa");
+  });
+
+  it("pedido AVULSO (pacote de tokens) aguardando pagamento, confirmado OVERDUE: alarme remover_cobranca_pendente", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_OVERDUE_PACOTE}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_OVERDUE_PACOTE}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_OVERDUE_PACOTE}'::uuid, '${pedidoId}'::uuid, 'pay_t6_009b', null, null);`);
+
+    const conf = `jsonb_build_object('id','pay_t6_009b','status','OVERDUE','externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-t6-009b", "PAYMENT_OVERDUE", "pay_t6_009b", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    expect(resultado).toContain('"alarme": "remover_cobranca_pendente"');
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("vencido");
   });
 });
 
@@ -1763,6 +1806,358 @@ describe("0909 Tarefa 6 (M8): aguardando ganha backoff, não é reservado de nov
 
     const linhaFinal = sql(`select resultado, tentativas, proxima_tentativa_em is null from public.asaas_webhook_events where id = '${eventoId}';`);
     expect(linhaFinal).toBe("erro|10|t");
+  });
+});
+
+// ============================================================================
+// PARTE 7: correções da revisão e da auditoria de segurança da fase F5
+// (hiperbold/planos/fase-F5-tarefas.md). Uma prova por item (1 a 13), mais o
+// acréscimo do coordenador (PAYMENT_CHARGEBACK_DISPUTE).
+// ============================================================================
+
+describe("0909 PARTE 7, item 8: fn_billing_asaas_registrar_evento, prefixo reservado do webhook vai para quarentena", () => {
+  it("event_id 'conc:...' vindo de origem=webhook não sequestra o namespace da conciliação", () => {
+    const resultado = sql(
+      `select public.fn_billing_asaas_registrar_evento('conc:forjado:REFUNDED', 'PAYMENT_REFUNDED', 'pay_forjado', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+    expect(resultado).toContain('"quarentena": true');
+    const linha = sql(`select resultado, erro_codigo from public.asaas_webhook_events where event_id = 'conc:forjado:REFUNDED';`);
+    expect(linha).toBe("erro|evento_fora_do_formato:prefixo_reservado");
+
+    // a MESMA origem=conciliacao com o mesmo prefixo passa normalmente.
+    const resultadoConc = sql(
+      `select public.fn_billing_asaas_registrar_evento('conc:pay_p7_008:REFUNDED', 'PAYMENT_REFUNDED', 'pay_p7_008', 'sandbox', 'conciliacao', '{}'::jsonb);`,
+    );
+    expect(resultadoConc).toContain('"quarentena": false');
+  });
+
+  it("event_id 'quarentena:...' vindo de origem=webhook também vai para quarentena", () => {
+    const resultado = sql(
+      `select public.fn_billing_asaas_registrar_evento('quarentena:forjado', 'PAYMENT_REFUNDED', 'pay_forjado2', 'sandbox', 'webhook', '{}'::jsonb);`,
+    );
+    expect(resultado).toContain('"quarentena": true');
+  });
+});
+
+describe("0909 PARTE 7, item 12: fn_billing_asaas_reprocessar_evento aceita sem_vinculo", () => {
+  it("evento sem_vinculo reprocessa sem erro e volta a aguardando", () => {
+    sql(`select public.fn_billing_asaas_registrar_evento('evt-p7-012', 'PAYMENT_CONFIRMED', 'pay_p7_012', 'sandbox', 'webhook', '{}'::jsonb);`);
+    const { id, lease } = reservarPorEventId("evt-p7-012");
+    const conf = `jsonb_build_object('id','pay_p7_012','status','CONFIRMED','value',10.00,'dueDate','2026-10-01')`;
+    sql(`select public.fn_billing_asaas_aplicar_evento('${id}'::uuid, '${lease}'::uuid, ${conf});`);
+    expect(sql(`select resultado from public.asaas_webhook_events where id = '${id}';`).trim()).toBe("sem_vinculo");
+
+    const reprocessado = sql(`select public.fn_billing_asaas_reprocessar_evento('${id}'::uuid, null);`);
+    expect(reprocessado).toContain('"resultado_novo": "aguardando"');
+
+    // ainda recusa fora de erro/sem_vinculo: o MESMO evento, já voltado para
+    // aguardando, não reprocessa de novo.
+    const erro = erroSob("service_role", `select public.fn_billing_asaas_reprocessar_evento('${id}'::uuid, null)`);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_evento_nao_esta_em_erro");
+  });
+});
+
+describe("0909 PARTE 7, item 3: fn_billing_asaas_rotear_pagamento exclui pedido estornado e falhou (não só pago)", () => {
+  it("pedido com status estornado ou falhou nunca casa como categoria=pedido", () => {
+    sql(`
+      insert into public.billing_orders (organization_id, ambiente, tipo, plan_id, ciclo, metodo, amount_cents, chave, asaas_payment_id, status)
+        select '${ORG_T6_ROTEAMENTO}', 'sandbox', 'assinatura', bc.plan_id, 'monthly', 'CREDIT_CARD', 19900, gen_random_uuid(), 'pay_p7_003a', 'estornado'
+        from public.billing_contracts bc where bc.organization_id = '${ORG_T6_ROTEAMENTO}';
+    `);
+    const rotaEstornado = sql(
+      `select categoria from public.fn_billing_asaas_rotear_pagamento('sandbox', null, null, 'pay_p7_003a');`,
+    ).trim();
+    expect(rotaEstornado).toBe("sem_vinculo");
+
+    sql(`
+      insert into public.billing_orders (organization_id, ambiente, tipo, pacote_id, tokens, metodo, amount_cents, chave, asaas_payment_id, status)
+        select '${ORG_T6_ROTEAMENTO}', 'sandbox', 'pacote_tokens', bp.id, bp.tokens, 'PIX', 3000, gen_random_uuid(), 'pay_p7_003b', 'falhou'
+        from public.billing_token_pacotes bp where bp.codigo = 't6pacote';
+    `);
+    const rotaFalhou = sql(
+      `select categoria from public.fn_billing_asaas_rotear_pagamento('sandbox', null, null, 'pay_p7_003b');`,
+    ).trim();
+    expect(rotaFalhou).toBe("sem_vinculo");
+  });
+});
+
+describe("0909 PARTE 7, item 1: estorno forjado não estorna nem bloqueia o pagamento real", () => {
+  it("REFUNDED com GET ainda dizendo RECEIVED (forjado) fica ignorado; REFUNDED confirmado depois aplica normalmente", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_ESTORNO_FORJADO}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ESTORNO_FORJADO}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ESTORNO_FORJADO}'::uuid, '${pedidoId}'::uuid, 'pay_p7_001', null, null);`);
+    const confPagamento = `jsonb_build_object('id','pay_p7_001','status','RECEIVED','value',199.00,'dueDate','2026-10-01','externalReference','HC:ord:${pedidoId}')`;
+    registrarEAplicarTipo("evt-p7-001a", "PAYMENT_RECEIVED", "pay_p7_001", confPagamento);
+    const fimAntes = sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T6_ESTORNO_FORJADO}';`).trim();
+    expect(fimAntes.length).toBeGreaterThan(0);
+
+    // FORJADO: evento REFUNDED com um pay_ LEGÍTIMO, mas o GET (p_confirmacao)
+    // ainda diz RECEIVED (nunca foi estornado de verdade).
+    const confForjado = `jsonb_build_object('id','pay_p7_001','status','RECEIVED','value',199.00)`;
+    const forjado = registrarEAplicarTipo("evt-p7-001b", "PAYMENT_REFUNDED", "pay_p7_001", confForjado);
+    expect(forjado).toContain('"resultado": "ignorado"');
+    expect(sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T6_ESTORNO_FORJADO}' and status = 'REFUNDED';`).trim()).toBe("0");
+    // o pagamento real não foi tocado: contrato intacto, pedido continua pago.
+    expect(sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T6_ESTORNO_FORJADO}';`).trim()).toBe(fimAntes);
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("pago");
+
+    // status EM ANDAMENTO (REFUND_IN_PROGRESS): aguardando, tenta de novo.
+    const confAndamento = `jsonb_build_object('id','pay_p7_001','status','REFUND_IN_PROGRESS','value',199.00)`;
+    const andamento = registrarEAplicarTipo("evt-p7-001c", "PAYMENT_REFUNDED", "pay_p7_001", confAndamento);
+    expect(andamento).toContain('"resultado": "aguardando"');
+
+    // REFUNDED confirmado DE VERDADE: aplica.
+    const confReal = `jsonb_build_object('id','pay_p7_001','status','REFUNDED','value',199.00)`;
+    const real = registrarEAplicarTipo("evt-p7-001d", "PAYMENT_REFUNDED", "pay_p7_001", confReal);
+    expect(real).toContain('"resultado": "aplicado"');
+    expect(sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T6_ESTORNO_FORJADO}' and status = 'REFUNDED';`).trim()).toBe("1");
+  });
+});
+
+describe("0909 PARTE 7, acréscimo (coordenador): PAYMENT_CHARGEBACK_DISPUTE despacha para fn_billing_asaas_aplicar_estorno", () => {
+  it("DISPUTE confirmado aplica como chargeback; REQUESTED depois é idempotente pela mesma linha", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_ESTORNO_FORJADO}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ESTORNO_FORJADO}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ESTORNO_FORJADO}'::uuid, '${pedidoId}'::uuid, 'pay_p7_dispute', null, null);`);
+    const confPagamento = `jsonb_build_object('id','pay_p7_dispute','status','RECEIVED','value',30.00,'externalReference','HC:ord:${pedidoId}')`;
+    registrarEAplicarTipo("evt-p7-dispute-a", "PAYMENT_RECEIVED", "pay_p7_dispute", confPagamento);
+
+    const confDispute = `jsonb_build_object('id','pay_p7_dispute','status','CHARGEBACK_DISPUTE','value',30.00)`;
+    const dispute = registrarEAplicarTipo("evt-p7-dispute-b", "PAYMENT_CHARGEBACK_DISPUTE", "pay_p7_dispute", confDispute);
+    expect(dispute).toContain('"resultado": "aplicado"');
+    expect(dispute).toContain('"alarme": "chargeback_confirmado"');
+    expect(sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T6_ESTORNO_FORJADO}' and status = 'CHARGEBACK_REQUESTED';`).trim()).toBe("1");
+
+    // REQUESTED chegando DEPOIS da DISPUTE, mesmo payment: idempotente (a
+    // MESMA chave, ja_aplicado), sem segunda linha.
+    const confRequested = `jsonb_build_object('id','pay_p7_dispute','status','CHARGEBACK_REQUESTED','value',30.00)`;
+    const requested = registrarEAplicarTipo("evt-p7-dispute-c", "PAYMENT_CHARGEBACK_REQUESTED", "pay_p7_dispute", confRequested);
+    expect(requested).toContain('"resultado": "ja_aplicado"');
+    expect(sql(`select count(*) from public.billing_payments where organization_id = '${ORG_T6_ESTORNO_FORJADO}' and status = 'CHARGEBACK_REQUESTED';`).trim()).toBe("1");
+  });
+});
+
+describe("0909 PARTE 7, item 2: PAYMENT_OVERDUE de cobrança de RENOVAÇÃO fecha ignorado (nunca 'renovacao' fora do CHECK)", () => {
+  it("assinatura de cartão já ativa: OVERDUE da própria assinatura (sem pedido) fecha ignorado, sem estourar o UPDATE final", () => {
+    sql(`
+      update public.billing_contracts
+         set cycle = 'monthly', gateway = 'asaas', asaas_subscription_id = 'sub_p7_002', asaas_ambiente = 'sandbox',
+             current_period_start = now() - interval '10 days', current_period_end = now() + interval '20 days', status = 'ativa'
+       where organization_id = '${ORG_T6_RENOVACAO_OVERDUE}';
+    `);
+    const conf = `jsonb_build_object('id','pay_p7_002','status','OVERDUE','subscription','sub_p7_002')`;
+    const resultado = registrarEAplicarTipo("evt-p7-002", "PAYMENT_OVERDUE", "pay_p7_002", conf);
+    expect(resultado).toContain('"resultado": "ignorado"');
+    const linha = sql(`select resultado, erro_codigo from public.asaas_webhook_events where event_id = 'evt-p7-002';`);
+    expect(linha).toBe("ignorado|cobranca_de_renovacao");
+    // não mexe no contrato.
+    expect(sql(`select status from public.billing_contracts where organization_id = '${ORG_T6_RENOVACAO_OVERDUE}';`).trim()).toBe("ativa");
+  });
+});
+
+describe("0909 PARTE 7, item 4 (primeira metade): assinatura Asaas duplicada não concede", () => {
+  it("contrato já com OUTRA assinatura viva: primeiro pagamento de uma SEGUNDA assinatura vira divergente com alarme assinatura_duplicada", () => {
+    sql(`
+      update public.billing_contracts
+         set asaas_subscription_id = 'sub_p7_original', asaas_ambiente = 'sandbox', asaas_assinatura_encerrada_em = null,
+             cycle = 'monthly', gateway = 'asaas', current_period_start = now(), current_period_end = now() + interval '30 days', status = 'ativa'
+       where organization_id = '${ORG_T6_ASSINATURA_DUPLICADA}';
+      insert into public.billing_orders (organization_id, ambiente, tipo, plan_id, ciclo, metodo, amount_cents, chave, asaas_payment_id, status)
+        select '${ORG_T6_ASSINATURA_DUPLICADA}', 'sandbox', 'assinatura', bc.plan_id, 'monthly', 'CREDIT_CARD', 19900, gen_random_uuid(), 'pay_p7_004', 'aguardando_pagamento'
+        from public.billing_contracts bc where bc.organization_id = '${ORG_T6_ASSINATURA_DUPLICADA}';
+    `);
+    const conf = `jsonb_build_object('id','pay_p7_004','status','CONFIRMED','value',199.00,'dueDate','2026-10-01','subscription','sub_p7_outra')`;
+    const resultado = registrarEAplicarTipo("evt-p7-004", "PAYMENT_CONFIRMED", "pay_p7_004", conf);
+    expect(resultado).toContain('"resultado": "divergente"');
+    expect(resultado).toContain('"alarme": "assinatura_duplicada"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_p7_004';`).trim()).toBe("0");
+    // a assinatura original do contrato continua intacta.
+    expect(sql(`select asaas_subscription_id from public.billing_contracts where organization_id = '${ORG_T6_ASSINATURA_DUPLICADA}';`).trim()).toBe("sub_p7_original");
+  });
+});
+
+describe("0909 PARTE 7, item 5: contrato só volta a ativa quando o novo fim é posterior a now()", () => {
+  it("pagamento de um período já todo no passado (dueDate velho) não ativa um contrato suspenso", () => {
+    sql(`
+      select public.fn_billing_criar_pedido('${ORG_T6_ATIVA_FUTURO}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);
+      update public.billing_contracts set status = 'suspensa', current_period_end = now() - interval '100 days' where organization_id = '${ORG_T6_ATIVA_FUTURO}';
+    `);
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ATIVA_FUTURO}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ATIVA_FUTURO}'::uuid, '${pedidoId}'::uuid, 'pay_p7_005', null, null);`);
+
+    // dueDate BEM velho: o período concedido (mensal, +1 dia) ainda termina no
+    // passado, então current_period_end novo continua no passado.
+    const conf = `jsonb_build_object('id','pay_p7_005','status','CONFIRMED','value',199.00,'dueDate','2020-01-01','externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-p7-005", "PAYMENT_CONFIRMED", "pay_p7_005", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    // o pagamento aplicou (billing_payments/pedido pago), mas o CONTRATO
+    // continua suspensa: o novo fim não é posterior a now().
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("pago");
+    expect(sql(`select status from public.billing_contracts where organization_id = '${ORG_T6_ATIVA_FUTURO}';`).trim()).toBe("suspensa");
+  });
+});
+
+describe("0909 PARTE 7, item 6: mais estados definitivos fecham ignorado (nunca aguardando para sempre)", () => {
+  it("PAYMENT_OVERDUE com GET já RECEIVED, PAYMENT_DELETED restaurado e SUBSCRIPTION_INACTIVATED reativada fecham ignorado", () => {
+    sql(`
+      select public.fn_billing_criar_pedido('${ORG_T6_ESTADOS_DEFINITIVOS}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);
+    `);
+    const pedidoAssinatura = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ESTADOS_DEFINITIVOS}' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ESTADOS_DEFINITIVOS}'::uuid, '${pedidoAssinatura}'::uuid, 'pay_p7_006a', null, null);`);
+    const confOverdueJaRecebido = `jsonb_build_object('id','pay_p7_006a','status','RECEIVED','externalReference','HC:ord:${pedidoAssinatura}')`;
+    const overdue = registrarEAplicarTipo("evt-p7-006a", "PAYMENT_OVERDUE", "pay_p7_006a", confOverdueJaRecebido);
+    expect(overdue).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-p7-006a';`).trim()).toBe("pagamento_ja_recebido");
+    // não marcou vencido: o pedido continua no estado de antes.
+    expect(sql(`select status from public.billing_orders where id = '${pedidoAssinatura}';`).trim()).toBe("aguardando_pagamento");
+
+    sql(`
+      select public.fn_billing_criar_pedido('${ORG_T6_ESTADOS_DEFINITIVOS}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);
+    `);
+    const pedidoPacote = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_ESTADOS_DEFINITIVOS}' and tipo = 'pacote_tokens' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_ESTADOS_DEFINITIVOS}'::uuid, '${pedidoPacote}'::uuid, 'pay_p7_006b', null, null);`);
+    const confDeletedRestaurado = `jsonb_build_object('id','pay_p7_006b','removida',false,'externalReference','HC:ord:${pedidoPacote}')`;
+    const deleted = registrarEAplicarTipo("evt-p7-006b", "PAYMENT_DELETED", "pay_p7_006b", confDeletedRestaurado);
+    expect(deleted).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-p7-006b';`).trim()).toBe("pagamento_restaurado");
+    expect(sql(`select status from public.billing_orders where id = '${pedidoPacote}';`).trim()).toBe("aguardando_pagamento");
+
+    sql(`
+      update public.billing_contracts set asaas_subscription_id = 'sub_p7_006c', asaas_ambiente = 'sandbox', asaas_assinatura_encerrada_em = null, cancel_at_period_end = false
+       where organization_id = '${ORG_T6_ESTADOS_DEFINITIVOS}';
+    `);
+    const confInactivatedReativada = `jsonb_build_object('id','sub_p7_006c','removida',false,'status','ACTIVE')`;
+    const inactivated = registrarEAplicarTipo("evt-p7-006c", "SUBSCRIPTION_INACTIVATED", "sub_p7_006c", confInactivatedReativada);
+    expect(inactivated).toContain('"resultado": "ignorado"');
+    expect(sql(`select erro_codigo from public.asaas_webhook_events where event_id = 'evt-p7-006c';`).trim()).toBe("assinatura_reativada");
+    expect(sql(`select cancel_at_period_end from public.billing_contracts where organization_id = '${ORG_T6_ESTADOS_DEFINITIVOS}';`).trim()).toBe("f");
+  });
+});
+
+describe("0909 PARTE 7, item 7: fn_billing_pedido_marcar, inconclusivo só a partir de processando", () => {
+  it("recusa inconclusivo a partir de criado; aceita a partir de processando", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_PEDIDO_MARCAR}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_PEDIDO_MARCAR}' and status = 'criado';`).trim();
+
+    const erro = erroSob(
+      "service_role",
+      `select public.fn_billing_pedido_marcar('${ORG_T6_PEDIDO_MARCAR}'::uuid, '${pedidoId}'::uuid, 'inconclusivo', 'teste item 7')`,
+    );
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_pedido_nao_esta_processando");
+
+    sql(`select public.fn_billing_pedido_tomar('${ORG_T6_PEDIDO_MARCAR}'::uuid, '${pedidoId}'::uuid);`);
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("processando");
+
+    const resultado = sql(
+      `select public.fn_billing_pedido_marcar('${ORG_T6_PEDIDO_MARCAR}'::uuid, '${pedidoId}'::uuid, 'inconclusivo', 'teste item 7');`,
+    );
+    expect(resultado).toContain('"status_novo": "inconclusivo"');
+  });
+});
+
+describe("0909 PARTE 7, item 9: evento fechado outro_app poda o payload na hora", () => {
+  it("externalReference de outro app: payload vira {} e payload_podado_em é gravado", () => {
+    const conf = `jsonb_build_object('id','pay_p7_009','status','CONFIRMED','value',10.00,'dueDate','2026-10-01','externalReference','HT:algumacoisa','dado_do_outro_produto','nao_deveria_ficar_aqui')`;
+    const resultado = registrarEAplicar("evt-p7-009", "pay_p7_009", conf);
+    expect(resultado).toContain('"resultado": "outro_app"');
+    const linha = sql(`select payload::text, payload_podado_em is not null from public.asaas_webhook_events where event_id = 'evt-p7-009';`);
+    expect(linha).toBe("{}|t");
+  });
+});
+
+describe("0909 PARTE 7, item 10: asaas_ambiente gravado no primeiro pagamento; renovação só casa do MESMO ambiente", () => {
+  it("um evento de PRODUÇÃO nunca casa como renovação de um contrato marcado sandbox", () => {
+    sql(`
+      update public.billing_contracts
+         set asaas_subscription_id = 'sub_p7_010', asaas_ambiente = 'sandbox', cycle = 'monthly', gateway = 'asaas',
+             current_period_start = now() - interval '10 days', current_period_end = now() + interval '20 days', status = 'ativa'
+       where organization_id = '${ORG_T6_AMBIENTE}';
+    `);
+    const rotaProducao = sql(
+      `select categoria from public.fn_billing_asaas_rotear_pagamento('producao', 'sub_p7_010', null, null);`,
+    ).trim();
+    expect(rotaProducao).toBe("sem_vinculo");
+    const rotaSandbox = sql(
+      `select categoria from public.fn_billing_asaas_rotear_pagamento('sandbox', 'sub_p7_010', null, null);`,
+    ).trim();
+    expect(rotaSandbox).toBe("renovacao");
+  });
+
+  it("primeiro pagamento grava asaas_ambiente junto com asaas_subscription_id", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_AMBIENTE}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    // limpa a assinatura anterior para este pedido de PACOTE não colidir com
+    // a checagem de assinatura duplicada (pacote não tem ciclo/assinatura).
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_AMBIENTE}' and tipo = 'pacote_tokens' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_AMBIENTE}'::uuid, '${pedidoId}'::uuid, 'pay_p7_010b', null, null);`);
+    const conf = `jsonb_build_object('id','pay_p7_010b','status','RECEIVED','value',30.00,'externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-p7-010b", "PAYMENT_RECEIVED", "pay_p7_010b", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    // pacote não mexe em asaas_ambiente do contrato (só o primeiro pagamento
+    // de ASSINATURA grava, decisão 8/item 10); confere que o ambiente da
+    // assinatura já existente continua sandbox.
+    expect(sql(`select asaas_ambiente from public.billing_contracts where organization_id = '${ORG_T6_AMBIENTE}';`).trim()).toBe("sandbox");
+  });
+});
+
+describe("0909 PARTE 7, item 11: sandbox só concede com billing_settings.asaas_sandbox_concede ligada", () => {
+  it("com a chave desligada, pagamento de sandbox fica ignorado (sandbox_nao_concede) sem tocar em contrato nem tokens; religada, concede", () => {
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_AMBIENTE}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_AMBIENTE}' and tipo = 'pacote_tokens' and status = 'criado';`).trim();
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_AMBIENTE}'::uuid, '${pedidoId}'::uuid, 'pay_p7_011', null, null);`);
+
+    sql(`update public.billing_settings set asaas_sandbox_concede = false where id = 1;`);
+    const confSandbox = `jsonb_build_object('id','pay_p7_011','status','RECEIVED','value',30.00,'externalReference','HC:ord:${pedidoId}')`;
+    const desligado = registrarEAplicarTipo("evt-p7-011a", "PAYMENT_RECEIVED", "pay_p7_011", confSandbox);
+    expect(desligado).toContain('"resultado": "ignorado"');
+    expect(desligado).toContain('"alarme": "sandbox_nao_concede"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_p7_011';`).trim()).toBe("0");
+    expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("aguardando_pagamento");
+
+    // ignorado é terminal (não é erro nem sem_vinculo, então fn_billing_
+    // asaas_reprocessar_evento não se aplica aqui, item 12): religar a chave
+    // e mandar um evento NOVO (o próprio Asaas reentregaria, ou a
+    // conciliação diária injeta um evento sintético) é o caminho real.
+    sql(`update public.billing_settings set asaas_sandbox_concede = true where id = 1;`);
+    const religado = registrarEAplicarTipo("evt-p7-011b", "PAYMENT_RECEIVED", "pay_p7_011", confSandbox);
+    expect(religado).toContain('"resultado": "aplicado"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_p7_011';`).trim()).toBe("1");
+  });
+});
+
+describe("0909 PARTE 7, item 13: Pix anual com paymentDate nulo usa o início do dia em São Paulo, nunca now()", () => {
+  it("período do Pix anual começa à meia-noite de SP do dia do processamento, não na hora exata", () => {
+    // price_yearly_cents continua nulo em produção (N8, ainda sem resposta
+    // do Filipe); para este teste (matemática de período, ortogonal ao
+    // preço) liga um preço só nesta VERSÃO ativa do plano, sem mexer na
+    // decisão de negócio N8/N9 em si.
+    sql(`update public.billing_plans set price_yearly_cents = 599900 where code = 'max' and active;`);
+    sql(
+      `select public.fn_billing_criar_pedido('${ORG_T6_PIX_ANUAL}'::uuid, 'assinatura', 'max', 'yearly', null, 'PIX', 'sandbox', gen_random_uuid(), null);`,
+    );
+    const pedidoId = sql(`select id from public.billing_orders where organization_id = '${ORG_T6_PIX_ANUAL}' and status = 'criado';`).trim();
+    expect(pedidoId.length).toBeGreaterThan(0);
+    sql(`select public.fn_billing_pedido_registrar_cobranca('${ORG_T6_PIX_ANUAL}'::uuid, '${pedidoId}'::uuid, 'pay_p7_013', null, null);`);
+    // SEM paymentDate: o objeto confirmado do Pix às vezes chega assim antes
+    // da confirmação definitiva do meio de pagamento.
+    const conf = `jsonb_build_object('id','pay_p7_013','status','RECEIVED','value',5999.00,'externalReference','HC:ord:${pedidoId}')`;
+    const resultado = registrarEAplicarTipo("evt-p7-013", "PAYMENT_RECEIVED", "pay_p7_013", conf);
+    expect(resultado).toContain('"resultado": "aplicado"');
+    const inicio = sql(`select billing_period_start from public.billing_payments where asaas_payment_id = 'pay_p7_013';`).trim();
+    // à meia-noite em America/Sao_Paulo (03:00 UTC), nunca a hora exata do
+    // processamento.
+    expect(inicio.endsWith("00:00:00+00") || inicio.includes(" 03:00:00+00"), `início não está à meia-noite de SP: ${inicio}`).toBe(true);
   });
 });
 

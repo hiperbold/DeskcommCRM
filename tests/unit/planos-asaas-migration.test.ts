@@ -558,13 +558,26 @@ describe("0909 Tarefa 3: fn_billing_pedido_registrar_cobranca amarra invoice_url
 });
 
 describe("0909 Tarefa 3: fn_billing_pedido_marcar nunca a partir de pago", () => {
+  // Correção (revisão F5, item 7): PARTE 7 redefine esta função (inconclusivo
+  // só a partir de processando); ancora na ÚLTIMA definição (CLAUDE.md, item
+  // 10; tests/unit/sonda-do-baseline-ancora-na-ultima-definicao.test.ts), a
+  // que o banco realmente instala.
   it("só inconclusivo/falhou/cancelado, e recusa a partir de pago", () => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_pedido_marcar(");
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_pedido_marcar(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
 
     expect(corpo).toMatch(/p_status not in \('inconclusivo', 'falhou', 'cancelado'\)/);
     expect(corpo).toMatch(/if v_pedido\.status = 'pago' then\s*\n\s*raise exception 'billing_pedido_ja_pago'/);
+  });
+
+  it("PARTE 7 (item 7): inconclusivo só a partir de processando", () => {
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_pedido_marcar(");
+    const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
+    const corpo = MIGRATION_0909.slice(inicio, fim);
+    expect(corpo).toMatch(
+      /if p_status = 'inconclusivo' and v_pedido\.status <> 'processando' then\s*\n\s*raise exception 'billing_pedido_nao_esta_processando'/,
+    );
   });
 });
 
@@ -640,11 +653,19 @@ describe("0909 Tarefa 4: as seis peças existem, com a assinatura do plano, em s
 });
 
 describe("0909 Tarefa 4: fn_billing_asaas_registrar_evento, idempotência e quarentena (decisão 19/M6)", () => {
+  // Correção (revisão F5, item 8): PARTE 7 redefine esta função (prefixo
+  // reservado conc:/quarentena: do webhook); ancora na ÚLTIMA definição.
   const corpo = (() => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_registrar_evento(");
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_registrar_evento(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     return MIGRATION_0909.slice(inicio, fim);
   })();
+
+  it("PARTE 7 (item 8): prefixo reservado conc:/quarentena: do webhook vai para quarentena", () => {
+    expect(corpo).toMatch(
+      /p_origem = 'webhook' and \(p_event_id like 'conc:%' or p_event_id like 'quarentena:%'\)/,
+    );
+  });
 
   it("on conflict (event_id) do nothing (evento repetido guardado uma vez só)", () => {
     expect(corpo).toMatch(/on conflict \(event_id\) do nothing/);
@@ -742,14 +763,16 @@ describe("0909 Tarefa 4: fn_billing_asaas_registrar_falha, lease alheio recusado
   });
 });
 
-describe("0909 Tarefa 4: fn_billing_asaas_reprocessar_evento, só a partir de erro", () => {
-  it("recusa fora de resultado = erro, e zera tentativas/proxima_tentativa_em/erro_codigo/lease", () => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_reprocessar_evento(");
+describe("0909 Tarefa 4: fn_billing_asaas_reprocessar_evento, a partir de erro (PARTE 7, item 12: também sem_vinculo)", () => {
+  // Correção (revisão F5, item 12): PARTE 7 redefine esta função (aceita
+  // também sem_vinculo); ancora na ÚLTIMA definição, a que vale de verdade.
+  it("recusa fora de resultado = erro/sem_vinculo, e zera tentativas/proxima_tentativa_em/erro_codigo/lease", () => {
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_reprocessar_evento(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
 
     expect(corpo).toMatch(
-      /if v_evento\.resultado <> 'erro' then\s*\n\s*raise exception 'billing_evento_nao_esta_em_erro' using errcode = '22023';/,
+      /if v_evento\.resultado not in \('erro', 'sem_vinculo'\) then\s*\n\s*raise exception 'billing_evento_nao_esta_em_erro' using errcode = '22023';/,
     );
     expect(corpo).toMatch(/tentativas = 0,/);
     expect(corpo).toMatch(/proxima_tentativa_em = now\(\),/);
@@ -884,9 +907,11 @@ describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo (decisão 5)", () => 
   });
 });
 
-describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6)", () => {
+describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6; PARTE 7, itens 3 e 10)", () => {
+  // Correção (revisão F5, itens 3 e 10): PARTE 7 redefine esta função; ancora
+  // na ÚLTIMA definição (CLAUDE.md, item 10).
   const corpo = (() => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     return MIGRATION_0909.slice(inicio, fim);
   })();
@@ -899,9 +924,15 @@ describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6)", () => 
     expect(posPedido).toBeLessThan(posRenovacao);
   });
 
-  it("status <> 'pago' em toda busca de pedido (nunca acha um pedido já honrado)", () => {
-    const ocorrencias = corpo.match(/status <> 'pago'/g) ?? [];
+  it("PARTE 7 (item 3): toda busca de pedido exclui pago, estornado E falhou (nunca acha um pedido já honrado, estornado ou que falhou)", () => {
+    const ocorrencias = corpo.match(/status not in \('pago', 'estornado', 'falhou'\)/g) ?? [];
     expect(ocorrencias.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("PARTE 7 (item 10): a busca de renovação por assinatura exige o MESMO ambiente do contrato", () => {
+    expect(corpo).toMatch(
+      /where asaas_subscription_id = p_subscription and asaas_ambiente = p_ambiente;/,
+    );
   });
 
   it("prefixo diferente de HC: vira outro_app; nada casou vira sem_vinculo", () => {
@@ -911,7 +942,7 @@ describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6)", () => 
   });
 
   it("é STABLE (só lê, nenhuma trava)", () => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_rotear_pagamento(");
     const fimAssinatura = MIGRATION_0909.indexOf("language plpgsql", inicio);
     const assinatura = MIGRATION_0909.slice(inicio, fimAssinatura + "language plpgsql\nstable".length);
     expect(assinatura).toMatch(/stable/);
@@ -920,9 +951,11 @@ describe("0909 Tarefa 5: fn_billing_asaas_rotear_pagamento (decisão 6)", () => 
   });
 });
 
-describe("0909 Tarefa 5: fn_billing_asaas_aplicar_pagamento (decisões 4 a 8, 12, 26, 27)", () => {
+describe("0909 Tarefa 5: fn_billing_asaas_aplicar_pagamento (decisões 4 a 8, 12, 26, 27; PARTE 7, itens 4, 5, 10, 11, 13)", () => {
+  // Correção (revisão F5): PARTE 7 redefine esta função; ancora na ÚLTIMA
+  // definição (CLAUDE.md, item 10), a que o banco realmente instala.
   const corpo = (() => {
-    const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_aplicar_pagamento(");
+    const inicio = MIGRATION_0909.lastIndexOf("create or replace function public.fn_billing_asaas_aplicar_pagamento(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     return MIGRATION_0909.slice(inicio, fim);
   })();
@@ -941,9 +974,9 @@ describe("0909 Tarefa 5: fn_billing_asaas_aplicar_pagamento (decisões 4 a 8, 12
     expect(posForUpdate).toBeGreaterThan(posAssinatura);
   });
 
-  it("roteamento chamado duas vezes (antes e depois das travas, decisão 12/B5)", () => {
+  it("roteamento chamado duas vezes para decidir a organização a travar (antes e depois das travas, decisão 12/B5), mais uma terceira vez (PARTE 7, item 11) só para achar organization_id quando sandbox não concede", () => {
     const ocorrencias = corpo.match(/fn_billing_asaas_rotear_pagamento\(/g) ?? [];
-    expect(ocorrencias.length).toBe(2);
+    expect(ocorrencias.length).toBe(3);
   });
 
   it("cliente confirmado tem que casar com billing_customers da mesma organização e ambiente, senão divergente", () => {
@@ -975,11 +1008,13 @@ describe("0909 Tarefa 5: fn_billing_asaas_aplicar_pagamento (decisões 4 a 8, 12
     );
   });
 
-  it("Pix anual: início = greatest(current_period_end, paymentDate), fim = início + 1 ano + 1 dia (decisão 5)", () => {
+  it("Pix anual: início = greatest(current_period_end, paymentDate), fim = início + 1 ano + 1 dia (decisão 5; PARTE 7, item 13: paymentDate nulo usa o início do dia em SP, nunca now())", () => {
     expect(corpo).toMatch(
       /if v_pedido\.metodo = 'PIX' and v_pedido\.ciclo = 'yearly' then/,
     );
-    expect(corpo).toMatch(/v_periodo_inicio := greatest\(v_contract\.current_period_end, v_pago_em\);/);
+    expect(corpo).toMatch(
+      /v_periodo_inicio := greatest\(\s*\n\s*v_contract\.current_period_end,\s*\n\s*coalesce\(\s*\n\s*\(nullif\(p_confirmacao->>'paymentDate', ''\)\)::date,\s*\n\s*\(now\(\) at time zone 'America\/Sao_Paulo'\)::date\s*\n\s*\)::timestamp at time zone 'America\/Sao_Paulo'\s*\n\s*\);/,
+    );
     expect(corpo).toMatch(/v_periodo_fim := v_periodo_inicio \+ interval '1 year' \+ interval '1 day';/);
   });
 
@@ -1054,14 +1089,24 @@ describe("0909 Tarefa 6: fn_billing_asaas_aplicar_evento REDEFINIDA (decisão 20
     expect(trechos.length).toBe(4);
   });
 
-  it("begin/exception interno em cada um dos três despachos: falha vira resultado=erro, sem propagar a exceção", () => {
+  it("begin/exception interno em cada um dos três despachos: falha vira resultado=erro, sem propagar a exceção (PARTE 7, item 6: falha transitória vira aguardando antes do when others)", () => {
     const corpo = corpoDaUltimaDefinicao(MIGRATION_0909, "fn_billing_asaas_aplicar_evento");
     expect(corpo).toMatch(/v_aplicacao := public\.fn_billing_asaas_aplicar_pagamento\(p_confirmacao, v_evento\.ambiente\);/);
     expect(corpo).toMatch(/v_aplicacao := public\.fn_billing_asaas_aplicar_estorno\(v_evento\.event_type, p_confirmacao, v_evento\.ambiente\);/);
     expect(corpo).toMatch(
       /v_aplicacao := public\.fn_billing_asaas_aplicar_fim_da_assinatura\(v_evento\.event_type, p_confirmacao, v_evento\.ambiente\);/,
     );
-    const quantasExceptions = (corpo.match(/exception when others then\s*\n\s*v_resultado := 'erro';/g) ?? []).length;
+    // Correção (revisão F5, item 6): cada begin/exception ganhou um WHEN
+    // específico para falha TRANSITÓRIA (lock_not_available, deadlock_
+    // detected, serialization_failure), que vira aguardando (retentativa com
+    // backoff) ANTES do when others (falha de verdade, erro imediato); por
+    // isso "when others then\n v_resultado := 'erro';" deixou de vir logo
+    // depois de "exception" (agora vem depois do primeiro WHEN).
+    const quantasTransitorias = (
+      corpo.match(/when lock_not_available or deadlock_detected or serialization_failure then\s*\n\s*v_resultado := 'aguardando';/g) ?? []
+    ).length;
+    expect(quantasTransitorias).toBe(3);
+    const quantasExceptions = (corpo.match(/when others then\s*\n\s*v_resultado := 'erro';/g) ?? []).length;
     expect(quantasExceptions).toBe(3);
   });
 
@@ -1152,10 +1197,16 @@ describe("0909 Tarefa 6: fn_billing_asaas_aplicar_estorno (decisão 9, N31, N32,
 describe("0909 Tarefa 6: fn_billing_asaas_aplicar_fim_da_assinatura (decisão 10, 22; N39)", () => {
   const corpo = corpoDaUltimaDefinicao(MIGRATION_0909, "fn_billing_asaas_aplicar_fim_da_assinatura");
 
-  it("PAYMENT_OVERDUE só confirma com status OVERDUE, e marca o pedido vencido com o alarme remover_cobranca_pendente (A1)", () => {
+  it("PAYMENT_OVERDUE só confirma com status OVERDUE, e marca o pedido vencido (A1; PARTE 7, item 4: alarme por TIPO de pedido)", () => {
     expect(corpo).toMatch(/if coalesce\(p_confirmacao->>'status', ''\) <> 'OVERDUE' then/);
     expect(corpo).toMatch(/update public\.billing_orders set status = 'vencido' where id = v_pedido\.id;/);
-    expect(corpo).toMatch(/'alarme', 'remover_cobranca_pendente'/);
+    // Correção (revisão F5, item 4): o alarme não é mais sempre remover_
+    // cobranca_pendente; pedido de ASSINATURA avisa remover_assinatura_
+    // pendente (N39), só o pedido AVULSO continua com remover_cobranca_
+    // pendente.
+    expect(corpo).toMatch(
+      /'alarme', case when v_pedido\.tipo = 'assinatura' then 'remover_assinatura_pendente' else 'remover_cobranca_pendente' end,/,
+    );
   });
 
   it("PAYMENT_DELETED só confirma com removida = true, e cancela o pedido", () => {
