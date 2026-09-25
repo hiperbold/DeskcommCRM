@@ -137,7 +137,7 @@ export interface EventoReservado {
   id: string;
   eventType: string;
   /** `resource_id` gravado pela rota do webhook: `payment.id ?? subscription.id`. */
-  resourceId: string | null;
+  idDoRecurso: string | null;
   leaseToken: string;
 }
 
@@ -355,9 +355,9 @@ interface ResultadoPreRoteamento {
 
 /**
  * Decide se vale a pena consultar o Asaas (decisão 6/M8). `paymentId` é
- * `evento.resourceId` só para os eventos cujo `resource_id` é mesmo um
+ * `evento.idDoRecurso` só para os eventos cujo `resource_id` é mesmo um
  * `payment.id` (dinheiro e cobrança); para os eventos de assinatura,
- * `paymentId` vem `null` (o `resourceId` ali é um `subscription.id`, e o
+ * `paymentId` vem `null` (o `idDoRecurso` ali é um `subscription.id`, e o
  * `subscriptionId` de `ref` já cobre o roteamento). Os outros três campos
  * vêm do payload guardado. Pular o `GET` nunca concede nada sozinho: o pior
  * caso desta função devolver `candidato: true` por engano é gastar um `GET`
@@ -450,11 +450,11 @@ function confirmacaoDeEstorno(cobranca: CobrancaAsaas): Record<string, unknown> 
  */
 function confirmacaoDoFimDoPagamento(
   eventType: string,
-  resourceId: string,
+  idDoRecurso: string,
   cobranca: Awaited<ReturnType<ClienteAsaasHttp["buscarCobranca"]>>,
 ): Record<string, unknown> {
   if ("removido" in cobranca) {
-    return eventType === "PAYMENT_DELETED" ? { id: resourceId, removida: true } : { id: resourceId };
+    return eventType === "PAYMENT_DELETED" ? { id: idDoRecurso, removida: true } : { id: idDoRecurso };
   }
   return {
     id: cobranca.id,
@@ -473,11 +473,11 @@ function confirmacaoDoFimDoPagamento(
  * `event_type` que disparou a checagem.
  */
 function confirmacaoDeAssinatura(
-  resourceId: string,
+  idDoRecurso: string,
   assinatura: Awaited<ReturnType<ClienteAsaasHttp["buscarAssinatura"]>>,
 ): Record<string, unknown> {
   if ("removido" in assinatura) {
-    return { id: resourceId, removida: true };
+    return { id: idDoRecurso, removida: true };
   }
   return { id: assinatura.id, status: assinatura.status ?? null, removida: false };
 }
@@ -550,7 +550,7 @@ function ehAssinaturaJaDesvinculadaDoContrato(erro: RpcErro | null | undefined):
  * alcance. Em vez de não fazer nada (o comportamento antigo, que deixava uma
  * cobrança potencialmente viva sem ninguém tentando removê-la), cai para
  * remover a COBRANÇA pelo `asaas_payment_id` do próprio evento
- * (`evento.resourceId`), idempotente em 404 (decisão 10): sem o id da
+ * (`evento.idDoRecurso`), idempotente em 404 (decisão 10): sem o id da
  * assinatura, não há o que marcar em `marcarAssinaturaEncerrada` aqui - a
  * conciliação diária (Tarefa 16), que conhece o `asaas_subscription_id`
  * gravado em `billing_contracts`, cuida do marcador quando conseguir
@@ -563,9 +563,9 @@ async function tentarRemoverAssinatura(
   organizationId: string | null,
 ): Promise<void> {
   if (!subscriptionId) {
-    if (!evento.resourceId) return;
+    if (!evento.idDoRecurso) return;
     try {
-      await deps.asaas.removerCobranca(evento.resourceId);
+      await deps.asaas.removerCobranca(evento.idDoRecurso);
     } catch (err) {
       // Mesma doutrina de tentarRemoverCobranca (decisão 10): só loga; a
       // conciliação diária (Tarefa 16) refaz.
@@ -647,9 +647,9 @@ async function finalizarAplicacao(
  * único).
  */
 async function tentarRemoverCobranca(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<void> {
-  if (!evento.resourceId) return;
+  if (!evento.idDoRecurso) return;
   try {
-    await deps.asaas.removerCobranca(evento.resourceId);
+    await deps.asaas.removerCobranca(evento.idDoRecurso);
   } catch (err) {
     // Falha aqui só loga (decisão 10): a conciliação diária (Tarefa 16) refaz.
     deps.logger.warn("asaas_processar_remover_cobranca_falhou", {
@@ -695,7 +695,7 @@ async function processarEventoDeDinheiro(
   if (payloadFalhou) return registrarFalhaDePreRoteamento(deps, evento);
 
   const referencia = extrairReferenciaDoPayload(payload);
-  const roteamento = await ehCandidatoAoGet(deps.db, evento.resourceId, referencia);
+  const roteamento = await ehCandidatoAoGet(deps.db, evento.idDoRecurso, referencia);
   if (roteamento.falhou) return registrarFalhaDePreRoteamento(deps, evento);
   if (!roteamento.candidato) {
     // Decisão 6/M8: payload não bate com nada conhecido, e não começa com
@@ -704,7 +704,7 @@ async function processarEventoDeDinheiro(
     return aplicarComoOutroApp(deps, evento);
   }
 
-  if (!evento.resourceId) {
+  if (!evento.idDoRecurso) {
     // Defensivo: um evento de dinheiro sempre deveria trazer `payment.id`
     // como `resource_id` (a rota do webhook garante isso). Sem ele não há
     // como fazer o GET; a mesma saída segura do ramo acima.
@@ -713,7 +713,7 @@ async function processarEventoDeDinheiro(
 
   let cobranca: Awaited<ReturnType<ClienteAsaasHttp["buscarCobranca"]>>;
   try {
-    cobranca = await deps.asaas.buscarCobranca(evento.resourceId);
+    cobranca = await deps.asaas.buscarCobranca(evento.idDoRecurso);
   } catch (err) {
     return tratarErroDeChamada(deps, evento, err);
   }
@@ -764,17 +764,17 @@ async function processarEventoDeCobranca(
   if (payloadFalhou) return registrarFalhaDePreRoteamento(deps, evento);
 
   const referencia = extrairReferenciaDoPayload(payload);
-  const roteamento = await ehCandidatoAoGet(deps.db, evento.resourceId, referencia);
+  const roteamento = await ehCandidatoAoGet(deps.db, evento.idDoRecurso, referencia);
   if (roteamento.falhou) return registrarFalhaDePreRoteamento(deps, evento);
   if (!roteamento.candidato) return aplicarComoOutroApp(deps, evento);
 
-  if (!evento.resourceId) {
+  if (!evento.idDoRecurso) {
     return aplicarSemConfirmacao(deps, evento);
   }
 
   let cobranca: Awaited<ReturnType<ClienteAsaasHttp["buscarCobranca"]>>;
   try {
-    cobranca = await deps.asaas.buscarCobranca(evento.resourceId);
+    cobranca = await deps.asaas.buscarCobranca(evento.idDoRecurso);
   } catch (err) {
     return tratarErroDeChamada(deps, evento, err);
   }
@@ -787,7 +787,7 @@ async function processarEventoDeCobranca(
     // backoff, nunca aplica algo incerto.
     confirmacao = "removido" in cobranca ? null : confirmacaoDeEstorno(cobranca);
   } else {
-    confirmacao = confirmacaoDoFimDoPagamento(evento.eventType, evento.resourceId, cobranca);
+    confirmacao = confirmacaoDoFimDoPagamento(evento.eventType, evento.idDoRecurso, cobranca);
   }
 
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
@@ -816,18 +816,18 @@ async function processarEventoDeAssinatura(
   if (roteamento.falhou) return registrarFalhaDePreRoteamento(deps, evento);
   if (!roteamento.candidato) return aplicarComoOutroApp(deps, evento);
 
-  if (!evento.resourceId) {
+  if (!evento.idDoRecurso) {
     return aplicarSemConfirmacao(deps, evento);
   }
 
   let assinatura: Awaited<ReturnType<ClienteAsaasHttp["buscarAssinatura"]>>;
   try {
-    assinatura = await deps.asaas.buscarAssinatura(evento.resourceId);
+    assinatura = await deps.asaas.buscarAssinatura(evento.idDoRecurso);
   } catch (err) {
     return tratarErroDeChamada(deps, evento, err);
   }
 
-  const confirmacao = confirmacaoDeAssinatura(evento.resourceId, assinatura);
+  const confirmacao = confirmacaoDeAssinatura(evento.idDoRecurso, assinatura);
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
   return finalizarAplicacao(deps, evento, aplicado, null);
 }
@@ -951,7 +951,7 @@ export function criarDbEventosAsaasSobre(admin: SupabaseClient): DbEventosAsaas 
       const linhas =
         (data as Array<{ id: string; event_type: string; resource_id: string | null; lease_token: string }> | null) ?? [];
       return {
-        data: linhas.map((l) => ({ id: l.id, eventType: l.event_type, resourceId: l.resource_id, leaseToken: l.lease_token })),
+        data: linhas.map((l) => ({ id: l.id, eventType: l.event_type, idDoRecurso: l.resource_id, leaseToken: l.lease_token })),
         error: null,
       };
     },

@@ -285,7 +285,7 @@ export interface FiltroDeEventosAsaas {
 export interface EventoAsaas {
   id: string;
   eventType: string;
-  resourceId: string | null;
+  idDoRecurso: string | null;
   ambiente: AmbienteAsaas;
   origem: string;
   recebidoEm: string;
@@ -352,7 +352,7 @@ export async function eventosAsaas(
       eventos: linhas.map((l) => ({
         id: l.id,
         eventType: l.event_type,
-        resourceId: l.resource_id,
+        idDoRecurso: l.resource_id,
         ambiente: l.ambiente,
         origem: l.origem,
         recebidoEm: l.recebido_em,

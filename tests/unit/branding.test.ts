@@ -881,6 +881,32 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
     motivo:
       "endpoint padrão do adapter do canal de mensagens, com override por ZERNIO_API_BASE_URL. Fixo de propósito: instalação que não configura nada tem de funcionar.",
   },
+  // ── gateway de pagamento da fase F5 (hiperbold/planos/fase-F5-tarefas.md) ─
+  "asaas.com": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "domínio base do gateway de pagamento Asaas usado pela compra de plano (fase F5, hiperbold/planos/fase-F5-tarefas.md). Só entra em jogo com ASAAS_ENABLED ligado; é o destino do request, não escolha nossa.",
+  },
+  "www.asaas.com": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "variante com `www` do mesmo gateway Asaas (fase F5), usada nos mesmos pontos de `_logica-compra.ts`. Só ativa com ASAAS_ENABLED; é o destino do request.",
+  },
+  "sandbox.asaas.com": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "ambiente de testes (sandbox) do gateway Asaas (fase F5), usado só quando a instalação está configurada para sandbox e ASAAS_ENABLED está ligado. Endereço do fornecedor, não nosso.",
+  },
+  "api.asaas.com": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "endpoint da API do Asaas em produção (`lib/billing/asaas/config.ts`, fase F5). É para onde o código fala quando ASAAS_ENABLED está ligado; troca de domínio quebraria a chamada real.",
+  },
+  "api-sandbox.asaas.com": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "endpoint da API do Asaas em sandbox (`lib/billing/asaas/config.ts`, fase F5), par do endpoint de produção acima. Também só ativo com ASAAS_ENABLED ligado.",
+  },
   // ── painel do fornecedor: texto de tela apontando para o endereço DELE ────
   "platform.openai.com": {
     categoria: "CONSOLE",

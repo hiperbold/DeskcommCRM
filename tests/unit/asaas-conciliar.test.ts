@@ -169,7 +169,7 @@ describe("conciliarAsaas", () => {
       expect.objectContaining({
         eventId: "conc:pay_fake123:CONFIRMED",
         eventType: "PAYMENT_CONFIRMED",
-        resourceId: "pay_fake123",
+        idDoRecurso: "pay_fake123",
         ambiente: "sandbox",
         payload: expect.objectContaining({
           id: "conc:pay_fake123:CONFIRMED",
@@ -246,7 +246,7 @@ describe("conciliarAsaas", () => {
       expect.objectContaining({
         eventId: "conc:sub_fake123:DELETED",
         eventType: "SUBSCRIPTION_DELETED",
-        resourceId: "sub_fake123",
+        idDoRecurso: "sub_fake123",
         payload: expect.objectContaining({
           event: "SUBSCRIPTION_DELETED",
           subscription: expect.objectContaining({ id: "sub_fake123", customer: "cus_conhecido", deleted: true }),

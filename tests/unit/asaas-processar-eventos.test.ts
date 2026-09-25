@@ -113,7 +113,7 @@ function deps(overrides: Partial<DepsProcessarEventosAsaas> = {}): DepsProcessar
 }
 
 function eventoDinheiro(overrides: Partial<EventoReservado> = {}): EventoReservado {
-  return { id: "evt-1", eventType: "PAYMENT_RECEIVED", resourceId: "pay_1", leaseToken: "lease-1", ...overrides };
+  return { id: "evt-1", eventType: "PAYMENT_RECEIVED", idDoRecurso: "pay_1", leaseToken: "lease-1", ...overrides };
 }
 
 function payloadDePagamento(overrides: Record<string, unknown> = {}) {
@@ -199,7 +199,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("payload sem prefixo HC: e sem vínculo local conhecido: nunca faz GET (pré-roteamento, decisão 6/M8)", async () => {
-    const evento = eventoDinheiro({ id: "evt-2", resourceId: "pay_de_outro_app", leaseToken: "lease-2" });
+    const evento = eventoDinheiro({ id: "evt-2", idDoRecurso: "pay_de_outro_app", leaseToken: "lease-2" });
     const payload = payloadDePagamento({ id: "pay_de_outro_app", customer: "cus_de_outro_app", externalReference: "HT:pay:xyz" });
     payload.id = "evt-2";
     const db = dbFalso({
@@ -217,7 +217,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("evento conhecido localmente pelo id do pagamento (sem HC:) ainda assim faz o GET", async () => {
-    const evento = eventoDinheiro({ id: "evt-2b", resourceId: "pay_conhecido", leaseToken: "lease-2b" });
+    const evento = eventoDinheiro({ id: "evt-2b", idDoRecurso: "pay_conhecido", leaseToken: "lease-2b" });
     const payload = { id: "evt-2b", event: "PAYMENT_RECEIVED", payment: { id: "pay_conhecido", status: "RECEIVED", value: 10, dueDate: "2026-09-25" } };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
@@ -233,7 +233,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("evento que não precisa de confirmação (PAYMENT_CREATED) nunca gera GET, mesmo sem qualquer pré-roteamento", async () => {
-    const evento: EventoReservado = { id: "evt-7", eventType: "PAYMENT_CREATED", resourceId: "pay_7", leaseToken: "lease-7" };
+    const evento: EventoReservado = { id: "evt-7", eventType: "PAYMENT_CREATED", idDoRecurso: "pay_7", leaseToken: "lease-7" };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       aplicarEvento: vi.fn(async () => ({ data: { resultado: "ignorado", organizationId: null, alarme: null }, error: null })),
@@ -250,7 +250,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("GET falha (indisponível): registra a falha com o código, sem tentar de novo dentro da rodada", async () => {
-    const evento = eventoDinheiro({ id: "evt-4", resourceId: "pay_4", leaseToken: "lease-4" });
+    const evento = eventoDinheiro({ id: "evt-4", idDoRecurso: "pay_4", leaseToken: "lease-4" });
     const payload = payloadDePagamento({ id: "pay_4" });
     payload.id = "evt-4";
     const db = dbFalso({
@@ -271,7 +271,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("429 acima do teto de espera (limite): registra falha com o código, sem segurar a rodada", async () => {
-    const evento = eventoDinheiro({ id: "evt-6", resourceId: "pay_6", leaseToken: "lease-6" });
+    const evento = eventoDinheiro({ id: "evt-6", idDoRecurso: "pay_6", leaseToken: "lease-6" });
     const payload = payloadDePagamento({ id: "pay_6" });
     payload.id = "evt-6";
     const db = dbFalso({
@@ -291,8 +291,8 @@ describe("processarEventosAsaas", () => {
 
   it("erro de CONFIGURAÇÃO aborta a rodada inteira, sem tentar os próximos eventos", async () => {
     const eventos: EventoReservado[] = [
-      eventoDinheiro({ id: "evt-9", resourceId: "pay_9", leaseToken: "lease-9" }),
-      eventoDinheiro({ id: "evt-10", resourceId: "pay_10", leaseToken: "lease-10" }),
+      eventoDinheiro({ id: "evt-9", idDoRecurso: "pay_9", leaseToken: "lease-9" }),
+      eventoDinheiro({ id: "evt-10", idDoRecurso: "pay_10", leaseToken: "lease-10" }),
     ];
     const payload9 = payloadDePagamento({ id: "pay_9" });
     payload9.id = "evt-9";
@@ -315,7 +315,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("lease expirado: fn_billing_asaas_aplicar_evento recusa gravar, e o processador não trava a rodada", async () => {
-    const evento: EventoReservado = { id: "evt-5", eventType: "PAYMENT_CREATED", resourceId: null, leaseToken: "lease-5" };
+    const evento: EventoReservado = { id: "evt-5", eventType: "PAYMENT_CREATED", idDoRecurso: null, leaseToken: "lease-5" };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       aplicarEvento: vi.fn(async () => ({ data: null, error: { code: "22023", message: "billing_lease_invalido" } })),
@@ -330,9 +330,9 @@ describe("processarEventosAsaas", () => {
 
   it("orçamento de tempo por rodada: para de processar perto do teto, mesmo com eventos sobrando", async () => {
     const eventos: EventoReservado[] = [
-      { id: "evt-a", eventType: "PAYMENT_CREATED", resourceId: null, leaseToken: "lease-a" },
-      { id: "evt-b", eventType: "PAYMENT_CREATED", resourceId: null, leaseToken: "lease-b" },
-      { id: "evt-c", eventType: "PAYMENT_CREATED", resourceId: null, leaseToken: "lease-c" },
+      { id: "evt-a", eventType: "PAYMENT_CREATED", idDoRecurso: null, leaseToken: "lease-a" },
+      { id: "evt-b", eventType: "PAYMENT_CREATED", idDoRecurso: null, leaseToken: "lease-b" },
+      { id: "evt-c", eventType: "PAYMENT_CREATED", idDoRecurso: null, leaseToken: "lease-c" },
     ];
     let relogio = 0;
     const agora = () => new Date((relogio += 20));
@@ -352,7 +352,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("alarme remover_cobranca_pendente: chama removerCobranca depois de aplicar; falha nisso só loga", async () => {
-    const evento: EventoReservado = { id: "evt-8", eventType: "PAYMENT_OVERDUE", resourceId: "pay_8", leaseToken: "lease-8" };
+    const evento: EventoReservado = { id: "evt-8", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_8", leaseToken: "lease-8" };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       aplicarEvento: vi.fn(async () => ({
@@ -368,7 +368,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("falha ao remover a cobrança só loga; não derruba a rodada nem muda o resultado contabilizado", async () => {
-    const evento: EventoReservado = { id: "evt-8b", eventType: "PAYMENT_OVERDUE", resourceId: "pay_8b", leaseToken: "lease-8b" };
+    const evento: EventoReservado = { id: "evt-8b", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_8b", leaseToken: "lease-8b" };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       aplicarEvento: vi.fn(async () => ({
@@ -390,7 +390,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("assinatura vinculada ao pagamento: também consulta GET /subscriptions para o assinatura_status (M3)", async () => {
-    const evento = eventoDinheiro({ id: "evt-11", resourceId: "pay_11", leaseToken: "lease-11" });
+    const evento = eventoDinheiro({ id: "evt-11", idDoRecurso: "pay_11", leaseToken: "lease-11" });
     const payload = payloadDePagamento({ id: "pay_11" });
     payload.id = "evt-11";
     const cobranca = cobrancaFake({ id: "pay_11", subscription: "sub_11" });
@@ -419,7 +419,7 @@ describe("processarEventosAsaas", () => {
   // p_confirmacao para cada família ────────────────────────────────────────
 
   it("PAYMENT_OVERDUE conhecido: consulta GET /payments e monta a confirmação com status (contrato de fim de pagamento)", async () => {
-    const evento: EventoReservado = { id: "evt-20", eventType: "PAYMENT_OVERDUE", resourceId: "pay_20", leaseToken: "lease-20" };
+    const evento: EventoReservado = { id: "evt-20", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_20", leaseToken: "lease-20" };
     const payload = payloadDePagamento({ id: "pay_20" });
     payload.id = "evt-20";
     payload.event = "PAYMENT_OVERDUE";
@@ -442,7 +442,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("PAYMENT_DELETED confirmado (404 no GET): confirmação leva removida:true, nunca status", async () => {
-    const evento: EventoReservado = { id: "evt-21", eventType: "PAYMENT_DELETED", resourceId: "pay_21", leaseToken: "lease-21" };
+    const evento: EventoReservado = { id: "evt-21", eventType: "PAYMENT_DELETED", idDoRecurso: "pay_21", leaseToken: "lease-21" };
     const payload = payloadDePagamento({ id: "pay_21" });
     payload.id = "evt-21";
     payload.event = "PAYMENT_DELETED";
@@ -459,7 +459,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("PAYMENT_REFUNDED conhecido: monta a confirmação com value/originalValue (contrato de estorno)", async () => {
-    const evento: EventoReservado = { id: "evt-22", eventType: "PAYMENT_REFUNDED", resourceId: "pay_22", leaseToken: "lease-22" };
+    const evento: EventoReservado = { id: "evt-22", eventType: "PAYMENT_REFUNDED", idDoRecurso: "pay_22", leaseToken: "lease-22" };
     const payload = payloadDePagamento({ id: "pay_22" });
     payload.id = "evt-22";
     payload.event = "PAYMENT_REFUNDED";
@@ -485,7 +485,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("PAYMENT_REFUNDED com o recurso removido no Asaas (404): manda null, evento fica aguardando", async () => {
-    const evento: EventoReservado = { id: "evt-23", eventType: "PAYMENT_REFUNDED", resourceId: "pay_23", leaseToken: "lease-23" };
+    const evento: EventoReservado = { id: "evt-23", eventType: "PAYMENT_REFUNDED", idDoRecurso: "pay_23", leaseToken: "lease-23" };
     const payload = payloadDePagamento({ id: "pay_23" });
     payload.id = "evt-23";
     payload.event = "PAYMENT_REFUNDED";
@@ -502,7 +502,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("SUBSCRIPTION_DELETED conhecido: consulta GET /subscriptions e monta a confirmação (removida:false, ainda ativa)", async () => {
-    const evento: EventoReservado = { id: "evt-24", eventType: "SUBSCRIPTION_DELETED", resourceId: "sub_24", leaseToken: "lease-24" };
+    const evento: EventoReservado = { id: "evt-24", eventType: "SUBSCRIPTION_DELETED", idDoRecurso: "sub_24", leaseToken: "lease-24" };
     // externalReference nulo de propósito: sem prefixo "HC:" o roteamento
     // precisa passar por assinaturaConhecida (não pelo atalho do prefixo).
     const payload = payloadDeAssinatura({ id: "sub_24", externalReference: null });
@@ -523,7 +523,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("SUBSCRIPTION_DELETED confirmado (404 no GET): confirmação leva removida:true", async () => {
-    const evento: EventoReservado = { id: "evt-25", eventType: "SUBSCRIPTION_DELETED", resourceId: "sub_25", leaseToken: "lease-25" };
+    const evento: EventoReservado = { id: "evt-25", eventType: "SUBSCRIPTION_DELETED", idDoRecurso: "sub_25", leaseToken: "lease-25" };
     const payload = payloadDeAssinatura({ id: "sub_25" });
     payload.id = "evt-25";
     const db = dbFalso({
@@ -543,7 +543,7 @@ describe("processarEventosAsaas", () => {
   // outro_app silencioso; registra falha com backoff ─────────────────────────
 
   it("lerPayloads falha: registra falha com backoff, nunca fecha como outro_app", async () => {
-    const evento = eventoDinheiro({ id: "evt-30", resourceId: "pay_30", leaseToken: "lease-30" });
+    const evento = eventoDinheiro({ id: "evt-30", idDoRecurso: "pay_30", leaseToken: "lease-30" });
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       lerPayloads: vi.fn(async () => ({ data: null, error: { code: "500", message: "timeout" } })),
@@ -559,7 +559,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("pagamentoConhecido falha (infraestrutura): registra falha com backoff, nunca fecha como outro_app", async () => {
-    const evento = eventoDinheiro({ id: "evt-31", resourceId: "pay_31", leaseToken: "lease-31" });
+    const evento = eventoDinheiro({ id: "evt-31", idDoRecurso: "pay_31", leaseToken: "lease-31" });
     const payload = payloadDePagamento({ id: "pay_31", externalReference: null });
     payload.id = "evt-31";
     const db = dbFalso({
@@ -581,7 +581,7 @@ describe("processarEventosAsaas", () => {
   // lease, em vez de só logar e deixar o lease expirar sozinho ───────────────
 
   it("fn_billing_asaas_aplicar_evento falha (RPC com erro, não confirmação): registra falha com o mesmo lease", async () => {
-    const evento: EventoReservado = { id: "evt-40", eventType: "PAYMENT_CREATED", resourceId: null, leaseToken: "lease-40" };
+    const evento: EventoReservado = { id: "evt-40", eventType: "PAYMENT_CREATED", idDoRecurso: null, leaseToken: "lease-40" };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       aplicarEvento: vi.fn(async () => ({ data: null, error: { code: "08006", message: "conexao perdida" } })),
@@ -598,7 +598,7 @@ describe("processarEventosAsaas", () => {
   // (não a cobrança) e marca o contrato como encerrado ───────────────────────
 
   it("alarme remover_assinatura_pendente: chama removerAssinatura e depois marcarAssinaturaEncerrada", async () => {
-    const evento: EventoReservado = { id: "evt-50", eventType: "PAYMENT_OVERDUE", resourceId: "pay_50", leaseToken: "lease-50" };
+    const evento: EventoReservado = { id: "evt-50", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_50", leaseToken: "lease-50" };
     const payload = payloadDePagamento({ id: "pay_50", subscription: "sub_50" });
     payload.id = "evt-50";
     payload.event = "PAYMENT_OVERDUE";
@@ -624,7 +624,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("remover_assinatura_pendente: contrato já não tem mais esta assinatura (billing_assinatura_nao_confere) não é logado como falha", async () => {
-    const evento: EventoReservado = { id: "evt-51", eventType: "PAYMENT_OVERDUE", resourceId: "pay_51", leaseToken: "lease-51" };
+    const evento: EventoReservado = { id: "evt-51", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_51", leaseToken: "lease-51" };
     const payload = payloadDePagamento({ id: "pay_51", subscription: "sub_51" });
     payload.id = "evt-51";
     payload.event = "PAYMENT_OVERDUE";
@@ -650,7 +650,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("falha ao remover a assinatura só loga; conciliação refaz depois", async () => {
-    const evento: EventoReservado = { id: "evt-52", eventType: "PAYMENT_OVERDUE", resourceId: "pay_52", leaseToken: "lease-52" };
+    const evento: EventoReservado = { id: "evt-52", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_52", leaseToken: "lease-52" };
     const payload = payloadDePagamento({ id: "pay_52", subscription: "sub_52" });
     payload.id = "evt-52";
     payload.event = "PAYMENT_OVERDUE";
@@ -678,7 +678,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("correção 9: sem subscriptionId (recurso já veio removido/404 do GET), cai para removerCobranca pelo asaas_payment_id do evento", async () => {
-    const evento: EventoReservado = { id: "evt-53", eventType: "PAYMENT_DELETED", resourceId: "pay_53", leaseToken: "lease-53" };
+    const evento: EventoReservado = { id: "evt-53", eventType: "PAYMENT_DELETED", idDoRecurso: "pay_53", leaseToken: "lease-53" };
     const payload = payloadDePagamento({ id: "pay_53" });
     payload.id = "evt-53";
     payload.event = "PAYMENT_DELETED";
@@ -706,7 +706,7 @@ describe("processarEventosAsaas", () => {
   });
 
   it("correção 9: falha ao remover a cobrança de fallback só loga; não derruba a rodada", async () => {
-    const evento: EventoReservado = { id: "evt-54", eventType: "PAYMENT_DELETED", resourceId: "pay_54", leaseToken: "lease-54" };
+    const evento: EventoReservado = { id: "evt-54", eventType: "PAYMENT_DELETED", idDoRecurso: "pay_54", leaseToken: "lease-54" };
     const payload = payloadDePagamento({ id: "pay_54" });
     payload.id = "evt-54";
     payload.event = "PAYMENT_DELETED";

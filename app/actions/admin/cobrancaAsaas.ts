@@ -253,8 +253,9 @@ export async function definirCompraPeloCliente(input: { sim: boolean }): Promise
     actorUserId: user.id,
     actingAsPlatformAdmin: true,
     resourceType: "installation",
-    resourceId: "billing_settings",
+    resourceId: null,
     metadata: {
+      recurso: "billing_settings",
       compra_pelo_cliente_anterior: resultado.compra_pelo_cliente_anterior,
       compra_pelo_cliente_novo: resultado.compra_pelo_cliente_novo,
     },
@@ -306,7 +307,7 @@ export async function definirPlanoAVenda(input: {
     actorUserId: user.id,
     actingAsPlatformAdmin: true,
     resourceType: "billing_plan",
-    resourceId: resultado.plan_code,
+    resourceId: null,
     metadata: {
       plan_code: resultado.plan_code,
       for_sale_anterior: resultado.for_sale_anterior,

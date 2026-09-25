@@ -280,7 +280,7 @@ describe("eventosAsaas", () => {
     expect(resultado.eventos[0]).toEqual({
       id: "evt-1",
       eventType: "PAYMENT_CONFIRMED",
-      resourceId: "pay_123",
+      idDoRecurso: "pay_123",
       ambiente: "sandbox",
       origem: "webhook",
       recebidoEm: "2026-09-24T09:00:00Z",

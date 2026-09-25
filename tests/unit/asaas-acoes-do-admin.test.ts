@@ -167,7 +167,12 @@ describe("definirCompraPeloCliente", () => {
     expect(h.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "billing.asaas_self_service_toggled",
-        metadata: { compra_pelo_cliente_anterior: false, compra_pelo_cliente_novo: true },
+        resourceId: null,
+        metadata: {
+          recurso: "billing_settings",
+          compra_pelo_cliente_anterior: false,
+          compra_pelo_cliente_novo: true,
+        },
       }),
     );
     expect(h.revalidatePath).toHaveBeenCalledWith("/admin/sistema/cobranca");
@@ -231,7 +236,7 @@ describe("definirPlanoAVenda", () => {
     expect(h.audit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "billing.asaas_plan_for_sale_toggled",
-        resourceId: "pro",
+        resourceId: null,
         metadata: { plan_code: "pro", for_sale_anterior: false, for_sale_novo: true },
       }),
     );

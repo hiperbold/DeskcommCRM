@@ -116,7 +116,7 @@ export interface AssinaturaAtivaParaConciliar {
 export interface RegistrarEventoSinteticoInput {
   eventId: string;
   eventType: string;
-  resourceId: string | null;
+  idDoRecurso: string | null;
   ambiente: "sandbox" | "producao";
   payload: Record<string, unknown>;
 }
@@ -391,7 +391,7 @@ async function processarPedidosPendentes(
     const registrado = await deps.db.registrarEventoSintetico({
       eventId,
       eventType,
-      resourceId: cobranca.id,
+      idDoRecurso: cobranca.id,
       ambiente: pedido.ambiente,
       payload: { id: eventId, event: eventType, payment: cobranca },
     });
@@ -467,7 +467,7 @@ async function processarAssinaturasAtivas(
     const registrado = await deps.db.registrarEventoSintetico({
       eventId,
       eventType: "SUBSCRIPTION_DELETED",
-      resourceId: contrato.asaasSubscriptionId,
+      idDoRecurso: contrato.asaasSubscriptionId,
       // O ambiente da assinatura é o da CONFIGURAÇÃO corrente (mesma
       // doutrina do webhook, `app/api/v1/webhooks/asaas/route.ts`): o
       // contrato não guarda uma coluna própria de ambiente.
@@ -744,7 +744,7 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
       const { data, error } = await admin.rpc("fn_billing_asaas_registrar_evento" as never, {
         p_event_id: input.eventId,
         p_event_type: input.eventType,
-        p_resource_id: input.resourceId,
+        p_resource_id: input.idDoRecurso,
         p_ambiente: input.ambiente,
         p_origem: "conciliacao",
         p_payload: input.payload,

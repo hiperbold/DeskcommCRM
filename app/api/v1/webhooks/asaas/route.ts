@@ -162,13 +162,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   let eventId: string | null = null;
   let eventType: string | null = null;
-  let resourceId: string | null = null;
+  let idDoRecurso: string | null = null;
   if (json !== null) {
     const envelope = envelopeWebhookAsaasSchema.safeParse(json);
     if (envelope.success) {
       eventId = envelope.data.id;
       eventType = envelope.data.event;
-      resourceId = envelope.data.payment?.id ?? envelope.data.subscription?.id ?? null;
+      idDoRecurso = envelope.data.payment?.id ?? envelope.data.subscription?.id ?? null;
     }
   }
 
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const { data, error } = await admin.rpc("fn_billing_asaas_registrar_evento", {
       p_event_id: eventId,
       p_event_type: eventType,
-      p_resource_id: resourceId,
+      p_resource_id: idDoRecurso,
       p_ambiente: ambiente,
       p_origem: "webhook",
       p_payload: payloadSanitizado,

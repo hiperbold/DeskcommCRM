@@ -43806,8 +43806,8 @@ $$;
 -- (alter default privileges) se não fosse revogado explicitamente.
 --
 -- Idempotente: create table if not exists, add column if not exists, drop
--- constraint if exists + add constraint, drop index if exists + create index
--- if not exists, drop trigger if exists + create trigger, bloco de
+-- constraint if exists + add constraint, índice removido e recriado de forma
+-- idempotente, drop trigger if exists + create trigger, bloco de
 -- agent_worker condicional à existência da role. Lógica de três valores:
 -- coalesce em toda condição booleana que envolve coluna nula.
 

@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/hooks/i18n/useT";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
+import { copyToClipboard } from "@/lib/clipboard";
 
 import { usePollDoPedido } from "../_use-poll-pedido";
 
@@ -32,11 +33,11 @@ export function PixPendente({ pedidoId, qr }: { pedidoId: string; qr: QrPixRespo
   const estado = usePollDoPedido(pedidoId, "aguardando_pagamento");
 
   async function copiar() {
-    try {
-      await navigator.clipboard.writeText(qr.payload);
+    const ok = await copyToClipboard(qr.payload);
+    if (ok) {
       setCopiado(true);
       setTimeout(() => setCopiado(false), 3000);
-    } catch {
+    } else {
       toast.error(t("Não foi possível copiar. Selecione e copie manualmente."));
     }
   }
