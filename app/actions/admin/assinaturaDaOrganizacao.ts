@@ -210,6 +210,14 @@ function mensagemDoErroDaAssinatura(error: { code?: string; message?: string } |
     if (msg.includes("billing_sim_obrigatorio")) {
       return "Informe se a assinatura cancela ou não no fim do período.";
     }
+    // Fase F5, Tarefa 19, decisão 22 (migração 0909): `fn_billing_mudar_estado`
+    // recusa a mudança manual para `cancelada` quando o contrato tem
+    // assinatura Asaas viva (sem `asaas_assinatura_encerrada_em`). O admin
+    // cancela a assinatura no Asaas primeiro (`cancelarAssinaturaNoAsaas`,
+    // `app/actions/admin/cobrancaAsaas.ts`), e só depois muda o estado aqui.
+    if (msg.includes("billing_cancele_no_asaas_antes")) {
+      return "Esta organização tem assinatura ativa no Asaas. Cancele a assinatura no Asaas antes de mudar o estado para cancelada.";
+    }
   }
   if (error?.code === "P0002") {
     if (msg.includes("billing_contrato_nao_encontrado")) return "Organização não encontrada.";

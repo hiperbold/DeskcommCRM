@@ -392,6 +392,22 @@ describe("mudarEstadoDaAssinatura", () => {
     });
   });
 
+  it("billing_cancele_no_asaas_antes (22023, fase F5/decisão 22) devolve a frase certa", async () => {
+    h.rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: "22023", message: "billing_cancele_no_asaas_antes" },
+    });
+    const { mudarEstadoDaAssinatura } = await acoes();
+
+    const r = await mudarEstadoDaAssinatura({ organizationId: ORG, estado: "cancelada" });
+
+    expect(r).toEqual({
+      ok: false,
+      error:
+        "Esta organização tem assinatura ativa no Asaas. Cancele a assinatura no Asaas antes de mudar o estado para cancelada.",
+    });
+  });
+
   it("sucesso audita estado, motivo (quando informado) e a transição", async () => {
     const { mudarEstadoDaAssinatura } = await acoes();
 

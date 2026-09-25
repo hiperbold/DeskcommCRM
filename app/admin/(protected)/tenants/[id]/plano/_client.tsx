@@ -24,6 +24,20 @@ import {
   porEmAvaliacao,
   registrarPagamento,
 } from "@/app/actions/admin/assinaturaDaOrganizacao";
+import {
+  cancelarAssinaturaNoAsaas,
+  cancelarPedidoAberto,
+} from "@/app/actions/admin/cobrancaAsaas";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -169,6 +183,13 @@ const ROTULO_DA_CHAVE: Record<ChaveDeLimite, string> = {
  */
 const FUSO_SP = "America/Sao_Paulo";
 
+/**
+ * Pedido ainda não concluído (fase F5, decisões 11 e 25 do plano mestre): o
+ * único conjunto que "Cancelar pedido" mostra, aqui e na tela de cobrança da
+ * instalação (`app/admin/(protected)/sistema/cobranca/_client.tsx`).
+ */
+const STATUS_DE_PEDIDO_ABERTO = new Set(["criado", "processando", "aguardando_pagamento", "inconclusivo"]);
+
 const CONTRATO_STATUS_VARIANT: Record<string, "success" | "info" | "warning" | "error" | "neutral"> = {
   avaliacao: "info",
   ativa: "success",
@@ -238,6 +259,162 @@ function IdCurtoCopiavel({ id, t }: { id: string; t: (texto: string) => string }
     >
       {copiado ? t("Copiado") : id.slice(0, 8)}
     </button>
+  );
+}
+
+/**
+ * "Cancelar assinatura no Asaas" (fase F5, Tarefa 19): reusa
+ * `cancelarAssinaturaNoAsaas` (`app/actions/admin/cobrancaAsaas.ts`, Tarefa
+ * 17), que já faz `DELETE /subscriptions/{id}` no Asaas e só depois grava o
+ * cancelamento no fim do período. A confirmação explica as duas coisas que
+ * quem clica precisa saber ANTES de clicar: a assinatura continua valendo até
+ * o fim do período já pago, e o Asaas para de cobrar depois disso.
+ */
+function BotaoCancelarAssinaturaNoAsaas({ organizationId }: { organizationId: string }) {
+  const t = useT();
+  const router = useRouter();
+  const [aberto, setAberto] = useState(false);
+  const [pendente, iniciar] = useTransition();
+
+  function confirmar() {
+    iniciar(async () => {
+      const r = await cancelarAssinaturaNoAsaas({ organizationId });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Assinatura cancelada no Asaas."));
+      setAberto(false);
+      router.refresh();
+    });
+  }
+
+  return (
+    <>
+      <Button
+        data-testid="cancelar-assinatura-no-asaas"
+        size="sm"
+        variant="outline"
+        disabled={pendente}
+        onClick={() => setAberto(true)}
+      >
+        {t("Cancelar assinatura no Asaas")}
+      </Button>
+
+      <AlertDialog open={aberto} onOpenChange={setAberto}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("Cancelar a assinatura no Asaas?")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                "A assinatura continua valendo até o fim do período já pago; depois disso o Asaas para de cobrar. Esta ação não pode ser desfeita.",
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pendente}>{t("Voltar")}</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="confirmar-cancelar-assinatura-no-asaas"
+              disabled={pendente}
+              onClick={(e) => {
+                e.preventDefault();
+                confirmar();
+              }}
+            >
+              {t("Cancelar assinatura no Asaas")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * "Cancelar pedido aberto" (fase F5, Tarefa 19): mesmo desenho do que a tela
+ * de cobrança da instalação usa (`FormularioDeCancelarPedido`), reusando
+ * `cancelarPedidoAberto` (Tarefa 17), que busca a cobrança/assinatura no
+ * Asaas por `externalReference` e remove antes de marcar cancelado.
+ */
+function BotaoCancelarPedidoAsaas({
+  organizationId,
+  pedidoId,
+}: {
+  organizationId: string;
+  pedidoId: string;
+}) {
+  const t = useT();
+  const router = useRouter();
+  const [aberto, setAberto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [pendente, iniciar] = useTransition();
+
+  function confirmar() {
+    if (motivo.trim().length === 0) {
+      toast.error(t("O motivo é obrigatório."));
+      return;
+    }
+    iniciar(async () => {
+      const r = await cancelarPedidoAberto({ organizationId, pedidoId, motivo: motivo.trim() });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      toast.success(t("Pedido cancelado."));
+      setAberto(false);
+      setMotivo("");
+      router.refresh();
+    });
+  }
+
+  return (
+    <>
+      <Button
+        data-testid="cancelar-pedido-asaas"
+        size="sm"
+        variant="outline"
+        disabled={pendente}
+        onClick={() => setAberto(true)}
+      >
+        {t("Cancelar pedido")}
+      </Button>
+
+      <AlertDialog open={aberto} onOpenChange={setAberto}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("Cancelar este pedido?")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t(
+                "Remove a cobrança ou a assinatura no Asaas antes de marcar o pedido como cancelado. Não é possível desfazer.",
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-1.5 py-2">
+            <Label htmlFor={`motivo-cancelamento-pedido-${pedidoId}`}>{t("Motivo (obrigatório)")}</Label>
+            <Input
+              id={`motivo-cancelamento-pedido-${pedidoId}`}
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              maxLength={500}
+              disabled={pendente}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pendente}>{t("Voltar")}</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="confirmar-cancelar-pedido-asaas"
+              disabled={pendente}
+              onClick={(e) => {
+                e.preventDefault();
+                confirmar();
+              }}
+            >
+              {t("Cancelar pedido")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -1032,12 +1209,17 @@ export function TenantPlanoClient({
                 <div className="space-y-1">
                   <p className="text-xs font-medium text-text-muted">{t("Assinatura")}</p>
                   {asaas.assinatura ? (
-                    <p className="flex items-center gap-2 font-mono text-sm">
-                      {asaas.assinatura.asaasSubscriptionId}
-                      <Badge variant={asaas.assinatura.encerradaEm ? "neutral" : "success"}>
-                        {asaas.assinatura.encerradaEm ? t("Encerrada") : t("Ativa")}
-                      </Badge>
-                    </p>
+                    <>
+                      <p className="flex items-center gap-2 font-mono text-sm">
+                        {asaas.assinatura.asaasSubscriptionId}
+                        <Badge variant={asaas.assinatura.encerradaEm ? "neutral" : "success"}>
+                          {asaas.assinatura.encerradaEm ? t("Encerrada") : t("Ativa")}
+                        </Badge>
+                      </p>
+                      {podeEscrever && !asaas.assinatura.encerradaEm && (
+                        <BotaoCancelarAssinaturaNoAsaas organizationId={organizationId} />
+                      )}
+                    </>
                   ) : (
                     <p className="text-sm text-text-muted">{t("Nenhuma assinatura Asaas.")}</p>
                   )}
@@ -1057,6 +1239,7 @@ export function TenantPlanoClient({
                         <TableHead>{t("Valor")}</TableHead>
                         <TableHead>{t("Status")}</TableHead>
                         <TableHead>{t("Criado em")}</TableHead>
+                        {podeEscrever && <TableHead />}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1073,6 +1256,13 @@ export function TenantPlanoClient({
                           <TableCell>
                             {new Date(pedido.criadoEm).toLocaleDateString(tagDoIdioma, { timeZone: FUSO_SP })}
                           </TableCell>
+                          {podeEscrever && (
+                            <TableCell>
+                              {STATUS_DE_PEDIDO_ABERTO.has(pedido.status) && (
+                                <BotaoCancelarPedidoAsaas organizationId={organizationId} pedidoId={pedido.id} />
+                              )}
+                            </TableCell>
+                          )}
                         </TableRow>
                       ))}
                     </TableBody>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
 import { loadAuthUser } from "@/lib/auth/server";
 import {
   contadoresDeAlarmeAsaas,
@@ -19,29 +20,40 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
+import {
+  AlternarCompraPeloCliente,
+  AlternarPlanoAVenda,
+  BotaoDeReprocessarEvento,
+  FormularioDeCancelarPedido,
+} from "./_client";
+
 export const metadata = { title: "Cobrança (Asaas)" };
 export const dynamic = "force-dynamic";
 
 /**
- * A tela de leitura da instalação para a fase F5 (`hiperbold/planos/fase-F5-
- * tarefas.md`, Tarefa 18): estado das duas chaves da decisão 18, planos à
- * venda, pedidos, eventos do webhook (sem o payload cru) e os contadores de
- * alarme da decisão 21.
+ * A tela de cobrança da instalação para a fase F5 (`hiperbold/planos/fase-F5-
+ * tarefas.md`): estado das duas chaves da decisão 18, planos à venda,
+ * pedidos, eventos do webhook (sem o payload cru) e os contadores de alarme
+ * da decisão 21 (Tarefa 18); ligar/desligar a compra pelo cliente, pôr/tirar
+ * plano à venda, reprocessar evento e cancelar pedido aberto (Tarefa 19, que
+ * liga esta tela às cinco ações de `app/actions/admin/cobrancaAsaas.ts`,
+ * Tarefa 17).
  *
- * ─── Só leitura ─────────────────────────────────────────────────────────
+ * ─── Onde mora a barreira de verdade ────────────────────────────────────────
  *
- * Nenhum botão de ação mora aqui: reprocessar evento, ligar/desligar as
- * chaves e as demais ações administrativas ficam para a Tarefa 19, que liga
- * a tela às ações de `app/actions/admin/cobrancaAsaas.ts` (Tarefa 17, ainda
- * não escrita). O comentário "Tarefa 19" abaixo, na tabela de eventos, marca
- * onde a coluna de ação entra.
+ * `podeEscrever` aqui só decide o que a tela MOSTRA (mesmo padrão de
+ * `podeEscreverNaAba` na aba de plano do tenant): cada ação em `./_client.tsx`
+ * chama uma server action que confere de novo `requirePlatformAdmin()`,
+ * escopo `full` e MFA em dia. Esconder o botão para quem tem escopo
+ * `support_readonly` é conveniência de interface, não segurança.
  *
  * ─── Por que os filtros são `<form method="get">`/`Link`, não client state ─
  *
  * Mesma doutrina do resto desta tela: leitura pura não precisa de
  * interatividade no cliente. Filtrar por querystring mantém a página um
  * Server Component só, sem "use client", e o filtro fica endereçável
- * (compartilhável por link, sobrevive a um F5 do navegador).
+ * (compartilhável por link, sobrevive a um F5 do navegador). Só as AÇÕES
+ * (Tarefa 19) precisam de um componente cliente à parte.
  */
 const RESULTADOS_DO_EVENTO = [
   "aplicado",
@@ -68,6 +80,12 @@ const STATUS_DO_PEDIDO = [
 
 const FUSO_SP = "America/Sao_Paulo";
 
+/** Pedido ainda não concluído (decisões 11 e 25): o único conjunto que "Cancelar pedido" mostra. */
+const STATUS_DE_PEDIDO_ABERTO = new Set(["criado", "processando", "aguardando_pagamento", "inconclusivo"]);
+
+/** Resultado de evento que a Tarefa 19 deixa reprocessar (decisão 20, `fn_billing_asaas_reprocessar_evento`). */
+const RESULTADOS_REPROCESSAVEIS = new Set(["erro", "sem_vinculo"]);
+
 function variantDoResultado(resultado: string): "success" | "warning" | "error" | "neutral" {
   if (resultado === "aplicado" || resultado === "ja_aplicado") return "success";
   if (resultado === "aguardando") return "warning";
@@ -82,6 +100,13 @@ interface CobrancaPageProps {
 export default async function CobrancaPage({ searchParams }: CobrancaPageProps) {
   const usuario = await loadAuthUser();
   if (!usuario?.is_platform_admin) notFound();
+
+  // O layout de `(protected)` já roda `requirePlatformAdmin()`; chamá-la de
+  // novo aqui é o mesmo padrão de `tenants/[id]/plano/page.tsx` (Tarefa 5,
+  // fase F1): é o único jeito de saber o ESCOPO do admin sem duplicar a
+  // consulta a `platform_admins` dentro de `loadAuthUser`.
+  const { platformAdmin } = await requirePlatformAdmin();
+  const podeEscrever = platformAdmin.scope === "full";
 
   const { resultado, status, organizacao } = await searchParams;
   const admin = createAdminClient();
@@ -114,7 +139,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
         <h1 className="text-2xl font-semibold tracking-tight">{t("Cobrança (Asaas)")}</h1>
         <p className="text-sm text-muted-foreground">
           {t(
-            "Estado da integração, planos à venda, pedidos, eventos do webhook e alarmes. Só leitura: as ações chegam numa tarefa seguinte.",
+            "Estado da integração, planos à venda, pedidos, eventos do webhook e alarmes.",
           )}
         </p>
       </div>
@@ -137,6 +162,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
             <Badge variant="neutral">
               {chaves.ambiente === "producao" ? t("Ambiente: produção") : t("Ambiente: sandbox")}
             </Badge>
+            {podeEscrever && <AlternarCompraPeloCliente ligada={chaves.compraPeloCliente} />}
           </div>
           {chaves.erroConfiguracao && (
             <p className="text-sm text-destructive">
@@ -202,6 +228,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                   <TableHead>{t("À venda")}</TableHead>
                   <TableHead>{t("Preço mensal")}</TableHead>
                   <TableHead>{t("Preço anual")}</TableHead>
+                  {podeEscrever && <TableHead />}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -217,6 +244,15 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                     <TableCell>
                       {p.priceYearlyCents === null ? t("não definido") : formatCentsBRL(p.priceYearlyCents)}
                     </TableCell>
+                    {podeEscrever && (
+                      <TableCell>
+                        <AlternarPlanoAVenda
+                          planCode={p.code}
+                          forSale={p.forSale}
+                          podeVender={p.priceMonthlyCents > 0}
+                        />
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -291,6 +327,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                   <TableHead>{t("Status")}</TableHead>
                   <TableHead>{t("Ambiente")}</TableHead>
                   <TableHead>{t("Criado em")}</TableHead>
+                  {podeEscrever && <TableHead />}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -312,6 +349,13 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                     </TableCell>
                     <TableCell>{p.ambiente === "producao" ? t("Produção") : t("Sandbox")}</TableCell>
                     <TableCell>{formatarData(p.criadoEm)}</TableCell>
+                    {podeEscrever && (
+                      <TableCell>
+                        {STATUS_DE_PEDIDO_ABERTO.has(p.status) && (
+                          <FormularioDeCancelarPedido organizationId={p.organizationId} pedidoId={p.id} />
+                        )}
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>
@@ -354,7 +398,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                   <TableHead>{t("Organização")}</TableHead>
                   <TableHead>{t("Recebido em")}</TableHead>
                   <TableHead>{t("Processado em")}</TableHead>
-                  {/* Tarefa 19: coluna de ação (reprocessar evento) entra aqui. */}
+                  {podeEscrever && <TableHead />}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -381,6 +425,13 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                     </TableCell>
                     <TableCell>{formatarData(e.recebidoEm)}</TableCell>
                     <TableCell>{formatarData(e.processadoEm)}</TableCell>
+                    {podeEscrever && (
+                      <TableCell>
+                        {RESULTADOS_REPROCESSAVEIS.has(e.resultado) && (
+                          <BotaoDeReprocessarEvento eventoId={e.id} />
+                        )}
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>

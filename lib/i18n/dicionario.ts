@@ -11985,6 +11985,43 @@ export const DICIONARIO: Traducoes = {
   "Nenhuma assinatura Asaas.": { es: "Ninguna suscripción Asaas." },
   "Nenhum pedido registrado.": { es: "Ningún pedido registrado." },
   "Pagamentos (com origem)": { es: "Pagos (con origen)" },
+
+  // Fase F5, Tarefa 19: ações da tela de cobrança (Asaas) e da seção Asaas
+  // da aba de plano do tenant.
+  "Ligar compra pelo cliente": { es: "Activar la compra por el cliente" },
+  "Desligar compra pelo cliente": { es: "Desactivar la compra por el cliente" },
+  "Ligar a compra pelo cliente?": { es: "¿Activar la compra por el cliente?" },
+  "Desligar a compra pelo cliente?": { es: "¿Desactivar la compra por el cliente?" },
+  "O cliente deixa de conseguir comprar plano ou pacote pela própria tela. Nenhuma assinatura já ativa é cancelada.": {
+    es: "El cliente deja de poder comprar plan o paquete por la propia pantalla. Ninguna suscripción ya activa se cancela.",
+  },
+  "Isto só vale com ASAAS_ENABLED ligado no ambiente do servidor. Sem essa variável, o cliente continua sem poder comprar pela tela mesmo com esta chave ligada.": {
+    es: "Esto solo vale con ASAAS_ENABLED activado en el entorno del servidor. Sin esa variable, el cliente sigue sin poder comprar por la pantalla aunque esta llave esté activada.",
+  },
+  "Compra pelo cliente atualizada.": { es: "Compra por el cliente actualizada." },
+  "Pôr à venda": { es: "Poner a la venta" },
+  "Tirar de venda": { es: "Quitar de venta" },
+  "Defina o preço mensal deste plano antes de pôr à venda.": {
+    es: "Defina el precio mensual de este plan antes de ponerlo a la venta.",
+  },
+  "Plano atualizado.": { es: "Plan actualizado." },
+  "Estado da integração, planos à venda, pedidos, eventos do webhook e alarmes.": {
+    es: "Estado de la integración, planes a la venta, pedidos, eventos del webhook y alarmas.",
+  },
+  Reprocessar: { es: "Reprocesar" },
+  "Evento reprocessado.": { es: "Evento reprocesado." },
+  "Cancelar pedido": { es: "Cancelar pedido" },
+  "Cancelar este pedido?": { es: "¿Cancelar este pedido?" },
+  "Remove a cobrança ou a assinatura no Asaas antes de marcar o pedido como cancelado. Não é possível desfazer.": {
+    es: "Elimina el cobro o la suscripción en Asaas antes de marcar el pedido como cancelado. No se puede deshacer.",
+  },
+  "Pedido cancelado.": { es: "Pedido cancelado." },
+  "Cancelar assinatura no Asaas": { es: "Cancelar suscripción en Asaas" },
+  "Cancelar a assinatura no Asaas?": { es: "¿Cancelar la suscripción en Asaas?" },
+  "A assinatura continua valendo até o fim do período já pago; depois disso o Asaas para de cobrar. Esta ação não pode ser desfeita.": {
+    es: "La suscripción sigue vigente hasta el fin del período ya pagado; después de eso, Asaas deja de cobrar. Esta acción no se puede deshacer.",
+  },
+  "Assinatura cancelada no Asaas.": { es: "Suscripción cancelada en Asaas." },
 };
 
 /**
