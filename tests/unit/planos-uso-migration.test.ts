@@ -434,7 +434,12 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     // tests/unit/planos-bloqueio-migration.test.ts). A subtração ao sair de
     // open (fechamento ou exclusão) nunca mudou: sempre update simples
     // (greatest), nos dois modos.
-    const inicioMigracao = MIGRATION.indexOf("create or replace function public.fn_billing_trava_crm_leads(");
+    // lastIndexOf (não indexOf): a 0910 (fase F7, D-055) redefine esta função
+    // no baseline para gravar o alarme consultável, e a sonda-do-baseline
+    // (CLAUDE.md item 10) mede repetição da literal no baseline inteiro,
+    // mesmo esta busca rodando só sobre MIGRATION (0905), que continua tendo
+    // uma ocorrência só, comportamento desta constante inalterado.
+    const inicioMigracao = MIGRATION.lastIndexOf("create or replace function public.fn_billing_trava_crm_leads(");
     const corpoMigracao = MIGRATION.slice(inicioMigracao, MIGRATION.indexOf("$$;", inicioMigracao));
     expect(corpoMigracao).toMatch(
       /if v_status_novo = 'open' and v_status_antigo is distinct from 'open' then/,

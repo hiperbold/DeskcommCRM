@@ -59,6 +59,25 @@ function erroSob(papel: string, comando: string): string | null {
   }
 }
 
+/**
+ * Roda como o DONO da conexão (`postgres`, superusuário do container): não
+ * sofre GRANT/REVOKE de tabela, só as regras que a própria trigger aplica.
+ * Usado a partir da migration 0910 (D-069) para provar
+ * `trg_billing_protege_assinatura_asaas` sem o `DELETE` de `billing_contracts`
+ * (revogado do `service_role` nessa migração) atrapalhar a leitura do
+ * resultado: sem isto, todo `delete` sob `service_role` falharia por
+ * `permission denied`, ANTES de a trigger rodar, e a prova pararia de medir o
+ * gatilho.
+ */
+function erroComoDono(comando: string): string | null {
+  try {
+    sql(`${comando};`);
+    return null;
+  } catch (err) {
+    return motivoDoErro(err);
+  }
+}
+
 function esperaBarrado(papel: string, comando: string): void {
   const erro = erroSob(papel, comando);
   expect(erro, `\`${papel}\` executou "${comando}" SEM erro, a tabela está exposta`).not.toBeNull();
@@ -209,8 +228,23 @@ describe("0909: trg_billing_protege_assinatura_asaas recusa apagar contrato com 
     expect(contagem).toBe("3");
   });
 
-  it("apagar o CONTRATO direto, sem marcador, falha com billing_cancele_no_asaas_antes", () => {
+  it("D-069 (migration 0910): service_role foi barrado por privilégio ao dar DELETE direto em billing_contracts", () => {
+    // Achado da fase F7 (D-069): a escrita em billing_contracts passou a ser
+    // só das funções (security definer, dono postgres); DELETE, INSERT e
+    // TRUNCATE foram revogados do service_role. Por isso as provas do
+    // gatilho, abaixo, rodam como o DONO da conexão (erroComoDono): sob
+    // service_role, TODO delete falharia por permission denied ANTES de a
+    // trigger sequer rodar, e deixaria de medir o gatilho.
     const erro = erroSob("service_role", `delete from public.billing_contracts where organization_id = '${ORG_TRIGGER_DIRETO}'`);
+    expect(erro, "service_role não deveria mais conseguir apagar billing_contracts direto").not.toBeNull();
+    expect(erro).toContain("permission denied");
+
+    const aindaExiste = sql(`select count(*) from public.billing_contracts where organization_id = '${ORG_TRIGGER_DIRETO}'`).trim();
+    expect(aindaExiste, "a linha deveria continuar existindo, a recusa foi por privilégio").toBe("1");
+  });
+
+  it("apagar o CONTRATO direto, sem marcador, falha com billing_cancele_no_asaas_antes", () => {
+    const erro = erroComoDono(`delete from public.billing_contracts where organization_id = '${ORG_TRIGGER_DIRETO}'`);
     expect(erro, "o delete direto do contrato passou sem erro, a trava não pegou").not.toBeNull();
     expect(erro).toContain("billing_cancele_no_asaas_antes");
 
@@ -219,6 +253,13 @@ describe("0909: trg_billing_protege_assinatura_asaas recusa apagar contrato com 
   });
 
   it("apagar a ORGANIZAÇÃO (cascata), sem marcador, TAMBÉM falha, e a organização continua existindo", () => {
+    // A cascata de apagar organização não passa pelo DELETE revogado do
+    // service_role: a ação referencial (ON DELETE CASCADE) roda com o
+    // privilégio do DONO da tabela, não do papel que disparou o DELETE em
+    // organizations (mesmo racional do comentário de billing_payments,
+    // "apagar o usuário não pode travar o registro"). Por isso este caso
+    // continua podendo rodar sob service_role: é a prova de que a cascata
+    // não depende do grant revogado.
     const erro = erroSob("service_role", `delete from public.organizations where id = '${ORG_TRIGGER_CASCATA}'`);
     expect(erro, "apagar a organização em cascata passou sem erro, o contrato ficaria órfão com assinatura Asaas viva").not.toBeNull();
     expect(erro).toContain("billing_cancele_no_asaas_antes");
@@ -230,7 +271,7 @@ describe("0909: trg_billing_protege_assinatura_asaas recusa apagar contrato com 
   });
 
   it("com o marcador (asaas_assinatura_encerrada_em) preenchido, apagar o contrato FUNCIONA", () => {
-    const erro = erroSob("service_role", `delete from public.billing_contracts where organization_id = '${ORG_TRIGGER_LIBERADO}'`);
+    const erro = erroComoDono(`delete from public.billing_contracts where organization_id = '${ORG_TRIGGER_LIBERADO}'`);
     expect(erro, `o delete deveria ter passado, o marcador já está preenchido: ${erro}`).toBeNull();
 
     const existe = sql(`select count(*) from public.billing_contracts where organization_id = '${ORG_TRIGGER_LIBERADO}'`).trim();
@@ -1793,8 +1834,11 @@ describe("0909 Tarefa 6: M1, reassinatura depois do cancelamento passa em fn_bil
 });
 
 describe("0909 Tarefa 6: trava de delete respeita o marcador gravado por SUBSCRIPTION_DELETED", () => {
+  // Como DONO (postgres): DELETE de billing_contracts foi revogado do
+  // service_role na migration 0910 (D-069), e esta prova mede o gatilho, não
+  // o privilégio (já provado à parte, describe acima).
   it("com o marcador preenchido (ORG_T6_SUB_DELETED), apagar o contrato agora FUNCIONA", () => {
-    const erro = erroSob("service_role", `delete from public.billing_contracts where organization_id = '${ORG_T6_SUB_DELETED}'`);
+    const erro = erroComoDono(`delete from public.billing_contracts where organization_id = '${ORG_T6_SUB_DELETED}'`);
     expect(erro, `o delete deveria ter passado, o marcador já está preenchido: ${erro}`).toBeNull();
     expect(sql(`select count(*) from public.billing_contracts where organization_id = '${ORG_T6_SUB_DELETED}';`).trim()).toBe("0");
   });

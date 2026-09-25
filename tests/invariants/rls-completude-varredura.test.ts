@@ -396,6 +396,21 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "NULLABLE e SEM chave estrangeira (de propósito: o roteamento do " +
       "webhook pode não achar organização nenhuma), mas o mesmo deny-all vale.",
   },
+  // ─── billing_trigger_alarmes (migration 0910, fork Hiperbold, fase F7, D-055) ───
+  //
+  // Mesmo desenho deny-all de billing_payments/billing_contract_eventos,
+  // acima: RLS ligada, ZERO policy, privilégio NENHUM para anon/authenticated/
+  // agent_worker, service_role só select+insert (rastro consultável de falha
+  // de gatilho, só de acréscimo).
+  {
+    tabela: "billing_trigger_alarmes",
+    razao:
+      "tests/invariants/planos-saneamento.test.ts (fork Hiperbold, 0910, D-055): " +
+      "anon, authenticated e agent_worker barrados por permission denied ao " +
+      "SELECT e ao INSERT (medido sob set role), service_role com select e " +
+      "insert e sem update/delete/truncate, mesmo desenho deny-all de " +
+      "billing_payments.",
+  },
 ];
 
 /**
