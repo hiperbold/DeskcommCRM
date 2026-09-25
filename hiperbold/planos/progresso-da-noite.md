@@ -165,3 +165,11 @@ Portões completos na cópia separada, commit de8ed83 (logs em `F:	emp6-09-24\
 | unitários | 14.065 verdes; 1 vermelho de ambiente aceito (`e2e-parte-4-fala-com-os-servicos-do-runner`, Redis) |
 
 F6: 3 modelos da página de vendas no canvas https://claude.ai/artifact/5dXN2LREhJNpTpmEm3QiE2 (A Clareza azul, B Editorial creme, C Produto em blocos), 3 seções claras para cada escura por pedido do Filipe; aguardando a escolha dele.
+
+## F5: revisão e auditoria do núcleo (24/09/2026, noite)
+
+Faixa 8ea9098..9afb775 (tarefas 1 a 6 e 10 a 18). Commits: ce99bf7, b04bfba, 8487304, 97e7be9, 73973bc, 5cbb69d, 0a750ec, c14e510, eeb261b, 7186080, 889aac0, 107538e, 3345adc, 9afb775.
+
+- Auditoria: sem crítico. Altos: o processador não confirma por GET os eventos que não são pagamento (estorno, chargeback, vencimento, fim de assinatura morrem em `aguardando`/`erro`); o estorno confia no tipo do evento e não no status confirmado. Médios: retentativa com consulta falha faz POST (cobrança dobrada); cancelar pedido sem recurso registrado deixa assinatura viva; N39 não remove a assinatura do primeiro pagamento vencido e o primeiro pagamento sobrescreve assinatura viva; evento de produção gravado como sandbox; pagamento sandbox concede plano real. Baixos: id `conc:` sequestrável, rota do pedido para viewer, payload de outro app guardado, retomada de pedido de outra oferta, escrita direta do service_role em `billing_payments`/`billing_contracts` (vai para o DEBITO), gate do admin da plataforma na compra, tamanho do token, `pedido_marcar` reabrindo.
+- Revisão: além dos mesmos, renovação fechada como `outro_app` quando a leitura falha, evento preso por `resultado` fora do CHECK, pedido estornado casando como primeiro pagamento, pedido sem fatura travado, alarme de 3 dias por organização, contrato voltando a `ativa` vencido, estados definitivos tratados como espera.
+- Correções em execução: SQL (parte 7), TS do processador e conciliação, TS da compra e ações. Decisões novas: `billing_settings.asaas_sandbox_concede` (padrão falso: pagamento de sandbox não concede em produção); `billing_contracts.asaas_ambiente`; N39 passa a "remove sozinho" também no processador.
