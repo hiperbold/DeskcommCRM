@@ -72,6 +72,7 @@ function pedidoBase(overrides: Partial<PedidoLinha> = {}): PedidoLinha {
     pacoteNome: null,
     planCode: "pro",
     pacoteCode: null,
+    atualizadoEm: "2026-09-24T12:00:00Z",
     ...overrides,
   };
 }
@@ -175,7 +176,37 @@ function dbFalso(pedidoInicial: PedidoLinha, opts: { vinculo?: string | null } =
       vinculo = asaasCustomerId;
       return { data: { jaExistia: false, asaasCustomerId }, error: null };
     }),
+    // Correção 2 (revisão da fase): imita o comportamento REAL de
+    // fn_billing_pedido_registrar_cobranca a partir de `aguardando_
+    // pagamento` (migração 0909, Tarefa 3): reenviar exatamente o que já
+    // está gravado é idempotente (`ja_registrado: true`); COMPLETAR um campo
+    // que ainda estava nulo (ex.: `invoice_url` chegando agora, correção 4)
+    // também é aceito; só uma cobrança DIFERENTE de uma já gravada e
+    // preenchida (conflito de verdade) é recusada com `22023`. A partir de
+    // `criado`/`processando`/`inconclusivo`, sempre transita normalmente.
     registrarCobranca: vi.fn(async (args) => {
+      if (pedido.status === "aguardando_pagamento") {
+        const conflita = (antigo: string | null, novo: string | null) =>
+          antigo !== null && novo !== null && antigo !== novo;
+        if (
+          conflita(pedido.asaasPaymentId, args.asaasPaymentId) ||
+          conflita(pedido.asaasSubscriptionId, args.asaasSubscriptionId) ||
+          conflita(pedido.invoiceUrl, args.invoiceUrl)
+        ) {
+          return { data: null, error: { code: "22023", message: "billing_pedido_status_invalido_para_cobranca" } };
+        }
+        const nadaMudou =
+          (args.asaasPaymentId ?? null) === pedido.asaasPaymentId &&
+          (args.asaasSubscriptionId ?? null) === pedido.asaasSubscriptionId &&
+          (args.invoiceUrl ?? null) === pedido.invoiceUrl;
+        pedido = {
+          ...pedido,
+          asaasPaymentId: args.asaasPaymentId ?? pedido.asaasPaymentId,
+          asaasSubscriptionId: args.asaasSubscriptionId ?? pedido.asaasSubscriptionId,
+          invoiceUrl: args.invoiceUrl ?? pedido.invoiceUrl,
+        };
+        return { data: { jaRegistrado: nadaMudou, pedidoId: pedido.id, status: pedido.status }, error: null };
+      }
       pedido = {
         ...pedido,
         asaasPaymentId: args.asaasPaymentId ?? pedido.asaasPaymentId,
@@ -350,6 +381,45 @@ describe("iniciarCompra: recuperação do inconclusivo (decisão 13)", () => {
     expect(asaas.criarAssinatura).toHaveBeenCalledTimes(1); // nunca um segundo POST
   });
 
+  it("correção 1: se a consulta por referência falhar, o pedido volta a inconclusivo (nunca fica preso em processando), e uma TERCEIRA chamada retoma", async () => {
+    const { db, getPedido } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      criarAssinatura: vi.fn(async () => {
+        throw erroTempoEsgotado(true);
+      }),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+    expect(getPedido().status).toBe("inconclusivo");
+
+    (asaas.buscarAssinaturaPorReferencia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("504"));
+
+    const segunda = await iniciarCompra(deps, { ...ENTRADA_BASE, chave: "66666666-6666-6666-6666-666666666666" });
+
+    expect(segunda).toEqual({ tipo: "erro", mensagem: MENSAGEM_AGUARDE });
+    // `tomarPedido` já tinha movido o pedido para "processando" antes da
+    // consulta falhar; sem a correção, ele ficaria preso ali (fora do
+    // alcance de fn_billing_pedido_tomar, que só toma de criado/
+    // inconclusivo) até a conciliação diária alcançar.
+    expect(getPedido().status).toBe("inconclusivo");
+    expect(db.marcarPedido).toHaveBeenCalledWith(
+      "org-1",
+      "pedido-1",
+      "inconclusivo",
+      expect.any(String),
+    );
+
+    // Terceira chamada: a consulta por referência agora funciona, e o
+    // pedido, de volta a "inconclusivo", pode ser tomado de novo.
+    (asaas.buscarAssinaturaPorReferencia as ReturnType<typeof vi.fn>).mockResolvedValueOnce(assinaturaFake());
+
+    const terceira = await iniciarCompra(deps, { ...ENTRADA_BASE, chave: "99999999-9999-9999-9999-999999999999" });
+
+    expect(terceira.tipo).toBe("redirecionar");
+    expect(asaas.criarAssinatura).toHaveBeenCalledTimes(1); // nunca um segundo POST
+  });
+
   it("4xx de validação marca falhou com mensagem fixa, nunca a mensagem crua do Asaas", async () => {
     const { db, getPedido } = dbFalso(pedidoBase());
     const asaas = asaasFalso({
@@ -438,6 +508,37 @@ describe("iniciarCompra: URL de redirecionamento (risco 8/B7)", () => {
     expect(resultado).toEqual({ tipo: "erro", mensagem: expect.any(String) });
     expect((resultado as { mensagem: string }).mensagem).not.toContain("malicious.example.com");
     expect(getPedido().status).toBe("falhou");
+    // Correção 8: a assinatura recém-criada é removida no Asaas ANTES de
+    // marcar falhou (nunca deixa uma cobrança fantasma cobrando sozinha).
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_fake123");
+  });
+
+  it("correção 8: se a remoção no Asaas falhar, marca inconclusivo em vez de falhou (a conciliação retoma)", async () => {
+    const { db, getPedido } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      listarCobrancasDaAssinatura: vi.fn(async () => [
+        cobrancaFake({ id: "pay_malicioso", invoiceUrl: "https://malicious.example.com/pagar" }),
+      ]),
+      removerAssinatura: vi.fn(async () => {
+        throw erroIndisponivel(500, false);
+      }),
+    });
+    const dbComValidacao: DbCompra = {
+      ...db,
+      registrarCobranca: vi.fn(async (args) => {
+        if (args.invoiceUrl && !/^https:\/\/sandbox\.asaas\.com\//.test(args.invoiceUrl)) {
+          return { data: null, error: { code: "22023", message: "billing_invoice_url_fora_do_ambiente" } };
+        }
+        return { data: { jaRegistrado: false, pedidoId: args.pedidoId, status: "aguardando_pagamento" as const }, error: null };
+      }),
+    };
+    const { deps } = montarDeps(dbComValidacao, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "erro", mensagem: expect.any(String) });
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_fake123");
+    expect(getPedido().status).toBe("inconclusivo");
   });
 });
 
@@ -615,6 +716,30 @@ describe("iniciarCompra: aguardando_pagamento com invoice_url nula (correção 4
     const resultado = await iniciarCompra(deps, ENTRADA_BASE);
 
     expect(resultado).toEqual({ tipo: "erro", mensagem: MENSAGEM_AGUARDE });
+  });
+
+  it("correção 2: uma cobrança DIFERENTE da já registrada é um conflito real, recusado como o SQL recusa (nunca sobrescreve silenciosamente)", async () => {
+    const pedido = pedidoBase({
+      status: "aguardando_pagamento",
+      invoiceUrl: null,
+      asaasPaymentId: "pay_ja_registrado",
+      asaasSubscriptionId: "sub_existente",
+    });
+    const { db, getPedido } = dbFalso(pedido);
+    const asaas = asaasFalso({
+      // O `pay_novo` é OUTRO pagamento (não `pay_ja_registrado`, que já está
+      // gravado): o dublê de registrarCobranca precisa recusar isso como
+      // conflito de verdade, e não sobrescrever `pay_ja_registrado`.
+      listarCobrancasDaAssinatura: vi.fn(async () => [
+        cobrancaFake({ id: "pay_novo", invoiceUrl: "https://sandbox.asaas.com/i/novo" }),
+      ]),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "erro", mensagem: MENSAGEM_AGUARDE });
+    expect(getPedido().asaasPaymentId).toBe("pay_ja_registrado");
   });
 });
 

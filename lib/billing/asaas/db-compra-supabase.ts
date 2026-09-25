@@ -51,7 +51,7 @@ import type {
 const ESTADOS_ABERTOS: StatusPedido[] = ["criado", "aguardando_pagamento", "inconclusivo", "processando"];
 
 const COLUNAS_PEDIDO =
-  "id, status, tipo, ambiente, metodo, amount_cents, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, ciclo, plan_id, pacote_id";
+  "id, status, tipo, ambiente, metodo, amount_cents, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, ciclo, plan_id, pacote_id, updated_at";
 
 interface LinhaBillingOrders {
   id: string;
@@ -67,6 +67,8 @@ interface LinhaBillingOrders {
   ciclo: string | null;
   plan_id: string | null;
   pacote_id: string | null;
+  /** Correção 10 (tarefa 17): `cancelarPedidoAberto` usa para o gate de 15 minutos em `processando`. */
+  updated_at: string;
 }
 
 /**
@@ -127,6 +129,7 @@ function paraPedidoLinha(
     pacoteNome,
     planCode,
     pacoteCode,
+    atualizadoEm: row.updated_at,
   };
 }
 

@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  chaveParaProximaTentativaDeCompra,
+  classificarDesfechoDaTentativa,
   devePararDePollarPedido,
+  MENSAGEM_AGUARDE_ESPELHO,
   montarPagadorDoFormulario,
   pedidoEmEstadoFinal,
   TETO_DE_POLLING_MS,
   urlDeRedirecionamentoEhSegura,
+  type EscolhaDeCompra,
 } from "@/app/app/settings/plano/_logica-compra";
+import { MENSAGEM_AGUARDE } from "@/lib/billing/asaas/compra";
 
 /**
  * Fase F5, Tarefas 20 e 21: a lógica pura das telas do cliente (assinar e
@@ -129,5 +134,128 @@ describe("montarPagadorDoFormulario: decisão 16, dados do pagador", () => {
     const r = montarPagadorDoFormulario({ ...CAMPOS_VALIDOS, email: "   " });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.pagador.email).toBeUndefined();
+  });
+});
+
+describe("MENSAGEM_AGUARDE_ESPELHO: nunca diverge do original server-only (correção 6)", () => {
+  it("é IDÊNTICA a MENSAGEM_AGUARDE de lib/billing/asaas/compra.ts", () => {
+    expect(MENSAGEM_AGUARDE_ESPELHO).toBe(MENSAGEM_AGUARDE);
+  });
+});
+
+describe("classificarDesfechoDaTentativa: correção 6", () => {
+  it("erro com a mensagem de aguarde é 'aguarde'", () => {
+    expect(classificarDesfechoDaTentativa({ tipo: "erro", mensagem: MENSAGEM_AGUARDE_ESPELHO })).toBe("aguarde");
+  });
+
+  it("qualquer outra mensagem de erro é terminal", () => {
+    expect(classificarDesfechoDaTentativa({ tipo: "erro", mensagem: "Este pedido já foi pago." })).toBe("terminal");
+    expect(classificarDesfechoDaTentativa({ tipo: "erro", mensagem: "O CPF ou CNPJ informado é inválido." })).toBe(
+      "terminal",
+    );
+  });
+
+  it("redirecionar e pix (sucesso) contam como terminal: não há próxima tentativa nesta mesma tela", () => {
+    expect(classificarDesfechoDaTentativa({ tipo: "redirecionar" })).toBe("terminal");
+    expect(classificarDesfechoDaTentativa({ tipo: "pix" })).toBe("terminal");
+  });
+});
+
+describe("chaveParaProximaTentativaDeCompra: correção 6, decisão 13 do lado do cliente", () => {
+  const ASSINATURA_PRO_MENSAL_CARTAO: EscolhaDeCompra = {
+    tipo: "assinatura",
+    planCode: "pro",
+    ciclo: "monthly",
+    metodo: "CREDIT_CARD",
+  };
+
+  it("sem tentativa anterior, sempre gera uma chave (não reaproveita a inicial às cegas)", () => {
+    const chave = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-inicial",
+      escolhaAtual: ASSINATURA_PRO_MENSAL_CARTAO,
+      tentativaAnterior: null,
+    });
+    expect(typeof chave).toBe("string");
+    expect(chave.length).toBeGreaterThan(0);
+  });
+
+  it("mesma escolha depois de 'aguarde': repete a MESMA chave", () => {
+    const chave = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-em-voo",
+      escolhaAtual: ASSINATURA_PRO_MENSAL_CARTAO,
+      tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho: "aguarde" },
+    });
+    expect(chave).toBe("chave-em-voo");
+  });
+
+  it("mudou o ciclo depois de 'aguarde': chave NOVA, mesmo com o mesmo plano e método", () => {
+    const chave = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-em-voo",
+      escolhaAtual: { ...ASSINATURA_PRO_MENSAL_CARTAO, ciclo: "yearly" },
+      tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho: "aguarde" },
+    });
+    expect(chave).not.toBe("chave-em-voo");
+  });
+
+  it("mudou o método depois de 'aguarde': chave NOVA", () => {
+    const chave = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-em-voo",
+      escolhaAtual: { ...ASSINATURA_PRO_MENSAL_CARTAO, metodo: "PIX" },
+      tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho: "aguarde" },
+    });
+    expect(chave).not.toBe("chave-em-voo");
+  });
+
+  it("mudou o plano depois de 'aguarde': chave NOVA", () => {
+    const chave = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-em-voo",
+      escolhaAtual: { ...ASSINATURA_PRO_MENSAL_CARTAO, planCode: "ilimitado" },
+      tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho: "aguarde" },
+    });
+    expect(chave).not.toBe("chave-em-voo");
+  });
+
+  it("mesma escolha, mas desfecho anterior TERMINAL (validação, falhou, cancelado): chave NOVA", () => {
+    for (const mensagem of [
+      "Este pedido já foi pago.",
+      "Este pedido já falhou. Não há nada para cancelar.",
+      "O CPF ou CNPJ informado é inválido.",
+    ]) {
+      const desfecho = classificarDesfechoDaTentativa({ tipo: "erro", mensagem });
+      const chave = chaveParaProximaTentativaDeCompra({
+        chaveAtual: "chave-anterior",
+        escolhaAtual: ASSINATURA_PRO_MENSAL_CARTAO,
+        tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho },
+      });
+      expect(chave).not.toBe("chave-anterior");
+    }
+  });
+
+  it("pacote de tokens: mesma escolha (pacote + método) depois de 'aguarde' repete a chave; mudar o pacote não", () => {
+    const escolhaPacote: EscolhaDeCompra = { tipo: "pacote_tokens", pacote: "mil-tokens", metodo: "PIX" };
+
+    const repetida = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-pacote",
+      escolhaAtual: escolhaPacote,
+      tentativaAnterior: { escolha: escolhaPacote, desfecho: "aguarde" },
+    });
+    expect(repetida).toBe("chave-pacote");
+
+    const nova = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-pacote",
+      escolhaAtual: { ...escolhaPacote, pacote: "dez-mil-tokens" },
+      tentativaAnterior: { escolha: escolhaPacote, desfecho: "aguarde" },
+    });
+    expect(nova).not.toBe("chave-pacote");
+  });
+
+  it("trocar de assinatura para pacote (ou vice-versa) nunca reaproveita a chave, mesmo com 'aguarde'", () => {
+    const escolhaPacote: EscolhaDeCompra = { tipo: "pacote_tokens", pacote: "mil-tokens", metodo: "PIX" };
+    const chave = chaveParaProximaTentativaDeCompra({
+      chaveAtual: "chave-anterior",
+      escolhaAtual: escolhaPacote,
+      tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho: "aguarde" },
+    });
+    expect(chave).not.toBe("chave-anterior");
   });
 });

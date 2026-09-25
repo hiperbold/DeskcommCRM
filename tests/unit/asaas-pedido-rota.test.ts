@@ -54,6 +54,7 @@ function pedidoBase(overrides: Partial<PedidoLinha> = {}): PedidoLinha {
     pacoteNome: null,
     planCode: "pro",
     pacoteCode: null,
+    atualizadoEm: "2026-09-24T12:00:00Z",
     ...overrides,
   };
 }

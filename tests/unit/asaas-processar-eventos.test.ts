@@ -676,4 +676,59 @@ describe("processarEventosAsaas", () => {
     expect(logger.warn).toHaveBeenCalledWith("asaas_processar_remover_assinatura_falhou", expect.any(Object));
     expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
   });
+
+  it("correção 9: sem subscriptionId (recurso já veio removido/404 do GET), cai para removerCobranca pelo asaas_payment_id do evento", async () => {
+    const evento: EventoReservado = { id: "evt-53", eventType: "PAYMENT_DELETED", resourceId: "pay_53", leaseToken: "lease-53" };
+    const payload = payloadDePagamento({ id: "pay_53" });
+    payload.id = "evt-53";
+    payload.event = "PAYMENT_DELETED";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-53", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({
+        data: { resultado: "aplicado", organizationId: "org-53", alarme: "remover_assinatura_pendente" },
+        error: null,
+      })),
+    });
+    const asaas = asaasFalso({
+      // O GET devolve o recurso REMOVIDO (404/deleted:true): sem `.subscription`
+      // no objeto, o processador não tem como saber a que assinatura este
+      // pagamento pertencia.
+      buscarCobranca: vi.fn(async () => ({ removido: true }) as never),
+      removerCobranca: vi.fn(async () => undefined),
+    });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(asaas.removerCobranca).toHaveBeenCalledWith("pay_53");
+    expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+    expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+  });
+
+  it("correção 9: falha ao remover a cobrança de fallback só loga; não derruba a rodada", async () => {
+    const evento: EventoReservado = { id: "evt-54", eventType: "PAYMENT_DELETED", resourceId: "pay_54", leaseToken: "lease-54" };
+    const payload = payloadDePagamento({ id: "pay_54" });
+    payload.id = "evt-54";
+    payload.event = "PAYMENT_DELETED";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-54", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({
+        data: { resultado: "aplicado", organizationId: "org-54", alarme: "remover_assinatura_pendente" },
+        error: null,
+      })),
+    });
+    const logger = loggerFalso();
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => ({ removido: true }) as never),
+      removerCobranca: vi.fn(async () => {
+        throw erroIndisponivel(500);
+      }),
+    });
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas, logger }));
+
+    expect(logger.warn).toHaveBeenCalledWith("asaas_processar_remover_cobranca_fallback_de_assinatura_falhou", expect.any(Object));
+    expect(resumo.aplicados).toBe(1);
+  });
 });

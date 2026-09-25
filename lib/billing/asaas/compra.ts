@@ -94,6 +94,37 @@ import "server-only";
  * novo é seguro: o `DELETE` já feito é idempotente (`removerAssinatura`
  * trata 404 como sucesso) e `marcarAssinaturaEncerrada` também é idempotente
  * (marcador já preenchido devolve `ja_registrado` sem repetir nada).
+ *
+ * ─── Correção 1 (revisão da fase): recuperação do inconclusivo nunca prende
+ * o pedido em `processando` ────────────────────────────────────────────────
+ *
+ * `tomarPedido` já moveu o pedido para `processando` (posse atômica, decisão
+ * 25) antes de `criarCobrancaOuAssinatura` tentar recuperar a assinatura/
+ * cobrança pela `externalReference` (decisão 13, pedido veio `inconclusivo`).
+ * Se essa CONSULTA falhar (timeout/429/5xx), o código antigo só devolvia
+ * "aguarde" e deixava o pedido preso em `processando`: como `fn_billing_
+ * pedido_tomar` só toma de `criado`/`inconclusivo` (nunca de `processando`),
+ * nenhuma chamada seguinte de `iniciarCompra` conseguiria tomar posse de
+ * novo, e o pedido ficaria parado até a conciliação diária (Tarefa 16)
+ * alcançar. Agora, antes de devolver "aguarde", volta o pedido para
+ * `inconclusivo` (`fn_billing_pedido_marcar`, válido porque o pedido está em
+ * `processando`, PARTE 7 da migração 0909): uma TERCEIRA chamada de
+ * `iniciarCompra` toma posse de novo e tenta a recuperação outra vez.
+ *
+ * ─── Correção 8 (revisão da fase): `invoice_url` fora do ambiente nunca
+ * deixa uma assinatura/cobrança viva no Asaas sem ninguém tentando apagar ──
+ *
+ * Quando `fn_billing_pedido_registrar_cobranca` recusa a `invoice_url` por
+ * estar fora do ambiente do próprio pedido, a assinatura ou a cobrança JÁ
+ * FOI criada no Asaas (o `POST` teve sucesso; só a URL veio errada). Marcar
+ * `falhou` sem remover essa assinatura/cobrança deixaria uma cobrança
+ * fantasma cobrando sozinha por lá, sem ninguém tentando removê-la de novo
+ * (o pedido `falhou` é terminal e a conciliação não mexe em pedido
+ * terminal). `removerRecemCriadoOuMarcarInconclusivo` remove primeiro
+ * (`removerAssinatura`/`removerCobranca`, idempotentes em 404); só DEPOIS
+ * disso funcionar é que marca `falhou`. Se a remoção em si falhar, marca
+ * `inconclusivo` em vez de `falhou`: a conciliação diária (Tarefa 16) refaz
+ * a remoção, e o pedido continua retomável.
  */
 import type { ClienteAsaasHttp } from "./cliente";
 import type { AmbienteAsaas, ConfigAsaas } from "./config";
@@ -217,6 +248,13 @@ export interface PedidoLinha {
   planCode: string | null;
   /** `billing_token_pacotes.codigo` (correção 3/M9), mesmo racional de `planCode`. */
   pacoteCode: string | null;
+  /**
+   * `billing_orders.updated_at` (ISO 8601), correção 10 (revisão da fase,
+   * tarefa 17): `cancelarPedidoAberto` (`app/actions/admin/cobrancaAsaas.ts`)
+   * usa este campo para recusar cancelar um pedido `processando` há MENOS de
+   * 15 minutos (o `POST` ao Asaas pode ainda estar em voo).
+   */
+  atualizadoEm: string;
 }
 
 export interface VinculoClienteAsaas {
@@ -385,6 +423,11 @@ function montarDescricao(pedido: PedidoLinha): string {
 
 function relogio(deps: DepsCompra): Date {
   return (deps.agora ?? (() => new Date()))();
+}
+
+/** Mesmo ajudante de `lib/billing/asaas/processar-eventos.ts`: só o `tipo` tipado do erro, nunca a mensagem crua do Asaas (risco 13). */
+function tipoDoErro(err: unknown): string {
+  return err instanceof ErroAsaasException ? err.erro.tipo : "desconhecido";
 }
 
 /** `AAAA-MM-DD` de amanhã em São Paulo (decisão 4: `dueDate` do Pix). */
@@ -676,6 +719,43 @@ async function tratarErroDoPost(
 }
 
 /**
+ * Correção 8 (revisão da fase): antes de marcar o pedido `falhou` por
+ * `invoice_url` fora do ambiente, a assinatura ou a cobrança JÁ FOI criada
+ * no Asaas (o `POST` teve sucesso; só a URL veio errada) - remove essa
+ * assinatura/cobrança recém-criada (`removerAssinatura`/`removerCobranca`,
+ * idempotentes em 404) antes de marcar `falhou`, para não deixar uma
+ * cobrança fantasma cobrando sozinha por lá (um pedido `falhou` é terminal;
+ * nada mais tentaria removê-la depois). Se a REMOÇÃO em si falhar, marca
+ * `inconclusivo` em vez de `falhou`: a conciliação diária (Tarefa 16) refaz
+ * a remoção, e o pedido continua retomável (nunca morre com uma assinatura
+ * viva no Asaas que ninguém mais tenta apagar).
+ */
+async function removerRecemCriadoOuMarcarInconclusivo(
+  deps: DepsCompra,
+  org: string,
+  pedidoId: string,
+  asaasSubscriptionId: string | null,
+  asaasPaymentId: string | null,
+  motivo: string,
+): Promise<void> {
+  try {
+    if (asaasSubscriptionId) {
+      await deps.asaas.removerAssinatura(asaasSubscriptionId);
+    } else if (asaasPaymentId) {
+      await deps.asaas.removerCobranca(asaasPaymentId);
+    }
+  } catch (err) {
+    deps.logger.warn("asaas_compra_remover_apos_invoice_url_invalida_falhou", {
+      pedidoId,
+      tipoErro: tipoDoErro(err),
+    });
+    await deps.db.marcarPedido(org, pedidoId, "inconclusivo", `${motivo}_remocao_falhou`);
+    return;
+  }
+  await deps.db.marcarPedido(org, pedidoId, "falhou", motivo);
+}
+
+/**
  * Grava a cobrança/assinatura (fn_billing_pedido_registrar_cobranca) e
  * devolve `{ tipo: "redirecionar" }` só quando a `invoiceUrl` bate com a
  * lista do ambiente do pedido (decisão 5/B7, risco 8). Usada tanto para uma
@@ -696,7 +776,14 @@ async function registrarEDevolverCartao(
   if (registrado.error) {
     if (contemCodigo(registrado.error, "billing_invoice_url_fora_do_ambiente")) {
       deps.logger.error("asaas_compra_invoice_url_fora_do_ambiente", { pedidoId: pedido.id });
-      await deps.db.marcarPedido(org, pedido.id, "falhou", "invoice_url_fora_do_ambiente");
+      await removerRecemCriadoOuMarcarInconclusivo(
+        deps,
+        org,
+        pedido.id,
+        asaasSubscriptionId,
+        asaasPaymentId,
+        "invoice_url_fora_do_ambiente",
+      );
       return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
     }
     deps.logger.error("asaas_compra_registrar_cobranca_falhou", { pedidoId: pedido.id, codigo: registrado.error.code });
@@ -844,9 +931,21 @@ async function criarCobrancaOuAssinatura(
     } catch {
       deps.logger.warn("asaas_compra_recuperar_inconclusivo_falhou", { pedidoId: pedido.id });
       // Decisão 13: a CONSULTA falhou (timeout/429/5xx). Nunca faz um POST
-      // cego depois de uma consulta que não respondeu; devolve "aguarde" e
-      // deixa o pedido como está para uma PRÓXIMA chamada de iniciarCompra
-      // tentar de novo.
+      // cego depois de uma consulta que não respondeu; devolve "aguarde".
+      //
+      // Correção 1: sem o passo abaixo, o pedido ficaria preso em
+      // `processando` (`tomarPedido` já tomou a posse antes de chegar aqui):
+      // `fn_billing_pedido_tomar` só toma de `criado`/`inconclusivo`, nunca
+      // de `processando`, então nenhuma chamada seguinte de `iniciarCompra`
+      // conseguiria tentar de novo. Volta para `inconclusivo` (válido porque
+      // o pedido está em `processando`) para uma TERCEIRA chamada retomar.
+      const marcado = await deps.db.marcarPedido(org, pedido.id, "inconclusivo", "asaas_recuperar_referencia_falhou");
+      if (marcado.error) {
+        deps.logger.error("asaas_compra_marcar_inconclusivo_apos_falha_de_recuperacao_falhou", {
+          pedidoId: pedido.id,
+          codigo: marcado.error.code,
+        });
+      }
       return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
     }
   }

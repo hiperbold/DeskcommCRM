@@ -13,8 +13,17 @@
  * resultado. Nenhuma mensagem de erro é reescrita: o que a ação devolve
  * chega direto ao toast, mesmo padrão de `app/admin/(protected)/sistema/
  * cobranca/_client.tsx`.
+ *
+ * Correção 6 (revisão da fase): a chave de idempotência de cada tentativa
+ * (decisão 13) vive em `chaveParaProximaTentativaDeCompra`/
+ * `classificarDesfechoDaTentativa` (`../_logica-compra`, puras e testadas em
+ * `tests/unit/asaas-telas-cliente.test.ts`): a MESMA chave só se repete para
+ * a MESMA escolha (plano/ciclo/método, ou pacote/método) depois de um
+ * desfecho "aguarde"; qualquer mudança de escolha, ou qualquer desfecho
+ * terminal (erro de validação do formulário, pedido `falhou`/`cancelado`,
+ * ou qualquer outra recusa), gera uma chave nova.
  */
-import { useMemo, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { comprarPacote, iniciarAssinatura } from "@/app/actions/settings/compraDoPlano";
@@ -32,10 +41,14 @@ import type { PlanoParaVenda } from "@/lib/billing/asaas/leitura";
 import type { ResultadoIniciarCompra } from "@/lib/billing/asaas/compra";
 
 import {
+  chaveParaProximaTentativaDeCompra,
+  classificarDesfechoDaTentativa,
   montarPagadorDoFormulario,
   urlDeRedirecionamentoEhSegura,
   type CamposDoFormularioDoPagador,
   type DadosDoPagador,
+  type DesfechoDaTentativaDeCompra,
+  type EscolhaDeCompra,
 } from "../_logica-compra";
 import { PixPendente } from "./_pix-pendente";
 import type { PacoteParaVenda } from "./_dados";
@@ -120,9 +133,11 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
   const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
   const [pendente, setPendente] = useState(false);
   const [resultado, setResultado] = useState<ResultadoIniciarCompra | null>(null);
-  // Estável por montagem: a MESMA chave em toda repetição desta tentativa
-  // (decisão 13 do plano da fase, idempotência do lado do cliente).
-  const chave = useMemo(() => randomId(), []);
+  // Chave de idempotência (decisão 13 do plano da fase): estável entre
+  // repetições da MESMA escolha depois de "aguarde"; nova a cada mudança de
+  // ciclo/método ou a cada desfecho terminal (correção 6 da revisão).
+  const [chave, setChave] = useState<string>(() => randomId());
+  const tentativaAnteriorRef = useRef<{ escolha: EscolhaDeCompra; desfecho: DesfechoDaTentativaDeCompra } | null>(null);
 
   const temAnual = plano.priceYearlyCents !== null && plano.priceYearlyCents > 0;
 
@@ -132,12 +147,21 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
   }
 
   async function assinar() {
+    const escolhaAtual: EscolhaDeCompra = { tipo: "assinatura", planCode: plano.code, ciclo, metodo };
+    const chaveDestaTentativa = chaveParaProximaTentativaDeCompra({
+      chaveAtual: chave,
+      escolhaAtual,
+      tentativaAnterior: tentativaAnteriorRef.current,
+    });
+    if (chaveDestaTentativa !== chave) setChave(chaveDestaTentativa);
+
     let entradaDoPagador: DadosDoPagador | undefined;
 
     if (precisaPagador) {
       const montado = montarPagadorDoFormulario(pagador);
       if (!montado.ok) {
         toast.error(t(montado.erro));
+        tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: "terminal" };
         return;
       }
       entradaDoPagador = montado.pagador;
@@ -149,9 +173,10 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
         planCode: plano.code,
         ciclo,
         metodo,
-        chave,
+        chave: chaveDestaTentativa,
         pagador: entradaDoPagador,
       });
+      tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: classificarDesfechoDaTentativa(r) };
 
       if (r.tipo === "erro") {
         toast.error(r.mensagem);
@@ -172,6 +197,7 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
       setResultado(r);
       setPendente(false);
     } catch {
+      tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: "terminal" };
       toast.error(t("Não foi possível concluir a compra agora. Tente novamente em instantes."));
       setPendente(false);
     }
@@ -261,15 +287,25 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
   const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
   const [pendente, setPendente] = useState(false);
   const [resultado, setResultado] = useState<ResultadoIniciarCompra | null>(null);
-  const chave = useMemo(() => randomId(), []);
+  const [chave, setChave] = useState<string>(() => randomId());
+  const tentativaAnteriorRef = useRef<{ escolha: EscolhaDeCompra; desfecho: DesfechoDaTentativaDeCompra } | null>(null);
 
   async function comprar() {
+    const escolhaAtual: EscolhaDeCompra = { tipo: "pacote_tokens", pacote: pacote.codigo, metodo };
+    const chaveDestaTentativa = chaveParaProximaTentativaDeCompra({
+      chaveAtual: chave,
+      escolhaAtual,
+      tentativaAnterior: tentativaAnteriorRef.current,
+    });
+    if (chaveDestaTentativa !== chave) setChave(chaveDestaTentativa);
+
     let entradaDoPagador: DadosDoPagador | undefined;
 
     if (precisaPagador) {
       const montado = montarPagadorDoFormulario(pagador);
       if (!montado.ok) {
         toast.error(t(montado.erro));
+        tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: "terminal" };
         return;
       }
       entradaDoPagador = montado.pagador;
@@ -277,7 +313,8 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
 
     setPendente(true);
     try {
-      const r = await comprarPacote({ pacote: pacote.codigo, metodo, chave, pagador: entradaDoPagador });
+      const r = await comprarPacote({ pacote: pacote.codigo, metodo, chave: chaveDestaTentativa, pagador: entradaDoPagador });
+      tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: classificarDesfechoDaTentativa(r) };
 
       if (r.tipo === "erro") {
         toast.error(r.mensagem);
@@ -298,6 +335,7 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
       setResultado(r);
       setPendente(false);
     } catch {
+      tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: "terminal" };
       toast.error(t("Não foi possível concluir a compra agora. Tente novamente em instantes."));
       setPendente(false);
     }

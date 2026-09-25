@@ -31,6 +31,11 @@
  * "cobrança dobrada"/"cobrança fantasma"): só DEPOIS da remoção (ou quando
  * nada foi encontrado) é que `fn_billing_pedido_marcar` grava `cancelado`.
  * Pedido `pago`, `estornado` ou `falhou` é recusado antes de qualquer busca.
+ * Pedido `processando` há MENOS de 15 minutos também é recusado (frase
+ * fixa), porque o `POST` ao Asaas pode ainda estar em voo (correção 10); e a
+ * busca por `externalReference` usa sempre o AMBIENTE DO PEDIDO, nunca o
+ * ambiente global do servidor: configurado outro, a ação recusa também
+ * (correção 10, risco 12: ambiente trocado).
  *
  * ─── `cancelarAssinaturaNoAsaas`: reusa `cancelarAssinaturaDoCliente` ──────
  *
@@ -87,6 +92,13 @@ const MENSAGEM_PEDIDO_ESTORNADO = "Este pedido já foi estornado.";
 const MENSAGEM_PEDIDO_FALHOU = "Este pedido já falhou. Não há nada para cancelar.";
 const MENSAGEM_ASAAS_DESLIGADO_PARA_CANCELAR =
   "O Asaas está desligado nesta instalação; não é possível cancelar a assinatura por aqui.";
+const MENSAGEM_PEDIDO_PROCESSANDO_HA_POUCO_TEMPO =
+  "O pedido está sendo processado agora. Tente cancelar em alguns minutos.";
+const MENSAGEM_AMBIENTE_DIFERENTE_DO_PEDIDO =
+  "O ambiente do Asaas configurado agora é diferente do ambiente deste pedido. Ajuste a configuração antes de cancelar.";
+
+/** Correção 10 (revisão da fase, tarefa 17): teto de espera antes de aceitar cancelar um pedido `processando`. */
+const QUINZE_MINUTOS_MS = 15 * 60 * 1000;
 
 const CAMINHO_TELA_COBRANCA = "/admin/sistema/cobranca";
 
@@ -401,6 +413,20 @@ export async function cancelarPedidoAberto(input: {
     return { ok: false, error: MENSAGEM_PEDIDO_FALHOU };
   }
 
+  // Correção 10 (revisão da fase): um pedido `processando` pode ter um POST
+  // ao Asaas ainda EM VOO (`iniciarCompra` só marca `processando` antes de
+  // chamar o Asaas, decisão 25); cancelar agora poderia correr com o próprio
+  // `registrarCobranca` daquele POST e deixar uma cobrança viva sem ninguém
+  // tentando removê-la depois. Só recusa por POUCO tempo (15 minutos): se o
+  // pedido ficou preso além disso, a busca por externalReference abaixo já
+  // acha e remove o que o POST tiver criado.
+  if (pedido.status === "processando") {
+    const atualizadoEmMs = new Date(pedido.atualizadoEm).getTime();
+    if (Number.isFinite(atualizadoEmMs) && Date.now() - atualizadoEmMs < QUINZE_MINUTOS_MS) {
+      return { ok: false, error: MENSAGEM_PEDIDO_PROCESSANDO_HA_POUCO_TEMPO };
+    }
+  }
+
   // Correção 2: nunca confia só nos ids locais (asaasSubscriptionId/
   // asaasPaymentId podem estar ausentes quando o POST no Asaas teve sucesso
   // mas fn_billing_pedido_registrar_cobranca falhou logo depois). Busca por
@@ -413,6 +439,15 @@ export async function cancelarPedidoAberto(input: {
   }
   if (!config.habilitado) {
     return { ok: false, error: MENSAGEM_ASAAS_DESLIGADO_PARA_REMOVER };
+  }
+  // Correção 10: a busca por externalReference usa o AMBIENTE DO PEDIDO
+  // (`pedido.ambiente`), nunca o ambiente global do servidor: um pedido de
+  // sandbox nunca pode ser buscado/removido com a chave de produção (e
+  // vice-versa, risco 12 da fase: ambiente trocado). Sem bater os dois, a
+  // busca abaixo consultaria o Asaas errado (ou nem acharia nada) e o
+  // cancelamento seguiria cego.
+  if (config.ambiente !== pedido.ambiente) {
+    return { ok: false, error: MENSAGEM_AMBIENTE_DIFERENTE_DO_PEDIDO };
   }
   const cliente = criarClienteAsaas({ fetch: globalThis.fetch.bind(globalThis), config, logger });
 

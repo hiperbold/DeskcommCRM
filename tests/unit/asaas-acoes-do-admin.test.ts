@@ -64,6 +64,7 @@ function pedidoFalso(overrides: Record<string, unknown> = {}) {
     ciclo: "monthly",
     planoNome: "Pro",
     pacoteNome: null,
+    atualizadoEm: "2026-09-24T12:00:00Z",
     ...overrides,
   };
 }
@@ -455,6 +456,47 @@ describe("cancelarPedidoAberto", () => {
     expect(r.ok).toBe(false);
     expect(h.criarClienteAsaas).not.toHaveBeenCalled();
     expect(h.buscarAssinaturaPorReferencia).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  it("pedido processando há menos de 15 minutos é recusado com frase fixa, sem buscar nem marcar", async () => {
+    h.lerPedido.mockResolvedValueOnce({
+      data: pedidoFalso({ status: "processando", atualizadoEm: new Date(Date.now() - 5 * 60 * 1000).toISOString() }),
+      error: null,
+    });
+    const { cancelarPedidoAberto } = await acoes();
+
+    const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "teste" });
+
+    expect(r).toEqual({ ok: false, error: "O pedido está sendo processado agora. Tente cancelar em alguns minutos." });
+    expect(h.criarClienteAsaas).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  it("pedido processando há mais de 15 minutos segue o fluxo normal de cancelamento", async () => {
+    h.lerPedido.mockResolvedValueOnce({
+      data: pedidoFalso({ status: "processando", atualizadoEm: new Date(Date.now() - 20 * 60 * 1000).toISOString() }),
+      error: null,
+    });
+    const { cancelarPedidoAberto } = await acoes();
+
+    const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "teste" });
+
+    expect(r.ok).toBe(true);
+    expect(h.criarClienteAsaas).toHaveBeenCalled();
+  });
+
+  it("ambiente configurado diferente do ambiente do pedido é recusado sem buscar no Asaas", async () => {
+    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ ambiente: "producao" }), error: null });
+    const { cancelarPedidoAberto } = await acoes();
+
+    const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "teste" });
+
+    expect(r).toEqual({
+      ok: false,
+      error: "O ambiente do Asaas configurado agora é diferente do ambiente deste pedido. Ajuste a configuração antes de cancelar.",
+    });
+    expect(h.criarClienteAsaas).not.toHaveBeenCalled();
     expect(h.rpc).not.toHaveBeenCalled();
   });
 

@@ -542,6 +542,19 @@ function ehAssinaturaJaDesvinculadaDoContrato(erro: RpcErro | null | undefined):
  * encerrada` grava o marcador (decisão 22) só quando o CONTRATO ainda aponta
  * para esta mesma assinatura; se o contrato já trocou de assinatura (ou não
  * existe mais), a remoção no Asaas já bastou e nada mais precisa acontecer.
+ *
+ * Correção 9 (revisão da fase): `subscriptionId` chega `null` quando o `GET
+ * /payments/{id}` já veio com o recurso REMOVIDO (404/`deleted:true`,
+ * `confirmacaoDoFimDoPagamento`) - não há como saber a que assinatura aquele
+ * pagamento pertencia, então um `DELETE /subscriptions/{id}` está fora de
+ * alcance. Em vez de não fazer nada (o comportamento antigo, que deixava uma
+ * cobrança potencialmente viva sem ninguém tentando removê-la), cai para
+ * remover a COBRANÇA pelo `asaas_payment_id` do próprio evento
+ * (`evento.resourceId`), idempotente em 404 (decisão 10): sem o id da
+ * assinatura, não há o que marcar em `marcarAssinaturaEncerrada` aqui - a
+ * conciliação diária (Tarefa 16), que conhece o `asaas_subscription_id`
+ * gravado em `billing_contracts`, cuida do marcador quando conseguir
+ * confirmar a remoção de verdade.
  */
 async function tentarRemoverAssinatura(
   deps: DepsProcessarEventosAsaas,
@@ -549,7 +562,20 @@ async function tentarRemoverAssinatura(
   subscriptionId: string | null,
   organizationId: string | null,
 ): Promise<void> {
-  if (!subscriptionId) return;
+  if (!subscriptionId) {
+    if (!evento.resourceId) return;
+    try {
+      await deps.asaas.removerCobranca(evento.resourceId);
+    } catch (err) {
+      // Mesma doutrina de tentarRemoverCobranca (decisão 10): só loga; a
+      // conciliação diária (Tarefa 16) refaz.
+      deps.logger.warn("asaas_processar_remover_cobranca_fallback_de_assinatura_falhou", {
+        eventoId: evento.id,
+        tipoErro: tipoDoErro(err),
+      });
+    }
+    return;
+  }
   try {
     await deps.asaas.removerAssinatura(subscriptionId);
   } catch (err) {

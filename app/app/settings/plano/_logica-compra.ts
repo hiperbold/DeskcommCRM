@@ -1,19 +1,23 @@
 /**
  * Lógica pura das telas do cliente (fase F5, Tarefas 20 e 21,
  * `hiperbold/planos/fase-F5-tarefas.md`): validação da URL de
- * redirecionamento, a régua de quando o polling do pedido para, e a
- * montagem do formulário do pagador.
+ * redirecionamento, a régua de quando o polling do pedido para, a montagem
+ * do formulário do pagador, e a chave de idempotência da tentativa de
+ * compra (correção 6 da revisão).
  *
  * Fica FORA de `lib/billing/asaas/*` de propósito: o briefing desta tarefa
  * não autoriza tocar naquela pasta. A validação de URL abaixo é uma SEGUNDA
  * conferência, no NAVEGADOR (risco 8 do plano da fase); a fonte de verdade
  * continua sendo `urlDeFaturaValida` em `lib/billing/asaas/compra.ts`, que já
- * roda no servidor antes de gravar `invoice_url`.
+ * roda no servidor antes de gravar `invoice_url`. Pelo mesmo motivo,
+ * `MENSAGEM_AGUARDE_ESPELHO` (abaixo) é uma CÓPIA do texto de
+ * `MENSAGEM_AGUARDE` daquele arquivo `server-only`, nunca um import dele.
  *
  * Sem JSX e sem hook: importável tanto pelos componentes client quanto pelo
  * teste de unidade (`tests/unit/asaas-telas-cliente.test.ts`) sem montar
  * árvore nenhuma.
  */
+import { randomId } from "@/lib/random-id";
 
 // ─── URL de redirecionamento (risco 8) ─────────────────────────────────────
 
@@ -95,6 +99,94 @@ const EMAIL_RAZOAVEL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * quantidade certa de dígitos (11 ou 14), para não gastar uma volta ao
  * servidor com um documento obviamente incompleto.
  */
+// ─── Chave de idempotência da tentativa de compra (correção 6 da revisão) ──
+
+export interface EscolhaDeAssinatura {
+  tipo: "assinatura";
+  planCode: string;
+  ciclo: "monthly" | "yearly";
+  metodo: "CREDIT_CARD" | "PIX";
+}
+
+export interface EscolhaDePacote {
+  tipo: "pacote_tokens";
+  pacote: string;
+  metodo: "CREDIT_CARD" | "PIX";
+}
+
+/** O que o cliente escolheu nesta tentativa: plano+ciclo+método, ou pacote+método. */
+export type EscolhaDeCompra = EscolhaDeAssinatura | EscolhaDePacote;
+
+export type DesfechoDaTentativaDeCompra = "aguarde" | "terminal";
+
+/**
+ * Espelha `MENSAGEM_AGUARDE` de `lib/billing/asaas/compra.ts`: aquele
+ * arquivo é `server-only` e não pode ser importado por código de cliente
+ * (o pacote `server-only` lança exatamente quando `typeof window !==
+ * "undefined"`, ou seja, quando o bundle chegasse ao navegador). O TEXTO
+ * exato é conferido contra o original em `tests/unit/asaas-telas-cliente.
+ * test.ts` (que roda em Node e pode importar os dois), para não deixar as
+ * duas cópias divergirem em silêncio.
+ */
+export const MENSAGEM_AGUARDE_ESPELHO =
+  "Não foi possível confirmar agora. Aguarde a confirmação do pagamento e tente novamente em instantes.";
+
+/**
+ * Classifica o desfecho de UMA tentativa de compra/assinatura, para decidir
+ * a chave da PRÓXIMA (decisão 13 do plano da fase, correção 6 da revisão):
+ * só o erro com a MESMA mensagem de `MENSAGEM_AGUARDE` é "aguarde" (o pedido
+ * segue `aguardando_pagamento`/`processando`, vale repetir com a MESMA
+ * chave); qualquer outro erro (validação do formulário, `falhou`,
+ * `cancelado`, já pago, sem assinatura, outra oferta aberta, genérico) é
+ * TERMINAL. Um sucesso (`redirecionar`/`pix`) também conta como terminal: a
+ * tela sai do ar (navega para longe) ou troca de formulário (QR do Pix),
+ * então não há uma "próxima tentativa" nesta MESMA instância do formulário.
+ */
+export function classificarDesfechoDaTentativa(resultado: {
+  tipo: "erro" | "redirecionar" | "pix";
+  mensagem?: string;
+}): DesfechoDaTentativaDeCompra {
+  if (resultado.tipo === "erro" && resultado.mensagem === MENSAGEM_AGUARDE_ESPELHO) return "aguarde";
+  return "terminal";
+}
+
+function mesmaEscolhaDeCompra(a: EscolhaDeCompra, b: EscolhaDeCompra): boolean {
+  if (a.tipo === "assinatura" && b.tipo === "assinatura") {
+    return a.planCode === b.planCode && a.ciclo === b.ciclo && a.metodo === b.metodo;
+  }
+  if (a.tipo === "pacote_tokens" && b.tipo === "pacote_tokens") {
+    return a.pacote === b.pacote && a.metodo === b.metodo;
+  }
+  return false;
+}
+
+/**
+ * A chave de idempotência (decisão 13 do plano da fase) só se REPETE quando
+ * a tentativa ANTERIOR ficou em "aguarde" E a escolha de agora (plano/ciclo/
+ * método, ou pacote/método) é EXATAMENTE a mesma: aí sim vale repetir a
+ * MESMA requisição. Qualquer mudança de escolha, qualquer desfecho TERMINAL
+ * (erro de validação do formulário, pedido `falhou`/`cancelado`, ou
+ * qualquer outra recusa), ou a ausência de uma tentativa anterior, gera uma
+ * chave NOVA com `randomId()` (correção 6): nunca reaproveita a chave de uma
+ * escolha diferente, nem a de um pedido que já chegou a um estado do qual
+ * não volta.
+ */
+export function chaveParaProximaTentativaDeCompra(args: {
+  chaveAtual: string;
+  escolhaAtual: EscolhaDeCompra;
+  tentativaAnterior: { escolha: EscolhaDeCompra; desfecho: DesfechoDaTentativaDeCompra } | null;
+}): string {
+  const { chaveAtual, escolhaAtual, tentativaAnterior } = args;
+  if (
+    tentativaAnterior !== null &&
+    tentativaAnterior.desfecho === "aguarde" &&
+    mesmaEscolhaDeCompra(escolhaAtual, tentativaAnterior.escolha)
+  ) {
+    return chaveAtual;
+  }
+  return randomId();
+}
+
 export function montarPagadorDoFormulario(
   campos: CamposDoFormularioDoPagador,
 ): ResultadoDoFormularioDoPagador {
