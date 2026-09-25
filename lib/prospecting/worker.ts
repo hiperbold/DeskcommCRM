@@ -393,10 +393,26 @@ export async function tickProspecting(pool: pg.Pool, admin: SupabaseClient) {
         // ponto, então pausar aqui não deixa candidato "preso" a meio
         // caminho.
         if (c && (await contaEmModoLeituraPeloPool(pool, org))) {
-          await db.query(
+          const pausada = await db.query(
             "update prospecting_campaigns set status='paused',error=$3,updated_at=now() where organization_id=$1 and id=$2 and status='running'",
             [org, c.id, "assinatura_suspensa"],
           );
+          // D-066: mesma auditoria que a campanha de DISPARO já grava ao pausar
+          // por conta suspensa (`lib/campanhas/rodada.ts`, `campaign.paused`);
+          // esta é a ação própria de prospecção (`prospecting_campaigns` é outra
+          // tabela), acrescentada ao fim de `lib/audit/actions.ts`. Só audita
+          // quando o UPDATE de fato pausou a linha (nunca uma corrida perdida
+          // contra outra transição de status desta campanha).
+          if ((pausada.rowCount ?? 0) > 0) {
+            void audit({
+              action: "prospecting.paused",
+              organizationId: org,
+              bypassedRls: true,
+              resourceType: "prospecting_campaign",
+              resourceId: c.id,
+              metadata: { reason: "assinatura_suspensa" },
+            });
+          }
           logger.info("[prospecting] tick não enviou: organização em modo leitura, campanha pausada", {
             organization_id: org,
             campaign_id: c.id,

@@ -802,7 +802,23 @@ async function registrarEDevolverCartao(
     return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
   }
   if (!urlDeFaturaValida(pedido.ambiente, invoiceUrl)) {
+    // D-072: esta segunda validação (TS) roda DEPOIS de `registrarCobranca`
+    // já ter tido sucesso: o banco (`fn_billing_pedido_registrar_cobranca`)
+    // aceitou a mesma `invoiceUrl`, então hoje este ramo é inalcançável (o
+    // banco valida a mesma lista de endereços antes). Mesmo assim, se um dia
+    // divergir, trata a recusa como o outro caminho (`billing_invoice_url_
+    // fora_do_ambiente`, registrado acima): remove no Asaas o recurso que
+    // acabou de ser criado, para não deixar uma cobrança fantasma cobrando
+    // sozinha por lá.
     deps.logger.error("asaas_compra_invoice_url_fora_da_lista", { pedidoId: pedido.id });
+    await removerRecemCriadoOuMarcarInconclusivo(
+      deps,
+      org,
+      pedido.id,
+      asaasSubscriptionId,
+      asaasPaymentId,
+      "invoice_url_fora_da_lista_ts",
+    );
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
   }
   return { tipo: "redirecionar", url: invoiceUrl };

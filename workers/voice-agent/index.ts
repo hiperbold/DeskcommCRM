@@ -407,4 +407,15 @@ function main() {
   startAudioSocketServer();
 }
 
-main();
+// D-065: mesma guarda de `require.main === module` que `scripts/cortar-release.ts`
+// e `scripts/acervo-cabe-na-tela.ts` já usam: `main()` só roda quando ESTE
+// arquivo é o entrypoint (tsx rodando `workers/voice-agent/index.ts` direto, o
+// que o Dockerfile.voice-agent já faz). Sem a guarda, `main()` rodava no
+// IMPORT (abre ARI e a porta do AudioSocket de verdade), e nenhum teste
+// automatizado conseguia importar `handleAudioSocketConnection` para exercitar
+// o portão da conta suspensa sem esses efeitos colaterais reais.
+if (require.main === module) {
+  main();
+}
+
+export { handleAudioSocketConnection };

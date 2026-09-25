@@ -63,8 +63,12 @@ vi.mock("@/lib/billing/assinatura/modo-leitura", () => ({
 }));
 
 const dbCalls: string[] = [];
+/** D-066: hook para um teste único sobrescrever uma resposta pontual do `db.query`. */
+let dbQueryImplOverride: ((sql: string) => { rows: unknown[]; rowCount?: number } | undefined) | null = null;
 function dbQueryImpl(sql: string) {
   dbCalls.push(sql);
+  const desviado = dbQueryImplOverride?.(sql);
+  if (desviado) return desviado;
   if (sql.startsWith("update prospecting_campaigns set search_status='unknown'")) return { rows: [] };
   if (sql.startsWith("update prospecting_candidates set status='failed',error='Execução interrompida"))
     return { rows: [] };
@@ -72,6 +76,10 @@ function dbQueryImpl(sql: string) {
     return { rows: [] };
   if (sql.startsWith("select * from prospecting_campaigns where organization_id=$1 and status='running'"))
     return { rows: [campaign] };
+  // D-066: a linha realmente pausou (rowCount 1); é o que decide se a
+  // auditoria dispara.
+  if (sql.startsWith("update prospecting_campaigns set status='paused',error=$3"))
+    return { rows: [], rowCount: 1 };
   if (sql.startsWith("update prospecting_campaigns set updated_at=now()")) return { rows: [] };
   if (sql.startsWith("select daily_message_limit")) return { rows: [{ daily_message_limit: 50 }] };
   if (sql.includes("count(*) filter"))
@@ -132,6 +140,7 @@ const pool = {
 beforeEach(() => {
   vi.clearAllMocks();
   dbCalls.length = 0;
+  dbQueryImplOverride = null;
   mocks.knobs.mockResolvedValue({ knobs: {} });
   mocks.open.mockReturnValue(true);
   mocks.preflight.mockResolvedValue({ permite: true });
@@ -168,6 +177,33 @@ describe("tickProspecting × modo leitura (Tarefa 7)", () => {
     expect(
       dbCalls.some((s) => s.startsWith("update prospecting_campaigns set status='paused',error=$3")),
     ).toBe(true);
+    // D-066: a pausa por conta suspensa grava auditoria, igual à campanha de
+    // disparo (`campaign.paused`), só que com a ação própria de prospecção.
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "prospecting.paused",
+        organizationId: id,
+        resourceType: "prospecting_campaign",
+        resourceId: id,
+        metadata: { reason: "assinatura_suspensa" },
+      }),
+    );
+  });
+
+  it("D-066: UPDATE que não pausa nenhuma linha (corrida perdida) não audita", async () => {
+    mocks.modoLeitura.mockResolvedValue(true);
+    dbQueryImplOverride = (sql: string) => {
+      if (sql.startsWith("update prospecting_campaigns set status='paused',error=$3")) {
+        return { rows: [], rowCount: 0 };
+      }
+      return undefined;
+    };
+
+    await tickProspecting(pool as never, {} as never);
+
+    expect(mocks.audit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "prospecting.paused" }),
+    );
   });
 
   it("fora do modo leitura: chama sendNextCandidate normalmente e aborda o candidato", async () => {

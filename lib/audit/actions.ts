@@ -1002,6 +1002,17 @@ export const AUDIT_ACTIONS = [
   "billing.asaas_event_reprocessed",
   "billing.asaas_order_canceled",
   "billing.asaas_subscription_canceled",
+
+  // A campanha de PROSPECÇÃO pausada pelo tick por conta suspensa (D-066,
+  // `lib/prospecting/worker.ts`, `tickProspecting`). Espelha `campaign.paused`
+  // (que é da campanha de DISPARO, `campaigns`/`lib/campanhas/rodada.ts`, outra
+  // tabela): a pergunta é a mesma ("por que esta campanha parou de sozinha, e
+  // quando"), mas `prospecting_campaigns` é um domínio à parte, com o próprio
+  // `prospecting.changed`/`prospecting.approach_sent` já cadastrados acima;
+  // reaproveitar `campaign.paused` misturaria duas tabelas na mesma pergunta de
+  // filtro do painel. Só audita quando o `UPDATE` de fato pausou uma linha
+  // (nunca uma corrida perdida contra outra transição de status).
+  "prospecting.paused",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

@@ -540,6 +540,44 @@ describe("iniciarCompra: URL de redirecionamento (risco 8/B7)", () => {
     expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_fake123");
     expect(getPedido().status).toBe("inconclusivo");
   });
+
+  it("D-072: a segunda validação (TS), depois que o banco já aceitou a invoice_url, remove o recém-criado e marca falhou", async () => {
+    // O dublê de `registrarCobranca` aqui NÃO valida a URL (imita o "banco já
+    // aceitou"): só a validação em TypeScript, que roda depois, recusa.
+    const { db, getPedido } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      listarCobrancasDaAssinatura: vi.fn(async () => [
+        cobrancaFake({ id: "pay_url_ruim", invoiceUrl: "https://fora-da-lista.example.com/pagar" }),
+      ]),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "erro", mensagem: expect.any(String) });
+    expect((resultado as { mensagem: string }).mensagem).not.toContain("fora-da-lista.example.com");
+    expect(getPedido().status).toBe("falhou");
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_fake123");
+  });
+
+  it("D-072: se a remoção no Asaas falhar depois da segunda validação, marca inconclusivo (a conciliação retoma)", async () => {
+    const { db, getPedido } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      listarCobrancasDaAssinatura: vi.fn(async () => [
+        cobrancaFake({ id: "pay_url_ruim", invoiceUrl: "https://fora-da-lista.example.com/pagar" }),
+      ]),
+      removerAssinatura: vi.fn(async () => {
+        throw erroIndisponivel(500, false);
+      }),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "erro", mensagem: expect.any(String) });
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_fake123");
+    expect(getPedido().status).toBe("inconclusivo");
+  });
 });
 
 describe("iniciarCompra: pedido aberto retomado (M9)", () => {
