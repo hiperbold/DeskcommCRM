@@ -461,8 +461,29 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
     expect(posSubtracao).toBeGreaterThan(posSoma);
 
     for (const sql of [MIGRATION, BASELINE]) {
+      // A 0910 (D-055) redefine fn_billing_trava_crm_leads (última definição
+      // vale, CLAUDE.md item 10): o corpo velho (0905) continua no texto do
+      // baseline, mas nunca roda (create or replace troca a função no
+      // banco). O que este teste protege é a contagem de inserts no
+      // CONTADOR, não quantas vezes o texto aparece no arquivo: conta só em
+      // código VIVO, excluindo o corpo da definição SUPERADA com a mesma
+      // técnica lastIndexOf/indexOf("$$;") usada acima pra isolar o corpo da
+      // ÚLTIMA definição.
+      const inicioPrimeiraDefCrmLeads = sql.indexOf(
+        "create or replace function public.fn_billing_trava_crm_leads(",
+      );
+      const inicioUltimaDefCrmLeads = sql.lastIndexOf(
+        "create or replace function public.fn_billing_trava_crm_leads(",
+      );
+      let sqlVivo = sql;
+      if (inicioPrimeiraDefCrmLeads !== inicioUltimaDefCrmLeads) {
+        const fimPrimeiraDefCrmLeads =
+          sql.indexOf("\n$$;", inicioPrimeiraDefCrmLeads) + "\n$$;".length;
+        sqlVivo = sql.slice(0, inicioPrimeiraDefCrmLeads) + sql.slice(fimPrimeiraDefCrmLeads);
+      }
+
       const ocorrenciasDeInsert = [
-        ...sql.matchAll(/insert into public\.billing_usage_counters/g),
+        ...sqlVivo.matchAll(/insert into public\.billing_usage_counters/g),
       ].length;
       if (sql === MIGRATION) {
         // Preenchimento inicial da parte 1, a soma condicional deste AFTER
@@ -473,8 +494,15 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
         // BASELINE é o arquivo INTEIRO: as três ocorrências da 0905 acima
         // MAIS a soma do BEFORE de crm_leads na 0907 (que continua existindo
         // para o caso em que o bloqueio ESTÁ ativo, conferida em
-        // planos-bloqueio-migration.test.ts). Total: 4.
-        expect(ocorrenciasDeInsert).toBe(4);
+        // planos-bloqueio-migration.test.ts) MAIS a recalibração da
+        // 0910/D-063 (achado baixo 5 da revisão da F3: repete o
+        // preenchimento inicial da 0905 com greatest(valor atual,
+        // recalculado), depois dela no arquivo). Total: 5. A redefinição da
+        // 0910/D-055 repete o MESMO insert de sempre (corpo idêntico, só o
+        // bloco exception ganhou a gravação em billing_trigger_alarmes): não
+        // é um insert novo no contador, é o corpo antigo ficando morto no
+        // arquivo, por isso excluído acima em vez de contado aqui.
+        expect(ocorrenciasDeInsert).toBe(5);
       }
     }
   });

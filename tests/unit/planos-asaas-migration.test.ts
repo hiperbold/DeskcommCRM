@@ -825,15 +825,29 @@ describe("0909 Tarefa 5: asaas_webhook_events.alarme e billing_contract_eventos.
     }
   });
 
-  it("billing_contract_eventos_tipo_check é recriado (drop + add) com 'plano' incluído (B6)", () => {
-    for (const sql of [MIGRATION_0909, BASELINE]) {
-      expect(sql).toMatch(
-        /alter table public\.billing_contract_eventos drop constraint if exists billing_contract_eventos_tipo_check;/,
-      );
-      expect(sql).toMatch(
-        /alter table public\.billing_contract_eventos add constraint billing_contract_eventos_tipo_check check \(\s*\n\s*tipo in \('estado', 'periodo', 'cancelar_no_fim', 'conferidor', 'plano'\)\s*\n\s*\);/,
-      );
-    }
+  // A 0909 NÃO reconstrói mais o CHECK (drop + add): tests/unit/
+  // baseline-constraint-reconstruida.test.ts pegou a mesma constraint
+  // reconstruída em dois blocos do baseline.sql (0909 e 0910 PARTE 3), o que
+  // deixa a tabela sem constraint entre o drop e o add do bloco antigo num
+  // update.sh com dados do vocabulário mais novo. Só a 0910 reconstrói, com
+  // o vocabulário final (que inclui 'plano', vindo desta tarefa, e
+  // 'carencia', da 0910); a 0909 comenta e aponta pra lá.
+  it("billing_contract_eventos_tipo_check: a 0909 comenta (não reconstrói) e aponta pra 0910, que traz 'plano' no vocabulário final (B6)", () => {
+    // A migração 0909 não reconstrói mais a constraint: só um comentário
+    // apontando pra 0910 PARTE 3.
+    expect(MIGRATION_0909).not.toMatch(
+      /alter table public\.billing_contract_eventos (drop|add) constraint (if exists )?billing_contract_eventos_tipo_check/,
+    );
+    expect(MIGRATION_0909).toMatch(/0910 PARTE 3 \(fn_billing_estender_carencia, D-069\), que recria a mesma/);
+
+    // O baseline tem a reconstrução UMA vez só, com o vocabulário final:
+    // 'plano' (desta tarefa) e 'carencia' (0910) juntos.
+    expect(BASELINE).toMatch(
+      /alter table public\.billing_contract_eventos drop constraint if exists billing_contract_eventos_tipo_check;\nalter table public\.billing_contract_eventos add constraint billing_contract_eventos_tipo_check\n {2}check \(tipo in \('estado', 'periodo', 'cancelar_no_fim', 'conferidor', 'plano', 'carencia'\)\);/,
+    );
+    expect(
+      BASELINE.match(/alter table public\.billing_contract_eventos add constraint billing_contract_eventos_tipo_check/g),
+    ).toHaveLength(1);
   });
 });
 

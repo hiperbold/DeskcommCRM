@@ -1539,13 +1539,17 @@ comment on column public.asaas_webhook_events.alarme is
 
 -- ── 25. billing_contract_eventos.tipo ganha "plano" (B6: cada mudança de
 -- estado, período OU PLANO grava um evento) ──
-alter table public.billing_contract_eventos drop constraint if exists billing_contract_eventos_tipo_check;
-alter table public.billing_contract_eventos add constraint billing_contract_eventos_tipo_check check (
-  tipo in ('estado', 'periodo', 'cancelar_no_fim', 'conferidor', 'plano')
-);
-
-comment on column public.billing_contract_eventos.tipo is
-  '0908 (revisão F4) + 0909 Tarefa 5 (B6): estado, periodo, cancelar_no_fim, conferidor (0908) e plano (0909, primeiro pagamento de uma assinatura troca billing_contracts.plan_id, decisão 8).';
+--
+-- A reconstrução do CHECK (drop + add) saiu daqui. Ela também acontecia na
+-- 0910 PARTE 3 (fn_billing_estender_carencia, D-069), que recria a mesma
+-- constraint com o vocabulário final (estado, periodo, cancelar_no_fim,
+-- conferidor, plano, carencia) num bloco só. Duas reconstruções deixavam a
+-- constraint reconstruída duas vezes no baseline.sql: num banco com dados do
+-- vocabulário mais novo, o bloco antigo (este) falha ao re-aplicar em
+-- update.sh, e a tabela fica sem constraint entre o drop e o add que
+-- funciona (mesmo defeito de agent_inbox_items_kind_check, tests/unit/
+-- baseline-constraint-reconstruida.test.ts). O comentário da coluna também
+-- fica só na 0910.
 
 -- ── 26. fn_billing_asaas_periodo_do_ciclo: cálculo puro do período (decisão
 -- 5) ──
