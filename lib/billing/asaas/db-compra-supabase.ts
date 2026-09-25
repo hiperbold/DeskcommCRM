@@ -12,14 +12,17 @@ import "server-only";
  * `billing_token_pacotes` para a `description` sem dado pessoal (decisão 4
  * do plano da fase).
  *
- * As sete funções chamadas por RPC (`fn_billing_criar_pedido`,
- * `fn_billing_pedido_tomar`, `fn_billing_vincular_cliente_asaas`,
- * `fn_billing_pedido_registrar_cobranca`, `fn_billing_pedido_marcar` da
- * migração 0909, e `fn_billing_cancelar_no_fim_do_periodo` da migração
- * 0908) ainda não estão em `lib/database.types.ts` (tabelas/funções novas
- * desta fase): os nomes de RPC e os argumentos levam `as never`, o mesmo
- * tratamento que `conferidorDeCarteiraSobre` já dá às funções novas da fase
- * F2-B.
+ * As funções chamadas por RPC (`fn_billing_criar_pedido`, `fn_billing_
+ * pedido_tomar`, `fn_billing_vincular_cliente_asaas`, `fn_billing_pedido_
+ * registrar_cobranca`, `fn_billing_pedido_marcar` e `fn_billing_asaas_
+ * marcar_assinatura_encerrada`, todas da migração 0909) ainda não estão em
+ * `lib/database.types.ts` (tabelas/funções novas desta fase): os nomes de
+ * RPC e os argumentos levam `as never`, o mesmo tratamento que
+ * `conferidorDeCarteiraSobre` já dá às funções novas da fase F2-B.
+ * `fn_billing_cancelar_no_fim_do_periodo` (0908) saiu da lista: a correção 5
+ * da revisão/auditoria removeu a chamada redundante em `cancelarAssinatura
+ * DoCliente` (`lib/billing/asaas/compra.ts`), já que `fn_billing_asaas_
+ * marcar_assinatura_encerrada` liga `cancel_at_period_end` sozinha.
  *
  * `SupabaseClient` (de `createAdminClient()`, `lib/supabase/admin.ts`) BYPASSA
  * RLS: toda leitura aqui é filtrada por `organization_id`, sempre recebido
@@ -68,32 +71,46 @@ interface LinhaBillingOrders {
 
 /**
  * Nomes do plano (`billing_plans.name`) e do pacote (`billing_token_pacotes.
- * nome`), só quando o pedido carrega um dos dois ids (checks de coerência da
- * migração 0909 garantem que nunca os dois ao mesmo tempo). Usado por
- * `montarDescricao` em `compra.ts` para a `description` sem dado pessoal
- * (decisão 4).
+ * nome`), e os respectivos CÓDIGOS (`billing_plans.code`/`billing_token_
+ * pacotes.codigo`, correção 3/M9: comparar a oferta do pedido aberto
+ * retomado com a que a entrada pediu agora), só quando o pedido carrega um
+ * dos dois ids (checks de coerência da migração 0909 garantem que nunca os
+ * dois ao mesmo tempo). Os nomes são usados por `montarDescricao` em
+ * `compra.ts` para a `description` sem dado pessoal (decisão 4).
  */
 async function nomesDoPedido(
   admin: SupabaseClient,
   planId: string | null,
   pacoteId: string | null,
-): Promise<{ planoNome: string | null; pacoteNome: string | null }> {
+): Promise<{ planoNome: string | null; pacoteNome: string | null; planCode: string | null; pacoteCode: string | null }> {
   let planoNome: string | null = null;
   let pacoteNome: string | null = null;
+  let planCode: string | null = null;
+  let pacoteCode: string | null = null;
 
   if (planId) {
-    const { data } = await admin.from("billing_plans").select("name").eq("id", planId).maybeSingle();
-    planoNome = (data as { name: string } | null)?.name ?? null;
+    const { data } = await admin.from("billing_plans").select("name, code").eq("id", planId).maybeSingle();
+    const row = data as { name: string; code: string } | null;
+    planoNome = row?.name ?? null;
+    planCode = row?.code ?? null;
   }
   if (pacoteId) {
-    const { data } = await admin.from("billing_token_pacotes").select("nome").eq("id", pacoteId).maybeSingle();
-    pacoteNome = (data as { nome: string } | null)?.nome ?? null;
+    const { data } = await admin.from("billing_token_pacotes").select("nome, codigo").eq("id", pacoteId).maybeSingle();
+    const row = data as { nome: string; codigo: string } | null;
+    pacoteNome = row?.nome ?? null;
+    pacoteCode = row?.codigo ?? null;
   }
 
-  return { planoNome, pacoteNome };
+  return { planoNome, pacoteNome, planCode, pacoteCode };
 }
 
-function paraPedidoLinha(row: LinhaBillingOrders, planoNome: string | null, pacoteNome: string | null): PedidoLinha {
+function paraPedidoLinha(
+  row: LinhaBillingOrders,
+  planoNome: string | null,
+  pacoteNome: string | null,
+  planCode: string | null,
+  pacoteCode: string | null,
+): PedidoLinha {
   return {
     id: row.id,
     status: row.status as StatusPedido,
@@ -108,6 +125,8 @@ function paraPedidoLinha(row: LinhaBillingOrders, planoNome: string | null, paco
     ciclo: row.ciclo as CicloPedido | null,
     planoNome,
     pacoteNome,
+    planCode,
+    pacoteCode,
   };
 }
 
@@ -162,8 +181,8 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
       if (error) return { data: null, error: error as RpcErro };
       const row = data as LinhaBillingOrders | null;
       if (!row) return { data: null, error: null };
-      const { planoNome, pacoteNome } = await nomesDoPedido(admin, row.plan_id, row.pacote_id);
-      return { data: paraPedidoLinha(row, planoNome, pacoteNome), error: null };
+      const { planoNome, pacoteNome, planCode, pacoteCode } = await nomesDoPedido(admin, row.plan_id, row.pacote_id);
+      return { data: paraPedidoLinha(row, planoNome, pacoteNome, planCode, pacoteCode), error: null };
     },
 
     async tomarPedido(org, pedidoId) {
@@ -188,8 +207,8 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
       if (error) return { data: null, error: error as RpcErro };
       const row = data as LinhaBillingOrders | null;
       if (!row) return { data: null, error: null };
-      const { planoNome, pacoteNome } = await nomesDoPedido(admin, row.plan_id, row.pacote_id);
-      return { data: paraPedidoLinha(row, planoNome, pacoteNome), error: null };
+      const { planoNome, pacoteNome, planCode, pacoteCode } = await nomesDoPedido(admin, row.plan_id, row.pacote_id);
+      return { data: paraPedidoLinha(row, planoNome, pacoteNome, planCode, pacoteCode), error: null };
     },
 
     async buscarVinculoClienteAsaas(org, ambiente) {
@@ -258,29 +277,22 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
     async lerContrato(org) {
       const { data, error } = await admin
         .from("billing_contracts")
-        .select("asaas_subscription_id, asaas_assinatura_encerrada_em")
+        .select("asaas_subscription_id, asaas_assinatura_encerrada_em, current_period_end")
         .eq("organization_id", org)
         .maybeSingle();
       if (error) return { data: null, error: error as RpcErro };
-      const row = data as { asaas_subscription_id: string | null; asaas_assinatura_encerrada_em: string | null } | null;
+      const row = data as {
+        asaas_subscription_id: string | null;
+        asaas_assinatura_encerrada_em: string | null;
+        current_period_end: string | null;
+      } | null;
       if (!row) return { data: null, error: null };
       const contrato: ContratoAsaas = {
         asaasSubscriptionId: row.asaas_subscription_id,
         asaasAssinaturaEncerradaEm: row.asaas_assinatura_encerrada_em,
+        currentPeriodEnd: row.current_period_end,
       };
       return { data: contrato, error: null };
-    },
-
-    async cancelarNoFimDoPeriodo(org, sim, actor) {
-      const { data, error } = await admin.rpc("fn_billing_cancelar_no_fim_do_periodo" as never, {
-        p_org: org,
-        p_sim: sim,
-        p_actor: actor,
-      } as never);
-      if (error) return { data: null, error: error as RpcErro };
-      const d = data as { cancel_at_period_end: boolean } | null;
-      if (!d) return { data: null, error: null };
-      return { data: { cancelAtPeriodEnd: d.cancel_at_period_end }, error: null };
     },
 
     async marcarAssinaturaEncerrada(org, asaasSubscriptionId, actor) {

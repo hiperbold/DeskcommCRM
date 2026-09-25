@@ -22,6 +22,8 @@ let supportBloqueado = false;
 let habilitado = true;
 let configValida = true;
 let compraLigadaValor = true;
+let platformAdminScope: string | null = "full";
+let mfaPendente = false;
 
 const auditadas: Array<Record<string, unknown>> = [];
 const chamadasIniciar: Array<Record<string, unknown>> = [];
@@ -44,8 +46,25 @@ vi.mock("@/lib/impersonate/support", () => ({
 vi.mock("@/lib/auth/server", () => ({
   loadAuthUser: vi.fn(async () => ({ id: USER, is_platform_admin: ehPlatformAdmin, support: null })),
   resolveActiveOrg: vi.fn(async () => ({ orgId: ORG, name: "Org Teste", role: papel })),
+  mfaEmDivida: vi.fn(async () => mfaPendente),
 }));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ marca: "admin-falso" }) }));
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({
+    marca: "admin-falso",
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          is: () => ({
+            maybeSingle: async () => ({
+              data: platformAdminScope ? { scope: platformAdminScope } : null,
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    }),
+  }),
+}));
 vi.mock("@/lib/billing/asaas/db-compra-supabase", () => ({ dbCompraSupabase: vi.fn(() => ({ marca: "db-falso" })) }));
 vi.mock("@/lib/billing/asaas/cliente", () => ({ criarClienteAsaas: vi.fn(() => ({ marca: "asaas-falso" })) }));
 vi.mock("@/lib/billing/asaas/config", () => ({
@@ -102,6 +121,8 @@ beforeEach(() => {
   habilitado = true;
   configValida = true;
   compraLigadaValor = true;
+  platformAdminScope = "full";
+  mfaPendente = false;
   auditadas.length = 0;
   chamadasIniciar.length = 0;
   chamadasCancelar.length = 0;
@@ -133,6 +154,33 @@ describe("compraDoPlano: só o papel admin da organização compra e cancela (N4
     const r = await iniciarAssinatura(ENTRADA_ASSINATURA);
     expect(r.tipo).not.toBe("erro");
     expect(chamadasIniciar.length).toBe(1);
+  });
+
+  it("platform admin com escopo diferente de full NÃO bypassa o papel", async () => {
+    papel = "viewer";
+    ehPlatformAdmin = true;
+    platformAdminScope = "support_readonly";
+    const r = await iniciarAssinatura(ENTRADA_ASSINATURA);
+    expect(r.tipo).toBe("erro");
+    expect(chamadasIniciar).toEqual([]);
+  });
+
+  it("platform admin com MFA em dívida NÃO bypassa o papel", async () => {
+    papel = "viewer";
+    ehPlatformAdmin = true;
+    mfaPendente = true;
+    const r = await iniciarAssinatura(ENTRADA_ASSINATURA);
+    expect(r.tipo).toBe("erro");
+    expect(chamadasIniciar).toEqual([]);
+  });
+
+  it("platform admin sem linha em platform_admins NÃO bypassa o papel", async () => {
+    papel = "viewer";
+    ehPlatformAdmin = true;
+    platformAdminScope = null;
+    const r = await cancelarAssinatura();
+    expect(r.tipo).toBe("erro");
+    expect(chamadasCancelar).toEqual([]);
   });
 
   it("sessão de suporte em modo só-leitura/encerrada não compra nem cancela", async () => {

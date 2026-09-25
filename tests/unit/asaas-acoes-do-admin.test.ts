@@ -27,6 +27,8 @@ const h = vi.hoisted(() => ({
   lerPedido: vi.fn(),
   removerAssinatura: vi.fn(),
   removerCobranca: vi.fn(),
+  buscarAssinaturaPorReferencia: vi.fn(),
+  buscarCobrancaPorReferencia: vi.fn(),
   criarClienteAsaas: vi.fn(),
 }));
 
@@ -73,7 +75,14 @@ beforeEach(() => {
   h.guard.mockResolvedValue(ADMIN_FULL);
   h.mfaEmDivida.mockResolvedValue(false);
   h.configDoAsaas.mockReturnValue(CONFIG_LIGADO);
-  h.criarClienteAsaas.mockReturnValue({ removerAssinatura: h.removerAssinatura, removerCobranca: h.removerCobranca });
+  h.criarClienteAsaas.mockReturnValue({
+    removerAssinatura: h.removerAssinatura,
+    removerCobranca: h.removerCobranca,
+    buscarAssinaturaPorReferencia: h.buscarAssinaturaPorReferencia,
+    buscarCobrancaPorReferencia: h.buscarCobrancaPorReferencia,
+  });
+  h.buscarAssinaturaPorReferencia.mockResolvedValue(null);
+  h.buscarCobrancaPorReferencia.mockResolvedValue(null);
   h.lerPedido.mockResolvedValue({ data: pedidoFalso(), error: null });
   fetchSpy = vi.spyOn(globalThis, "fetch");
 });
@@ -340,24 +349,51 @@ describe("cancelarPedidoAberto", () => {
 
     expect(r).toEqual({ ok: false, error: "Este pedido já foi pago." });
     expect(h.criarClienteAsaas).not.toHaveBeenCalled();
+    expect(h.buscarAssinaturaPorReferencia).not.toHaveBeenCalled();
     expect(h.rpc).not.toHaveBeenCalled();
   });
 
-  it("sem assinatura nem cobrança no Asaas: cancela direto, sem tocar o cliente Asaas", async () => {
+  it("pedido estornado é recusado sem chamar o Asaas nem a RPC de marcar", async () => {
+    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ status: "estornado" }), error: null });
+    const { cancelarPedidoAberto } = await acoes();
+
+    const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "teste" });
+
+    expect(r).toEqual({ ok: false, error: "Este pedido já foi estornado." });
+    expect(h.criarClienteAsaas).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  it("pedido que já falhou é recusado sem chamar o Asaas nem a RPC de marcar", async () => {
+    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ status: "falhou" }), error: null });
+    const { cancelarPedidoAberto } = await acoes();
+
+    const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "teste" });
+
+    expect(r).toEqual({ ok: false, error: "Este pedido já falhou. Não há nada para cancelar." });
+    expect(h.criarClienteAsaas).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  it("sem assinatura nem cobrança encontradas por referência: cancela mesmo assim, depois de buscar as duas", async () => {
     const { cancelarPedidoAberto } = await acoes();
 
     const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "pedido abandonado" });
 
     expect(r.ok).toBe(true);
-    expect(h.criarClienteAsaas).not.toHaveBeenCalled();
+    expect(h.criarClienteAsaas).toHaveBeenCalled();
+    expect(h.buscarAssinaturaPorReferencia).toHaveBeenCalledWith(`HC:ord:${PEDIDO}`);
+    expect(h.buscarCobrancaPorReferencia).toHaveBeenCalledWith(`HC:ord:${PEDIDO}`);
+    expect(h.removerAssinatura).not.toHaveBeenCalled();
+    expect(h.removerCobranca).not.toHaveBeenCalled();
     expect(h.rpc).toHaveBeenCalledWith(
       "fn_billing_pedido_marcar",
       expect.objectContaining({ p_org: ORG, p_pedido: PEDIDO, p_status: "cancelado", p_motivo: "pedido abandonado" }),
     );
   });
 
-  it("pedido com assinatura no Asaas: remove a assinatura ANTES de marcar cancelado", async () => {
-    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ asaasSubscriptionId: "sub_123" }), error: null });
+  it("assinatura achada por referência no Asaas: remove ANTES de marcar cancelado", async () => {
+    h.buscarAssinaturaPorReferencia.mockResolvedValueOnce({ id: "sub_123" });
     const ordem: string[] = [];
     h.removerAssinatura.mockImplementationOnce(async () => {
       ordem.push("remover_assinatura");
@@ -376,8 +412,8 @@ describe("cancelarPedidoAberto", () => {
     expect(ordem).toEqual(["remover_assinatura", "marcar_cancelado"]);
   });
 
-  it("pedido com cobrança avulsa no Asaas (sem assinatura): remove a cobrança antes de marcar", async () => {
-    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ asaasPaymentId: "pay_123" }), error: null });
+  it("cobrança avulsa achada por referência no Asaas (sem assinatura): remove antes de marcar", async () => {
+    h.buscarCobrancaPorReferencia.mockResolvedValueOnce({ id: "pay_123" });
     const { cancelarPedidoAberto } = await acoes();
 
     const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "duplicado" });
@@ -386,8 +422,20 @@ describe("cancelarPedidoAberto", () => {
     expect(h.removerCobranca).toHaveBeenCalledWith("pay_123");
   });
 
+  it("busca por externalReference falhando recusa o cancelamento sem marcar nada", async () => {
+    h.buscarAssinaturaPorReferencia.mockRejectedValueOnce(new Error("timeout"));
+    const { cancelarPedidoAberto } = await acoes();
+
+    const r = await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "duplicado" });
+
+    expect(r.ok).toBe(false);
+    expect(h.removerAssinatura).not.toHaveBeenCalled();
+    expect(h.removerCobranca).not.toHaveBeenCalled();
+    expect(h.rpc).not.toHaveBeenCalled();
+  });
+
   it("remoção no Asaas falhando NUNCA marca o pedido como cancelado", async () => {
-    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ asaasSubscriptionId: "sub_123" }), error: null });
+    h.buscarAssinaturaPorReferencia.mockResolvedValueOnce({ id: "sub_123" });
     h.removerAssinatura.mockRejectedValueOnce(new Error("timeout"));
     const { cancelarPedidoAberto } = await acoes();
 
@@ -399,7 +447,6 @@ describe("cancelarPedidoAberto", () => {
   });
 
   it("ASAAS_ENABLED desligado com assinatura pendente de remover: recusa sem tentar remover nem marcar", async () => {
-    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ asaasSubscriptionId: "sub_123" }), error: null });
     h.configDoAsaas.mockReturnValueOnce(CONFIG_DESLIGADO);
     const { cancelarPedidoAberto } = await acoes();
 
@@ -407,11 +454,12 @@ describe("cancelarPedidoAberto", () => {
 
     expect(r.ok).toBe(false);
     expect(h.criarClienteAsaas).not.toHaveBeenCalled();
+    expect(h.buscarAssinaturaPorReferencia).not.toHaveBeenCalled();
     expect(h.rpc).not.toHaveBeenCalled();
   });
 
   it("sucesso audita se havia cobrança/assinatura no Asaas, SEM CPF/CNPJ nem valor", async () => {
-    h.lerPedido.mockResolvedValueOnce({ data: pedidoFalso({ asaasSubscriptionId: "sub_123" }), error: null });
+    h.buscarAssinaturaPorReferencia.mockResolvedValueOnce({ id: "sub_123" });
     const { cancelarPedidoAberto } = await acoes();
 
     await cancelarPedidoAberto({ organizationId: ORG, pedidoId: PEDIDO, motivo: "duplicado" });

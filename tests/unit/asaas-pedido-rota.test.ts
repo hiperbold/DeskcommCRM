@@ -52,6 +52,8 @@ function pedidoBase(overrides: Partial<PedidoLinha> = {}): PedidoLinha {
     ciclo: "monthly",
     planoNome: "Pro",
     pacoteNome: null,
+    planCode: "pro",
+    pacoteCode: null,
     ...overrides,
   };
 }
@@ -93,6 +95,12 @@ describe("GET /api/v1/billing/pedidos/[id]: autorização", () => {
     const res = await chamarRota(PEDIDO_ID);
     expect(res.status).toBe(403);
     expect(vi.mocked(dbCompraSupabase)).not.toHaveBeenCalled();
+  });
+
+  it("exige o papel admin (N41/correção 6), o mesmo das ações de compra", async () => {
+    vi.mocked(dbCompraSupabase).mockReturnValue(dbFalso(ORG, pedidoBase()));
+    await chamarRota(PEDIDO_ID);
+    expect(vi.mocked(requireRole)).toHaveBeenCalledWith("admin", expect.objectContaining({ resource: "billing_orders" }));
   });
 });
 

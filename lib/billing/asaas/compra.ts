@@ -80,20 +80,20 @@ import "server-only";
  *
  * ─── `cancelarAssinaturaDoCliente`: o marcador de encerramento ────────────
  *
- * Decisão 22: depois de um `DELETE /subscriptions/{id}` bem sucedido feito
- * pelo próprio CRM, `cancelarAssinaturaDoCliente` chama primeiro
- * `fn_billing_cancelar_no_fim_do_periodo` (0908) e só depois
- * `fn_billing_asaas_marcar_assinatura_encerrada` (0909, Tarefa 6): a
- * primeira já liga `cancel_at_period_end` e grava o evento de auditoria
- * (`billing_contract_eventos`, tipo `cancelar_no_fim`); a segunda, chamada
- * DEPOIS, encontra `cancel_at_period_end` já `true` e não grava um segundo
- * evento redundante (ela só insere quando o valor anterior era `false`), só
- * grava `asaas_assinatura_encerrada_em` e cancela pedido aberto daquela
- * assinatura. Uma falha em `marcarAssinaturaEncerrada` só é logada (não
- * derruba a resposta ao cliente, que já teve o `DELETE` e o
- * `cancel_at_period_end` aplicados de verdade): o marcador fica pendente
- * para a conciliação diária (Tarefa 16) ou para um futuro
- * `SUBSCRIPTION_DELETED` confirmado gravarem depois.
+ * Correção 5 (revisão/auditoria da fase): depois de um `DELETE
+ * /subscriptions/{id}` bem sucedido feito pelo próprio CRM,
+ * `cancelarAssinaturaDoCliente` chama só `fn_billing_asaas_marcar_
+ * assinatura_encerrada` (0909, Tarefa 6, decisão 22), sem passar antes por
+ * `fn_billing_cancelar_no_fim_do_periodo` (0908): a função nova já liga
+ * `cancel_at_period_end` e grava o evento de auditoria
+ * (`billing_contract_eventos`, tipo `cancelar_no_fim`) sozinha, então a
+ * chamada antiga só duplicava trabalho. Uma falha em
+ * `marcarAssinaturaEncerrada` agora DEVOLVE ERRO (nunca mais "ok"): sem o
+ * marcador, o contrato não ficou com `cancel_at_period_end` nem com o
+ * rastro de auditoria, e afirmar sucesso seria mentir. Pedir para tentar de
+ * novo é seguro: o `DELETE` já feito é idempotente (`removerAssinatura`
+ * trata 404 como sucesso) e `marcarAssinaturaEncerrada` também é idempotente
+ * (marcador já preenchido devolve `ja_registrado` sem repetir nada).
  */
 import type { ClienteAsaasHttp } from "./cliente";
 import type { AmbienteAsaas, ConfigAsaas } from "./config";
@@ -213,6 +213,10 @@ export interface PedidoLinha {
   ciclo: CicloPedido | null;
   planoNome: string | null;
   pacoteNome: string | null;
+  /** `billing_plans.code` (correção 3/M9): compara a oferta do pedido aberto retomado com a que a entrada pediu agora. */
+  planCode: string | null;
+  /** `billing_token_pacotes.codigo` (correção 3/M9), mesmo racional de `planCode`. */
+  pacoteCode: string | null;
 }
 
 export interface VinculoClienteAsaas {
@@ -222,6 +226,12 @@ export interface VinculoClienteAsaas {
 export interface ContratoAsaas {
   asaasSubscriptionId: string | null;
   asaasAssinaturaEncerradaEm: string | null;
+  /**
+   * `billing_contracts.current_period_end` (correção 3/M9): decisão 26 na
+   * retomada de um pedido aberto (`fn_billing_criar_pedido` não roda nesse
+   * caminho, então quem calcula a próxima cobrança é este arquivo).
+   */
+  currentPeriodEnd: string | null;
 }
 
 export interface DbCompra {
@@ -274,11 +284,8 @@ export interface DbCompra {
     motivo: string,
   ): Promise<RpcResultado<{ pedidoId: string; statusAnterior: StatusPedido; statusNovo: StatusPedido }>>;
 
-  /** Leitura pura de `billing_contracts` (só os dois campos usados por `cancelarAssinaturaDoCliente`). */
+  /** Leitura pura de `billing_contracts` (campos usados por `cancelarAssinaturaDoCliente` e pela retomada M9, correção 3). */
   lerContrato(org: string): Promise<RpcResultado<ContratoAsaas | null>>;
-
-  /** `fn_billing_cancelar_no_fim_do_periodo` (migração 0908). */
-  cancelarNoFimDoPeriodo(org: string, sim: boolean, actor: string): Promise<RpcResultado<{ cancelAtPeriodEnd: boolean }>>;
 
   /** `fn_billing_asaas_marcar_assinatura_encerrada` (migração 0909, Tarefa 6, decisão 22). */
   marcarAssinaturaEncerrada(
@@ -316,6 +323,8 @@ export const MENSAGEM_PAGADOR_OBRIGATORIO =
   "Informe seus dados de pagamento para concluir a primeira compra.";
 export const MENSAGEM_SEM_ASSINATURA_ASAAS =
   "Esta organização não tem uma assinatura Asaas ativa para cancelar.";
+export const MENSAGEM_OUTRA_OFERTA_ABERTA =
+  "Há um pedido em aberto de outra opção. Conclua ou peça para cancelar antes de escolher outra.";
 
 // ─── Ajudantes ──────────────────────────────────────────────────────────
 
@@ -389,6 +398,21 @@ type ResolucaoPedido =
   | { tipo: "ok"; pedidoId: string; proximaCobrancaEm: string | null }
   | { tipo: "erro"; mensagem: string };
 
+/**
+ * M9/correção 3: só retoma um pedido aberto do mesmo tipo quando plano,
+ * ciclo e método também batem com o que a entrada pediu AGORA. Comparar só
+ * o tipo (M9 original) deixava alguém que pediu Pro mensal cartão ser
+ * silenciosamente jogado para dentro de um pedido aberto de outra oferta
+ * (ex.: Ilimitado anual Pix) criado minutos antes.
+ */
+function mesmaOfertaDoPedidoAberto(pedido: PedidoLinha, entrada: EntradaIniciarCompra): boolean {
+  if (pedido.metodo !== entrada.metodo) return false;
+  if (pedido.tipo === "assinatura") {
+    return pedido.planCode === (entrada.planCode ?? null) && pedido.ciclo === (entrada.ciclo ?? null);
+  }
+  return pedido.pacoteCode === (entrada.pacote ?? null);
+}
+
 async function resolverPedido(
   deps: DepsCompra,
   entrada: EntradaIniciarCompra,
@@ -426,10 +450,34 @@ async function resolverPedido(
       });
       return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
     }
-    // proximaCobrancaEm só vem do banco quando fn_billing_criar_pedido roda
-    // de fato (decisão 26/A3); aqui não rodou, então o próximo passo usa
-    // "hoje em SP" (a regra literal da decisão A3: "senão hoje em SP").
-    return { tipo: "ok", pedidoId: aberto.data.id, proximaCobrancaEm: null };
+    if (!mesmaOfertaDoPedidoAberto(aberto.data, entrada)) {
+      // Correção 3: nunca retoma silenciosamente um pedido de outra oferta;
+      // nunca chega a fazer POST nenhum neste caminho.
+      return { tipo: "erro", mensagem: MENSAGEM_OUTRA_OFERTA_ABERTA };
+    }
+
+    let proximaCobrancaEm: string | null = null;
+    if (aberto.data.tipo === "assinatura") {
+      // Decisão 26 continua valendo na retomada (correção 3):
+      // fn_billing_criar_pedido não rodou desta vez (a exceção que gerou
+      // billing_pedido_aberto_existe não devolve dados), então este serviço
+      // calcula a próxima cobrança a partir do CONTRATO, em vez de deixar
+      // cair em "hoje" por omissão.
+      const contrato = await deps.db.lerContrato(entrada.organizationId);
+      if (contrato.error) {
+        deps.logger.error("asaas_compra_ler_contrato_para_retomada_falhou", {
+          org: entrada.organizationId,
+          codigo: contrato.error.code,
+        });
+        return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+      }
+      const fimPeriodo = contrato.data?.currentPeriodEnd;
+      if (fimPeriodo && new Date(fimPeriodo).getTime() > relogio(deps).getTime()) {
+        proximaCobrancaEm = dataSaoPaulo(new Date(fimPeriodo));
+      }
+    }
+
+    return { tipo: "ok", pedidoId: aberto.data.id, proximaCobrancaEm };
   }
 
   deps.logger.warn("asaas_compra_pedido_recusado", {
@@ -442,13 +490,19 @@ async function resolverPedido(
 
 // ─── Devolver o que um pedido em `aguardando_pagamento` já tem ─────────────
 
-async function devolverCobrancaJaRegistrada(deps: DepsCompra, pedido: PedidoLinha): Promise<ResultadoIniciarCompra> {
+async function devolverCobrancaJaRegistrada(deps: DepsCompra, org: string, pedido: PedidoLinha): Promise<ResultadoIniciarCompra> {
   if (pedido.metodo === "CREDIT_CARD") {
-    if (!pedido.invoiceUrl || !urlDeFaturaValida(pedido.ambiente, pedido.invoiceUrl)) {
-      deps.logger.error("asaas_compra_invoice_url_invalida_na_retomada", { pedidoId: pedido.id });
-      return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+    if (pedido.invoiceUrl) {
+      if (!urlDeFaturaValida(pedido.ambiente, pedido.invoiceUrl)) {
+        deps.logger.error("asaas_compra_invoice_url_invalida_na_retomada", { pedidoId: pedido.id });
+        return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+      }
+      return { tipo: "redirecionar", url: pedido.invoiceUrl };
     }
-    return { tipo: "redirecionar", url: pedido.invoiceUrl };
+    // Correção 4: invoice_url ainda nula (a leitura da fatura, logo depois
+    // do POST, falhou). Nunca um erro genérico permanente por isso:
+    // reconsulta agora e registra; se falhar de novo, pede para aguardar.
+    return reconsultarFaturaEDevolver(deps, org, pedido);
   }
   if (!pedido.asaasPaymentId) {
     deps.logger.error("asaas_compra_pix_sem_cobranca_na_retomada", { pedidoId: pedido.id });
@@ -466,8 +520,59 @@ async function devolverCobrancaJaRegistrada(deps: DepsCompra, pedido: PedidoLinh
   }
 }
 
-async function resolverRespostaPeloEstado(deps: DepsCompra, pedido: PedidoLinha): Promise<ResultadoIniciarCompra> {
-  if (pedido.status === "aguardando_pagamento") return devolverCobrancaJaRegistrada(deps, pedido);
+/**
+ * Correção 4: quando `aguardando_pagamento` chega com `invoice_url` nula no
+ * fluxo de cartão (a leitura da fatura falhou bem depois de um POST que já
+ * tinha sucesso), reconsulta agora, pela assinatura quando o pedido tem
+ * `asaasSubscriptionId`, pela cobrança avulsa quando tem `asaasPaymentId`, e
+ * REGISTRA o que achar (para a próxima chamada não precisar reconsultar de
+ * novo). Uma consulta que falha de novo, ou que ainda não tem a fatura,
+ * NUNCA vira erro permanente: sempre `MENSAGEM_AGUARDE`, para uma PRÓXIMA
+ * chamada de `iniciarCompra` tentar de novo.
+ */
+async function reconsultarFaturaEDevolver(deps: DepsCompra, org: string, pedido: PedidoLinha): Promise<ResultadoIniciarCompra> {
+  let cobranca: CobrancaAsaas | null = null;
+  try {
+    if (pedido.asaasSubscriptionId) {
+      const cobrancas = await deps.asaas.listarCobrancasDaAssinatura(pedido.asaasSubscriptionId);
+      cobranca = cobrancas[0] ?? null;
+    } else if (pedido.asaasPaymentId) {
+      const resultado = await deps.asaas.buscarCobranca(pedido.asaasPaymentId);
+      cobranca = "removido" in resultado ? null : resultado;
+    }
+  } catch {
+    deps.logger.warn("asaas_compra_reconsultar_fatura_falhou", { pedidoId: pedido.id });
+    return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
+  }
+
+  if (!cobranca?.invoiceUrl) {
+    return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
+  }
+  if (!urlDeFaturaValida(pedido.ambiente, cobranca.invoiceUrl)) {
+    deps.logger.error("asaas_compra_invoice_url_fora_da_lista_na_retomada", { pedidoId: pedido.id });
+    return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+  }
+
+  const registrado = await deps.db.registrarCobranca({
+    org,
+    pedidoId: pedido.id,
+    asaasPaymentId: cobranca.id,
+    asaasSubscriptionId: pedido.asaasSubscriptionId,
+    invoiceUrl: cobranca.invoiceUrl,
+  });
+  if (registrado.error || !registrado.data) {
+    deps.logger.error("asaas_compra_registrar_cobranca_na_retomada_falhou", {
+      pedidoId: pedido.id,
+      codigo: registrado.error?.code,
+    });
+    return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
+  }
+
+  return { tipo: "redirecionar", url: cobranca.invoiceUrl };
+}
+
+async function resolverRespostaPeloEstado(deps: DepsCompra, org: string, pedido: PedidoLinha): Promise<ResultadoIniciarCompra> {
+  if (pedido.status === "aguardando_pagamento") return devolverCobrancaJaRegistrada(deps, org, pedido);
   if (pedido.status === "pago") return { tipo: "erro", mensagem: MENSAGEM_PEDIDO_JA_PAGO };
   if (pedido.status === "processando") return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
   // "criado"/"inconclusivo" não deveriam chegar aqui vindos deste caminho
@@ -738,7 +843,11 @@ async function criarCobrancaOuAssinatura(
       }
     } catch {
       deps.logger.warn("asaas_compra_recuperar_inconclusivo_falhou", { pedidoId: pedido.id });
-      // A CONSULTA falhou, não o pedido: segue para tentar o POST mesmo assim.
+      // Decisão 13: a CONSULTA falhou (timeout/429/5xx). Nunca faz um POST
+      // cego depois de uma consulta que não respondeu; devolve "aguarde" e
+      // deixa o pedido como está para uma PRÓXIMA chamada de iniciarCompra
+      // tentar de novo.
+      return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
     }
   }
 
@@ -764,7 +873,7 @@ export async function iniciarCompra(deps: DepsCompra, entrada: EntradaIniciarCom
 
   const tomavel = leitura1.data.status === "criado" || leitura1.data.status === "inconclusivo" || leitura1.data.status === "processando";
   if (!tomavel) {
-    return resolverRespostaPeloEstado(deps, leitura1.data);
+    return resolverRespostaPeloEstado(deps, entrada.organizationId, leitura1.data);
   }
   const estadoAntesDeTomar = leitura1.data.status;
 
@@ -781,7 +890,7 @@ export async function iniciarCompra(deps: DepsCompra, entrada: EntradaIniciarCom
       deps.logger.error("asaas_compra_ler_pedido_falhou", { pedidoId: resolucao.pedidoId, codigo: leitura2.error?.code });
       return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
     }
-    return resolverRespostaPeloEstado(deps, leitura2.data);
+    return resolverRespostaPeloEstado(deps, entrada.organizationId, leitura2.data);
   }
 
   // Ganhou a posse: releitura autoritativa (decisão 12: releitura depois da
@@ -813,10 +922,11 @@ export async function iniciarCompra(deps: DepsCompra, entrada: EntradaIniciarCom
  * Cancela a assinatura Asaas da organização: primeiro `DELETE
  * /subscriptions/{id}` (idempotente: 404 já conta como sucesso, tratado
  * dentro de `deps.asaas.removerAssinatura`); só DEPOIS do sucesso chama
- * `fn_billing_cancelar_no_fim_do_periodo`. Nunca na ordem inversa: marcar
- * `cancel_at_period_end` antes do `DELETE` deixaria o contrato dizendo
- * "cancela no fim do período" enquanto a assinatura de verdade continua
- * cobrando no Asaas.
+ * `fn_billing_asaas_marcar_assinatura_encerrada` (correção 5: ela já liga
+ * `cancel_at_period_end` e grava o evento de auditoria sozinha, ver o corpo
+ * dela na migração 0909). Nunca na ordem inversa: marcar `cancel_at_period_
+ * end` antes do `DELETE` deixaria o contrato dizendo "cancela no fim do
+ * período" enquanto a assinatura de verdade continua cobrando no Asaas.
  */
 export async function cancelarAssinaturaDoCliente(
   deps: DepsCompra,
@@ -841,20 +951,21 @@ export async function cancelarAssinaturaDoCliente(
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
   }
 
-  const cancelado = await deps.db.cancelarNoFimDoPeriodo(organizationId, true, actorId);
-  if (cancelado.error || !cancelado.data) {
-    deps.logger.error("asaas_cancelar_no_banco_falhou", { org: organizationId, codigo: cancelado.error?.code });
+  // Correção 5: fn_billing_asaas_marcar_assinatura_encerrada (0909) já liga
+  // cancel_at_period_end = true e grava o evento de auditoria sozinha;
+  // chamar fn_billing_cancelar_no_fim_do_periodo (0908) antes dela só
+  // duplicava trabalho que a função nova já cobre, por isso essa chamada foi
+  // removida. Uma falha AQUI agora devolve erro (nunca mais "ok"): sem o
+  // marcador, o contrato não tem cancel_at_period_end nem o rastro de
+  // auditoria, e afirmar sucesso seria mentir. É seguro pedir para tentar de
+  // novo: o DELETE já feito é idempotente (removerAssinatura trata 404 como
+  // sucesso) e marcarAssinaturaEncerrada também é idempotente (marcador já
+  // preenchido devolve ja_registrado sem repetir nada).
+  const marcado = await deps.db.marcarAssinaturaEncerrada(organizationId, asaasSubscriptionId, actorId);
+  if (marcado.error || !marcado.data) {
+    deps.logger.error("asaas_cancelar_marcar_encerrada_falhou", { org: organizationId, codigo: marcado.error?.code });
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
   }
 
-  const marcado = await deps.db.marcarAssinaturaEncerrada(organizationId, asaasSubscriptionId, actorId);
-  if (marcado.error || !marcado.data) {
-    // Decisão 22: o DELETE no Asaas e o cancel_at_period_end já foram
-    // aplicados de verdade; o marcador fica pendente para a conciliação
-    // diária (Tarefa 16) ou para um SUBSCRIPTION_DELETED confirmado gravarem
-    // depois. Não derruba a resposta ao cliente por isso.
-    deps.logger.error("asaas_cancelar_marcar_encerrada_falhou", { org: organizationId, codigo: marcado.error?.code });
-  }
-
-  return { tipo: "ok", cancelAtPeriodEnd: cancelado.data.cancelAtPeriodEnd };
+  return { tipo: "ok", cancelAtPeriodEnd: true };
 }

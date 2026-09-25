@@ -19,10 +19,14 @@
  *
  * `ROLE_RANK[activeOrg.role] < ROLE_RANK.admin` recusa antes de qualquer
  * outra checagem (mesma ordem de `apagarDadosOperacionaisDaOrganizacao.ts`:
- * sessão, depois papel, só depois o resto). Platform admin (suporte) segue o
- * mesmo bypass que o resto das ações de `app/actions/settings/` já dá:
- * `supportWriteError` barra sessão de suporte em modo só-leitura ou
- * encerrada.
+ * sessão, depois papel, só depois o resto). `supportWriteError` barra sessão
+ * de suporte em modo só-leitura ou encerrada. Correção 7: o admin da
+ * PLATAFORMA (`authUser.is_platform_admin`) pode bypassar o papel do tenant,
+ * mas só depois de provar escopo `full` em `platform_admins` e MFA em dia
+ * (`mfaEmDivida`), a mesma régua de `cobrancaAsaas.ts`
+ * (`requirePlatformAdmin` + `mfaEmDivida`); sem isso, comprar ou cancelar em
+ * QUALQUER organização ficaria ao alcance de um escopo de suporte só
+ * leitura, ou de uma sessão sem MFA provado.
  *
  * ─── As duas chaves da decisão 18 ──────────────────────────────────────────
  *
@@ -59,7 +63,7 @@ import { headers } from "next/headers";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { criarClienteAsaas } from "@/lib/billing/asaas/cliente";
 import { compraLigada, configDoAsaas, type ConfigAsaas } from "@/lib/billing/asaas/config";
@@ -87,6 +91,7 @@ const MENSAGEM_CANCELAMENTO_DESLIGADO =
   "O cancelamento pela tela não está disponível no momento. Fale com o suporte.";
 const MENSAGEM_ERRO_CONFIGURACAO =
   "Não foi possível concluir a operação agora. Tente novamente em instantes ou fale com o suporte.";
+const MENSAGEM_MFA = "Confirme a verificação em duas etapas.";
 
 // ─── Entrada (zod): nunca organizationId, nunca preço/plano resolvido ─────
 
@@ -149,8 +154,28 @@ async function autorizarAdminDaOrganizacao(mensagemSemPermissao: string): Promis
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, mensagem: MENSAGEM_SEM_ORGANIZACAO };
 
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, mensagem: mensagemSemPermissao };
+  if (ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
+    if (!authUser.is_platform_admin) {
+      return { ok: false, mensagem: mensagemSemPermissao };
+    }
+    // Correção 7: bypass do papel do tenant pelo admin da PLATAFORMA exige
+    // escopo `full` e MFA em dia, a mesma régua de `cobrancaAsaas.ts`
+    // (`requirePlatformAdmin` + `mfaEmDivida`). Sem isso, um platform admin
+    // com escopo de suporte só leitura, ou numa sessão sem MFA provado,
+    // compraria ou cancelaria a assinatura de QUALQUER organização.
+    const admin = createAdminClient();
+    const { data: paRow, error: paErro } = await admin
+      .from("platform_admins")
+      .select("scope")
+      .eq("user_id", authUser.id)
+      .is("revoked_at", null)
+      .maybeSingle();
+    if (paErro || !paRow || paRow.scope !== "full") {
+      return { ok: false, mensagem: mensagemSemPermissao };
+    }
+    if (await mfaEmDivida()) {
+      return { ok: false, mensagem: MENSAGEM_MFA };
+    }
   }
 
   return { ok: true, userId: authUser.id, orgId: activeOrg.orgId };

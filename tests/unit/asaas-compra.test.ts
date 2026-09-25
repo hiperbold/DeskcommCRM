@@ -70,6 +70,8 @@ function pedidoBase(overrides: Partial<PedidoLinha> = {}): PedidoLinha {
     ciclo: "monthly",
     planoNome: "Pro",
     pacoteNome: null,
+    planCode: "pro",
+    pacoteCode: null,
     ...overrides,
   };
 }
@@ -188,8 +190,10 @@ function dbFalso(pedidoInicial: PedidoLinha, opts: { vinculo?: string | null } =
       pedido = { ...pedido, status };
       return { data: { pedidoId: pedido.id, statusAnterior, statusNovo: status }, error: null };
     }),
-    lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null }, error: null })),
-    cancelarNoFimDoPeriodo: vi.fn(async () => ({ data: { cancelAtPeriodEnd: true }, error: null })),
+    lerContrato: vi.fn(async () => ({
+      data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+      error: null,
+    })),
     marcarAssinaturaEncerrada: vi.fn(async () => ({
       data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
       error: null,
@@ -214,7 +218,6 @@ function dbStubVazio(): DbCompra {
     registrarCobranca: naoDeveriaSerChamado("registrarCobranca") as DbCompra["registrarCobranca"],
     marcarPedido: naoDeveriaSerChamado("marcarPedido") as DbCompra["marcarPedido"],
     lerContrato: naoDeveriaSerChamado("lerContrato") as DbCompra["lerContrato"],
-    cancelarNoFimDoPeriodo: naoDeveriaSerChamado("cancelarNoFimDoPeriodo") as DbCompra["cancelarNoFimDoPeriodo"],
     marcarAssinaturaEncerrada: naoDeveriaSerChamado("marcarAssinaturaEncerrada") as DbCompra["marcarAssinaturaEncerrada"],
   };
 }
@@ -237,7 +240,15 @@ describe("iniciarCompra: caminho feliz", () => {
   });
 
   it("pacote de tokens no Pix devolve o QR", async () => {
-    const pedido = pedidoBase({ tipo: "pacote_tokens", metodo: "PIX", ciclo: null, planoNome: null, pacoteNome: "1000 tokens" });
+    const pedido = pedidoBase({
+      tipo: "pacote_tokens",
+      metodo: "PIX",
+      ciclo: null,
+      planoNome: null,
+      pacoteNome: "1000 tokens",
+      planCode: null,
+      pacoteCode: "mil-tokens",
+    });
     const { db } = dbFalso(pedido);
     const asaas = asaasFalso({
       criarCobranca: vi.fn(async () => cobrancaFake({ id: "pay_pix123", billingType: "PIX", invoiceUrl: null })),
@@ -317,6 +328,26 @@ describe("iniciarCompra: recuperação do inconclusivo (decisão 13)", () => {
     expect(segunda.tipo).toBe("redirecionar");
     expect(asaas.criarAssinatura).toHaveBeenCalledTimes(1);
     expect(asaas.buscarAssinaturaPorReferencia).toHaveBeenCalledWith("HC:ord:pedido-1");
+  });
+
+  it("timeout marca inconclusivo; se a retentativa NÃO conseguir consultar por referência, aguarda sem POST", async () => {
+    const { db, getPedido } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      criarAssinatura: vi.fn(async () => {
+        throw erroTempoEsgotado(true);
+      }),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+    expect(getPedido().status).toBe("inconclusivo");
+
+    (asaas.buscarAssinaturaPorReferencia as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("504"));
+
+    const segunda = await iniciarCompra(deps, { ...ENTRADA_BASE, chave: "66666666-6666-6666-6666-666666666666" });
+
+    expect(segunda).toEqual({ tipo: "erro", mensagem: MENSAGEM_AGUARDE });
+    expect(asaas.criarAssinatura).toHaveBeenCalledTimes(1); // nunca um segundo POST
   });
 
   it("4xx de validação marca falhou com mensagem fixa, nunca a mensagem crua do Asaas", async () => {
@@ -450,6 +481,46 @@ describe("iniciarCompra: pedido aberto retomado (M9)", () => {
     expect(asaas.criarAssinatura).not.toHaveBeenCalled();
     expect(dbComRecusa.tomarPedido).not.toHaveBeenCalled();
   });
+
+  it("pedido aberto de OUTRA oferta (plano diferente): recusa, nunca retoma nem cria outro", async () => {
+    const pedidoExistente = pedidoBase({ id: "pedido-existente", status: "criado", planCode: "ilimitado" });
+    const { db: dbBase } = dbFalso(pedidoExistente);
+    const db: DbCompra = {
+      ...dbBase,
+      criarPedido: vi.fn(async () => ({ data: null, error: { code: "22023", message: "billing_pedido_aberto_existe" } })),
+    };
+    const asaas = asaasFalso();
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, { ...ENTRADA_BASE, chave: "77777777-7777-7777-7777-777777777777" });
+
+    expect(resultado.tipo).toBe("erro");
+    if (resultado.tipo === "erro") {
+      expect(resultado.mensagem).toContain("Há um pedido em aberto de outra opção");
+    }
+    expect(db.tomarPedido).not.toHaveBeenCalled();
+    expect(asaas.criarAssinatura).not.toHaveBeenCalled();
+  });
+
+  it("retomada calcula a próxima cobrança a partir do contrato (decisão 26), nunca hoje", async () => {
+    const pedidoExistente = pedidoBase({ id: "pedido-existente", status: "criado" });
+    const { db: dbBase } = dbFalso(pedidoExistente);
+    const db: DbCompra = {
+      ...dbBase,
+      criarPedido: vi.fn(async () => ({ data: null, error: { code: "22023", message: "billing_pedido_aberto_existe" } })),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null, currentPeriodEnd: "2026-11-15T03:00:00Z" },
+        error: null,
+      })),
+    };
+    const asaas = asaasFalso();
+    const { deps } = montarDeps(db, asaas, () => new Date("2026-09-24T12:00:00Z"));
+
+    await iniciarCompra(deps, { ...ENTRADA_BASE, chave: "88888888-8888-8888-8888-888888888888" });
+
+    const chamada = (asaas.criarAssinatura as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(chamada.nextDueDate).toBe("2026-11-15");
+  });
 });
 
 describe("iniciarCompra: nextDueDate (decisão 26/A3)", () => {
@@ -499,6 +570,54 @@ describe("iniciarCompra: description sem dado pessoal (decisão 4)", () => {
   });
 });
 
+describe("iniciarCompra: aguardando_pagamento com invoice_url nula (correção 4)", () => {
+  it("assinatura sem fatura ainda: reconsulta pela assinatura e registra a que achar", async () => {
+    const pedido = pedidoBase({ status: "aguardando_pagamento", invoiceUrl: null, asaasSubscriptionId: "sub_existente" });
+    const { db } = dbFalso(pedido);
+    const asaas = asaasFalso({
+      listarCobrancasDaAssinatura: vi.fn(async () => [
+        cobrancaFake({ id: "pay_novo", invoiceUrl: "https://sandbox.asaas.com/i/novo" }),
+      ]),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "redirecionar", url: "https://sandbox.asaas.com/i/novo" });
+    expect(db.registrarCobranca).toHaveBeenCalledWith(
+      expect.objectContaining({ asaasPaymentId: "pay_novo", invoiceUrl: "https://sandbox.asaas.com/i/novo" }),
+    );
+  });
+
+  it("reconsulta falhando (rede) devolve aguarde, nunca erro permanente", async () => {
+    const pedido = pedidoBase({ status: "aguardando_pagamento", invoiceUrl: null, asaasSubscriptionId: "sub_existente" });
+    const { db } = dbFalso(pedido);
+    const asaas = asaasFalso({
+      listarCobrancasDaAssinatura: vi.fn(async () => {
+        throw new Error("504");
+      }),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "erro", mensagem: MENSAGEM_AGUARDE });
+  });
+
+  it("reconsulta ainda sem fatura: aguarde, nunca erro permanente", async () => {
+    const pedido = pedidoBase({ status: "aguardando_pagamento", invoiceUrl: null, asaasSubscriptionId: "sub_existente" });
+    const { db } = dbFalso(pedido);
+    const asaas = asaasFalso({
+      listarCobrancasDaAssinatura: vi.fn(async () => []),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado).toEqual({ tipo: "erro", mensagem: MENSAGEM_AGUARDE });
+  });
+});
+
 describe("iniciarCompra: logs nunca carregam dado sensível", () => {
   it("nenhuma linha de log contém CPF, e-mail ou a chave do pedido", async () => {
     const { db } = dbFalso(pedidoBase());
@@ -519,7 +638,7 @@ describe("iniciarCompra: logs nunca carregam dado sensível", () => {
 });
 
 describe("cancelarAssinaturaDoCliente", () => {
-  it("primeiro remove no Asaas, depois marca cancel_at_period_end, depois marca a assinatura encerrada", async () => {
+  it("primeiro remove no Asaas, depois marca a assinatura encerrada (que já liga cancel_at_period_end)", async () => {
     const ordem: string[] = [];
     const asaas = asaasFalso({
       removerAssinatura: vi.fn(async () => {
@@ -528,11 +647,10 @@ describe("cancelarAssinaturaDoCliente", () => {
     });
     const db: DbCompra = {
       ...dbStubVazio(),
-      lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null }, error: null })),
-      cancelarNoFimDoPeriodo: vi.fn(async () => {
-        ordem.push("banco_cancelar");
-        return { data: { cancelAtPeriodEnd: true }, error: null };
-      }),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+        error: null,
+      })),
       marcarAssinaturaEncerrada: vi.fn(async () => {
         ordem.push("marcar_encerrada");
         return { data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" }, error: null };
@@ -543,7 +661,7 @@ describe("cancelarAssinaturaDoCliente", () => {
     const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
 
     expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
-    expect(ordem).toEqual(["asaas_delete", "banco_cancelar", "marcar_encerrada"]);
+    expect(ordem).toEqual(["asaas_delete", "marcar_encerrada"]);
     expect(db.marcarAssinaturaEncerrada).toHaveBeenCalledWith("org-1", "sub_ativo123", "actor-1");
   });
 
@@ -553,12 +671,13 @@ describe("cancelarAssinaturaDoCliente", () => {
         throw erroIndisponivel(500, false);
       }),
     });
-    const cancelarNoFimDoPeriodo = vi.fn();
     const marcarAssinaturaEncerrada = vi.fn();
     const db: DbCompra = {
       ...dbStubVazio(),
-      lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null }, error: null })),
-      cancelarNoFimDoPeriodo: cancelarNoFimDoPeriodo as DbCompra["cancelarNoFimDoPeriodo"],
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+        error: null,
+      })),
       marcarAssinaturaEncerrada: marcarAssinaturaEncerrada as DbCompra["marcarAssinaturaEncerrada"],
     };
     const { deps } = montarDeps(db, asaas);
@@ -566,7 +685,6 @@ describe("cancelarAssinaturaDoCliente", () => {
     const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
 
     expect(resultado.tipo).toBe("erro");
-    expect(cancelarNoFimDoPeriodo).not.toHaveBeenCalled();
     expect(marcarAssinaturaEncerrada).not.toHaveBeenCalled();
   });
 
@@ -575,8 +693,10 @@ describe("cancelarAssinaturaDoCliente", () => {
     const asaas = asaasFalso({ removerAssinatura: vi.fn(async () => undefined) });
     const db: DbCompra = {
       ...dbStubVazio(),
-      lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ja_removida", asaasAssinaturaEncerradaEm: null }, error: null })),
-      cancelarNoFimDoPeriodo: vi.fn(async () => ({ data: { cancelAtPeriodEnd: true }, error: null })),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: "sub_ja_removida", asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+        error: null,
+      })),
       marcarAssinaturaEncerrada: vi.fn(async () => ({
         data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
         error: null,
@@ -589,19 +709,21 @@ describe("cancelarAssinaturaDoCliente", () => {
     expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
   });
 
-  it("falha ao marcar a assinatura como encerrada só loga; a resposta ao cliente continua ok", async () => {
+  it("falha ao marcar a assinatura como encerrada devolve erro, nunca 'ok' (o marcador não foi gravado)", async () => {
     const asaas = asaasFalso();
     const db: DbCompra = {
       ...dbStubVazio(),
-      lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null }, error: null })),
-      cancelarNoFimDoPeriodo: vi.fn(async () => ({ data: { cancelAtPeriodEnd: true }, error: null })),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+        error: null,
+      })),
       marcarAssinaturaEncerrada: vi.fn(async () => ({ data: null, error: { code: "P0002", message: "billing_contrato_nao_encontrado" } })),
     };
     const { deps, linhas } = montarDeps(db, asaas);
 
     const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
 
-    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+    expect(resultado.tipo).toBe("erro");
     expect(linhas.some((l) => l.nivel === "error" && l.msg === "asaas_cancelar_marcar_encerrada_falhou")).toBe(true);
   });
 
@@ -609,7 +731,10 @@ describe("cancelarAssinaturaDoCliente", () => {
     const asaas = asaasFalso();
     const db: DbCompra = {
       ...dbStubVazio(),
-      lerContrato: vi.fn(async () => ({ data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null }, error: null })),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+        error: null,
+      })),
     };
     const { deps } = montarDeps(db, asaas);
 
@@ -624,7 +749,7 @@ describe("cancelarAssinaturaDoCliente", () => {
     const db: DbCompra = {
       ...dbStubVazio(),
       lerContrato: vi.fn(async () => ({
-        data: { asaasSubscriptionId: "sub_ja_encerrada", asaasAssinaturaEncerradaEm: "2026-09-01T00:00:00Z" },
+        data: { asaasSubscriptionId: "sub_ja_encerrada", asaasAssinaturaEncerradaEm: "2026-09-01T00:00:00Z", currentPeriodEnd: null },
         error: null,
       })),
     };

@@ -15,20 +15,22 @@
  * e `cancelarAssinaturaNoAsaas` são as duas escritas que TOCAM o Asaas de
  * verdade antes de escrever no banco.
  *
- * ─── `cancelarPedidoAberto`: remove no Asaas ANTES de marcar (decisão 10) ───
+ * ─── `cancelarPedidoAberto`: busca por externalReference e remove no Asaas
+ * ANTES de marcar (decisão 10, correção 2 da revisão/auditoria) ───
  *
- * Um pedido pode já ter uma assinatura (`asaas_subscription_id`) ou uma
- * cobrança avulsa (`asaas_payment_id`) registrada no Asaas. Cancelar esse
- * pedido só no CRM, sem remover do lado do Asaas, deixaria uma cobrança
- * fantasma cobrando o cliente sozinha (risco 6/11 do plano da fase: "cobrança
- * dobrada"/"cobrança fantasma"). Por isso esta ação: (1) lê o pedido; (2) se
- * ele tem assinatura OU cobrança no Asaas, remove lá primeiro pelo cliente
- * HTTP (`lib/billing/asaas/cliente.ts`), o que EXIGE `ASAAS_ENABLED` (sem
- * chave ligada, não há como remover com segurança, e a ação recusa antes de
- * tentar); (3) só DEPOIS da remoção (ou quando não havia nada a remover) é
- * que `fn_billing_pedido_marcar` grava `cancelado`. Uma falha na remoção
- * NUNCA chega a marcar o pedido: ele continua como estava, para o admin
- * tentar de novo (ou a conciliação diária alcançar depois).
+ * Nunca confia só nos ids locais do pedido (`asaas_subscription_id`/
+ * `asaas_payment_id`): eles podem estar ausentes mesmo havendo uma
+ * assinatura ou cobrança de verdade no Asaas, quando o `POST` teve sucesso
+ * mas `fn_billing_pedido_registrar_cobranca` falhou logo depois. Por isso
+ * esta ação SEMPRE busca no Asaas por `externalReference`
+ * (`buscarAssinaturaPorReferencia`/`buscarCobrancaPorReferencia`) as duas
+ * possibilidades, e remove (`removerAssinatura`/`removerCobranca`) o que
+ * achar, o que EXIGE `ASAAS_ENABLED` (sem chave ligada, não há como buscar
+ * nem remover com segurança, e a ação recusa antes de tentar). Uma busca que
+ * lança exceção recusa o cancelamento inteiro (risco 6/11 do plano da fase:
+ * "cobrança dobrada"/"cobrança fantasma"): só DEPOIS da remoção (ou quando
+ * nada foi encontrado) é que `fn_billing_pedido_marcar` grava `cancelado`.
+ * Pedido `pago`, `estornado` ou `falhou` é recusado antes de qualquer busca.
  *
  * ─── `cancelarAssinaturaNoAsaas`: reusa `cancelarAssinaturaDoCliente` ──────
  *
@@ -36,9 +38,8 @@
  * (`app/actions/settings/compraDoPlano.ts`) usa para o cliente cancelar a
  * própria assinatura; aqui o ATOR é o admin da plataforma, cancelando a
  * assinatura de QUALQUER organização (suporte). A ordem (DELETE no Asaas,
- * `fn_billing_cancelar_no_fim_do_periodo`, `fn_billing_asaas_marcar_
- * assinatura_encerrada`) e as frases fixas já vêm prontas de `compra.ts`;
- * esta ação só faz o gate do admin e a auditoria.
+ * `fn_billing_asaas_marcar_assinatura_encerrada`) e as frases fixas já vêm
+ * prontas de `compra.ts`; esta ação só faz o gate do admin e a auditoria.
  *
  * ─── Nenhuma chamada real ao Asaas em teste (restrição fixa 1 da fase) ─────
  *
@@ -82,6 +83,8 @@ const MENSAGEM_ASAAS_DESLIGADO_PARA_REMOVER =
   "Este pedido tem cobrança ou assinatura registrada no Asaas, e a integração está desligada nesta instalação. Ligue o Asaas ou cancele direto no painel do Asaas antes de marcar este pedido como cancelado.";
 const MENSAGEM_FALHA_AO_REMOVER_NO_ASAAS =
   "Não foi possível remover a cobrança ou a assinatura no Asaas agora. Tente novamente em instantes.";
+const MENSAGEM_PEDIDO_ESTORNADO = "Este pedido já foi estornado.";
+const MENSAGEM_PEDIDO_FALHOU = "Este pedido já falhou. Não há nada para cancelar.";
 const MENSAGEM_ASAAS_DESLIGADO_PARA_CANCELAR =
   "O Asaas está desligado nesta instalação; não é possível cancelar a assinatura por aqui.";
 
@@ -391,35 +394,59 @@ export async function cancelarPedidoAberto(input: {
   if (pedido.status === "pago") {
     return { ok: false, error: "Este pedido já foi pago." };
   }
+  if (pedido.status === "estornado") {
+    return { ok: false, error: MENSAGEM_PEDIDO_ESTORNADO };
+  }
+  if (pedido.status === "falhou") {
+    return { ok: false, error: MENSAGEM_PEDIDO_FALHOU };
+  }
 
-  // Decisão 10/risco 6/11: um pedido com assinatura ou cobrança no Asaas
-  // nunca é cancelado só no CRM, sem remover do lado do Asaas antes (deixaria
-  // uma cobrança fantasma cobrando o cliente sozinha).
-  if (pedido.asaasSubscriptionId || pedido.asaasPaymentId) {
-    const config = configAsaasOuNulo();
-    if (!config) {
-      return { ok: false, error: MENSAGEM_ERRO_CONFIGURACAO_ASAAS };
+  // Correção 2: nunca confia só nos ids locais (asaasSubscriptionId/
+  // asaasPaymentId podem estar ausentes quando o POST no Asaas teve sucesso
+  // mas fn_billing_pedido_registrar_cobranca falhou logo depois). Busca por
+  // externalReference as duas possibilidades no Asaas ANTES de marcar
+  // cancelado, e remove o que achar; uma busca que falha recusa o
+  // cancelamento inteiro (risco 6/11 da fase: cobrança fantasma).
+  const config = configAsaasOuNulo();
+  if (!config) {
+    return { ok: false, error: MENSAGEM_ERRO_CONFIGURACAO_ASAAS };
+  }
+  if (!config.habilitado) {
+    return { ok: false, error: MENSAGEM_ASAAS_DESLIGADO_PARA_REMOVER };
+  }
+  const cliente = criarClienteAsaas({ fetch: globalThis.fetch.bind(globalThis), config, logger });
+
+  let assinaturaParaRemover: string | null = null;
+  let cobrancaParaRemover: string | null = null;
+  try {
+    const assinatura = await cliente.buscarAssinaturaPorReferencia(pedido.externalReference);
+    assinaturaParaRemover = assinatura?.id ?? null;
+    const cobranca = await cliente.buscarCobrancaPorReferencia(pedido.externalReference);
+    cobrancaParaRemover = cobranca?.id ?? null;
+  } catch (err) {
+    logger.error("[cobrancaAsaas] procurar cobranca/assinatura por referencia antes de cancelar falhou", {
+      pedidoId,
+      erro: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, error: MENSAGEM_FALHA_AO_REMOVER_NO_ASAAS };
+  }
+
+  try {
+    if (assinaturaParaRemover) {
+      await cliente.removerAssinatura(assinaturaParaRemover);
     }
-    if (!config.habilitado) {
-      return { ok: false, error: MENSAGEM_ASAAS_DESLIGADO_PARA_REMOVER };
+    if (cobrancaParaRemover) {
+      await cliente.removerCobranca(cobrancaParaRemover);
     }
-    const cliente = criarClienteAsaas({ fetch: globalThis.fetch.bind(globalThis), config, logger });
-    try {
-      if (pedido.asaasSubscriptionId) {
-        await cliente.removerAssinatura(pedido.asaasSubscriptionId);
-      } else if (pedido.asaasPaymentId) {
-        await cliente.removerCobranca(pedido.asaasPaymentId);
-      }
-    } catch (err) {
-      logger.error("[cobrancaAsaas] remover cobranca/assinatura antes de cancelar pedido falhou", {
-        pedidoId,
-        erro: err instanceof Error ? err.message : String(err),
-      });
-      // NUNCA marca o pedido quando a remoção no Asaas falhou: ele continua
-      // como estava, para o admin tentar de novo (ou a conciliação diária,
-      // Tarefa 16, alcançar depois).
-      return { ok: false, error: MENSAGEM_FALHA_AO_REMOVER_NO_ASAAS };
-    }
+  } catch (err) {
+    logger.error("[cobrancaAsaas] remover cobranca/assinatura antes de cancelar pedido falhou", {
+      pedidoId,
+      erro: err instanceof Error ? err.message : String(err),
+    });
+    // NUNCA marca o pedido quando a remoção no Asaas falhou: ele continua
+    // como estava, para o admin tentar de novo (ou a conciliação diária,
+    // Tarefa 16, alcançar depois).
+    return { ok: false, error: MENSAGEM_FALHA_AO_REMOVER_NO_ASAAS };
   }
 
   const { data, error } = await admin.rpc("fn_billing_pedido_marcar" as never, {
@@ -445,7 +472,7 @@ export async function cancelarPedidoAberto(input: {
     resourceId: pedidoId,
     metadata: {
       motivo,
-      tinha_cobranca_ou_assinatura_no_asaas: Boolean(pedido.asaasSubscriptionId || pedido.asaasPaymentId),
+      tinha_cobranca_ou_assinatura_no_asaas: Boolean(assinaturaParaRemover || cobrancaParaRemover),
       status_anterior: resultado.status_anterior,
       status_novo: resultado.status_novo,
     },

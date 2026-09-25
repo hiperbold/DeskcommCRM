@@ -43,7 +43,9 @@ export async function GET(
 ): Promise<Response> {
   const requestId = request.headers.get("x-request-id") ?? undefined;
 
-  const authz = await requireRole("viewer", { requestId, resource: "billing_orders" });
+  // N41/correção 6: só admin compra e cancela; esta leitura do estado do
+  // pedido exige o mesmo papel das ações de compra (`compraDoPlano.ts`).
+  const authz = await requireRole("admin", { requestId, resource: "billing_orders" });
   if (!authz.ok) return authz.response;
 
   const { id } = await context.params;
