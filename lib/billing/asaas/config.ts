@@ -76,6 +76,25 @@ function ambienteDaChave(apiKey: string): AmbienteAsaas | null {
 }
 
 /**
+ * O ambiente do EVENTO recebido pelo webhook (`app/api/v1/webhooks/asaas/
+ * route.ts`, Tarefa 12): derivado SÓ da base configurada (`ASAAS_BASE_URL`),
+ * NUNCA da chave nem de `ASAAS_ENABLED`. A rota precisa saber em que
+ * ambiente um evento chegou mesmo com a compra desligada ou a chave
+ * incoerente com a base: o token já provou que quem chamou é o Asaas de
+ * verdade, e `configDoAsaas()` não serve aqui porque ela devolve `"sandbox"`
+ * como valor NEUTRO quando `habilitado` é falso (correto para quem nunca vai
+ * chamar a rede, errado para gravar o ambiente de um evento real).
+ *
+ * `null` quando a base está vazia ou fora das duas oficiais: EMERGÊNCIA de
+ * configuração (o webhook está configurado, mas a base não diz qual
+ * ambiente é), nunca "sandbox" como padrão silencioso (risco 12: ambiente
+ * trocado). Quem chama decide o 500 nesse caso.
+ */
+export function ambienteDoEventoWebhook(): AmbienteAsaas | null {
+  return ambienteDaBase(env.ASAAS_BASE_URL.trim());
+}
+
+/**
  * Lê e valida a configuração do Asaas. NUNCA chama a rede.
  *
  * Com `ASAAS_ENABLED=false` (o estado de toda instalação desta fase),

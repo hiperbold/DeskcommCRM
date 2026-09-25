@@ -234,9 +234,10 @@ describe("conciliarAsaas", () => {
 
   it("assinatura ativa removida no Asaas: injeta SUBSCRIPTION_DELETED sintético com o customer conhecido", async () => {
     const contrato: AssinaturaAtivaParaConciliar = { organizationId: "org-2", asaasSubscriptionId: "sub_fake123" };
+    const clienteAsaasDaOrganizacao = vi.fn(async () => ({ data: "cus_conhecido", error: null }));
     const db = dbFalso({
       listarAssinaturasAtivas: vi.fn(async () => ({ data: [contrato], error: null })),
-      clienteAsaasDaOrganizacao: vi.fn(async () => ({ data: "cus_conhecido", error: null })),
+      clienteAsaasDaOrganizacao,
     });
     const asaas = asaasFalso({ buscarAssinatura: vi.fn(async () => ({ removido: true as const })) });
     const resumo = await conciliarAsaas(deps({ db, asaas }));
@@ -253,6 +254,10 @@ describe("conciliarAsaas", () => {
       }),
     );
     expect(resumo.eventosSinteticos).toBe(1);
+    // Correção 9: o cliente Asaas da organização é buscado FILTRANDO pelo
+    // ambiente da configuração corrente, nunca o primeiro cliente achado
+    // (uma organização pode ter cliente em sandbox e em produção).
+    expect(clienteAsaasDaOrganizacao).toHaveBeenCalledWith("org-2", "sandbox");
   });
 
   it("assinatura ativa ainda existe no Asaas: nenhum evento", async () => {
@@ -265,18 +270,31 @@ describe("conciliarAsaas", () => {
     expect(resumo.eventosSinteticos).toBe(0);
   });
 
-  it("pedido vencido com cobrança gravada: refaz removerCobranca (decisão 10, A1)", async () => {
-    const vencido: PedidoVencidoParaRemocao = { id: "pedido-3", organizationId: "org-3", asaasPaymentId: "pay_velho" };
+  it("pedido vencido com cobrança gravada (pacote/avulso): refaz removerCobranca (decisão 10, A1)", async () => {
+    const vencido: PedidoVencidoParaRemocao = {
+      id: "pedido-3",
+      organizationId: "org-3",
+      tipo: "pacote_tokens",
+      asaasPaymentId: "pay_velho",
+      asaasSubscriptionId: null,
+    };
     const db = dbFalso({ listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [vencido], error: null })) });
     const asaas = asaasFalso({ removerCobranca: vi.fn(async () => undefined) });
     const resumo = await conciliarAsaas(deps({ db, asaas }));
 
     expect(asaas.removerCobranca).toHaveBeenCalledWith("pay_velho");
+    expect(asaas.removerAssinatura).not.toHaveBeenCalled();
     expect(resumo.cobrancasRemovidas).toBe(1);
   });
 
   it("remoção de cobrança vencida falha de novo: alarme remover_cobranca_pendente", async () => {
-    const vencido: PedidoVencidoParaRemocao = { id: "pedido-3", organizationId: "org-3", asaasPaymentId: "pay_velho" };
+    const vencido: PedidoVencidoParaRemocao = {
+      id: "pedido-3",
+      organizationId: "org-3",
+      tipo: "pacote_tokens",
+      asaasPaymentId: "pay_velho",
+      asaasSubscriptionId: null,
+    };
     const db = dbFalso({ listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [vencido], error: null })) });
     const asaas = asaasFalso({
       removerCobranca: vi.fn(async () => {
@@ -287,6 +305,44 @@ describe("conciliarAsaas", () => {
     const resumo = await conciliarAsaas(deps({ db, asaas, logger }));
 
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_remover_cobranca_pendente", expect.any(Object));
+    expect(resumo.falhas).toBe(1);
+  });
+
+  it("pedido vencido do tipo assinatura com asaas_subscription_id: refaz removerAssinatura, nunca removerCobranca (correção 4)", async () => {
+    const vencido: PedidoVencidoParaRemocao = {
+      id: "pedido-4",
+      organizationId: "org-4",
+      tipo: "assinatura",
+      asaasPaymentId: "pay_da_assinatura",
+      asaasSubscriptionId: "sub_velha",
+    };
+    const db = dbFalso({ listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [vencido], error: null })) });
+    const asaas = asaasFalso({ removerAssinatura: vi.fn(async () => undefined) });
+    const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_velha");
+    expect(asaas.removerCobranca).not.toHaveBeenCalled();
+    expect(resumo.cobrancasRemovidas).toBe(1);
+  });
+
+  it("remoção de assinatura vencida falha de novo: alarme remover_assinatura_pendente", async () => {
+    const vencido: PedidoVencidoParaRemocao = {
+      id: "pedido-4",
+      organizationId: "org-4",
+      tipo: "assinatura",
+      asaasPaymentId: null,
+      asaasSubscriptionId: "sub_velha",
+    };
+    const db = dbFalso({ listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [vencido], error: null })) });
+    const asaas = asaasFalso({
+      removerAssinatura: vi.fn(async () => {
+        throw erroIndisponivel(500);
+      }),
+    });
+    const logger = loggerFalso();
+    const resumo = await conciliarAsaas(deps({ db, asaas, logger }));
+
+    expect(logger.error).toHaveBeenCalledWith("alarme_asaas_remover_assinatura_pendente", expect.any(Object));
     expect(resumo.falhas).toBe(1);
   });
 

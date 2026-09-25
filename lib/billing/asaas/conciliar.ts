@@ -35,9 +35,11 @@ import "server-only";
  *      preenchido, `asaas_assinatura_encerrada_em` nulo): confere se a
  *      assinatura ainda existe no Asaas; se sumiu (404/`deleted:true`),
  *      injeta o evento sintético `SUBSCRIPTION_DELETED`.
- *   3. Pedido `vencido` com `asaas_payment_id` ainda gravado: refaz
- *      `removerCobranca` (decisão 10, correção A1) - idempotente (um recurso
- *      já removido não lança), para quando a tentativa do processador tiver
+ *   3. Pedido `vencido` com `asaas_payment_id` ou `asaas_subscription_id`
+ *      ainda gravado: refaz `removerCobranca` (pedido avulso) ou
+ *      `removerAssinatura` (pedido de tipo `assinatura` com
+ *      `asaas_subscription_id`, decisão 4/10) - idempotente (um recurso já
+ *      removido não lança), para quando a tentativa do processador tiver
  *      falhado antes.
  *   4. Poda: `fn_billing_asaas_podar_eventos(180)` (N38).
  *   5. Alarmes: os CONTADORES de `lib/billing/asaas/leitura.ts`
@@ -62,7 +64,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { ClienteAsaasHttp, LoggerAsaas } from "./cliente";
-import type { ConfigAsaas } from "./config";
+import type { AmbienteAsaas, ConfigAsaas } from "./config";
 import type { CobrancaAsaas } from "./contratos";
 import { ErroAsaasException } from "./erros";
 import { contadoresDeAlarmeAsaas, type ContadoresDeAlarmeAsaas } from "./leitura";
@@ -91,11 +93,18 @@ export interface PedidoParaConciliar {
   asaasSubscriptionId: string | null;
 }
 
-/** Um pedido `vencido` com cobrança ainda gravada (decisão 10, correção A1). */
+/**
+ * Um pedido `vencido` com cobrança ou assinatura ainda gravada (decisão 10,
+ * correção A1/4). Pedido de tipo `assinatura` com `asaasSubscriptionId`
+ * refaz `removerAssinatura`, nunca `removerCobranca` (a assinatura inteira
+ * precisa sair, não só a cobrança avulsa do ciclo vencido).
+ */
 export interface PedidoVencidoParaRemocao {
   id: string;
   organizationId: string;
-  asaasPaymentId: string;
+  tipo: string;
+  asaasPaymentId: string | null;
+  asaasSubscriptionId: string | null;
 }
 
 /** Uma assinatura Asaas ainda ativa localmente (decisão 21). */
@@ -119,8 +128,17 @@ export interface DbConciliarAsaas {
   listarPedidosVencidosParaRemocao(limite: number): Promise<RpcResultado<PedidoVencidoParaRemocao[]>>;
   /** `billing_contracts` com assinatura Asaas ativa (decisão 21). */
   listarAssinaturasAtivas(limite: number): Promise<RpcResultado<AssinaturaAtivaParaConciliar[]>>;
-  /** `billing_customers.asaas_customer_id` da organização, para montar o payload sintético de `SUBSCRIPTION_DELETED`. */
-  clienteAsaasDaOrganizacao(organizationId: string): Promise<RpcResultado<string | null>>;
+  /**
+   * `billing_customers.asaas_customer_id` da organização, para montar o
+   * payload sintético de `SUBSCRIPTION_DELETED`. Filtra pelo AMBIENTE
+   * (decisão 6/risco 12): uma organização pode ter cliente Asaas em sandbox
+   * e em produção ao longo do tempo, e o `customer` do payload sintético
+   * precisa ser o da MESMA base que o resto do evento, senão o roteamento
+   * (`payment.customer confirmado tem de ser o billing_customers.asaas_
+   * customer_id da mesma organização e do mesmo ambiente`) trata como
+   * `divergente` sem nunca ter sido de fato.
+   */
+  clienteAsaasDaOrganizacao(organizationId: string, ambiente: AmbienteAsaas): Promise<RpcResultado<string | null>>;
   /** `fn_billing_pedido_marcar(p_status = 'inconclusivo')`: destrava o `processando` velho. */
   marcarPedidoInconclusivo(organizationId: string, pedidoId: string, motivo: string): Promise<RpcResultado<unknown>>;
   /** `fn_billing_asaas_registrar_evento` com `p_origem = 'conciliacao'` (mesmo caminho do webhook). */
@@ -436,7 +454,7 @@ async function processarAssinaturasAtivas(
 
     if (!removida) continue;
 
-    const clienteRes = await deps.db.clienteAsaasDaOrganizacao(contrato.organizationId);
+    const clienteRes = await deps.db.clienteAsaasDaOrganizacao(contrato.organizationId, deps.config.ambiente);
     if (clienteRes.error || !clienteRes.data) {
       deps.logger.error("asaas_conciliar_cliente_da_organizacao_falhou", {
         organizationId: contrato.organizationId,
@@ -477,7 +495,7 @@ async function processarAssinaturasAtivas(
   }
 }
 
-// ─── Passo 3: refaz a remoção de cobrança de pedido vencido (decisão 10, A1) ─
+// ─── Passo 3: refaz a remoção de cobrança/assinatura de pedido vencido (decisão 10, A1/4) ─
 
 async function refazerRemocaoDeCobrancaVencida(
   deps: DepsConciliarAsaas,
@@ -495,8 +513,18 @@ async function refazerRemocaoDeCobrancaVencida(
   }
 
   for (const pedido of vencidos.data ?? []) {
+    // Pedido de assinatura vencido remove a ASSINATURA inteira, nunca só a
+    // cobrança avulsa do ciclo (decisão 4/10, correção item 4): removerCobranca
+    // deixaria a assinatura viva no Asaas, cobrando de novo no ciclo seguinte.
+    const usaAssinatura = pedido.tipo === "assinatura" && Boolean(pedido.asaasSubscriptionId);
+    if (!usaAssinatura && !pedido.asaasPaymentId) continue;
+
     try {
-      await deps.asaas.removerCobranca(pedido.asaasPaymentId);
+      if (usaAssinatura) {
+        await deps.asaas.removerAssinatura(pedido.asaasSubscriptionId as string);
+      } else {
+        await deps.asaas.removerCobranca(pedido.asaasPaymentId as string);
+      }
       resumo.cobrancasRemovidas++;
     } catch (err) {
       if (ehErroDeConfiguracao(err)) {
@@ -505,12 +533,15 @@ async function refazerRemocaoDeCobrancaVencida(
         return;
       }
       // Alarme com o MESMO código que `fn_billing_asaas_aplicar_evento`
-      // devolve (correção A1): a remoção continua pendente.
-      deps.logger.error("alarme_asaas_remover_cobranca_pendente", {
-        pedidoId: pedido.id,
-        organizationId: pedido.organizationId,
-        tipoErro: tipoDoErro(err),
-      });
+      // devolve (correção A1/4): a remoção continua pendente.
+      deps.logger.error(
+        usaAssinatura ? "alarme_asaas_remover_assinatura_pendente" : "alarme_asaas_remover_cobranca_pendente",
+        {
+          pedidoId: pedido.id,
+          organizationId: pedido.organizationId,
+          tipoErro: tipoDoErro(err),
+        },
+      );
       resumo.falhas++;
     }
   }
@@ -646,18 +677,26 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
     async listarPedidosVencidosParaRemocao(limite) {
       const { data, error } = await admin
         .from("billing_orders")
-        .select("id, organization_id, asaas_payment_id")
+        .select("id, organization_id, tipo, asaas_payment_id, asaas_subscription_id")
         .eq("status", "vencido")
-        .not("asaas_payment_id", "is", null)
+        .or("asaas_payment_id.not.is.null,asaas_subscription_id.not.is.null")
         .limit(limite);
       if (error) return { data: null, error: { code: error.code, message: error.message } };
       const linhas = (data ?? []) as unknown as Array<{
         id: string;
         organization_id: string;
-        asaas_payment_id: string;
+        tipo: string;
+        asaas_payment_id: string | null;
+        asaas_subscription_id: string | null;
       }>;
       return {
-        data: linhas.map((l) => ({ id: l.id, organizationId: l.organization_id, asaasPaymentId: l.asaas_payment_id })),
+        data: linhas.map((l) => ({
+          id: l.id,
+          organizationId: l.organization_id,
+          tipo: l.tipo,
+          asaasPaymentId: l.asaas_payment_id,
+          asaasSubscriptionId: l.asaas_subscription_id,
+        })),
         error: null,
       };
     },
@@ -677,11 +716,12 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
       };
     },
 
-    async clienteAsaasDaOrganizacao(organizationId) {
+    async clienteAsaasDaOrganizacao(organizationId, ambiente) {
       const { data, error } = await admin
         .from("billing_customers")
         .select("asaas_customer_id")
         .eq("organization_id", organizationId)
+        .eq("ambiente", ambiente)
         .limit(1)
         .maybeSingle();
       if (error) return { data: null, error: { code: error.code, message: error.message } };

@@ -161,17 +161,48 @@ export type WebhookAsaas = z.infer<typeof webhookAsaasSchema>;
 // ─── Envelope do webhook ──────────────────────────────────────────────────
 
 /**
- * Envelope do webhook (manual, seção 7 e 19 do plano). `payment`/`subscription`
- * são opcionais porque o mesmo formato serve eventos de cobrança e de
- * assinatura, e o processador (Tarefa 13, fora deste arquivo) é quem decide
- * qual olhar a partir de `event`.
+ * `payment`/`subscription` DENTRO DO ENVELOPE do webhook: campos usados só
+ * para o pré-roteamento e para extrair `resource_id` (`id`, `subscription`,
+ * `customer`, `externalReference`), com `.passthrough()` para o resto. De
+ * propósito MAIS TOLERANTE que `cobrancaAsaasSchema`/`assinaturaAsaasSchema`
+ * (usados para validar a RESPOSTA de verdade da API em `lib/billing/asaas/
+ * cliente.ts`): um subcampo do CORPO DO WEBHOOK fora do formato esperado
+ * (`dueDate` com formato estranho, um id sem o prefixo de sempre, o Asaas
+ * mandando algo novo) nunca pode jogar um evento AUTENTICADO inteiro para a
+ * quarentena. Quem decide se aplica ou não é sempre o objeto CONFIRMADO por
+ * `GET` (decisão 3), nunca o corpo do webhook - a validação estrita continua
+ * de pé só para a resposta real da API.
+ */
+const envelopePagamentoSchema = z
+  .object({
+    id: z.string().optional(),
+    subscription: z.string().nullable().optional(),
+    customer: z.string().nullable().optional(),
+    externalReference: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const envelopeAssinaturaSchema = z
+  .object({
+    id: z.string().optional(),
+    customer: z.string().nullable().optional(),
+    externalReference: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+/**
+ * Envelope do webhook (manual, seção 7 e 19 do plano). Só `id` e `event` são
+ * exigidos; `payment`/`subscription` são objetos tolerantes (acima) porque o
+ * mesmo formato serve eventos de cobrança e de assinatura, e o processador
+ * (Tarefa 13, fora deste arquivo) é quem decide qual olhar a partir de
+ * `event`.
  */
 export const envelopeWebhookAsaasSchema = z
   .object({
     id: z.string().min(1).max(100),
     event: z.string().regex(/^[A-Z_]{3,64}$/),
-    payment: cobrancaAsaasSchema.optional(),
-    subscription: assinaturaAsaasSchema.optional(),
+    payment: envelopePagamentoSchema.optional(),
+    subscription: envelopeAssinaturaSchema.optional(),
   })
   .passthrough();
 export type EnvelopeWebhookAsaas = z.infer<typeof envelopeWebhookAsaasSchema>;

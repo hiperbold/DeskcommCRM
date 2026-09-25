@@ -307,36 +307,20 @@ describe("eventosAsaas", () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("contadoresDeAlarmeAsaas", () => {
-  it("soma os quatro contadores por count e o quinto por organização sem evento recente", async () => {
+  it("soma os quatro contadores por count; o quinto é da INSTALAÇÃO: assinatura ativa e nenhum evento recente", async () => {
     const { contadoresDeAlarmeAsaas } = await importarComEnv({});
-    const agora = Date.now();
-    const ha4Dias = new Date(agora - 4 * 24 * 60 * 60 * 1000).toISOString();
-    const haUmDia = new Date(agora - 1 * 24 * 60 * 60 * 1000).toISOString();
 
     const db = dbFalso({
-      // pendente, erro, divergente, sem_vinculo: cada `.from` desta tabela é
-      // uma consulta DIFERENTE (a função faz 4 chamadas com count antes da
-      // quinta, de organization_id+recebido_em): a fila cobre as 4 primeiras,
-      // e a leitura final (organization_id, recebido_em) é a 5ª.
+      // pendente, erro, divergente, sem_vinculo, evento recente (3 dias):
+      // cada `.from` desta tabela é uma consulta DIFERENTE por count.
       asaas_webhook_events: [
         { data: null, error: null, count: 2 }, // pendente > 1h
         { data: null, error: null, count: 1 }, // erro 24h
         { data: null, error: null, count: 0 }, // divergente 24h
         { data: null, error: null, count: 3 }, // sem_vinculo 24h
-        {
-          // último evento por organização: org-ativa-1 não tem evento
-          // recente (4 dias), org-ativa-2 tem (1 dia).
-          data: [
-            { organization_id: "org-ativa-2", recebido_em: haUmDia },
-            { organization_id: "org-ativa-1", recebido_em: ha4Dias },
-          ],
-          error: null,
-        },
+        { data: null, error: null, count: 0 }, // nenhum evento nos últimos 3 dias
       ],
-      billing_contracts: {
-        data: [{ organization_id: "org-ativa-1" }, { organization_id: "org-ativa-2" }],
-        error: null,
-      },
+      billing_contracts: { data: null, error: null, count: 1 }, // existe ao menos 1 assinatura ativa
     });
 
     const resultado = await contadoresDeAlarmeAsaas(db);
@@ -350,11 +334,27 @@ describe("contadoresDeAlarmeAsaas", () => {
     });
   });
 
-  it("sem organização com assinatura Asaas ativa: o quinto contador é zero sem consulta extra", async () => {
+  it("existe assinatura ativa, mas HOUVE evento recente: o quinto contador é zero", async () => {
+    const { contadoresDeAlarmeAsaas } = await importarComEnv({});
+    const db = dbFalso({
+      asaas_webhook_events: [
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 5 }, // eventos nos últimos 3 dias
+      ],
+      billing_contracts: { data: null, error: null, count: 2 },
+    });
+    const resultado = await contadoresDeAlarmeAsaas(db);
+    expect(resultado.contadores.semEventoHa3DiasComAssinaturaAtiva).toBe(0);
+  });
+
+  it("sem NENHUMA assinatura ativa: o quinto contador é zero mesmo sem evento recente", async () => {
     const { contadoresDeAlarmeAsaas } = await importarComEnv({});
     const db = dbFalso({
       asaas_webhook_events: { data: null, error: null, count: 0 },
-      billing_contracts: { data: [], error: null },
+      billing_contracts: { data: null, error: null, count: 0 },
     });
     const resultado = await contadoresDeAlarmeAsaas(db);
     expect(resultado.contadores.semEventoHa3DiasComAssinaturaAtiva).toBe(0);
@@ -364,7 +364,7 @@ describe("contadoresDeAlarmeAsaas", () => {
     const { contadoresDeAlarmeAsaas } = await importarComEnv({});
     const db = dbFalso({
       asaas_webhook_events: { data: null, error: { message: "indisponível" }, count: undefined },
-      billing_contracts: { data: [], error: null },
+      billing_contracts: { data: null, error: null, count: 0 },
     });
     const resultado = await contadoresDeAlarmeAsaas(db);
     expect(resultado.leituraFalhou).toBe(true);

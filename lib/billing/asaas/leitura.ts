@@ -386,10 +386,16 @@ export interface ContadoresDeAlarmeAsaas {
   /** `resultado = 'sem_vinculo'` nas últimas 24 horas. */
   semVinculoUltimas24h: number;
   /**
-   * Organização com assinatura Asaas ativa (`asaas_subscription_id`
-   * preenchido e `asaas_assinatura_encerrada_em` nulo) sem NENHUM evento nos
-   * últimos 3 dias. O prazo é 3 dias, não os 35 do conferidor de vencimento:
-   * o Asaas só guarda evento por 14 dias (decisão 21).
+   * Alarme da INSTALAÇÃO (não por organização, correção da decisão 21): `1`
+   * quando existe PELO MENOS UMA assinatura Asaas ativa (`asaas_
+   * subscription_id` preenchido e `asaas_assinatura_encerrada_em` nulo, em
+   * qualquer organização) e NENHUM evento (webhook ou conciliação, de
+   * qualquer organização) chegou nos últimos 3 dias; `0` caso contrário. O
+   * sinal é "o webhook parou de chegar", não "esta organização específica
+   * está quieta" - uma organização sem transação recente não é um problema,
+   * a fila do Asaas parar de entregar é. O prazo é 3 dias, não os 35 do
+   * conferidor de vencimento: o Asaas só guarda evento por 14 dias (decisão
+   * 21).
    */
   semEventoHa3DiasComAssinaturaAtiva: number;
 }
@@ -411,14 +417,13 @@ const MS_POR_HORA = 60 * 60 * 1000;
 const MS_POR_DIA = 24 * MS_POR_HORA;
 
 /**
- * Os contadores de alarme da decisão 21, para a tela da instalação. A conta
- * de "sem evento há 3 dias" é feita em duas consultas (organizações com
- * assinatura Asaas ativa, depois o evento mais recente de cada uma) porque
- * PostgREST não expõe `group by`/`max()` por linha nesta lista de colunas; a
- * escala é a de um admin (dezenas de organizações), não a de um relatório.
- * Esta função é uma leitura de EXIBIÇÃO: a autoridade sobre o alarme de
- * verdade é `logger.error` na cron de conciliação (decisão 21, fora desta
- * tarefa). Nunca lança.
+ * Os contadores de alarme da decisão 21, para a tela da instalação. "Sem
+ * evento há 3 dias" é um alarme da INSTALAÇÃO (correção da decisão 21, não
+ * mais por organização): só duas contagens (existe assinatura ativa? existe
+ * evento recente?), nunca uma lista de organizações. Esta função é uma
+ * leitura de EXIBIÇÃO: a autoridade sobre o alarme de verdade é
+ * `logger.error` na cron de conciliação (decisão 21, fora desta tarefa).
+ * Nunca lança.
  */
 export async function contadoresDeAlarmeAsaas(
   admin: SupabaseClient,
@@ -430,7 +435,7 @@ export async function contadoresDeAlarmeAsaas(
     const ha24Horas = new Date(agora - 24 * MS_POR_HORA).toISOString();
     const ha3Dias = new Date(agora - 3 * MS_POR_DIA).toISOString();
 
-    const [pendenteRes, erroRes, divergenteRes, semVinculoRes, contratosAtivosRes] = await Promise.all([
+    const [pendenteRes, erroRes, divergenteRes, semVinculoRes, assinaturaAtivaRes, eventoRecenteRes] = await Promise.all([
       admin
         .from("asaas_webhook_events")
         .select("id", { count: "exact", head: true })
@@ -453,9 +458,10 @@ export async function contadoresDeAlarmeAsaas(
         .gte("recebido_em", ha24Horas),
       admin
         .from("billing_contracts")
-        .select("organization_id")
+        .select("organization_id", { count: "exact", head: true })
         .not("asaas_subscription_id", "is", null)
         .is("asaas_assinatura_encerrada_em", null),
+      admin.from("asaas_webhook_events").select("id", { count: "exact", head: true }).gte("recebido_em", ha3Dias),
     ]);
 
     for (const [etapa, r] of [
@@ -463,39 +469,15 @@ export async function contadoresDeAlarmeAsaas(
       ["erro", erroRes],
       ["divergente", divergenteRes],
       ["sem_vinculo", semVinculoRes],
-      ["contratos_com_assinatura_ativa", contratosAtivosRes],
+      ["assinatura_ativa_instalacao", assinaturaAtivaRes],
+      ["evento_recente_instalacao", eventoRecenteRes],
     ] as const) {
       if (r.error) throw new Error(`ler alarmes (${etapa}): ${r.error.message}`);
     }
 
-    const orgsComAssinaturaAtiva = ((contratosAtivosRes.data ?? []) as { organization_id: string }[]).map(
-      (l) => l.organization_id,
-    );
-
-    let semEventoHa3Dias = 0;
-    if (orgsComAssinaturaAtiva.length > 0) {
-      const { data: eventosRecentes, error: erroEventos } = await admin
-        .from("asaas_webhook_events")
-        .select("organization_id, recebido_em")
-        .in("organization_id", orgsComAssinaturaAtiva)
-        .order("recebido_em", { ascending: false });
-
-      if (erroEventos) throw new Error(`ler último evento por organização: ${erroEventos.message}`);
-
-      const ultimoEventoPorOrg = new Map<string, string>();
-      for (const linha of (eventosRecentes ?? []) as { organization_id: string | null; recebido_em: string }[]) {
-        if (!linha.organization_id) continue;
-        // A consulta já vem ordenada do mais recente para o mais antigo: o
-        // PRIMEIRO valor visto por organização é o mais recente dela.
-        if (!ultimoEventoPorOrg.has(linha.organization_id)) {
-          ultimoEventoPorOrg.set(linha.organization_id, linha.recebido_em);
-        }
-      }
-      for (const org of orgsComAssinaturaAtiva) {
-        const ultimo = ultimoEventoPorOrg.get(org);
-        if (!ultimo || ultimo < ha3Dias) semEventoHa3Dias += 1;
-      }
-    }
+    const existeAssinaturaAtiva = (assinaturaAtivaRes.count ?? 0) > 0;
+    const existeEventoRecente = (eventoRecenteRes.count ?? 0) > 0;
+    const semEventoHa3Dias = existeAssinaturaAtiva && !existeEventoRecente ? 1 : 0;
 
     return {
       contadores: {

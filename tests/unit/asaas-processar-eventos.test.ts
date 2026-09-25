@@ -93,6 +93,7 @@ function dbFalso(overrides: Partial<DbEventosAsaas> = {}): DbEventosAsaas {
     clienteConhecido: vi.fn(async () => ({ data: false, error: null })),
     aplicarEvento: vi.fn(async () => ({ data: { resultado: "aguardando", organizationId: null, alarme: null }, error: null })),
     registrarFalha: vi.fn(async () => ({ data: { tentativas: 1, resultado: "aguardando" }, error: null })),
+    marcarAssinaturaEncerrada: vi.fn(async () => ({ data: { jaRegistrado: false }, error: null })),
     ...overrides,
   };
 }
@@ -126,6 +127,19 @@ function payloadDePagamento(overrides: Record<string, unknown> = {}) {
       billingType: "CREDIT_CARD",
       value: 199,
       dueDate: "2026-09-25",
+      externalReference: "HC:ord:pedido-1",
+      ...overrides,
+    },
+  };
+}
+
+function payloadDeAssinatura(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "evt-sub-1",
+    event: "SUBSCRIPTION_DELETED",
+    subscription: {
+      id: "sub_1",
+      customer: "cus_1",
       externalReference: "HC:ord:pedido-1",
       ...overrides,
     },
@@ -218,8 +232,8 @@ describe("processarEventosAsaas", () => {
     expect(asaas.buscarCobranca).toHaveBeenCalledWith("pay_conhecido");
   });
 
-  it("evento que não é de dinheiro nunca gera GET, mesmo sem qualquer pré-roteamento", async () => {
-    const evento: EventoReservado = { id: "evt-7", eventType: "SUBSCRIPTION_DELETED", resourceId: "sub_7", leaseToken: "lease-7" };
+  it("evento que não precisa de confirmação (PAYMENT_CREATED) nunca gera GET, mesmo sem qualquer pré-roteamento", async () => {
+    const evento: EventoReservado = { id: "evt-7", eventType: "PAYMENT_CREATED", resourceId: "pay_7", leaseToken: "lease-7" };
     const db = dbFalso({
       reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
       aplicarEvento: vi.fn(async () => ({ data: { resultado: "ignorado", organizationId: null, alarme: null }, error: null })),
@@ -398,5 +412,268 @@ describe("processarEventosAsaas", () => {
       "lease-11",
       expect.objectContaining({ assinatura_status: "ACTIVE" }),
     );
+  });
+
+  // ─── Correção 1: PAYMENT_OVERDUE/PAYMENT_DELETED/estorno/chargeback e
+  // SUBSCRIPTION_* agora também fazem GET, com o contrato certo de
+  // p_confirmacao para cada família ────────────────────────────────────────
+
+  it("PAYMENT_OVERDUE conhecido: consulta GET /payments e monta a confirmação com status (contrato de fim de pagamento)", async () => {
+    const evento: EventoReservado = { id: "evt-20", eventType: "PAYMENT_OVERDUE", resourceId: "pay_20", leaseToken: "lease-20" };
+    const payload = payloadDePagamento({ id: "pay_20" });
+    payload.id = "evt-20";
+    payload.event = "PAYMENT_OVERDUE";
+    const cobranca = cobrancaFake({ id: "pay_20", status: "OVERDUE", subscription: null });
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-20", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => cobranca) });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(asaas.buscarCobranca).toHaveBeenCalledWith("pay_20");
+    expect(db.aplicarEvento).toHaveBeenCalledWith(
+      "evt-20",
+      "lease-20",
+      expect.objectContaining({ id: "pay_20", status: "OVERDUE", removida: false }),
+    );
+  });
+
+  it("PAYMENT_DELETED confirmado (404 no GET): confirmação leva removida:true, nunca status", async () => {
+    const evento: EventoReservado = { id: "evt-21", eventType: "PAYMENT_DELETED", resourceId: "pay_21", leaseToken: "lease-21" };
+    const payload = payloadDePagamento({ id: "pay_21" });
+    payload.id = "evt-21";
+    payload.event = "PAYMENT_DELETED";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-21", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => ({ removido: true as const })) });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-21", "lease-21", { id: "pay_21", removida: true });
+  });
+
+  it("PAYMENT_REFUNDED conhecido: monta a confirmação com value/originalValue (contrato de estorno)", async () => {
+    const evento: EventoReservado = { id: "evt-22", eventType: "PAYMENT_REFUNDED", resourceId: "pay_22", leaseToken: "lease-22" };
+    const payload = payloadDePagamento({ id: "pay_22" });
+    payload.id = "evt-22";
+    payload.event = "PAYMENT_REFUNDED";
+    const cobranca = cobrancaFake({ id: "pay_22", status: "REFUNDED", value: 100, originalValue: 100 });
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-22", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => cobranca) });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).toHaveBeenCalledWith(
+      "evt-22",
+      "lease-22",
+      expect.objectContaining({ id: "pay_22", value: 100, originalValue: 100 }),
+    );
+    // O contrato de estorno não tem campo `dueDate`/`customer` (só o de pagamento confirmado).
+    const chamada = (db.aplicarEvento as ReturnType<typeof vi.fn>).mock.calls[0]![2] as Record<string, unknown>;
+    expect(chamada).not.toHaveProperty("dueDate");
+    expect(chamada).not.toHaveProperty("customer");
+  });
+
+  it("PAYMENT_REFUNDED com o recurso removido no Asaas (404): manda null, evento fica aguardando", async () => {
+    const evento: EventoReservado = { id: "evt-23", eventType: "PAYMENT_REFUNDED", resourceId: "pay_23", leaseToken: "lease-23" };
+    const payload = payloadDePagamento({ id: "pay_23" });
+    payload.id = "evt-23";
+    payload.event = "PAYMENT_REFUNDED";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-23", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aguardando", organizationId: null, alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => ({ removido: true as const })) });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-23", "lease-23", null);
+  });
+
+  it("SUBSCRIPTION_DELETED conhecido: consulta GET /subscriptions e monta a confirmação (removida:false, ainda ativa)", async () => {
+    const evento: EventoReservado = { id: "evt-24", eventType: "SUBSCRIPTION_DELETED", resourceId: "sub_24", leaseToken: "lease-24" };
+    // externalReference nulo de propósito: sem prefixo "HC:" o roteamento
+    // precisa passar por assinaturaConhecida (não pelo atalho do prefixo).
+    const payload = payloadDeAssinatura({ id: "sub_24", externalReference: null });
+    payload.id = "evt-24";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-24", payload }], error: null })),
+      assinaturaConhecida: vi.fn(async () => ({ data: true, error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarAssinatura: vi.fn(async () => assinaturaFake({ id: "sub_24", status: "ACTIVE" })) });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.assinaturaConhecida).toHaveBeenCalledWith("sub_24");
+    expect(asaas.buscarAssinatura).toHaveBeenCalledWith("sub_24");
+    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-24", "lease-24", { id: "sub_24", status: "ACTIVE", removida: false });
+  });
+
+  it("SUBSCRIPTION_DELETED confirmado (404 no GET): confirmação leva removida:true", async () => {
+    const evento: EventoReservado = { id: "evt-25", eventType: "SUBSCRIPTION_DELETED", resourceId: "sub_25", leaseToken: "lease-25" };
+    const payload = payloadDeAssinatura({ id: "sub_25" });
+    payload.id = "evt-25";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-25", payload }], error: null })),
+      assinaturaConhecida: vi.fn(async () => ({ data: true, error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarAssinatura: vi.fn(async () => ({ removido: true as const })) });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-25", "lease-25", { id: "sub_25", removida: true });
+  });
+
+  // ─── Correção 2: falha de INFRAESTRUTURA no pré-roteamento nunca vira
+  // outro_app silencioso; registra falha com backoff ─────────────────────────
+
+  it("lerPayloads falha: registra falha com backoff, nunca fecha como outro_app", async () => {
+    const evento = eventoDinheiro({ id: "evt-30", resourceId: "pay_30", leaseToken: "lease-30" });
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: null, error: { code: "500", message: "timeout" } })),
+    });
+    const asaas = asaasFalso();
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).not.toHaveBeenCalled();
+    expect(db.registrarFalha).toHaveBeenCalledWith("evt-30", "lease-30", "asaas_pre_roteamento_falhou");
+    expect(resumo.outroApp).toBe(0);
+    expect(resumo.falhas).toBe(1);
+  });
+
+  it("pagamentoConhecido falha (infraestrutura): registra falha com backoff, nunca fecha como outro_app", async () => {
+    const evento = eventoDinheiro({ id: "evt-31", resourceId: "pay_31", leaseToken: "lease-31" });
+    const payload = payloadDePagamento({ id: "pay_31", externalReference: null });
+    payload.id = "evt-31";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-31", payload }], error: null })),
+      pagamentoConhecido: vi.fn(async () => ({ data: null, error: { code: "500", message: "indisponivel" } })),
+    });
+    const asaas = asaasFalso();
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(asaas.buscarCobranca).not.toHaveBeenCalled();
+    expect(db.aplicarEvento).not.toHaveBeenCalled();
+    expect(db.registrarFalha).toHaveBeenCalledWith("evt-31", "lease-31", "asaas_pre_roteamento_falhou");
+    expect(resumo.outroApp).toBe(0);
+  });
+
+  // ─── Correção 3: falha da PRÓPRIA RPC de aplicar registra falha com o
+  // lease, em vez de só logar e deixar o lease expirar sozinho ───────────────
+
+  it("fn_billing_asaas_aplicar_evento falha (RPC com erro, não confirmação): registra falha com o mesmo lease", async () => {
+    const evento: EventoReservado = { id: "evt-40", eventType: "PAYMENT_CREATED", resourceId: null, leaseToken: "lease-40" };
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: null, error: { code: "08006", message: "conexao perdida" } })),
+    });
+    const asaas = asaasFalso();
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.registrarFalha).toHaveBeenCalledWith("evt-40", "lease-40", "asaas_aplicar_evento_08006");
+    expect(resumo.falhas).toBe(1);
+  });
+
+  // ─── Correção 4: alarme remover_assinatura_pendente remove a assinatura
+  // (não a cobrança) e marca o contrato como encerrado ───────────────────────
+
+  it("alarme remover_assinatura_pendente: chama removerAssinatura e depois marcarAssinaturaEncerrada", async () => {
+    const evento: EventoReservado = { id: "evt-50", eventType: "PAYMENT_OVERDUE", resourceId: "pay_50", leaseToken: "lease-50" };
+    const payload = payloadDePagamento({ id: "pay_50", subscription: "sub_50" });
+    payload.id = "evt-50";
+    payload.event = "PAYMENT_OVERDUE";
+    const cobranca = cobrancaFake({ id: "pay_50", status: "OVERDUE", subscription: "sub_50" });
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-50", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({
+        data: { resultado: "aplicado", organizationId: "org-50", alarme: "remover_assinatura_pendente" },
+        error: null,
+      })),
+    });
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => cobranca),
+      removerAssinatura: vi.fn(async () => undefined),
+    });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_50");
+    expect(asaas.removerCobranca).not.toHaveBeenCalled();
+    expect(db.marcarAssinaturaEncerrada).toHaveBeenCalledWith("org-50", "sub_50");
+  });
+
+  it("remover_assinatura_pendente: contrato já não tem mais esta assinatura (billing_assinatura_nao_confere) não é logado como falha", async () => {
+    const evento: EventoReservado = { id: "evt-51", eventType: "PAYMENT_OVERDUE", resourceId: "pay_51", leaseToken: "lease-51" };
+    const payload = payloadDePagamento({ id: "pay_51", subscription: "sub_51" });
+    payload.id = "evt-51";
+    payload.event = "PAYMENT_OVERDUE";
+    const cobranca = cobrancaFake({ id: "pay_51", status: "OVERDUE", subscription: "sub_51" });
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-51", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({
+        data: { resultado: "aplicado", organizationId: "org-51", alarme: "remover_assinatura_pendente" },
+        error: null,
+      })),
+      marcarAssinaturaEncerrada: vi.fn(async () => ({
+        data: null,
+        error: { code: "22023", message: "billing_assinatura_nao_confere" },
+      })),
+    });
+    const logger = loggerFalso();
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => cobranca) });
+
+    await processarEventosAsaas(deps({ db, asaas, logger }));
+
+    expect(logger.warn).not.toHaveBeenCalledWith("asaas_processar_marcar_assinatura_encerrada_falhou", expect.any(Object));
+  });
+
+  it("falha ao remover a assinatura só loga; conciliação refaz depois", async () => {
+    const evento: EventoReservado = { id: "evt-52", eventType: "PAYMENT_OVERDUE", resourceId: "pay_52", leaseToken: "lease-52" };
+    const payload = payloadDePagamento({ id: "pay_52", subscription: "sub_52" });
+    payload.id = "evt-52";
+    payload.event = "PAYMENT_OVERDUE";
+    const cobranca = cobrancaFake({ id: "pay_52", status: "OVERDUE", subscription: "sub_52" });
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-52", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({
+        data: { resultado: "aplicado", organizationId: "org-52", alarme: "remover_assinatura_pendente" },
+        error: null,
+      })),
+    });
+    const logger = loggerFalso();
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => cobranca),
+      removerAssinatura: vi.fn(async () => {
+        throw erroIndisponivel(500);
+      }),
+    });
+
+    await processarEventosAsaas(deps({ db, asaas, logger }));
+
+    expect(logger.warn).toHaveBeenCalledWith("asaas_processar_remover_assinatura_falhou", expect.any(Object));
+    expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
   });
 });

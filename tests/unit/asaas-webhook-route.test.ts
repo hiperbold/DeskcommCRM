@@ -55,7 +55,10 @@ async function montarRota(opts: {
   vi.resetModules();
   const vars: Record<string, string> = {
     ASAAS_ENABLED: "false",
-    ASAAS_BASE_URL: "",
+    // Base válida por padrão (correção 5: o ambiente do evento vem SÓ da
+    // base, mesmo com ASAAS_ENABLED desligado - a maioria dos testes deste
+    // arquivo não é sobre o ambiente, então o padrão precisa resolver).
+    ASAAS_BASE_URL: "https://api-sandbox.asaas.com/v3",
     ASAAS_API_KEY: "",
     ASAAS_WEBHOOK_TOKEN: TOKEN,
     ASAAS_WEBHOOK_ID: "",
@@ -343,5 +346,89 @@ describe("POST /api/v1/webhooks/asaas - log (restrição fixa 4, risco 2/3)", ()
     expect(serializado).not.toContain(TOKEN);
     expect(serializado).not.toContain("199.9");
     expect(contexto).not.toHaveProperty("payload");
+  });
+});
+
+// ─── Token CONFIGURADO precisa de um formato mínimo de segredo (decisão 19, risco 2) ─
+
+describe("POST /api/v1/webhooks/asaas - token configurado inválido (correção 6)", () => {
+  it("ASAAS_WEBHOOK_TOKEN com menos de 32 caracteres -> 401, mesmo que o cabeçalho bata com ele", async () => {
+    const tokenCurto = "curto-demais-para-ser-segredo";
+    const { POST, rpc, logger } = await montarRota({ vars: { ASAAS_WEBHOOK_TOKEN: tokenCurto } });
+    const res = await POST(req({ token: tokenCurto }));
+    expect(res.status).toBe(401);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith("asaas_webhook_token_configurado_invalido", expect.any(Object));
+  });
+
+  it("ASAAS_WEBHOOK_TOKEN com mais de 255 caracteres -> 401", async () => {
+    const tokenLongo = "a".repeat(256);
+    const { POST, rpc } = await montarRota({ vars: { ASAAS_WEBHOOK_TOKEN: tokenLongo } });
+    const res = await POST(req({ token: tokenLongo }));
+    expect(res.status).toBe(401);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("ASAAS_WEBHOOK_TOKEN igual a ASAAS_API_KEY -> 401, mesmo com formato válido", async () => {
+    const mesmoValor = "a-mesma-string-para-token-e-chave-32c";
+    const { POST, rpc } = await montarRota({
+      vars: { ASAAS_WEBHOOK_TOKEN: mesmoValor, ASAAS_API_KEY: mesmoValor },
+    });
+    const res = await POST(req({ token: mesmoValor }));
+    expect(res.status).toBe(401);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it("token válido (32 a 255, diferente da chave) continua autenticando normalmente", async () => {
+    const { POST, rpc } = await montarRota({ vars: { ASAAS_API_KEY: "$aact_hmlg_qualquerCoisaDiferente" } });
+    const res = await POST(req({ token: TOKEN }));
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Ambiente do evento: SEMPRE da base, nunca de ASAAS_ENABLED/chave (correção 5, risco 12) ─
+
+describe("POST /api/v1/webhooks/asaas - ambiente do evento (correção 5)", () => {
+  it("ASAAS_BASE_URL vazia -> 500 genérico, log com código fixo, nada é registrado", async () => {
+    const { POST, rpc, logger } = await montarRota({ vars: { ASAAS_BASE_URL: "" } });
+    const res = await POST(req({ token: TOKEN, body: ENVELOPE_VALIDO }));
+    expect(res.status).toBe(500);
+    const texto = await res.text();
+    expect(texto).toBe("");
+    expect(rpc).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith("asaas_webhook_ambiente_invalido", expect.any(Object));
+  });
+
+  it("ASAAS_BASE_URL fora das duas oficiais -> 500 genérico, nada é registrado", async () => {
+    const { POST, rpc, logger } = await montarRota({ vars: { ASAAS_BASE_URL: "https://outra-coisa.example.com/v3" } });
+    const res = await POST(req({ token: TOKEN, body: ENVELOPE_VALIDO }));
+    expect(res.status).toBe(500);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith("asaas_webhook_ambiente_invalido", expect.any(Object));
+  });
+
+  it("ambiente resolve pela base mesmo com ASAAS_ENABLED desligado (nunca sandbox como padrão silencioso)", async () => {
+    const { POST, rpc } = await montarRota({
+      vars: { ASAAS_ENABLED: "false", ASAAS_BASE_URL: "https://api.asaas.com/v3" },
+    });
+    const res = await POST(req({ token: TOKEN, body: ENVELOPE_VALIDO }));
+    expect(res.status).toBe(200);
+    const chamada = rpc.mock.calls[0]![1] as Record<string, unknown>;
+    expect(chamada.p_ambiente).toBe("producao");
+  });
+
+  it("ambiente resolve pela base mesmo com a chave incoerente com a base (produção configurada, chave de sandbox)", async () => {
+    const { POST, rpc } = await montarRota({
+      vars: {
+        ASAAS_ENABLED: "true",
+        ASAAS_BASE_URL: "https://api.asaas.com/v3",
+        ASAAS_API_KEY: "$aact_hmlg_umaChaveDeSandboxNaProducao",
+      },
+    });
+    const res = await POST(req({ token: TOKEN, body: ENVELOPE_VALIDO }));
+    expect(res.status).toBe(200);
+    const chamada = rpc.mock.calls[0]![1] as Record<string, unknown>;
+    expect(chamada.p_ambiente).toBe("producao");
   });
 });

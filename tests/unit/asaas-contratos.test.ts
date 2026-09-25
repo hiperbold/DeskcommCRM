@@ -146,10 +146,39 @@ describe("envelopeWebhookAsaasSchema", () => {
       },
     });
     expect(env.event).toBe("PAYMENT_RECEIVED");
-    expect(env.payment?.valorConfirmado).toBe(100);
+    expect(env.payment?.id).toBe("pay_1");
+    expect(env.payment?.customer).toBe("cus_1");
   });
 
   it("recusa event fora do formato MAIUSCULO_COM_UNDERSCORE", () => {
     expect(() => envelopeWebhookAsaasSchema.parse({ id: "evt_1", event: "payment.received" })).toThrow();
+  });
+
+  it("payment/subscription são tolerantes: um subcampo fora do formato da API de verdade não derruba o envelope inteiro", () => {
+    // `dueDate` num formato estranho e `value` como texto derrubariam
+    // `cobrancaAsaasSchema` (usada para validar a RESPOSTA de verdade da
+    // API); no envelope do webhook isso não pode jogar um evento
+    // AUTENTICADO para a quarentena (correção de tolerância do envelope).
+    const env = envelopeWebhookAsaasSchema.parse({
+      id: "evt_tolerante",
+      event: "PAYMENT_OVERDUE",
+      payment: {
+        id: "pay_estranho",
+        customer: "cus_1",
+        subscription: "sub_1",
+        externalReference: "HC:ord:pedido-1",
+        status: "OVERDUE",
+        value: "cem reais",
+        dueDate: "data invalida",
+      },
+    });
+    expect(env.payment?.id).toBe("pay_estranho");
+    expect(env.payment?.subscription).toBe("sub_1");
+    expect(env.payment?.externalReference).toBe("HC:ord:pedido-1");
+  });
+
+  it("id/event continuam obrigatórios mesmo com payment/subscription tolerantes", () => {
+    expect(() => envelopeWebhookAsaasSchema.parse({ event: "PAYMENT_CREATED", payment: {} })).toThrow();
+    expect(() => envelopeWebhookAsaasSchema.parse({ id: "evt_1", payment: {} })).toThrow();
   });
 });

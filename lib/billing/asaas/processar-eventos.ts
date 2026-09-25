@@ -22,45 +22,69 @@ import "server-only";
  * ═══ O que este arquivo FAZ e o que NÃO faz (decisão 3) ═══
  *
  * O webhook (Tarefa 12) só GUARDA o evento. Quem CONFIRMA é este processador:
- * todo evento que mexe em dinheiro consulta o Asaas por `GET /payments/{id}`
+ * todo evento que mexe em dinheiro ou contrato consulta o Asaas por `GET`
  * ANTES de aplicar qualquer coisa, e o que é aplicado é o OBJETO CONFIRMADO
  * (`p_confirmacao`), nunca o corpo do webhook. Um evento forjado sozinho
  * nunca concede acesso: o pior que ele faz é gastar um `GET` (e só isso
  * quando o pré-roteamento, abaixo, decide que vale a pena consultar).
  *
+ * ═══ Três famílias de evento, cada uma com o GET certo (revisão da fase) ═══
+ *
+ * `PAYMENT_CONFIRMED`/`PAYMENT_RECEIVED`/`PAYMENT_RECEIVED_IN_CASH`
+ * (`EVENTOS_DE_DINHEIRO`): `GET /payments/{id}` e o contrato de
+ * `fn_billing_asaas_aplicar_pagamento` (Tarefa 5).
+ *
+ * `PAYMENT_REFUNDED`/`PAYMENT_PARTIALLY_REFUNDED`/`PAYMENT_CHARGEBACK_
+ * REQUESTED`/`PAYMENT_CHARGEBACK_DISPUTE`/`PAYMENT_AWAITING_CHARGEBACK_
+ * REVERSAL`/`PAYMENT_OVERDUE`/`PAYMENT_DELETED` (`EVENTOS_DE_COBRANCA_GET`):
+ * também `GET /payments/{id}`, mas o contrato de `p_confirmacao` é o de
+ * `fn_billing_asaas_aplicar_estorno` (o primeiro grupo, `EVENTOS_DE_
+ * ESTORNO`) ou de `fn_billing_asaas_aplicar_fim_da_assinatura` para
+ * `PAYMENT_OVERDUE`/`PAYMENT_DELETED` (comentário da PARTE 6 da migração
+ * 0909): campos diferentes do contrato de pagamento confirmado, por isso os
+ * dois grupos têm uma função de montagem própria (`confirmacaoDeEstorno` e
+ * `confirmacaoDoFimDoPagamento`).
+ *
+ * `SUBSCRIPTION_DELETED`/`SUBSCRIPTION_INACTIVATED`/`SUBSCRIPTION_UPDATED`
+ * (`EVENTOS_DE_ASSINATURA_GET`): `GET /subscriptions/{id}`, contrato também
+ * de `fn_billing_asaas_aplicar_fim_da_assinatura`.
+ *
+ * Qualquer outro `event_type` (`PAYMENT_CREATED`, `SUBSCRIPTION_CREATED`,
+ * `CHECKOUT_*`, um tipo novo que o Asaas venha a mandar) não precisa de GET
+ * nenhum: `fn_billing_asaas_aplicar_evento` só registra (`ignorado`, decisão
+ * 10), e este processador chama a função com `p_confirmacao: null` direto.
+ *
  * ═══ Pré-roteamento pelo payload, ANTES de qualquer GET (decisão 6/M8) ═══
  *
- * Só os TRÊS event_type de dinheiro (`PAYMENT_CONFIRMED`, `PAYMENT_RECEIVED`,
- * `PAYMENT_RECEIVED_IN_CASH`) precisam de um `GET` nesta tarefa: qualquer
- * outro tipo (`PAYMENT_OVERDUE`, `SUBSCRIPTION_DELETED`, `PAYMENT_CREATED`,
- * etc.) é despachado por `fn_billing_asaas_aplicar_evento` só pelo
- * `event_type`, sem olhar `p_confirmacao` (Tarefa 6, "tarefa_6_pendente", ou
- * decisão 10, "ignorado"), então este processador chama a função com
- * `p_confirmacao: null` direto, sem gastar `GET` nenhum.
- *
- * Para os três tipos de dinheiro, `ehCandidatoAoGet` olha o PAYLOAD já salvo
- * do próprio webhook (nunca o Asaas) e só manda fazer o `GET` quando o
- * `externalReference` começa com `HC:`, OU quando `payment.id` (= o
- * `resource_id` da reserva), `payment.subscription` ou `payment.customer` já
- * são conhecidos localmente (consulta barata e indexada em
- * `billing_orders`/`billing_payments`/`billing_contracts`/
+ * As TRÊS famílias acima (dinheiro, cobrança e assinatura) passam pelo MESMO
+ * pré-roteamento: `ehCandidatoAoGet` olha o PAYLOAD já salvo do próprio
+ * webhook (nunca o Asaas) e só manda fazer o `GET` quando o
+ * `externalReference` começa com `HC:`, OU quando `payment.id`/`payment.
+ * subscription`/`payment.customer` (ou o equivalente do lado de
+ * `subscription`) já são conhecidos localmente (consulta barata e indexada
+ * em `billing_orders`/`billing_payments`/`billing_contracts`/
  * `billing_customers`). Pulando o `GET`, o evento nunca é aplicado: forjar o
  * payload não abre acesso.
  *
- * ═══ "outro_app" sem GET para evento de dinheiro (M8) ═══
+ * Uma falha de INFRAESTRUTURA nessas consultas baratas (erro do banco, não
+ * "não achei nada") NUNCA é tratada como "não é candidato": o evento é
+ * jogado fora do pré-roteamento sem certeza nenhuma, e fechar como
+ * `outro_app` esconderia um evento legítimo para sempre. Por isso
+ * `ehCandidatoAoGet` devolve um resultado de três valores (`candidato`/
+ * `falhou`), e o mesmo vale para a leitura do payload em si (`lerPayloads`):
+ * qualquer falha aqui vira uma FALHA do evento, registrada com
+ * `fn_billing_asaas_registrar_falha` (o mesmo backoff exponencial de um GET
+ * que falhou), nunca um fechamento silencioso.
  *
- * Quando `ehCandidatoAoGet` decide que o evento NÃO é nosso, este processador
- * chama `fn_billing_asaas_aplicar_evento` (migração 0909, Tarefa 6) com o
- * SENTINELA `p_confirmacao: {"pre_roteamento":"outro_app"}` (nenhum outro
- * campo): a função fecha o evento como `outro_app` DIRETO, sem despachar para
- * `fn_billing_asaas_aplicar_pagamento` e sem gastar nenhum `GET` - a garantia
- * de segurança da decisão 6/M8/risco 15 continua de pé (pular o `GET` nunca
- * concede nada sozinho). Isto substitui a versão anterior desta tarefa, que
- * mandava `p_confirmacao: null` (o evento ficava `aguardando` para sempre,
- * sem nunca "descansar", porque a função ainda não tinha o ramo do
- * sentinela); com o sentinela, o evento vira `outro_app` de uma vez, fora dos
- * alarmes de dinheiro (decisão 6) e sem custar uma vaga do lote a cada rodada
- * para sempre.
+ * ═══ "outro_app" sem GET para evento candidato a dinheiro/cobrança/assinatura (M8) ═══
+ *
+ * Quando `ehCandidatoAoGet` decide (com certeza, sem falha) que o evento NÃO
+ * é nosso, este processador chama `fn_billing_asaas_aplicar_evento` (migração
+ * 0909, Tarefa 6) com o SENTINELA `p_confirmacao: {"pre_roteamento":"outro_app"}`
+ * (nenhum outro campo): a função fecha o evento como `outro_app` DIRETO, sem
+ * despachar para nenhuma das funções de aplicação e sem gastar nenhum `GET` -
+ * a garantia de segurança da decisão 6/M8/risco 15 continua de pé (pular o
+ * `GET` nunca concede nada sozinho).
  *
  * ═══ Erro do Asaas nunca segura a rodada inteira (decisão 20) ═══
  *
@@ -72,6 +96,12 @@ import "server-only";
  * ex.: `ASAAS_ENABLED` ligado com base/chave incoerentes) aborta a rodada
  * INTEIRA: a causa não é do evento, é do ambiente, e tentar o próximo evento
  * só repetiria o mesmo erro.
+ *
+ * Uma falha da PRÓPRIA `fn_billing_asaas_aplicar_evento` (RPC com erro, não a
+ * confirmação em si) também nunca fica só no log: registra a falha com o
+ * MESMO lease, para o backoff exponencial decidir quando tentar de novo, em
+ * vez de deixar o evento preso até o lease expirar sozinho sem escalonar as
+ * tentativas.
  *
  * ═══ Orçamento de tempo por rodada (decisão 20) ═══
  *
@@ -130,6 +160,11 @@ export interface RegistrarFalhaResultado {
   resultado: string;
 }
 
+/** O que `fn_billing_asaas_marcar_assinatura_encerrada` devolve. */
+export interface MarcarAssinaturaEncerradaResultado {
+  jaRegistrado: boolean;
+}
+
 export interface DbEventosAsaas {
   /** `fn_billing_asaas_reservar_eventos`. */
   reservarEventos(limite: number, leaseSegundos: number): Promise<RpcResultado<EventoReservado[]>>;
@@ -149,6 +184,18 @@ export interface DbEventosAsaas {
   ): Promise<RpcResultado<AplicarEventoResultado>>;
   /** `fn_billing_asaas_registrar_falha`. */
   registrarFalha(eventoId: string, leaseToken: string, codigo: string): Promise<RpcResultado<RegistrarFalhaResultado>>;
+  /**
+   * `fn_billing_asaas_marcar_assinatura_encerrada` (decisão 22): chamada
+   * depois de `removerAssinatura` confirmar a remoção no Asaas (alarme
+   * `remover_assinatura_pendente`, Tarefa 6). `billing_assinatura_nao_
+   * confere`/contrato não encontrado (o contrato já não tem mais esta
+   * assinatura) não é uma falha de infraestrutura: quem chama decide o que
+   * fazer com o `error` devolvido.
+   */
+  marcarAssinaturaEncerrada(
+    organizationId: string,
+    asaasSubscriptionId: string,
+  ): Promise<RpcResultado<MarcarAssinaturaEncerradaResultado>>;
 }
 
 export interface DepsProcessarEventosAsaas {
@@ -188,6 +235,29 @@ export const LEASE_SEGUNDOS_PADRAO = 300;
 export const ORCAMENTO_MS_PADRAO = 28_000;
 
 const EVENTOS_DE_DINHEIRO = new Set(["PAYMENT_CONFIRMED", "PAYMENT_RECEIVED", "PAYMENT_RECEIVED_IN_CASH"]);
+
+/** Contrato de `fn_billing_asaas_aplicar_estorno` (decisão 9, N31/N32/N43). */
+const EVENTOS_DE_ESTORNO = new Set([
+  "PAYMENT_REFUNDED",
+  "PAYMENT_PARTIALLY_REFUNDED",
+  "PAYMENT_CHARGEBACK_REQUESTED",
+  "PAYMENT_CHARGEBACK_DISPUTE",
+  "PAYMENT_AWAITING_CHARGEBACK_REVERSAL",
+]);
+
+/** Contrato de `fn_billing_asaas_aplicar_fim_da_assinatura` pelo lado do PAGAMENTO avulso (decisão 10, N39). */
+const EVENTOS_DE_FIM_DE_PAGAMENTO = new Set(["PAYMENT_OVERDUE", "PAYMENT_DELETED"]);
+
+/** Os dois grupos acima juntos: todos fazem `GET /payments/{id}`. */
+const EVENTOS_DE_COBRANCA_GET = new Set([...EVENTOS_DE_ESTORNO, ...EVENTOS_DE_FIM_DE_PAGAMENTO]);
+
+/** Contrato de `fn_billing_asaas_aplicar_fim_da_assinatura` pelo lado da ASSINATURA (decisão 10/22). */
+const EVENTOS_DE_ASSINATURA_GET = new Set(["SUBSCRIPTION_DELETED", "SUBSCRIPTION_INACTIVATED", "SUBSCRIPTION_UPDATED"]);
+
+/** Qualquer evento destas três famílias precisa do payload salvo para o pré-roteamento (decisão 6/M8). */
+function precisaDeGet(eventType: string): boolean {
+  return EVENTOS_DE_DINHEIRO.has(eventType) || EVENTOS_DE_COBRANCA_GET.has(eventType) || EVENTOS_DE_ASSINATURA_GET.has(eventType);
+}
 
 function resumoZerado(habilitado: boolean): ResumoProcessarEventosAsaas {
   return {
@@ -239,9 +309,10 @@ function contabilizar(resumo: ResumoProcessarEventosAsaas, categoria: string): v
       resumo.aguardando++;
       break;
     default:
-      // "erro" (aplicação interna falhou no SQL), "falha" (GET falhou),
-      // "falha_ao_aplicar" (a RPC de aplicar devolveu erro) e "abortado"
-      // (erro de configuração) contam todos como falha da rodada.
+      // "erro" (aplicação interna falhou no SQL), "falha" (GET ou
+      // pré-roteamento falharam), "falha_ao_aplicar" (a RPC de aplicar
+      // devolveu erro) e "abortado" (erro de configuração) contam todos
+      // como falha da rodada.
       resumo.falhas++;
       break;
   }
@@ -270,33 +341,53 @@ function extrairReferenciaDoPayload(payload: unknown): ReferenciaPreRoteamento {
   };
 }
 
+interface ResultadoPreRoteamento {
+  candidato: boolean;
+  /**
+   * `true` quando uma das consultas baratas (`pagamentoConhecido`/
+   * `assinaturaConhecida`/`clienteConhecido`) devolveu ERRO (infraestrutura),
+   * não "não achei nada". Uma falha aqui NUNCA vira `outro_app`: quem chama
+   * precisa registrar a falha com backoff e tentar de novo, porque fechar
+   * como `outro_app` esconderia um evento legítimo para sempre.
+   */
+  falhou: boolean;
+}
+
 /**
  * Decide se vale a pena consultar o Asaas (decisão 6/M8). `paymentId` é
- * sempre `evento.resourceId` (a rota do webhook já grava `payment.id` ali
- * para todo evento de dinheiro); os outros três campos vêm do payload
- * guardado. Pular o `GET` nunca concede nada sozinho: o pior caso desta
- * função devolver `true` por engano é gastar um `GET` à toa.
+ * `evento.resourceId` só para os eventos cujo `resource_id` é mesmo um
+ * `payment.id` (dinheiro e cobrança); para os eventos de assinatura,
+ * `paymentId` vem `null` (o `resourceId` ali é um `subscription.id`, e o
+ * `subscriptionId` de `ref` já cobre o roteamento). Os outros três campos
+ * vêm do payload guardado. Pular o `GET` nunca concede nada sozinho: o pior
+ * caso desta função devolver `candidato: true` por engano é gastar um `GET`
+ * à toa.
  */
 async function ehCandidatoAoGet(
   db: DbEventosAsaas,
   paymentId: string | null,
   ref: ReferenciaPreRoteamento,
-): Promise<boolean> {
-  if (ref.externalReference && ref.externalReference.startsWith("HC:")) return true;
+): Promise<ResultadoPreRoteamento> {
+  if (ref.externalReference && ref.externalReference.startsWith("HC:")) {
+    return { candidato: true, falhou: false };
+  }
 
   if (paymentId) {
     const r = await db.pagamentoConhecido(paymentId);
-    if (!r.error && r.data) return true;
+    if (r.error) return { candidato: false, falhou: true };
+    if (r.data) return { candidato: true, falhou: false };
   }
   if (ref.subscriptionId) {
     const r = await db.assinaturaConhecida(ref.subscriptionId);
-    if (!r.error && r.data) return true;
+    if (r.error) return { candidato: false, falhou: true };
+    if (r.data) return { candidato: true, falhou: false };
   }
   if (ref.customerId) {
     const r = await db.clienteConhecido(ref.customerId);
-    if (!r.error && r.data) return true;
+    if (r.error) return { candidato: false, falhou: true };
+    if (r.data) return { candidato: true, falhou: false };
   }
-  return false;
+  return { candidato: false, falhou: false };
 }
 
 // ─── Monta o objeto CONFIRMADO (decisão 3, nunca o corpo do webhook) ───────
@@ -326,6 +417,71 @@ function confirmacaoDoPagamento(cobranca: CobrancaAsaas, assinaturaStatus: strin
   return confirmacao;
 }
 
+/**
+ * O contrato de `p_confirmacao` de `fn_billing_asaas_aplicar_estorno`
+ * (comentário da PARTE 6 da migração 0909, decisão 9): `id` é sempre o MESMO
+ * id do pagamento original (o Asaas representa o estorno como mudança de
+ * status do mesmo objeto). `value` é obrigatório no contrato; sem ele
+ * (recurso removido no Asaas, caso não previsto pela decisão 9) quem chama
+ * envia `null` em vez desta função, e o evento fica `aguardando` com backoff.
+ */
+function confirmacaoDeEstorno(cobranca: CobrancaAsaas): Record<string, unknown> {
+  return {
+    id: cobranca.id,
+    status: cobranca.status,
+    value: cobranca.value,
+    originalValue: cobranca.originalValue ?? null,
+    paymentDate: cobranca.paymentDate ?? null,
+    confirmedDate: cobranca.confirmedDate ?? null,
+    subscription: cobranca.subscription ?? null,
+    externalReference: cobranca.externalReference ?? null,
+  };
+}
+
+/**
+ * O contrato de `p_confirmacao` de `fn_billing_asaas_aplicar_fim_da_
+ * assinatura` para `PAYMENT_OVERDUE`/`PAYMENT_DELETED` (comentário da PARTE 6
+ * da migração 0909, decisão 10): `status` só importa para `PAYMENT_OVERDUE`
+ * (confirma só quando igual a `OVERDUE`); `removida` só importa para
+ * `PAYMENT_DELETED` (confirma a remoção, 404/`deleted:true`). Um `GET` que
+ * devolveu o recurso REMOVIDO para um `PAYMENT_OVERDUE` não pode confirmar o
+ * status `OVERDUE` (o recurso já não existe): fica sem o campo `status`, e o
+ * evento volta `aguardando` com backoff em vez de aplicar algo incerto.
+ */
+function confirmacaoDoFimDoPagamento(
+  eventType: string,
+  resourceId: string,
+  cobranca: Awaited<ReturnType<ClienteAsaasHttp["buscarCobranca"]>>,
+): Record<string, unknown> {
+  if ("removido" in cobranca) {
+    return eventType === "PAYMENT_DELETED" ? { id: resourceId, removida: true } : { id: resourceId };
+  }
+  return {
+    id: cobranca.id,
+    status: cobranca.status,
+    removida: false,
+    subscription: cobranca.subscription ?? null,
+    externalReference: cobranca.externalReference ?? null,
+  };
+}
+
+/**
+ * O contrato de `p_confirmacao` de `fn_billing_asaas_aplicar_fim_da_
+ * assinatura` para `SUBSCRIPTION_DELETED`/`SUBSCRIPTION_INACTIVATED`/
+ * `SUBSCRIPTION_UPDATED` (comentário da PARTE 6, decisões 10/22): `removida`
+ * é a fonte da verdade da remoção (404/`deleted:true`), qualquer que seja o
+ * `event_type` que disparou a checagem.
+ */
+function confirmacaoDeAssinatura(
+  resourceId: string,
+  assinatura: Awaited<ReturnType<ClienteAsaasHttp["buscarAssinatura"]>>,
+): Record<string, unknown> {
+  if ("removido" in assinatura) {
+    return { id: resourceId, removida: true };
+  }
+  return { id: assinatura.id, status: assinatura.status ?? null, removida: false };
+}
+
 // ─── Processa um único evento reservado ────────────────────────────────────
 
 interface ResultadoDeUmEvento {
@@ -335,7 +491,7 @@ interface ResultadoDeUmEvento {
 
 async function aplicarSemConfirmacao(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<ResultadoDeUmEvento> {
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, null);
-  return finalizarAplicacao(deps, evento, aplicado);
+  return finalizarAplicacao(deps, evento, aplicado, null);
 }
 
 /**
@@ -346,35 +502,123 @@ async function aplicarSemConfirmacao(deps: DepsProcessarEventosAsaas, evento: Ev
  */
 async function aplicarComoOutroApp(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<ResultadoDeUmEvento> {
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, { pre_roteamento: "outro_app" });
-  return finalizarAplicacao(deps, evento, aplicado);
+  return finalizarAplicacao(deps, evento, aplicado, null);
+}
+
+/**
+ * A leitura do payload ou uma das consultas baratas do pré-roteamento
+ * falhou (infraestrutura, não "não achei nada"): registra a falha com
+ * backoff, o MESMO caminho de um `GET` que falhou (decisão 20). Nunca fecha
+ * como `outro_app`: isso esconderia um evento legítimo para sempre.
+ */
+async function registrarFalhaDePreRoteamento(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+): Promise<ResultadoDeUmEvento> {
+  deps.logger.warn("asaas_processar_pre_roteamento_falhou", { eventoId: evento.id });
+  const falha = await deps.db.registrarFalha(evento.id, evento.leaseToken, "asaas_pre_roteamento_falhou");
+  if (falha.error) {
+    deps.logger.error("asaas_processar_registrar_falha_falhou", {
+      eventoId: evento.id,
+      codigo: falha.error.code,
+    });
+  }
+  return { categoria: "falha", abortarRodada: false };
+}
+
+/** `billing_assinatura_nao_confere` (22023) ou contrato não encontrado (P0002, decisão 22/4): o contrato já não tem mais esta assinatura, e a remoção no Asaas já bastou. Não é uma falha de infraestrutura. */
+function ehAssinaturaJaDesvinculadaDoContrato(erro: RpcErro | null | undefined): boolean {
+  if (!erro) return false;
+  if (erro.code === "P0002") return true;
+  return Boolean(erro.message?.includes("billing_assinatura_nao_confere"));
+}
+
+/**
+ * Alarme `remover_assinatura_pendente` (Tarefa 6, decisão 10/22, N39): a
+ * assinatura nunca recebeu o primeiro pagamento (ou o pagamento de renovação
+ * venceu sem pagar) e o pedido é de tipo `assinatura`. `removerAssinatura` é
+ * idempotente em 404 (o cliente HTTP já trata isso, `lib/billing/asaas/
+ * cliente.ts`). Depois de remover, `fn_billing_asaas_marcar_assinatura_
+ * encerrada` grava o marcador (decisão 22) só quando o CONTRATO ainda aponta
+ * para esta mesma assinatura; se o contrato já trocou de assinatura (ou não
+ * existe mais), a remoção no Asaas já bastou e nada mais precisa acontecer.
+ */
+async function tentarRemoverAssinatura(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  subscriptionId: string | null,
+  organizationId: string | null,
+): Promise<void> {
+  if (!subscriptionId) return;
+  try {
+    await deps.asaas.removerAssinatura(subscriptionId);
+  } catch (err) {
+    // Falha aqui só loga (mesma doutrina de tentarRemoverCobranca, decisão
+    // 10): a conciliação diária (Tarefa 16) refaz.
+    deps.logger.warn("asaas_processar_remover_assinatura_falhou", {
+      eventoId: evento.id,
+      tipoErro: tipoDoErro(err),
+    });
+    return;
+  }
+
+  if (!organizationId) return;
+
+  const marcado = await deps.db.marcarAssinaturaEncerrada(organizationId, subscriptionId);
+  if (marcado.error && !ehAssinaturaJaDesvinculadaDoContrato(marcado.error)) {
+    deps.logger.warn("asaas_processar_marcar_assinatura_encerrada_falhou", {
+      eventoId: evento.id,
+      codigo: marcado.error.code,
+    });
+  }
 }
 
 async function finalizarAplicacao(
   deps: DepsProcessarEventosAsaas,
   evento: EventoReservado,
   aplicado: RpcResultado<AplicarEventoResultado>,
+  subscriptionId: string | null,
 ): Promise<ResultadoDeUmEvento> {
   if (aplicado.error || !aplicado.data) {
     deps.logger.error("asaas_processar_aplicar_evento_falhou", {
       eventoId: evento.id,
       codigo: aplicado.error?.code,
     });
+    // A RPC de aplicar em si falhou (não a confirmação, a CHAMADA): registra
+    // a falha com o MESMO lease para o backoff exponencial decidir quando
+    // tentar de novo, em vez de deixar o evento preso até o lease expirar
+    // sozinho, sem escalonar as tentativas.
+    const falha = await deps.db.registrarFalha(
+      evento.id,
+      evento.leaseToken,
+      `asaas_aplicar_evento_${aplicado.error?.code ?? "falhou"}`,
+    );
+    if (falha.error) {
+      deps.logger.error("asaas_processar_registrar_falha_falhou", {
+        eventoId: evento.id,
+        codigo: falha.error.code,
+      });
+    }
     return { categoria: "falha_ao_aplicar", abortarRodada: false };
   }
 
-  const { resultado, alarme } = aplicado.data;
-  if (alarme && alarme.split(",").includes("remover_cobranca_pendente")) {
+  const { resultado, organizationId, alarme } = aplicado.data;
+  const alarmes = alarme ? alarme.split(",") : [];
+  if (alarmes.includes("remover_cobranca_pendente")) {
     await tentarRemoverCobranca(deps, evento);
+  }
+  if (alarmes.includes("remover_assinatura_pendente")) {
+    await tentarRemoverAssinatura(deps, evento, subscriptionId, organizationId);
   }
   return { categoria: resultado, abortarRodada: false };
 }
 
 /**
- * O alarme `remover_cobranca_pendente` (Tarefa 6, correção A1) ainda NÃO
- * existe na migração 0909 revisada (fora desta tarefa): `fn_billing_asaas_
- * aplicar_evento` só devolve `divergente_valor` e `pago_fora_do_prazo` hoje.
- * Este ramo fica pronto para quando a Tarefa 6 acrescentar o alarme; até lá,
- * é código morto e inofensivo (a condição nunca bate).
+ * O alarme `remover_cobranca_pendente` (Tarefa 6, correção A1): `PAYMENT_
+ * OVERDUE` confirmado de um pedido AVULSO (não assinatura) marca o pedido
+ * como vencido e pede a remoção da cobrança no Asaas, para um pedido novo
+ * poder nascer sem cobrar a mais (decisão 10, decisão 11 do pedido aberto
+ * único).
  */
 async function tentarRemoverCobranca(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<void> {
   if (!evento.resourceId) return;
@@ -420,10 +664,14 @@ async function processarEventoDeDinheiro(
   deps: DepsProcessarEventosAsaas,
   evento: EventoReservado,
   payload: unknown,
+  payloadFalhou: boolean,
 ): Promise<ResultadoDeUmEvento> {
+  if (payloadFalhou) return registrarFalhaDePreRoteamento(deps, evento);
+
   const referencia = extrairReferenciaDoPayload(payload);
-  const candidato = await ehCandidatoAoGet(deps.db, evento.resourceId, referencia);
-  if (!candidato) {
+  const roteamento = await ehCandidatoAoGet(deps.db, evento.resourceId, referencia);
+  if (roteamento.falhou) return registrarFalhaDePreRoteamento(deps, evento);
+  if (!roteamento.candidato) {
     // Decisão 6/M8: payload não bate com nada conhecido, e não começa com
     // "HC:". NENHUM GET é feito; fecha como outro_app pelo sentinela (ver o
     // cabeçalho deste arquivo).
@@ -446,8 +694,8 @@ async function processarEventoDeDinheiro(
 
   if ("removido" in cobranca) {
     // O recurso já não existe no Asaas (404/deleted:true). Tratar isso como
-    // remoção confirmada é escopo da Tarefa 6 (B4); aqui só evita aplicar
-    // qualquer coisa - a mesma saída segura acima.
+    // remoção confirmada é escopo dos eventos de fim de pagamento (B4); aqui
+    // só evita aplicar qualquer coisa - a mesma saída segura acima.
     return aplicarSemConfirmacao(deps, evento);
   }
 
@@ -471,34 +719,136 @@ async function processarEventoDeDinheiro(
 
   const confirmacao = confirmacaoDoPagamento(cobranca, assinaturaStatus);
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
-  return finalizarAplicacao(deps, evento, aplicado);
+  return finalizarAplicacao(deps, evento, aplicado, cobranca.subscription ?? null);
+}
+
+/**
+ * Estorno/chargeback/`PAYMENT_OVERDUE`/`PAYMENT_DELETED` (`EVENTOS_DE_
+ * COBRANCA_GET`): mesmo `GET /payments/{id}` do grupo de dinheiro, mas o
+ * contrato de `p_confirmacao` é o de `fn_billing_asaas_aplicar_estorno`
+ * (grupo `EVENTOS_DE_ESTORNO`) ou de `fn_billing_asaas_aplicar_fim_da_
+ * assinatura` (grupo `EVENTOS_DE_FIM_DE_PAGAMENTO`).
+ */
+async function processarEventoDeCobranca(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  payload: unknown,
+  payloadFalhou: boolean,
+): Promise<ResultadoDeUmEvento> {
+  if (payloadFalhou) return registrarFalhaDePreRoteamento(deps, evento);
+
+  const referencia = extrairReferenciaDoPayload(payload);
+  const roteamento = await ehCandidatoAoGet(deps.db, evento.resourceId, referencia);
+  if (roteamento.falhou) return registrarFalhaDePreRoteamento(deps, evento);
+  if (!roteamento.candidato) return aplicarComoOutroApp(deps, evento);
+
+  if (!evento.resourceId) {
+    return aplicarSemConfirmacao(deps, evento);
+  }
+
+  let cobranca: Awaited<ReturnType<ClienteAsaasHttp["buscarCobranca"]>>;
+  try {
+    cobranca = await deps.asaas.buscarCobranca(evento.resourceId);
+  } catch (err) {
+    return tratarErroDeChamada(deps, evento, err);
+  }
+
+  let confirmacao: Record<string, unknown> | null;
+  if (EVENTOS_DE_ESTORNO.has(evento.eventType)) {
+    // O contrato de fn_billing_asaas_aplicar_estorno exige `value` (decisão
+    // 9): sem o objeto (removido no Asaas, caso não previsto), manda `null`
+    // em vez de um confirmação incompleta - o evento fica aguardando com
+    // backoff, nunca aplica algo incerto.
+    confirmacao = "removido" in cobranca ? null : confirmacaoDeEstorno(cobranca);
+  } else {
+    confirmacao = confirmacaoDoFimDoPagamento(evento.eventType, evento.resourceId, cobranca);
+  }
+
+  const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
+  const subscriptionId = "removido" in cobranca ? null : (cobranca.subscription ?? null);
+  return finalizarAplicacao(deps, evento, aplicado, subscriptionId);
+}
+
+/**
+ * `SUBSCRIPTION_DELETED`/`SUBSCRIPTION_INACTIVATED`/`SUBSCRIPTION_UPDATED`
+ * (`EVENTOS_DE_ASSINATURA_GET`): `GET /subscriptions/{id}`, contrato de
+ * `fn_billing_asaas_aplicar_fim_da_assinatura` pelo lado da assinatura.
+ */
+async function processarEventoDeAssinatura(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  payload: unknown,
+  payloadFalhou: boolean,
+): Promise<ResultadoDeUmEvento> {
+  if (payloadFalhou) return registrarFalhaDePreRoteamento(deps, evento);
+
+  const referencia = extrairReferenciaDoPayload(payload);
+  // `paymentId: null` de propósito: o `resource_id` de um evento de
+  // assinatura é um `subscription.id`, não um `payment.id` - o roteamento
+  // por assinatura já é coberto por `referencia.subscriptionId`.
+  const roteamento = await ehCandidatoAoGet(deps.db, null, referencia);
+  if (roteamento.falhou) return registrarFalhaDePreRoteamento(deps, evento);
+  if (!roteamento.candidato) return aplicarComoOutroApp(deps, evento);
+
+  if (!evento.resourceId) {
+    return aplicarSemConfirmacao(deps, evento);
+  }
+
+  let assinatura: Awaited<ReturnType<ClienteAsaasHttp["buscarAssinatura"]>>;
+  try {
+    assinatura = await deps.asaas.buscarAssinatura(evento.resourceId);
+  } catch (err) {
+    return tratarErroDeChamada(deps, evento, err);
+  }
+
+  const confirmacao = confirmacaoDeAssinatura(evento.resourceId, assinatura);
+  const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
+  return finalizarAplicacao(deps, evento, aplicado, null);
 }
 
 async function processarUmEvento(
   deps: DepsProcessarEventosAsaas,
   evento: EventoReservado,
   payload: unknown,
+  payloadFalhou: boolean,
 ): Promise<ResultadoDeUmEvento> {
-  if (!EVENTOS_DE_DINHEIRO.has(evento.eventType)) {
-    // Nenhum GET necessário: fn_billing_asaas_aplicar_evento despacha só
-    // pelo event_type para "tarefa_6_pendente" e "ignorado" (decisão 10).
-    return aplicarSemConfirmacao(deps, evento);
+  if (EVENTOS_DE_DINHEIRO.has(evento.eventType)) {
+    return processarEventoDeDinheiro(deps, evento, payload, payloadFalhou);
   }
-  return processarEventoDeDinheiro(deps, evento, payload);
+  if (EVENTOS_DE_COBRANCA_GET.has(evento.eventType)) {
+    return processarEventoDeCobranca(deps, evento, payload, payloadFalhou);
+  }
+  if (EVENTOS_DE_ASSINATURA_GET.has(evento.eventType)) {
+    return processarEventoDeAssinatura(deps, evento, payload, payloadFalhou);
+  }
+  // Nenhum GET necessário: fn_billing_asaas_aplicar_evento só registra
+  // (ignorado, decisão 10).
+  return aplicarSemConfirmacao(deps, evento);
 }
 
 // ─── A função pública ───────────────────────────────────────────────────
 
-async function carregarPayloads(deps: DepsProcessarEventosAsaas, ids: string[]): Promise<Map<string, unknown>> {
-  const mapa = new Map<string, unknown>();
-  if (ids.length === 0) return mapa;
+interface ResultadoPayloads {
+  encontrados: Map<string, unknown>;
+  /**
+   * A leitura em LOTE falhou (infraestrutura): NENHUM dos ids pedidos tem
+   * payload confiável nesta rodada. Diferente de "achei o evento mas o
+   * payload é `null`": aqui não sabemos nada, e por isso `falhouCarregar`
+   * nunca pode virar um `outro_app` silencioso (decisão 6/M8 estendida).
+   */
+  falhouCarregar: boolean;
+}
+
+async function carregarPayloads(deps: DepsProcessarEventosAsaas, ids: string[]): Promise<ResultadoPayloads> {
+  const encontrados = new Map<string, unknown>();
+  if (ids.length === 0) return { encontrados, falhouCarregar: false };
   const res = await deps.db.lerPayloads(ids);
   if (res.error || !res.data) {
     deps.logger.warn("asaas_processar_ler_payloads_falhou", { codigo: res.error?.code });
-    return mapa;
+    return { encontrados, falhouCarregar: true };
   }
-  for (const linha of res.data) mapa.set(linha.id, linha.payload);
-  return mapa;
+  for (const linha of res.data) encontrados.set(linha.id, linha.payload);
+  return { encontrados, falhouCarregar: false };
 }
 
 /**
@@ -530,9 +880,9 @@ export async function processarEventosAsaas(deps: DepsProcessarEventosAsaas): Pr
   resumo.reservados = eventos.length;
   if (eventos.length === 0) return resumo;
 
-  const payloads = await carregarPayloads(
+  const payloadsResultado = await carregarPayloads(
     deps,
-    eventos.filter((e) => EVENTOS_DE_DINHEIRO.has(e.eventType)).map((e) => e.id),
+    eventos.filter((e) => precisaDeGet(e.eventType)).map((e) => e.id),
   );
 
   for (const evento of eventos) {
@@ -541,7 +891,9 @@ export async function processarEventosAsaas(deps: DepsProcessarEventosAsaas): Pr
       break;
     }
 
-    const resultado = await processarUmEvento(deps, evento, payloads.get(evento.id) ?? null);
+    const payload = payloadsResultado.encontrados.get(evento.id) ?? null;
+    const payloadFalhou = precisaDeGet(evento.eventType) && payloadsResultado.falhouCarregar;
+    const resultado = await processarUmEvento(deps, evento, payload, payloadFalhou);
     resumo.processados++;
     contabilizar(resumo, resultado.categoria);
 
@@ -556,7 +908,7 @@ export async function processarEventosAsaas(deps: DepsProcessarEventosAsaas): Pr
 /**
  * Monta o `DbEventosAsaas` sobre um `SupabaseClient` de verdade (o admin,
  * `service_role`). As três tabelas novas (`billing_customers`,
- * `billing_orders`, `asaas_webhook_events`) e as funções da Tarefa 4/5 não
+ * `billing_orders`, `asaas_webhook_events`) e as funções da Tarefa 4/5/6 não
  * estão em `lib/database.types.ts` ainda (mesmo tratamento que os
  * conferidores irmãos dão a peça recém-nascida da migração: `admin.rpc(nome
  * as never, args as never)`, `lib/billing/assinatura/conferir-
@@ -636,6 +988,17 @@ export function criarDbEventosAsaasSobre(admin: SupabaseClient): DbEventosAsaas 
       if (error) return { data: null, error: { code: error.code, message: error.message } };
       const linha = data as { tentativas: number; resultado: string };
       return { data: { tentativas: linha.tentativas, resultado: linha.resultado }, error: null };
+    },
+
+    async marcarAssinaturaEncerrada(organizationId, asaasSubscriptionId) {
+      const { data, error } = await admin.rpc("fn_billing_asaas_marcar_assinatura_encerrada" as never, {
+        p_org: organizationId,
+        p_asaas_subscription_id: asaasSubscriptionId,
+        p_actor: null,
+      } as never);
+      if (error) return { data: null, error: { code: error.code, message: error.message } };
+      const linha = data as { ja_registrado: boolean };
+      return { data: { jaRegistrado: linha.ja_registrado }, error: null };
     },
   };
 }
