@@ -142,6 +142,22 @@ export const listaClientesSchema = listaPaginadaSchema(clienteAsaasSchema);
 export const listaAssinaturasSchema = listaPaginadaSchema(assinaturaAsaasSchema);
 export const listaCobrancasSchema = listaPaginadaSchema(cobrancaAsaasSchema);
 
+// ─── Cadastro do webhook (GET /webhooks/{id}) ──────────────────────────────
+
+/**
+ * Resposta de `GET /webhooks/{id}` (Tarefa 16, decisão 21): a conciliação
+ * diária confere se o Asaas marcou a fila do webhook como `interrupted`
+ * (entregas falhando em sequência) e alarma quando sim. Só o campo que a
+ * conciliação lê é validado; o resto passa por `.passthrough()`.
+ */
+export const webhookAsaasSchema = z
+  .object({
+    id: z.string().min(1),
+    interrupted: z.boolean().optional(),
+  })
+  .passthrough();
+export type WebhookAsaas = z.infer<typeof webhookAsaasSchema>;
+
 // ─── Envelope do webhook ──────────────────────────────────────────────────
 
 /**

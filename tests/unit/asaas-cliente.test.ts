@@ -317,6 +317,22 @@ describe("cliente Asaas: recurso removido (decisão 10/B4)", () => {
   });
 });
 
+describe("cliente Asaas: buscarWebhook (Tarefa 16, decisão 21)", () => {
+  it("faz GET em /webhooks/{id} e devolve o campo interrupted", async () => {
+    const { deps, chamadas } = montarDeps([respostaJson(200, { id: "wh_1", interrupted: true })]);
+    const cliente = criarClienteAsaas(deps);
+    await expect(cliente.buscarWebhook("wh_1")).resolves.toMatchObject({ id: "wh_1", interrupted: true });
+    expect(chamadas[0]!.url).toContain("/webhooks/wh_1");
+    expect(chamadas[0]!.init.method).toBe("GET");
+  });
+
+  it("resposta sem interrupted (fila saudável) não quebra o schema", async () => {
+    const { deps } = montarDeps([respostaJson(200, { id: "wh_1" })]);
+    const cliente = criarClienteAsaas(deps);
+    await expect(cliente.buscarWebhook("wh_1")).resolves.toMatchObject({ id: "wh_1" });
+  });
+});
+
 describe("cliente Asaas: base ou chave trocada", () => {
   it("config com habilitado:false recusa qualquer chamada, sem tocar a rede", async () => {
     const { deps, chamadas } = montarDeps([respostaJson(200, { object: "list", data: [] })]);

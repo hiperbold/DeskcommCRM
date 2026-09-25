@@ -119,6 +119,16 @@ CRONS="
 0 12 * * *|60|api/v1/cron/lgpd-sla-watcher
 30 3 * * *|120|api/v1/cron/kb-conversations-batch
 15 4 * * *|60|api/v1/cron/sync-model-catalog
+# A CONCILIAÇÃO DIÁRIA DO ASAAS (F5, Tarefa 16, decisão 21). 04:30 UTC, ANTES
+# do conferidor de vencimento (05:40): ela é a rede de segurança para o que o
+# webhook (Tarefa 12) e o processador por minuto (Tarefa 13) não pegaram
+# sozinhos - pedido preso sem evento aplicado, assinatura removida no Asaas
+# sem o webhook ter chegado, cobrança vencida cuja remoção falhou antes.
+# Teto de 200 GET ao Asaas por rodada (lib/billing/asaas/conciliar.ts):
+# timeout de 120s cobre folga de sobra para essa varredura diária, sem
+# disputar a mesma janela de I/O das rodadas de billing que vêm depois (04:55,
+# 05:25, 05:40). Sem ASAAS_ENABLED a rodada não toca banco nem rede.
+30 4 * * *|120|api/v1/cron/conciliar-asaas
 40 4 * * *|120|api/v1/cron/data-retention
 55 4 * * *|60|api/v1/cron/conferir-contadores-de-plano
 # A CARTEIRA DE TOKENS (F2-B, Tarefa 8). 05:25 UTC (este container roda com

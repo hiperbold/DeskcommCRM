@@ -125,6 +125,9 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     buscarCobrancaPorReferencia: vi.fn(async () => null),
     removerCobranca: vi.fn(async () => undefined),
     qrPix: vi.fn(async () => ({ encodedImage: "img-base64", payload: "00020126...", expirationDate: "2026-10-02T00:00:00Z" })),
+    buscarWebhook: vi.fn(async () => {
+      throw new Error("buscarWebhook não deveria ser chamado por compra.ts");
+    }),
     ...overrides,
   };
 }

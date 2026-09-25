@@ -58,6 +58,8 @@ import {
   listaClientesSchema,
   listaCobrancasSchema,
   qrPixAsaasSchema,
+  type WebhookAsaas,
+  webhookAsaasSchema,
 } from "./contratos";
 import {
   ErroAsaasException,
@@ -272,6 +274,8 @@ export interface ClienteAsaasHttp {
   buscarCobrancaPorReferencia(externalReference: string): Promise<CobrancaAsaas | null>;
   removerCobranca(id: string): Promise<void>;
   qrPix(id: string): Promise<QrPixAsaas>;
+  /** `GET /webhooks/{id}` (Tarefa 16, decisão 21): a conciliação diária confere `interrupted`. */
+  buscarWebhook(id: string): Promise<WebhookAsaas>;
 }
 
 /**
@@ -387,6 +391,10 @@ export function criarClienteAsaas(deps: DepsClienteAsaas): ClienteAsaasHttp {
         { metodo: "GET", caminho: `/payments/${encodeURIComponent(id)}/pixQrCode` },
         qrPixAsaasSchema,
       );
+    },
+
+    async buscarWebhook(id) {
+      return chamarComSchema(deps, { metodo: "GET", caminho: `/webhooks/${encodeURIComponent(id)}` }, webhookAsaasSchema);
     },
   };
 }

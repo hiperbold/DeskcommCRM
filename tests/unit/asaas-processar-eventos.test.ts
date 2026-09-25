@@ -77,6 +77,9 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     qrPix: vi.fn(async () => {
       throw new Error("qrPix não deveria ser chamado pelo processador");
     }),
+    buscarWebhook: vi.fn(async () => {
+      throw new Error("buscarWebhook não deveria ser chamado pelo processador");
+    }),
     ...overrides,
   };
 }
