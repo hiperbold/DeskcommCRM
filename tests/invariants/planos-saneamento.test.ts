@@ -8,8 +8,11 @@ import { motivoDoErro, sql } from "./psql-transporte";
  * cinco entradas do `DEBITO.md` que esta migração toca:
  *
  *  1. D-069: billing_payments perde INSERT do service_role, billing_contracts
- *     perde INSERT/DELETE/TRUNCATE do service_role, e UPDATE de
- *     billing_contracts continua concedido de propósito (planoDaOrganizacao.ts).
+ *     perde INSERT/UPDATE/DELETE/TRUNCATE do service_role (fase F7, lote 1b:
+ *     UPDATE também revogado). planoDaOrganizacao.ts (darCarenciaExtra)
+ *     passa a chamar fn_billing_estender_carencia (security definer,
+ *     PARTE 3), que lê e escreve na mesma transação sob select ... for
+ *     update, e grava um evento em billing_contract_eventos (tipo=carencia).
  *  2. D-047: TRUNCATE revogado de anon/authenticated em toda tabela do schema
  *     public, inclusive tabela criada DEPOIS desta migração.
  *  3. D-055: fn_billing_trava_crm_leads grava um rastro consultável em
@@ -80,11 +83,16 @@ describe("1. D-069: service_role não escreve direto em billing_payments nem bil
     );
   });
 
-  it("service_role é barrado ao dar INSERT, DELETE e TRUNCATE em billing_contracts", () => {
+  it("service_role é barrado ao dar INSERT, UPDATE, DELETE e TRUNCATE em billing_contracts", () => {
     esperaBarradoComoPapel(
       "service_role",
       `insert into public.billing_contracts (organization_id, plan_id) values ('${ORG}', gen_random_uuid())`,
       "insert em billing_contracts sob service_role",
+    );
+    esperaBarradoComoPapel(
+      "service_role",
+      `update public.billing_contracts set bloqueio_a_partir_de = now() + interval '10 days' where organization_id = '${ORG}'`,
+      "update em billing_contracts sob service_role",
     );
     esperaBarradoComoPapel(
       "service_role",
@@ -93,19 +101,104 @@ describe("1. D-069: service_role não escreve direto em billing_payments nem bil
     );
     esperaBarradoComoPapel("service_role", "truncate public.billing_contracts", "truncate em billing_contracts sob service_role");
   });
+});
 
-  it("EXCEÇÃO DELIBERADA: service_role continua podendo dar UPDATE em billing_contracts (planoDaOrganizacao.ts)", () => {
+// ============================================================================
+// 1b. fn_billing_estender_carencia (fase F7, lote 1b): fecha o D-069 por
+// completo, trocando a escrita direta que planoDaOrganizacao.ts fazia.
+// ============================================================================
+
+describe("1b. fn_billing_estender_carencia: única porta para estender bloqueio_a_partir_de", () => {
+  const ORG = "09100001-0000-4000-8000-000000000002";
+  const ORG_SEM_BLOQUEIO = "09100001-0000-4000-8000-000000000003";
+  const ORG_SEM_CONTRATO = "09100001-0000-4000-8000-000000000009";
+
+  it("sucesso: adia bloqueio_a_partir_de, devolve o valor ANTERIOR e grava o evento tipo=carencia", () => {
     const linhas = comoServico(`
       begin;
-      ${criarOrgSql(ORG, "d069-update-exc")}
-      set role service_role;
-      update public.billing_contracts set bloqueio_a_partir_de = now() + interval '10 days'
+      ${criarOrgSql(ORG, "d069-fn-sucesso")}
+      update public.billing_contracts set bloqueio_a_partir_de = '2026-10-01T00:00:00Z'
         where organization_id = '${ORG}';
+      set role service_role;
+      select 'SONDA|' || public.fn_billing_estender_carencia(
+        '${ORG}'::uuid, '2026-10-10T00:00:00Z'::timestamptz, gen_random_uuid()
+      )::text;
       reset role;
-      select 'SONDA|' || (bloqueio_a_partir_de is not null)::text from public.billing_contracts where organization_id = '${ORG}';
+      select 'SONDA|depois=' || bloqueio_a_partir_de::text from public.billing_contracts where organization_id = '${ORG}';
+      select 'SONDA|evento=' || count(*) || '|de=' || max(de) || '|para=' || max(para) || '|motivo=' || max(motivo)
+        from public.billing_contract_eventos where organization_id = '${ORG}' and tipo = 'carencia';
       rollback;
     `);
-    expect(linhas, "UPDATE de billing_contracts sob service_role deveria continuar passando").toEqual(["true"]);
+    expect(linhas).toEqual([
+      "2026-10-01 00:00:00+00",
+      "depois=2026-10-10 00:00:00+00",
+      "evento=1|de=2026-10-01 00:00:00+00|para=2026-10-10 00:00:00+00|motivo=carencia_extra",
+    ]);
+  });
+
+  it("recusa (P0002) organização sem linha em billing_contracts", () => {
+    const erro = erroDe(`
+      set role service_role;
+      select public.fn_billing_estender_carencia(
+        '${ORG_SEM_CONTRATO}'::uuid, now() + interval '10 days', gen_random_uuid()
+      );
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_carencia_organizacao_sem_contrato");
+  });
+
+  it("recusa (P0002) organização sem bloqueio_a_partir_de programado (nada para estender)", () => {
+    const erro = erroDe(`
+      begin;
+      ${criarOrgSql(ORG_SEM_BLOQUEIO, "d069-fn-sem-bloqueio")}
+      set role service_role;
+      select public.fn_billing_estender_carencia(
+        '${ORG_SEM_BLOQUEIO}'::uuid, now() + interval '10 days', gen_random_uuid()
+      );
+      rollback;
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_carencia_sem_bloqueio_programado");
+  });
+
+  it("recusa (22023) data que não é posterior à carência atual: só ADIA, nunca antecipa", () => {
+    const erro = erroDe(`
+      begin;
+      ${criarOrgSql(ORG, "d069-fn-nao-posterior")}
+      update public.billing_contracts set bloqueio_a_partir_de = '2026-10-10T00:00:00Z'
+        where organization_id = '${ORG}';
+      set role service_role;
+      select public.fn_billing_estender_carencia(
+        '${ORG}'::uuid, '2026-10-05T00:00:00Z'::timestamptz, gen_random_uuid()
+      );
+      rollback;
+    `);
+    expect(erro).not.toBeNull();
+    expect(erro).toContain("billing_carencia_data_nao_posterior");
+  });
+
+  it("anon, authenticated e agent_worker (se existir) são barrados por privilégio, não pelas regras de negócio", () => {
+    esperaBarradoComoPapel(
+      "anon",
+      `select public.fn_billing_estender_carencia('${ORG}'::uuid, now() + interval '10 days', gen_random_uuid())`,
+      "fn_billing_estender_carencia sob anon",
+    );
+    esperaBarradoComoPapel(
+      "authenticated",
+      `select public.fn_billing_estender_carencia('${ORG}'::uuid, now() + interval '10 days', gen_random_uuid())`,
+      "fn_billing_estender_carencia sob authenticated",
+    );
+
+    const roleExiste = comoServico(
+      "select 'SONDA|' || exists(select 1 from pg_roles where rolname = 'agent_worker')::text;",
+    );
+    if (roleExiste[0] === "true") {
+      esperaBarradoComoPapel(
+        "agent_worker",
+        `select public.fn_billing_estender_carencia('${ORG}'::uuid, now() + interval '10 days', gen_random_uuid())`,
+        "fn_billing_estender_carencia sob agent_worker",
+      );
+    }
   });
 });
 
@@ -136,6 +229,54 @@ describe("2. D-047: TRUNCATE revogado de anon e authenticated em toda tabela do 
     // O grant padrão do Supabase continua concedendo o resto (select
     // inclusive): só o TRUNCATE some, prova de que o alter default
     // privileges mirou exatamente o privilégio certo, sem alargar o revoke.
+    expect(linhas).toEqual(["anon=false|authenticated=false|select_anon=true"]);
+  });
+
+  it("(lote 1b, auditoria) quando o papel supabase_admin existe, o mesmo revoke vale para o default DELE também", () => {
+    // supabase_admin não existe neste harness local (test-db.sh não o cria):
+    // criado e derrubado dentro do rollback, só para provar o ESTADO FINAL no
+    // catálogo (pg_default_acl, via has_table_privilege numa tabela futura
+    // criada COMO essa role) quando ela existir, sem exigir Supabase de
+    // verdade. A migration já rodou (é o baseline inteiro que este arquivo
+    // recebeu): supabase_admin não existia quando ela rodou, então o bloco da
+    // PARTE 5 foi um no-op silencioso; este teste reexecuta o MESMO texto do
+    // do-block da migração (colado aqui, não extraído do arquivo: é raso e
+    // estável) depois de criar o papel, para provar que ele funciona quando a
+    // role existe de verdade (Supabase gerenciado).
+    const linhas = comoServico(`
+      begin;
+      create role supabase_admin nologin;
+      grant create on schema public to supabase_admin;
+      -- Reproduz, PARA supabase_admin, o mesmo default ACL que test-db.sh
+      -- concede a 'postgres' no prelude (o dono de schema de um Supabase
+      -- gerenciado de verdade é supabase_admin, não postgres): sem isto, uma
+      -- tabela criada por supabase_admin não teria select/insert/update/
+      -- delete nenhum para anon/authenticated, e a comparação de select não
+      -- provaria que o revoke abaixo mirou só o TRUNCATE.
+      alter default privileges for role supabase_admin in schema public grant all on tables to anon;
+      alter default privileges for role supabase_admin in schema public grant all on tables to authenticated;
+      alter default privileges for role supabase_admin in schema public grant all on tables to service_role;
+      do $$
+      begin
+        if exists (select 1 from pg_roles where rolname = 'supabase_admin') then
+          begin
+            execute 'alter default privileges for role supabase_admin in schema public revoke truncate on tables from anon, authenticated';
+          exception
+            when insufficient_privilege then
+              raise warning 'sem privilegio para alterar o default de supabase_admin';
+          end;
+        end if;
+      end
+      $$;
+      set role supabase_admin;
+      create table public.zz_saneamento_d047_supabase_admin_futura (id int);
+      reset role;
+      insert into public.zz_saneamento_d047_supabase_admin_futura values (1);
+      select 'SONDA|anon=' || has_table_privilege('anon', 'public.zz_saneamento_d047_supabase_admin_futura', 'TRUNCATE')::text
+        || '|authenticated=' || has_table_privilege('authenticated', 'public.zz_saneamento_d047_supabase_admin_futura', 'TRUNCATE')::text
+        || '|select_anon=' || has_table_privilege('anon', 'public.zz_saneamento_d047_supabase_admin_futura', 'SELECT')::text;
+      rollback;
+    `);
     expect(linhas).toEqual(["anon=false|authenticated=false|select_anon=true"]);
   });
 });

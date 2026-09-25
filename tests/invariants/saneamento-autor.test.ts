@@ -12,10 +12,17 @@ import { motivoDoErro, sql } from "./psql-transporte";
  *  1. D-048: `orgs_write_platform_admin` passa a exigir `scope = 'full'`
  *     (`fn_is_platform_admin_full`); um admin `support_readonly` é recusado
  *     pela RLS, um admin `full` continua escrevendo.
- *  2. D-061: `fn_reserve_channel_connection`, no ramo de onboarding, zera
- *     `archived_at` de uma sessão `waha` arquivada ANTES de reaproveitá-la, e
- *     essa reativação passa a contar no teto de conexões do plano, igual a
- *     uma conexão nova.
+ *  2. D-061: achado da auditoria da fase F7 (lote 1b): falso positivo.
+ *     `fn_finish_channel_connection` (0228) já zera `archived_at` no próprio
+ *     SET da atualização de `channel_sessions`, coluna presente na lista do
+ *     UPDATE mesmo quando o valor final é igual ao anterior, e
+ *     `trg_billing_trava_channel_sessions` (before ... OF archived_at, 0907)
+ *     dispara por COLUNA NA LISTA, não por mudança de valor: toda chamada de
+ *     `fn_finish_channel_connection` já passa pelo teto do plano, inclusive
+ *     a reativação de uma sessão arquivada. `fn_reserve_channel_connection`
+ *     voltou ao corpo original da migration 0232 (revertendo a mudança do
+ *     lote 4b): no ramo de onboarding, acha a sessão arquivada SEM zerar
+ *     `archived_at`; a limpeza (e a contagem no teto) fica só para o finish.
  *  3. D-063: o segundo recálculo de `billing_usage_counters` (merge por
  *     `greatest`) nunca decresce um valor já elevado por um incremento
  *     concorrente, e continua subindo até o valor real quando ele é maior.
@@ -134,15 +141,14 @@ describe("1. D-048: escrever em organizations pela política exige admin de esco
 });
 
 // ============================================================================
-// 2. D-061: fn_reserve_channel_connection limpa archived_at e conta no teto.
+// 2. D-061: falso positivo (auditoria F7, lote 1b). fn_reserve_channel_
+// connection voltou ao corpo da 0232: a reserva NÃO zera archived_at.
 // ============================================================================
 
-describe("2. D-061: reaproveitar sessão waha arquivada limpa archived_at e conta no teto", () => {
+describe("2. D-061: reaproveitar sessão waha arquivada na RESERVA não zera archived_at (corpo da 0232)", () => {
   const ATOR = "d0610001-0000-4000-8000-000000000001";
-  const ORG_LIMPA = "d0610001-0000-4000-8000-000000000002";
-  const SESSAO_LIMPA = "d0610001-0000-4000-8000-000000000003";
-  const ORG_TETO = "d0610001-0000-4000-8000-000000000004";
-  const SESSAO_TETO = "d0610001-0000-4000-8000-000000000005";
+  const ORG_ARQUIVADA = "d0610001-0000-4000-8000-000000000002";
+  const SESSAO_ARQUIVADA = "d0610001-0000-4000-8000-000000000003";
 
   const seedAtor = `insert into auth.users(id,email) values ('${ATOR}','ator-d061@invariant.test') on conflict (id) do nothing;`;
   const comoAtor = `
@@ -168,51 +174,24 @@ describe("2. D-061: reaproveitar sessão waha arquivada limpa archived_at e cont
     `;
   }
 
-  it("sem teto: a sessão arquivada é reaproveitada com archived_at limpo (D-061, parte 1)", () => {
+  it("a reserva acha e reaproveita a sessão arquivada, mas a linha CONTINUA arquivada depois (a limpeza é do finish)", () => {
     const linhas = comoServico(`
       begin;
       ${seedAtor}
-      ${seedOrgComAdmin(ORG_LIMPA)}
-      ${seedSessaoArquivada(ORG_LIMPA, SESSAO_LIMPA)}
+      ${seedOrgComAdmin(ORG_ARQUIVADA)}
+      ${seedSessaoArquivada(ORG_ARQUIVADA, SESSAO_ARQUIVADA)}
       ${comoAtor}
       select 'SONDA|' || ((public.fn_reserve_channel_connection(
-        '${ORG_LIMPA}'::uuid, gen_random_uuid(), repeat('a', 64), null, true
-      )->'channel'->>'id') = '${SESSAO_LIMPA}')::text;
+        '${ORG_ARQUIVADA}'::uuid, gen_random_uuid(), repeat('a', 64), null, true
+      )->'channel'->>'id') = '${SESSAO_ARQUIVADA}')::text;
       reset role;
-      select 'SONDA|' || (archived_at is null)::text from public.channel_sessions where id = '${SESSAO_LIMPA}';
+      select 'SONDA|' || (archived_at is not null)::text from public.channel_sessions where id = '${SESSAO_ARQUIVADA}';
       rollback;
     `);
-    expect(linhas).toEqual(["true", "true"]);
-  });
-
-  it("no teto (modo bloquear, carência vencida): reaproveitar a sessão arquivada é recusado com PT402, e a linha permanece arquivada (D-061, parte 2)", () => {
-    const linhas = comoServico(`
-      begin;
-      ${seedAtor}
-      ${seedOrgComAdmin(ORG_TETO)}
-      select public.fn_billing_ajustar_limites('${ORG_TETO}'::uuid, '{"conexoes": 0}'::jsonb, null, null);
-      update public.billing_settings set modo = 'bloquear' where id = 1;
-      update public.billing_contracts set bloqueio_a_partir_de = now() - interval '1 day'
-        where organization_id = '${ORG_TETO}';
-      ${seedSessaoArquivada(ORG_TETO, SESSAO_TETO)}
-      ${comoAtor}
-      do $$
-      begin
-        perform public.fn_reserve_channel_connection('${ORG_TETO}'::uuid, gen_random_uuid(), repeat('a', 64), null, true);
-        raise exception 'reserva no teto passou sem erro';
-      exception
-        when sqlstate 'PT402' then
-          raise notice 'PT402 capturado: o teto agora conta o reaproveitamento';
-      end $$;
-      reset role;
-      select 'SONDA|' || (archived_at is not null)::text from public.channel_sessions where id = '${SESSAO_TETO}';
-      select 'SONDA|' || count(*) from public.channel_connection_requests where organization_id = '${ORG_TETO}';
-      rollback;
-    `);
-    expect(linhas, "a sessão devia continuar arquivada e nenhum pedido de conexão devia sobreviver ao PT402").toEqual([
-      "true",
-      "0",
-    ]);
+    expect(
+      linhas,
+      "a reserva devia achar a MESMA sessão arquivada (id bate) e NÃO devia zerar archived_at (corpo da 0232)",
+    ).toEqual(["true", "true"]);
   });
 });
 

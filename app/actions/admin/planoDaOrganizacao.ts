@@ -47,10 +47,10 @@ import { instanteDe } from "@/lib/agenda/fuso";
  * ── Por que o erro do banco nunca vira `error.message` na resposta ──────────
  *
  * A mensagem de erro do Postgres pode conter nome de coluna, de tabela ou
- * fragmento de SQL, e nada disso é para a tela. Só os dois erros com
- * `errcode = 'P0002'` que as funções levantam de propósito viram frase fixa
- * reconhecível; qualquer outro vira uma frase genérica e o texto cru vai só
- * para o log do servidor.
+ * fragmento de SQL, e nada disso é para a tela. Só os erros de negócio que
+ * as funções levantam de propósito (`errcode = 'P0002'` ou `22023`) viram
+ * frase fixa reconhecível; qualquer outro vira uma frase genérica e o texto
+ * cru vai só para o log do servidor.
  */
 
 const entradaTrocarPlano = z.object({
@@ -118,16 +118,26 @@ function caminhoDaAbaDePlano(organizationId: string): string {
 }
 
 /**
- * Traduz o erro de `fn_billing_trocar_plano` / `fn_billing_ajustar_limites`
- * para a frase que a tela mostra. Os dois códigos de negócio são fixos
- * (`organizacao_nao_encontrada`, `plano_nao_encontrado_ou_inativo`), sempre
- * com `errcode = 'P0002'`; qualquer outra coisa é falha inesperada do banco,
- * e o texto original nunca sai daqui.
+ * Traduz o erro de `fn_billing_trocar_plano`, `fn_billing_ajustar_limites` e
+ * `fn_billing_estender_carencia` para a frase que a tela mostra. Os códigos
+ * de negócio são fixos: `organizacao_nao_encontrada`,
+ * `plano_nao_encontrado_ou_inativo`, `billing_carencia_organizacao_sem_
+ * contrato` e `billing_carencia_sem_bloqueio_programado` com `errcode =
+ * 'P0002'`; `billing_carencia_data_nao_posterior` com `errcode = '22023'`.
+ * Qualquer outra coisa é falha inesperada do banco, e o texto original nunca
+ * sai daqui.
  */
 function mensagemDoErroDeEscrita(error: { code?: string; message?: string } | null): string {
   if (error?.code === "P0002") {
     if (error.message?.includes("organizacao_nao_encontrada")) return "Organização não encontrada.";
     if (error.message?.includes("plano_nao_encontrado_ou_inativo")) return "Plano não encontrado.";
+    if (error.message?.includes("billing_carencia_organizacao_sem_contrato")) return "Organização não encontrada.";
+    if (error.message?.includes("billing_carencia_sem_bloqueio_programado")) {
+      return "Esta organização não tem bloqueio programado; não há carência para estender.";
+    }
+  }
+  if (error?.code === "22023" && error.message?.includes("billing_carencia_data_nao_posterior")) {
+    return "A nova data precisa ser depois da carência atual.";
   }
   logger.error("[planoDaOrganizacao] erro na escrita do plano", {
     code: error?.code ?? null,
@@ -214,19 +224,18 @@ export async function trocarPlanoDaOrganizacao(input: {
  * bloqueia, decisão 2 da fase; "estender" sem uma data para estender não
  * tem sentido, e a ação recusa com frase fixa).
  *
- * ── Por que não existe função nova no banco aqui ─────────────────────────────
+ * ── Por que a leitura e a escrita agora vivem numa função do banco ──────────
  *
- * `billing_contracts` tem `grant all ... to service_role` desde a migration
- * 0904, o mesmo caso de `definirDiasDeCarencia` em `bloqueioDosPlanos.ts`: o
- * `service_role` ignora RLS, e o cliente admin já escreve direto em tabela
- * protegida por RLS em outros pontos do repositório (`platform_settings`,
- * `platform_config`). Uma função dedicada, com `for update`, evitaria a
- * janela entre a leitura do `antes` e a escrita do `depois` numa troca
- * concorrente; para uma ação rara e feita por um humano (o admin da
- * plataforma abrindo uma exceção pontual), o mesmo risco que
- * `gravarComportamentoDaInstalacao` já assume pareceu aceitável, e não vi
- * motivo para propor uma migration nesta tarefa (proibida de tocar
- * `supabase/`).
+ * Correção (D-069, fase F7, lote 1b): esta ação escrevia
+ * `bloqueio_a_partir_de` direto com o cliente de serviço, o único caminho em
+ * TypeScript que ainda escrevia em `billing_contracts` por fora das funções
+ * do módulo (migration 0910, PARTE 1). `fn_billing_estender_carencia`
+ * (security definer, migration 0910, PARTE 3) faz a leitura e a escrita
+ * dentro da MESMA transação, sob `select ... for update`: a janela de
+ * concorrência do achado médio 3-a (leitura e escrita em dois round-trips
+ * separados, detectada só depois pelo `.eq("bloqueio_a_partir_de", antes)`)
+ * deixa de existir, porque não há mais dois round-trips. UPDATE de
+ * `billing_contracts` foi revogado do `service_role` na mesma migration.
  */
 export async function darCarenciaExtra(input: {
   organizationId: string;
@@ -277,66 +286,23 @@ export async function darCarenciaExtra(input: {
   }
 
   const admin = createAdminClient();
+  const { data, error } = await admin.rpc("fn_billing_estender_carencia", {
+    p_org: parsed.data.organizationId,
+    p_ate: alvo.toISOString(),
+    p_actor: user.id,
+  });
 
-  const { data: linha, error: erroLeitura } = await admin
-    .from("billing_contracts")
-    .select("id, bloqueio_a_partir_de")
-    .eq("organization_id", parsed.data.organizationId)
-    .maybeSingle();
-
-  if (erroLeitura) {
-    logger.error("[planoDaOrganizacao] erro ao ler a carência atual", {
-      code: erroLeitura.code ?? null,
-      message: erroLeitura.message ?? null,
-    });
-    return { ok: false, error: "Não foi possível salvar. Tente de novo." };
+  if (error) {
+    return { ok: false, error: mensagemDoErroDeEscrita(error) };
   }
 
-  const contrato = linha as { id: string; bloqueio_a_partir_de: string | null } | null;
-
-  if (!contrato) {
-    return { ok: false, error: "Organização não encontrada." };
-  }
-  if (!contrato.bloqueio_a_partir_de) {
-    return {
-      ok: false,
-      error: "Esta organização não tem bloqueio programado; não há carência para estender.",
-    };
-  }
-  if (alvo.getTime() <= new Date(contrato.bloqueio_a_partir_de).getTime()) {
-    return { ok: false, error: "A nova data precisa ser depois da carência atual." };
-  }
-
-  const antes = contrato.bloqueio_a_partir_de;
+  // `fn_billing_estender_carencia` lê e escreve dentro da MESMA transação
+  // (D-069, fase F7, lote 1b), sob `select ... for update`: não há janela de
+  // concorrência para reler aqui. `antes` é o `bloqueio_a_partir_de` ANTERIOR
+  // que a função devolveu; `depois` é o mesmo instante que esta chamada já
+  // calculou e enviou como `p_ate`.
+  const antes = new Date(data as string).toISOString();
   const depois = alvo.toISOString();
-
-  // Achado médio 3-a: sem condicionar ao valor LIDO, duas abas do admin (ou
-  // um segundo clique) liam o "antes" da MESMA linha e a segunda escrita
-  // vencia sem avisar que a primeira tinha acontecido, o clássico "perdeu a
-  // escrita". `.eq("bloqueio_a_partir_de", antes)` faz o UPDATE só valer
-  // contra o valor que ESTA chamada leu; `.select("id")` devolve a linha
-  // afetada (vazio quando o `eq` não bateu em nada, porque a carência já
-  // mudou entre a leitura e a escrita), e é isso que decide sucesso.
-  const { data: escrita, error: erroEscrita } = await admin
-    .from("billing_contracts")
-    .update({ bloqueio_a_partir_de: depois })
-    .eq("id", contrato.id)
-    .eq("bloqueio_a_partir_de", antes)
-    .select("id");
-
-  if (erroEscrita) {
-    logger.error("[planoDaOrganizacao] erro ao gravar a carência extra", {
-      code: erroEscrita.code ?? null,
-      message: erroEscrita.message ?? null,
-    });
-    return { ok: false, error: "Não foi possível salvar. Tente de novo." };
-  }
-  if (!escrita || escrita.length === 0) {
-    return {
-      ok: false,
-      error: "A carência desta organização mudou enquanto você editava. Recarregue a página e tente de novo.",
-    };
-  }
 
   const { requestId, ip, userAgent } = await contextoDaRequisicao();
   await audit({

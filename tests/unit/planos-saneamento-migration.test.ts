@@ -62,17 +62,77 @@ describe("0910 D-069: billing_payments e billing_contracts só escritos pelas fu
     }
   });
 
-  it("revoga INSERT, DELETE e TRUNCATE de billing_contracts do service_role, sem tocar em UPDATE nem SELECT", () => {
+  it("revoga INSERT, UPDATE, DELETE e TRUNCATE de billing_contracts do service_role, sem tocar em SELECT", () => {
     for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
-      expect(sql).toMatch(/revoke insert, delete, truncate on public\.billing_contracts from service_role;/);
-      expect(sql).not.toMatch(/revoke[^;]*\bupdate\b[^;]*on public\.billing_contracts from service_role/);
+      expect(sql).toMatch(/revoke insert, update, delete, truncate on public\.billing_contracts from service_role;/);
       expect(sql).not.toMatch(/revoke[^;]*\bselect\b[^;]*on public\.billing_contracts from service_role/);
     }
   });
 
-  it("documenta a exceção do UPDATE de billing_contracts (planoDaOrganizacao.ts) no comentário da tabela", () => {
-    expect(MIGRATION_0910).toMatch(/EXCEÇÃO DELIBERADA: UPDATE continua concedido/);
+  it("o comentário da tabela não descreve mais UPDATE como exceção deliberada, e cita a função nova", () => {
+    expect(MIGRATION_0910).not.toMatch(/EXCEÇÃO DELIBERADA: UPDATE continua concedido/);
     expect(MIGRATION_0910).toMatch(/planoDaOrganizacao\.ts/);
+    expect(MIGRATION_0910).toMatch(/fn_billing_estender_carencia/);
+  });
+
+  it("(lote 1b, auditoria) o levantamento não afirma mais que workers/ e scripts/ não existem", () => {
+    expect(MIGRATION_0910).not.toMatch(/nenhum\s*\n?-- desses três diretórios de workers\/scripts existe neste repo hoje/);
+    expect(MIGRATION_0910).toContain("os cinco\n-- diretórios existem neste repo");
+  });
+});
+
+describe("0910 PARTE 3 (lote 1b): fn_billing_estender_carencia fecha D-069 por completo", () => {
+  it("a PARTE 3 está presente na migração e no bloco do baseline, igual ignorando comentários e linhas em branco", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toContain("PARTE 3 (fase F7, lote 1b): D-069 completo.");
+    }
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION_0910);
+    const sqlBloco = removeComentariosEBrancas(extraiBloco0910Baseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+  });
+
+  it("redefine o CHECK de billing_contract_eventos.tipo (drop + add) preservando os cinco valores anteriores (0908 + 0909) e incluindo 'carencia'", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(
+        /alter table public\.billing_contract_eventos drop constraint if exists billing_contract_eventos_tipo_check;/,
+      );
+      expect(sql).toMatch(
+        /check \(tipo in \('estado', 'periodo', 'cancelar_no_fim', 'conferidor', 'plano', 'carencia'\)\);/,
+      );
+    }
+  });
+
+  it("cria fn_billing_estender_carencia: security definer, for update, e as três recusas de negócio", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      const posicao = sql.lastIndexOf(
+        "create or replace function public.fn_billing_estender_carencia(p_org uuid, p_ate timestamptz, p_actor uuid)",
+      );
+      expect(posicao).toBeGreaterThan(-1);
+      const trecho = sql.slice(posicao, posicao + 2000);
+      expect(trecho).toMatch(/security definer/);
+      expect(trecho).toMatch(/where organization_id = p_org\s*\n\s*for update;/);
+      expect(trecho).toMatch(/billing_carencia_organizacao_sem_contrato' using errcode = 'P0002';/);
+      expect(trecho).toMatch(/billing_carencia_sem_bloqueio_programado' using errcode = 'P0002';/);
+      expect(trecho).toMatch(/billing_carencia_data_nao_posterior' using errcode = '22023';/);
+      expect(trecho).toMatch(
+        /insert into public\.billing_contract_eventos \(organization_id, contract_id, tipo, de, para, motivo, actor\)/,
+      );
+      expect(trecho).toMatch(/'carencia',/);
+    }
+  });
+
+  it("grant só para service_role, revoke de public/anon/authenticated e de agent_worker (se a role existir)", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_estender_carencia\(uuid, timestamptz, uuid\) from public, anon, authenticated;/,
+      );
+      expect(sql).toMatch(
+        /grant execute on function public\.fn_billing_estender_carencia\(uuid, timestamptz, uuid\) to service_role;/,
+      );
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_billing_estender_carencia\(uuid, timestamptz, uuid\) from agent_worker/,
+      );
+    }
   });
 });
 
@@ -220,10 +280,41 @@ describe("0910 D-048: orgs_write_platform_admin passa a exigir escopo full", () 
   it("não toca na política de leitura orgs_select (o achado do D-048 é só escrita)", () => {
     expect(MIGRATION_0910).not.toMatch(/(drop|create) policy[^;]*\borgs_select\b/);
   });
+
+  it("(lote 1b, auditoria) revoga EXECUTE de agent_worker, condicional à role existir: função nova nasce com grant padrão", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toMatch(
+        /revoke execute on function public\.fn_is_platform_admin_full\(\) from agent_worker/,
+      );
+    }
+  });
 });
 
-describe("0910 D-061: fn_reserve_channel_connection limpa archived_at e conta no teto ao reaproveitar", () => {
-  it("redefine a função (última definição vale) com o update que zera archived_at dentro do ramo de onboarding", () => {
+describe("0910 D-061 (lote 4b): a redefinição original zerava archived_at dentro do ramo de onboarding", () => {
+  it("a PRIMEIRA definição (lote 4b, PARTE 2) ainda tem o update que zera archived_at: histórico preservado, revertido depois", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      const posicao = sql.indexOf(
+        "create or replace function public.fn_reserve_channel_connection(p_org uuid,p_key uuid,p_hash text,p_display_name text default null,p_onboarding boolean default false)",
+      );
+      expect(posicao).toBeGreaterThan(-1);
+      const trecho = sql.slice(posicao, posicao + 3500);
+      expect(trecho).toMatch(/update public\.channel_sessions set archived_at=null,updated_at=now\(\)/);
+      expect(trecho).toMatch(/if channel\.id is not null and channel\.archived_at is not null then/);
+    }
+  });
+});
+
+describe("0910 PARTE 4 (lote 1b, auditoria): D-061 revertido, fn_reserve_channel_connection volta ao corpo da 0232", () => {
+  it("a PARTE 4 está presente na migração e no bloco do baseline, igual ignorando comentários e linhas em branco", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toContain("PARTE 4 (fase F7, lote 1b, auditoria): D-061 era falso positivo.");
+    }
+    const sqlMigracao = removeComentariosEBrancas(MIGRATION_0910);
+    const sqlBloco = removeComentariosEBrancas(extraiBloco0910Baseline());
+    expect(sqlBloco).toBe(sqlMigracao);
+  });
+
+  it("a ÚLTIMA definição (última definição vale) não zera mais archived_at no ramo de onboarding", () => {
     for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
       const posicao = sql.lastIndexOf(
         "create or replace function public.fn_reserve_channel_connection(p_org uuid,p_key uuid,p_hash text,p_display_name text default null,p_onboarding boolean default false)",
@@ -233,18 +324,16 @@ describe("0910 D-061: fn_reserve_channel_connection limpa archived_at e conta no
 
       const posOnboarding = trecho.indexOf("if p_onboarding then");
       const posBuscaArquivada = trecho.indexOf("where organization_id=p_org and provider='waha'");
-      const posUpdateArchivedAt = trecho.indexOf("update public.channel_sessions set archived_at=null,updated_at=now()");
       const posInsertNovoCanal = trecho.indexOf("if channel.id is null then");
 
-      // A limpeza de archived_at mora DENTRO do ramo de onboarding, DEPOIS da
-      // busca pela sessão arquivada e ANTES do insert de canal novo (só
-      // insere quando a reativação não achou nada para reaproveitar).
       expect(posOnboarding).toBeGreaterThan(-1);
       expect(posBuscaArquivada).toBeGreaterThan(posOnboarding);
-      expect(posUpdateArchivedAt).toBeGreaterThan(posBuscaArquivada);
-      expect(posInsertNovoCanal).toBeGreaterThan(posUpdateArchivedAt);
+      expect(posInsertNovoCanal).toBeGreaterThan(posBuscaArquivada);
 
-      expect(trecho).toMatch(/if channel\.id is not null and channel\.archived_at is not null then/);
+      // Corpo idêntico ao da 0232: sem o update que zera archived_at, e sem
+      // o if que só existia para decidir se zerava.
+      expect(trecho).not.toMatch(/archived_at=null/);
+      expect(trecho).not.toMatch(/if channel\.id is not null and channel\.archived_at is not null then/);
       expect(trecho).toMatch(/security definer/);
     }
   });
@@ -257,6 +346,19 @@ describe("0910 D-061: fn_reserve_channel_connection limpa archived_at e conta no
       expect(sql).toMatch(
         /grant execute on function public\.fn_reserve_channel_connection\(uuid,uuid,text,text,boolean\) to authenticated;/,
       );
+    }
+  });
+});
+
+describe("0910 PARTE 5 (lote 1b, auditoria): D-047 também cobre o default de supabase_admin", () => {
+  it("tenta revogar TRUNCATE do default de supabase_admin, condicional à role existir, sem derrubar a migration em 42501", () => {
+    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
+      expect(sql).toContain("PARTE 5 (fase F7, lote 1b, auditoria): D-047");
+      expect(sql).toMatch(/if exists \(select 1 from pg_roles where rolname = 'supabase_admin'\) then/);
+      expect(sql).toMatch(
+        /alter default privileges for role supabase_admin in schema public revoke truncate on tables from anon, authenticated/,
+      );
+      expect(sql).toMatch(/when insufficient_privilege then/);
     }
   });
 });
