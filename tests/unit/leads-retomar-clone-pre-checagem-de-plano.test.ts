@@ -42,7 +42,7 @@ const USER_ID = "11111111-1111-4111-8111-111111111111";
 
 /** `bloqueioValeParaOrganizacao` (lib/billing/planos/modo-cacheado.ts) vale
  * quando `billing_settings.modo = 'bloquear'` e o contrato já venceu a
- * carência — dublê mínimo para as duas tabelas que ela lê. */
+ * carência, dublê mínimo para as duas tabelas que ela lê. */
 function adminStub() {
   return {
     from: (tabela: string) => {
@@ -91,7 +91,7 @@ describe("retomarLeadHandler: pré-checagem de plano (F3, Tarefa 7)", () => {
   /** O mínimo que o handler lê antes de criar: origem encerrada, sem retomada
    * aberta ainda, funil sem regra de campos, e a etapa aberta do funil.
    * `crm_leads` é consultado DUAS vezes (a origem, depois a checagem de
-   * idempotência `jaRetomado`) — um contador por tabela distingue as duas. */
+   * idempotência `jaRetomado`), um contador por tabela distingue as duas. */
   function clienteStub() {
     const chamadasPorTabela = new Map<string, number>();
     const etapas = [

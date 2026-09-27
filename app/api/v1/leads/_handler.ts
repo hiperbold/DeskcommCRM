@@ -1493,7 +1493,7 @@ export async function retomarLeadHandler(
     );
   }
 
-  // A retomada cria um lead novo — a mesma pergunta de toda criação (bulk,
+  // A retomada cria um lead novo, a mesma pergunta de toda criação (bulk,
   // import, channels/graph-partner): perguntar ANTES de escrever, não só
   // confiar no gatilho do banco. `createLeadHandler` já traduz o PT402 dele
   // em 402 (rede de segurança); isto aqui é a checagem da aplicação.

@@ -2,7 +2,7 @@
  * `POST /api/v1/channels/graph-partner` criava lead sem a trava do plano na
  * aplicação: nem a pré-checagem (`podeCriar`/`bloqueioValeParaOrganizacao`,
  * como `channels/partner`) nem a rede de segurança (`saveGraphPartnerSession`
- * reduzia o erro a `error?.message`, perdendo o `code` do PT402 — a rota caía
+ * reduzia o erro a `error?.message`, perdendo o `code` do PT402, a rota caía
  * sempre em 500 `internal_error`). Molde de
  * `canal-parceiro-pre-checagem-de-plano.test.ts` (a mesma família, canal
  * `partner`), aqui contra o Route Handler REAL do `graph-partner`.
@@ -175,7 +175,7 @@ describe("POST /api/v1/channels/graph-partner: pré-checagem de plano (F3)", () 
 
   it("o gatilho do banco recusa com PT402: rede de segurança devolve 402, nunca 500", async () => {
     // Sessão já ativa: a pré-checagem nem entra (mesma régua de `channels/partner`),
-    // e é o gatilho do banco quem recusa no INSERT/UPDATE — o caso que
+    // e é o gatilho do banco quem recusa no INSERT/UPDATE, o caso que
     // `saveGraphPartnerSession` perdia ao reduzir o erro a `.message`.
     vi.mocked(createAdminClient).mockReturnValue(adminStub({ modo: "avisar" }) as never);
     vi.mocked(saveGraphPartnerSession).mockResolvedValue({

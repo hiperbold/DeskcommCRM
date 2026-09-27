@@ -96,7 +96,7 @@ export async function saveGraphPartnerSession(
     userId: string;
     requestId: string;
   },
-  // Erro CRU do banco (`code`/`details` inclusos), e não só a mensagem — fase
+  // Erro CRU do banco (`code`/`details` inclusos), e não só a mensagem, fase
   // F3, decisão 9: quem chama precisa do `code` para reconhecer o PT402 sem
   // depender do texto do Postgres (molde de `lib/channels/connect.ts:savePartnerSession`).
   // `unknown`, e não um tipo fechado: os dois ramos (reactivate x insert) devolvem

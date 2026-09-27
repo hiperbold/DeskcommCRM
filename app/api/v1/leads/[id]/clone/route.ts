@@ -306,7 +306,7 @@ export async function POST(
       }
     }
 
-    // O clone cria um lead novo no funil de destino — a mesma pergunta de toda
+    // O clone cria um lead novo no funil de destino, a mesma pergunta de toda
     // criação (bulk, import, channels/graph-partner): perguntar ANTES de
     // escrever, não só confiar no gatilho do banco. Vem depois de todas as
     // recusas de negócio acima (não gastar a leitura à toa) e ANTES da

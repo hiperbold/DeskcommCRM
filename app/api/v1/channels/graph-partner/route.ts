@@ -113,14 +113,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const admin = createAdminClient();
 
   // Lido AQUI (antes da chamada ao provedor) só para a checagem de plano
-  // abaixo — a leitura de novo depois de `validateGraphPartnerCredentials`
+  // abaixo, a leitura de novo depois de `validateGraphPartnerCredentials`
   // segue igual, porque o estado pode ter mudado nesse meio-tempo (outra aba).
   const existenteAntes = await findGraphPartnerSession(admin, orgId);
 
   // Fase F3, decisão 3 (mesmo molde de `app/api/v1/channels/partner/route.ts`):
   // conectar por credencial faz uma chamada de REDE ao provedor
   // (`validateGraphPartnerCredentials`) antes de gravar. Só uma sessão NOVA ou
-  // uma REATIVAÇÃO (arquivada) conta contra o teto de conexões — editar uma
+  // uma REATIVAÇÃO (arquivada) conta contra o teto de conexões, editar uma
   // sessão já ativa não dispara o gatilho do banco. `podeCriar` é só o AVISO
   // adiantado, para não pagar a chamada ao provedor à toa; quem trava de
   // verdade continua sendo o gatilho no INSERT/UPDATE abaixo.
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     requestId,
   });
   if (error) {
-    // Fase F3, decisão 3: o `podeCriar` acima é só o aviso adiantado — quem
+    // Fase F3, decisão 3: o `podeCriar` acima é só o aviso adiantado, quem
     // trava de verdade é o gatilho do banco, e é este erro que carrega o
     // PT402 quando duas conexões correm juntas e passam pelo aviso. Rede de
     // segurança, nunca 500 para um teto de plano.

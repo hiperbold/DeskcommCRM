@@ -114,7 +114,7 @@ describe("consultarJevNoRoteador", () => {
    * (`vetoPorAssinaturaSuspensaEnsaio`, lib/ai/runtime/agent.ts); perguntar ao
    * Jev aqui gastaria uma chamada de IA para decidir um roteamento que nunca
    * vai rodar. Mesmo desfecho de "Jev desligado", mesmo com a tarefa LIGADA e
-   * decidindo — a organização suspensa nunca chega a ser lida.
+   * decidindo, a organização suspensa nunca chega a ser lida.
    */
   it("conta suspensa (modo leitura): nada sai, mesmo com a tarefa ligada e decidindo", async () => {
     vi.mocked(contaEmModoLeituraPeloPool).mockResolvedValueOnce(true);
