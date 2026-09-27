@@ -47,6 +47,7 @@ import type pg from "pg";
 import type { IntentVerdict } from "@/lib/agent-engine/agent/intent-classifier";
 import type { RouterMember } from "@/lib/agent-engine/agent/router-config";
 import { costCents } from "@/lib/agent-engine/edge/llm/pricing";
+import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura";
 import { logger } from "@/lib/logger";
 import { scrubMessage } from "@/lib/sentry/scrub";
 
@@ -379,10 +380,18 @@ export function consultarJevNoRoteador(
   entrada: EntradaDoRoteador,
   deps: DependenciasDoPonto = {},
 ): JevNoRoteador {
+  // Conta suspensa (F4): o turno do AGENTE já é vetado antes disso
+  // (`vetoPorAssinaturaSuspensaEnsaio`), e perguntar ao Jev aqui só gastaria
+  // uma chamada de IA para decidir um roteamento que nunca vai rodar. Mesmo
+  // desfecho de "sem o que perguntar" (mensagem vazia): `desligada`, e o
+  // `perguntar` nem chega a ser chamado. Fail-open: leitura que falha NÃO
+  // desliga o Jev (`contaEmModoLeituraPeloPool` já devolve `false`).
   const estado: Promise<EstadoDaTarefa> =
     entrada.mensagem.trim() === ""
       ? Promise.resolve("desligada")
-      : estadoDaTarefaNoPool(pool, entrada.organizationId, TAREFA_DO_ROTEADOR);
+      : contaEmModoLeituraPeloPool(pool, entrada.organizationId).then((emLeitura) =>
+          emLeitura ? "desligada" : estadoDaTarefaNoPool(pool, entrada.organizationId, TAREFA_DO_ROTEADOR),
+        );
   // A pergunta só é montada com a tarefa rodando: desligado, o Jev não custa
   // nada ao turno além da leitura do estado.
   const resposta: Promise<RespostaDoJev> = estado

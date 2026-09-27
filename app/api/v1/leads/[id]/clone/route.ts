@@ -22,6 +22,9 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { createLeadHandler } from "@/app/api/v1/leads/_handler";
+import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { modoDeReabertura } from "@/lib/leads/reabertura";
 import {
   recusaDeCamposObrigatorios,
@@ -53,6 +56,7 @@ import {
   recusaDeMotivoForaDoVocabulario,
 } from "@/lib/leads/motivo-da-perda";
 import { cloneLeadSchema, validateRequest } from "@/lib/schemas";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -297,6 +301,30 @@ export async function POST(
           "pipeline_no_lost_stage",
           t(ORIGEM_SEM_ETAPA_DE_PERDA),
           422,
+          { requestId },
+        );
+      }
+    }
+
+    // O clone cria um lead novo no funil de destino — a mesma pergunta de toda
+    // criação (bulk, import, channels/graph-partner): perguntar ANTES de
+    // escrever, não só confiar no gatilho do banco. Vem depois de todas as
+    // recusas de negócio acima (não gastar a leitura à toa) e ANTES da
+    // primeira escrita, como as outras recusas desta rota.
+    // `createLeadHandler` já traduz o PT402 do gatilho em 402 (rede de
+    // segurança); isto aqui é a checagem da aplicação.
+    const admin = createAdminClient();
+    if (await bloqueioValeParaOrganizacao(admin, handlerCtx.organization_id)) {
+      const capacidade = await podeCriar(admin, handlerCtx.organization_id, "leads");
+      if (
+        capacidade.teto !== null &&
+        capacidade.atual !== null &&
+        capacidade.atual + 1 > capacidade.teto
+      ) {
+        return fail(
+          "plano_limite_atingido",
+          t("O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar."),
+          STATUS_RECUSA_DO_PLANO,
           { requestId },
         );
       }

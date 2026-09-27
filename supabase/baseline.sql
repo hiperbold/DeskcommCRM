@@ -54117,3 +54117,25 @@ on conflict (id) do update
   set public             = excluded.public,
       file_size_limit    = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
+
+-- ---- quinto transporte: instância em servidor UAZAPI (migration 0261/0900) ----
+--
+-- As colunas e os ramos dos dois CHECKs de provider foram somados aos BLOCOS
+-- ÚNICOS dessas constraints, lá em cima (vocabulário do terceiro canal), e
+-- `uazapi` entrou na lista única de `webhook_events_log_provider_check`: canal
+-- novo edita a lista existente, nunca acrescenta um segundo drop+add (issue #159).
+-- Aqui ficam só os comentários e a trava de unicidade. Racional completo no
+-- arquivo da migration.
+--
+-- Nada a deduplicar antes do índice: as colunas nasceram vazias na mesma
+-- migration, então nenhum clone tem duas linhas ativas com a mesma instância.
+comment on column public.channel_sessions.uazapi_instance_id is
+  'Id da instância no servidor UAZAPI (instance.id de /instance/status). É o sessionRef deste canal; espelhado em lib/channels/session-ref.ts.';
+comment on column public.channel_sessions.uazapi_base_url is
+  'Servidor UAZAPI desta conexão (ex.: https://empresa.uazapi.com). Por sessão, não da instalação: cada organização pode usar outro servidor.';
+comment on column public.channel_sessions.uazapi_token_encrypted is
+  'Token da instância UAZAPI, cifrado por fn_encrypt_oauth. Quem tem este valor envia mensagem pelo número.';
+
+create unique index if not exists channel_sessions_uazapi_instancia_ativa_unique
+  on public.channel_sessions (uazapi_base_url, uazapi_instance_id)
+  where archived_at is null and uazapi_instance_id is not null;

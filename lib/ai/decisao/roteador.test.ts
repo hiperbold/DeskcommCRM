@@ -8,7 +8,15 @@
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/billing/assinatura/modo-leitura", () => ({
+  // Default = o de sempre nesta suíte: a conta NÃO está em modo leitura, e o
+  // roteador segue como antes de o veto existir. Só o describe da conta
+  // suspensa muda o valor.
+  contaEmModoLeituraPeloPool: vi.fn(async () => false),
+}));
+
 import type { RouterMember } from "@/lib/agent-engine/agent/router-config";
+import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura";
 import { registrarFalha } from "@/lib/ai/decisao/disjuntor";
 import {
   consultarJevNoRoteador,
@@ -94,6 +102,23 @@ describe("perguntaDoRoteador — uma escolha entre as intenções do roteador, e
 describe("consultarJevNoRoteador", () => {
   it("Jev desligado: nada sai, e a tarefa vale desligada", async () => {
     const { pool } = poolCom({});
+    const fetchImpl = vi.fn();
+    const jev = consultarJevNoRoteador(pool, entrada(novaOrg()), { buscarChave: async () => "tsk_x", fetchImpl });
+    expect(await jev.estado).toBe("desligada");
+    expect(await jev.escolha).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  /**
+   * F4: o turno do AGENTE já é vetado em conta suspensa
+   * (`vetoPorAssinaturaSuspensaEnsaio`, lib/ai/runtime/agent.ts); perguntar ao
+   * Jev aqui gastaria uma chamada de IA para decidir um roteamento que nunca
+   * vai rodar. Mesmo desfecho de "Jev desligado", mesmo com a tarefa LIGADA e
+   * decidindo — a organização suspensa nunca chega a ser lida.
+   */
+  it("conta suspensa (modo leitura): nada sai, mesmo com a tarefa ligada e decidindo", async () => {
+    vi.mocked(contaEmModoLeituraPeloPool).mockResolvedValueOnce(true);
+    const { pool } = poolCom(LIGADO);
     const fetchImpl = vi.fn();
     const jev = consultarJevNoRoteador(pool, entrada(novaOrg()), { buscarChave: async () => "tsk_x", fetchImpl });
     expect(await jev.estado).toBe("desligada");

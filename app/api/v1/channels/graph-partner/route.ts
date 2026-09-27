@@ -30,6 +30,9 @@ import { z } from "zod";
 import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
+import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
+import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { canalGraphParceiroLigado, GRAPH_PARTNER_LABEL } from "@/lib/channels/graph-parceiro/credentials";
 import {
   findGraphPartnerSession,
@@ -107,12 +110,43 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return fail("invalid_request", t("Informe o token do provedor parceiro."), 422, { requestId });
   }
 
+  const admin = createAdminClient();
+
+  // Lido AQUI (antes da chamada ao provedor) só para a checagem de plano
+  // abaixo — a leitura de novo depois de `validateGraphPartnerCredentials`
+  // segue igual, porque o estado pode ter mudado nesse meio-tempo (outra aba).
+  const existenteAntes = await findGraphPartnerSession(admin, orgId);
+
+  // Fase F3, decisão 3 (mesmo molde de `app/api/v1/channels/partner/route.ts`):
+  // conectar por credencial faz uma chamada de REDE ao provedor
+  // (`validateGraphPartnerCredentials`) antes de gravar. Só uma sessão NOVA ou
+  // uma REATIVAÇÃO (arquivada) conta contra o teto de conexões — editar uma
+  // sessão já ativa não dispara o gatilho do banco. `podeCriar` é só o AVISO
+  // adiantado, para não pagar a chamada ao provedor à toa; quem trava de
+  // verdade continua sendo o gatilho no INSERT/UPDATE abaixo.
+  // `bloqueioValeParaOrganizacao` é o portão: sem ele, no modo `avisar` de hoje
+  // (o único em produção) a pré-checagem recusaria uma conexão que o modo
+  // atual deixaria passar.
+  if (
+    (!existenteAntes || existenteAntes.archivedAt) &&
+    (await bloqueioValeParaOrganizacao(admin, orgId))
+  ) {
+    const veredito = await podeCriar(admin, orgId, "conexoes");
+    if (!veredito.pode && veredito.motivo === "teto_atingido") {
+      return fail(
+        "plano_limite_atingido",
+        t("O plano desta organização chegou ao limite de conexões. Fale com o suporte para ampliar."),
+        STATUS_RECUSA_DO_PLANO,
+        { requestId },
+      );
+    }
+  }
+
   // Valida ANTES de gravar: gravar primeiro e descobrir depois é o operador
   // achando que conectou até a primeira mensagem que não sai.
   const validacao = await validateGraphPartnerCredentials({ token: parsed.data.token });
   if (!validacao.ok) return fail("invalid_request", validacao.motivo, 422, { requestId });
 
-  const admin = createAdminClient();
   const tokenCifrado = await encryptWebhookSecret(admin, parsed.data.token);
   // Provisório e aleatório, NUNCA `whsec_`: a entrada recusa tudo até o
   // operador colar o segredo do painel (ver `saveGraphPartnerSession`).
@@ -133,7 +167,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     : null;
   const displayName = validacao.verifiedName ?? GRAPH_PARTNER_LABEL;
 
-  const { error, channelSessionId } = await saveGraphPartnerSession(admin, {
+  const { error, errorRaw, channelSessionId } = await saveGraphPartnerSession(admin, {
     organizationId: orgId,
     existente,
     phoneNumberId: validacao.phoneNumberId,
@@ -145,7 +179,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     userId: authz.user.id,
     requestId,
   });
-  if (error) return fail("internal_error", error, 500, { requestId });
+  if (error) {
+    // Fase F3, decisão 3: o `podeCriar` acima é só o aviso adiantado — quem
+    // trava de verdade é o gatilho do banco, e é este erro que carrega o
+    // PT402 quando duas conexões correm juntas e passam pelo aviso. Rede de
+    // segurança, nunca 500 para um teto de plano.
+    const recusa = recusaDoPlano(errorRaw);
+    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    return fail("internal_error", error, 500, { requestId });
+  }
 
   // A volta de um canal arquivado já é auditada por `reactivateChannelSession`
   // (`channel.reactivated`); aqui fica a conexão nova e a troca de token.

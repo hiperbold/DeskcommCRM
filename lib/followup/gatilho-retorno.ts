@@ -107,12 +107,22 @@ export interface GatilhoRetornoSummary {
   skipped_bloqueado: number;
   /** Preenchido quando enrollou — o handler avança o fluxo neste request. */
   contact_id: string | null;
+  /** Fase F4, mesma decisão 8 do gatilho de etapa: evento consumido sem enrollment porque a organização está em modo leitura. */
+  modo_leitura: number;
 }
 
 export interface GatilhoRetornoDeps {
   db: GatilhoRetornoDb;
   gateDb: FollowupGateDb;
   clock: () => Date;
+  /**
+   * Fase F4, decisão 8 (mesmo portão de `gatilho-etapa.ts`): organização em
+   * modo leitura não abre sequência nova por retorno do contato (o evento é
+   * CONSUMIDO, não volta para a fila). Opcional e com fail-open embutido em
+   * `contaEmModoLeitura`: omitir a dependência (como os testes existentes
+   * fazem) mantém o gatilho de sempre, sem gate nenhum.
+   */
+  contaEmModoLeitura?: (organizationId: string) => Promise<boolean>;
 }
 
 function textoOuNulo(v: unknown): string | null {
@@ -131,6 +141,7 @@ function vazio(): GatilhoRetornoSummary {
     skipped_grupo: 0,
     skipped_bloqueado: 0,
     contact_id: null,
+    modo_leitura: 0,
   };
 }
 
@@ -165,6 +176,15 @@ export async function aplicaGatilhoDeRetorno(
   const armados = await deps.db.carregaPointersDeRetorno(row.organization_id);
   summary.pointers_armados = armados.length;
   if (armados.length === 0) return summary;
+
+  // Fase F4, decisão 8: organização em modo leitura não abre enrollment nenhum
+  // aqui (o evento é CONSUMIDO, matched:true, sem retry). Depois do gate "há
+  // pointer armado" (mais barato) e antes de qualquer consulta ao estado da
+  // conversa (a próxima mais cara).
+  if (deps.contaEmModoLeitura && (await deps.contaEmModoLeitura(row.organization_id))) {
+    summary.modo_leitura = armados.length;
+    return summary;
+  }
 
   const estado = await deps.db.carregaEstadoDaConversa(row.organization_id, conversaId, contatoId);
   if (!estado) return summary;

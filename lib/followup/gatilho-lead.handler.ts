@@ -4,6 +4,7 @@
  */
 import type { EventHandler, HandlerResult } from "@/lib/event-log/dispatcher";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 import { createSupabaseFollowupGateDb } from "@/lib/followup/agent-followup-gate";
 import {
   EVENTO_DE_LEAD_CRIADO,
@@ -24,6 +25,9 @@ export const followupGatilhoLeadHandler: EventHandler = {
           db: createSupabaseGatilhoLeadDb(admin),
           gateDb: createSupabaseFollowupGateDb(admin),
           clock: () => new Date(),
+          // Tarefa 7, decisão 8 da fase F4: mesma wiring de
+          // `gatilho-etapa.handler.ts` para a varredura de silêncio.
+          contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
         },
         row,
       );
@@ -33,7 +37,7 @@ export const followupGatilhoLeadHandler: EventHandler = {
         detail:
           `armados=${summary.pointers_armados} enrolled=${summary.enrolled} ` +
           `origem_obsoleta=${summary.skipped_stale_origin ?? 0} ja_vivo=${summary.skipped_existing} gate=${summary.pointers_barrados_pelo_gate} ` +
-          `sem_contato=${summary.sem_contato} planilha=${summary.vindos_de_planilha}`,
+          `sem_contato=${summary.sem_contato} planilha=${summary.vindos_de_planilha} modo_leitura=${summary.modo_leitura}`,
       };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

@@ -11,6 +11,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { ApiError } from "@/lib/api/types";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
+import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
+import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { resolveOwnerPatch, type OwnerPatch, type OwnerPatchInput } from "@/lib/leads/owner-patch";
@@ -1489,6 +1491,31 @@ export async function retomarLeadHandler(
       ctx.requestId,
       recusa.mensagem,
     );
+  }
+
+  // A retomada cria um lead novo — a mesma pergunta de toda criação (bulk,
+  // import, channels/graph-partner): perguntar ANTES de escrever, não só
+  // confiar no gatilho do banco. `createLeadHandler` já traduz o PT402 dele
+  // em 402 (rede de segurança); isto aqui é a checagem da aplicação.
+  const admin = createAdminClient();
+  if (await bloqueioValeParaOrganizacao(admin, ctx.organization_id)) {
+    const capacidade = await podeCriar(admin, ctx.organization_id, "leads");
+    if (
+      capacidade.teto !== null &&
+      capacidade.atual !== null &&
+      capacidade.atual + 1 > capacidade.teto
+    ) {
+      throw new ApiError(
+        STATUS_RECUSA_DO_PLANO,
+        "plano_limite_atingido",
+        undefined,
+        ctx.requestId,
+        traduzir(
+          "O plano desta organização chegou ao limite de leads. Fale com o suporte para ampliar.",
+          idioma,
+        ),
+      );
+    }
   }
 
   return createLeadHandler(supabase, ctx, payload);

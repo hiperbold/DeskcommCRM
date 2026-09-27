@@ -96,7 +96,17 @@ export async function saveGraphPartnerSession(
     userId: string;
     requestId: string;
   },
-): Promise<{ error: string | null; channelSessionId: string | null }> {
+  // Erro CRU do banco (`code`/`details` inclusos), e não só a mensagem — fase
+  // F3, decisão 9: quem chama precisa do `code` para reconhecer o PT402 sem
+  // depender do texto do Postgres (molde de `lib/channels/connect.ts:savePartnerSession`).
+  // `unknown`, e não um tipo fechado: os dois ramos (reactivate x insert) devolvem
+  // formas de erro diferentes (`DbErrorLike` x `PostgrestError`), e `recusaDoPlano`
+  // já aceita `unknown` de propósito.
+): Promise<{
+  error: string | null;
+  errorRaw: unknown;
+  channelSessionId: string | null;
+}> {
   const linha = {
     organization_id: input.organizationId,
     provider: CHANNEL_PROVIDER_DATAFY,
@@ -125,7 +135,7 @@ export async function saveGraphPartnerSession(
         metadata: { provider: CHANNEL_PROVIDER_DATAFY, phone_number: input.phoneNumber },
       },
     );
-    return { error: r.error?.message ?? null, channelSessionId: input.existente.id };
+    return { error: r.error?.message ?? null, errorRaw: r.error ?? null, channelSessionId: input.existente.id };
   }
 
   const { data, error } = await admin
@@ -139,6 +149,7 @@ export async function saveGraphPartnerSession(
     .maybeSingle();
   return {
     error: error?.message ?? null,
+    errorRaw: error ?? null,
     channelSessionId: (data as { id: string } | null)?.id ?? null,
   };
 }

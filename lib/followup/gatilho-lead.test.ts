@@ -145,6 +145,39 @@ describe("aplicaGatilhoDeLead — o que não dispara", () => {
     expect(s.pointers_armados).toBe(0);
     expect(reg.contatoConsultado).toBe(0);
   });
+
+  /**
+   * Fase F4, decisão 8: organização em modo leitura não abre enrollment por
+   * lead criado (o evento é CONSUMIDO, matched:true, sem retry). Mesmo portão
+   * de `gatilho-etapa.ts`.
+   */
+  it("conta em modo leitura: não consulta o negócio nem enrolla", async () => {
+    const reg = registro();
+    const s = await aplicaGatilhoDeLead(
+      {
+        db: fakeDb({ pointers: [pointerArmado], registro: reg }),
+        gateDb: fakeGate([]),
+        clock: CLOCK,
+        contaEmModoLeitura: async () => true,
+      },
+      evento(),
+    );
+    expect(s.matched).toBe(true);
+    expect(s.modo_leitura).toBe(1);
+    expect(s.enrolled).toBe(0);
+    expect(reg.contatoConsultado).toBe(0);
+    expect(reg.enrollments).toHaveLength(0);
+  });
+
+  it("contaEmModoLeitura ausente (compatibilidade): segue o gatilho de sempre, sem gate nenhum", async () => {
+    const reg = registro();
+    const s = await aplicaGatilhoDeLead(
+      { db: fakeDb({ pointers: [pointerArmado], pedeAgente: false, registro: reg }), gateDb: fakeGate([]), clock: CLOCK },
+      evento(),
+    );
+    expect(s.modo_leitura).toBe(0);
+    expect(s.enrolled).toBe(1);
+  });
 });
 
 describe("aplicaGatilhoDeLead — o enrollment", () => {

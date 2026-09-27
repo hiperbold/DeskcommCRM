@@ -76,12 +76,22 @@ export interface GatilhoLeadSummary {
   skipped_stale_origin?: number;
   sem_contato: number;
   vindos_de_planilha: number;
+  /** Fase F4, mesma decisão 8 do gatilho de etapa: evento consumido sem enrollment porque a organização está em modo leitura. */
+  modo_leitura: number;
 }
 
 export interface GatilhoLeadDeps {
   db: GatilhoLeadDb;
   gateDb: FollowupGateDb;
   clock: () => Date;
+  /**
+   * Fase F4, decisão 8 (mesmo portão de `gatilho-etapa.ts`): organização em
+   * modo leitura não abre sequência nova por lead criado (o evento é
+   * CONSUMIDO, não volta para a fila). Opcional e com fail-open embutido em
+   * `contaEmModoLeitura`: omitir a dependência (como os testes existentes
+   * fazem) mantém o gatilho de sempre, sem gate nenhum.
+   */
+  contaEmModoLeitura?: (organizationId: string) => Promise<boolean>;
 }
 
 function textoOuNulo(v: unknown): string | null {
@@ -97,6 +107,7 @@ function vazio(): GatilhoLeadSummary {
     skipped_existing: 0,
     sem_contato: 0,
     vindos_de_planilha: 0,
+    modo_leitura: 0,
   };
 }
 
@@ -118,6 +129,15 @@ export async function aplicaGatilhoDeLead(
 
   if (row.metadata?.via === ORIGEM_DA_PLANILHA) {
     summary.vindos_de_planilha = armados.length;
+    return summary;
+  }
+
+  // Fase F4, decisão 8: organização em modo leitura não abre enrollment nenhum
+  // aqui (o evento é CONSUMIDO, matched:true, sem retry). Depois dos gates
+  // mais baratos (pointer armado, planilha) e antes de qualquer consulta ao
+  // negócio (a próxima mais cara).
+  if (deps.contaEmModoLeitura && (await deps.contaEmModoLeitura(row.organization_id))) {
+    summary.modo_leitura = armados.length;
     return summary;
   }
 
