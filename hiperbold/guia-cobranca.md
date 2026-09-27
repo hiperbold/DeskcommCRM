@@ -48,7 +48,7 @@ Reenviar a mesma ação não duplica o crédito.
 1. Na seção "Plano contratado", preencha o campo "Dar carência extra até" com a nova data.
 2. Clique em "Estender carência".
 
-Isso só estende a data, nunca encurta.
+Isso só estende a data, nunca encurta. E só funciona depois que o bloqueio foi ligado em "bloquear", porque antes disso a organização ainda não tem data de bloqueio para adiar.
 
 ### Mudar o estado da assinatura
 
