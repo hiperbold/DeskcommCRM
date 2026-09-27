@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 
 import { zoomAte } from "./utils/canvas-do-fluxo";
 
@@ -129,6 +129,34 @@ test.describe("followup flows — lista + criação (Task 6.1)", () => {
       path: "test-results/followup-6.1-04-flow-in-list.png",
       fullPage: true,
     });
+  });
+
+  test("manager duplica e renomeia um fluxo pela lista", async ({ page }) => {
+    await login(page, creds.users.manager!.email);
+    await page.goto("/app/ai/followups");
+
+    const flowName = `E2E Cópia ${Date.now()}`;
+    await page.getByRole("button", { name: "Novo fluxo" }).click();
+    const criar = page.getByRole("dialog");
+    await criar.getByLabel("Nome").fill(flowName);
+    await criar.getByRole("button", { name: "Criar fluxo" }).click();
+    await expect(criar).not.toBeVisible();
+
+    const original = page.locator("li", { hasText: flowName });
+    await original.getByTestId("duplicate-followup-flow").click();
+
+    const copia = page.locator("li", { hasText: `${flowName} (cópia)` });
+    await expect(copia).toBeVisible();
+    await expect(copia.getByText("Rascunho", { exact: true })).toBeVisible();
+
+    await copia.getByTestId("rename-followup-flow").click();
+    const rename = page.getByRole("dialog", { name: "Renomear fluxo" });
+    await expect(rename.getByText("Renomear fluxo")).toBeVisible();
+    const campo = rename.getByLabel("Nome");
+    await campo.fill(`${flowName} renomeado`);
+    await rename.getByRole("button", { name: "Salvar" }).click();
+    await expect(rename).not.toBeVisible();
+    await expect(page.locator("li", { hasText: `${flowName} renomeado` })).toBeVisible();
   });
 
   test("viewer não vê o botão de criar fluxo (RBAC)", async ({ page }) => {
@@ -1054,6 +1082,8 @@ test.describe("followup flow builder — controle de gatilho na PublishBar (Task
         "Etapa do funil",
         "Falta confirmada pela equipe",
         "Agente pediu ajuda",
+        "Cliente voltou",
+        "Lead criado",
         "Automação (Webhooks)",
       ];
       for (const nome of OFERECIDOS) {

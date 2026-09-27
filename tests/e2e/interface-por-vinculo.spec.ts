@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
 const credentials = credenciaisSupabaseDeTeste();
 const db = createClient(credentials.url, credentials.serviceRole, {
   auth: { persistSession: false },
 });
 const password = `Local-${randomUUID()}!`;
-const evidence = ".superpowers/evidence/comunidade-360";
+const evidence = "evidence/comunidade-360";
 async function login(page: Page, email: string) {
   await page.goto("/login");
   await page.getByLabel(/e-?mail/i).fill(email);

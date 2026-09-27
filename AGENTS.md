@@ -22,7 +22,7 @@ Stack canônica (major; a versão exata é o `package.json`):
 
 Next.js 16 (App Router, Turbopack) · React 19 · TypeScript 6 estrito · Tailwind 4 (config em CSS) ·
 shadcn/ui (`new-york`) · Supabase (Postgres + Auth + Realtime + Storage) · Zod 4 · Vitest 4 ·
-Playwright 1 · Sentry 10 · WAHA 2026.7.2 (engine NOWEB) · Upstash Redis · Vercel AI Gateway
+Playwright 1 · Sentry 11 · WAHA 2026.7.2 (engine NOWEB) · Upstash Redis · Vercel AI Gateway
 (`@ai-sdk/anthropic|openai|google`).
 
 > As majors acima são verificadas contra o `package.json` por
@@ -143,6 +143,15 @@ pnpm test:shell       # scripts do kit self-host (bash)
 pnpm gov:verify       # typecheck + lint + lint:channels + lint:role-rank + test:unit
 ```
 
+Um teste só:
+
+```bash
+pnpm vitest run lib/foo/bar.test.ts         # um arquivo unit
+pnpm vitest run -t "nome do caso"           # um caso pelo nome
+pnpm test:db tests/invariants/x.test.ts     # um invariante (o script repassa os args ao vitest)
+pnpm playwright test tests/e2e/x.spec.ts    # uma spec e2e
+```
+
 ⚠️ **`pnpm gov:verify` não cobre tudo.** Ele omite `test:db`, `test:e2e` **e** `test:shell`.
 Se a mudança toca schema/RLS/tabela tenant-aware, rode `pnpm test:db`. Se toca UI ou fluxo de
 usuário, rode `pnpm test:e2e` com evidência visual. Se toca `Dockerfile*`, `docker-compose*` ou
@@ -206,6 +215,8 @@ O gate de arquitetura de qualquer peça que atende pessoas é a skill `sistema-v
 1. Zod valida **todo** input externo (body, query, path).
 2. Guard canônico: `requireRole()` de `lib/auth/require-role.ts`,
    `requirePlatformAdmin`, ou secret/HMAC. Nunca reimplemente a comparação de rank na mão.
+   Handler **mutante** de `app/api/v1` declara ainda `requireSupportWrite(` (`lib/impersonate/support.ts`)
+   antes do efeito: barra escrita em `support_readonly` e não substitui RBAC/MFA.
 3. `organization_id` resolvido de **fonte confiável** (cookie/JWT/webhook secret/path token) —
    **nunca do body**.
 4. Query: RLS pelo client de sessão, ou filtro manual de `organization_id` quando usa service role.
@@ -302,7 +313,8 @@ server; segredo em query string; `throw` cru na borda da API.
   `react-hooks`, `typescript-eslint`. `next lint` foi removido no Next 16 — o script chama o CLI.
 - **Prettier** com `prettier-plugin-tailwindcss`; classes Tailwind em ordem canônica.
 - **Tailwind 4** — configuração em CSS (`app/globals.css`), não em `tailwind.config.js`.
-- **Sentry** — `beforeSend` higieniza PII; `tunnelRoute: "/monitoring"` evita ad-blocker.
+- **Sentry** — coleta restrita (`dataCollection`) + scrub num ponto só, `lib/sentry/privacidade.ts`,
+  provado pelo envelope do SDK em `privacidade.sdk.test.ts`; `tunnelRoute: "/monitoring"` evita ad-blocker.
 - **Packaging (não-negociável; lei em [`docs/doctrine/packaging.md`](docs/doctrine/packaging.md))** —
   nenhum serviço de `docker-compose.prod.yml` constrói na máquina do cliente: todo serviço declara
   `image:` de imagem publicada, e `build:` existe só ao lado, como escape. Serviço `build:`-only é
@@ -363,7 +375,9 @@ gera o arquivo).
 **QA visual com recursos reais (doutrina).** O produto é self-host: a experiência de quem instala
 numa VPS **é** o produto. Toda feature nova, ou fix de comportamento visível, deve ser provada
 pela tela como um usuário leigo faria, em ambiente fresco estilo VPS, com evidência visual.
-`curl` não conta como prova de UX. Mapa de jornadas:
+`curl` não conta como prova de UX. Quando o caminho passa por um agente de IA, o caso de aceite
+mede o **par** (tela pelo agente + ferramenta chamada direto, com o mesmo texto cru) e só conta
+quando os dois concordam: [`docs/doctrine/prova-em-par.md`](docs/doctrine/prova-em-par.md). Mapa de jornadas:
 [`docs/testing/user-journey-map.md`](docs/testing/user-journey-map.md).
 
 Cada linha abaixo traz o comando que a mede — **rode o comando em vez de citar número**. Este

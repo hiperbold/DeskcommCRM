@@ -15,7 +15,8 @@ export type ChannelProvider =
   | "zernio"
   | "uazapi"
   | "zernio_social"
-  | "wacalls";
+  | "wacalls"
+  | "datafy";
 
 /**
  * Os providers que transportam MENSAGEM — o subconjunto sobre o qual a matriz
@@ -60,6 +61,8 @@ export interface ChannelCapabilities {
   groups: "full" | "limited" | "none";
   /** Mensagem entregue gera custo → decisões de envio precisam considerar orçamento. */
   costPerMessage: boolean;
+  /** O atendente pode editar e apagar para todos uma mensagem já enviada. */
+  alteraMensagemEnviada: boolean;
 }
 
 /**
@@ -294,6 +297,31 @@ export interface ChannelAdapter {
   }): Promise<void>;
 
   /**
+   * Troca o texto de uma mensagem que o próprio atendente já enviou.
+   *
+   * `externalId` é o que o CRM gravou (`messages.external_id`); `recipient` é o
+   * endereço de `resolveRecipient`, ou `null` quando não há. Como o canal monta
+   * o id completo a partir dos dois é conhecimento dele, não da rota. Lança
+   * `recipient_unavailable` quando não dá para endereçar a mensagem.
+   *
+   * OPCIONAL como os demais: a tela pergunta `alteraMensagemEnviada` e a rota
+   * testa a presença do método em vez de perguntar QUAL provider é.
+   */
+  editMessage?(input: ChannelTenantScope & {
+    sessionRef: string;
+    recipient: string | null;
+    externalId: string;
+    text: string;
+  }): Promise<void>;
+
+  /** Apaga para todos uma mensagem enviada. Mesmo contrato de `editMessage`. */
+  revokeMessage?(input: ChannelTenantScope & {
+    sessionRef: string;
+    recipient: string | null;
+    externalId: string;
+  }): Promise<void>;
+
+  /**
    * A conexão está de pé AGORA? Pergunta feita ao transporte, não ao banco.
    *
    * Existe porque o banco guarda o último estado que alguém CONTOU, e a falha
@@ -414,9 +442,24 @@ export interface ChannelTemplateOps {
   update(input: ChannelTenantScope & {
     sessionRef: string;
     name: string;
+    /**
+     * OBRIGATÓRIO: com variantes de idioma, o PATCH por nome do provedor
+     * intermediado exige `language` no corpo (changelog de 28/08/2026) — sem ele
+     * a chamada falha, ou pior, edita a variante errada. Um modelo sem variantes
+     * aceita o idioma que ele tem, então mandar sempre é o caminho sem armadilha.
+     */
+    language: string;
     patch: Partial<Pick<ChannelTemplateDraft, "components" | "category">>;
   }): Promise<ChannelTemplate>;
+  /**
+   * ⚠️ `language` é OBRIGATÓRIO aqui por segurança, não por exigência da API:
+   * no provedor intermediado, DELETE por nome SEM idioma apaga TODAS as
+   * variantes (changelog de 28/08/2026). A assinatura obriga quem chama (a
+   * gestão de modelos da tela, `lib/channels/gestao-de-modelos.ts`) a dizer
+   * QUAL variante morre — apagar todas de uma vez é decisão que merece um
+   * método próprio, não um parâmetro esquecido.
+   */
   remove(
-    input: ChannelTenantScope & { sessionRef: string; name: string; language?: string },
+    input: ChannelTenantScope & { sessionRef: string; name: string; language: string },
   ): Promise<void>;
 }

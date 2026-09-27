@@ -34,6 +34,7 @@ describe("capabilities da instância em servidor próprio", () => {
       voiceNote: "server-convert",
       groups: "full",
       costPerMessage: false,
+      alteraMensagemEnviada: false,
     });
   });
 
@@ -130,11 +131,13 @@ describe("banco e TypeScript falam o mesmo vocabulário", () => {
 
   it("a migration versionada existe junto do apêndice — clone atualiza pelas duas vias", () => {
     // Renumerada de 0261 para 0385 no merge de 2026-09-22 (colidiu com a migration
-    // do autor que também ganhou o número 0261 no lote 11 de renumeração dele).
-    const mig = readFileSync("supabase/migrations/20260916000000_0385_canal_uazapi.sql", "utf8");
+    // do autor que também ganhou o número 0261 no lote 11 de renumeração dele), e
+    // de 0385 para 0900 no merge de 2026-09-27 (colidiu com a migration do autor
+    // 20260923120000_0385_memoria_da_org_aceita_origem_agente; timestamp mantido).
+    const mig = readFileSync("supabase/migrations/20260916000000_0900_canal_uazapi.sql", "utf8");
     expect(mig).toContain("uazapi_instance_id");
     expect(mig).toContain("uazapi_base_url");
-    expect(readFileSync("supabase/migrations/MANIFEST.md", "utf8")).toContain("0385_canal_uazapi");
+    expect(readFileSync("supabase/migrations/MANIFEST.md", "utf8")).toContain("0900_canal_uazapi");
   });
 
   it("o token da instância tem coluna PRÓPRIA e cifrada — ele não é o segredo do webhook", () => {

@@ -7,7 +7,7 @@ const MIGRATION_0905 = readFileSync(
   "utf8",
 );
 const MIGRATION_0907 = readFileSync(
-  join(process.cwd(), "supabase/migrations/20260923120000_0907_planos_bloqueio.sql"),
+  join(process.cwd(), "supabase/migrations/20260923120500_0907_planos_bloqueio.sql"),
   "utf8",
 );
 const BASELINE = readFileSync(join(process.cwd(), "supabase/baseline.sql"), "utf8");

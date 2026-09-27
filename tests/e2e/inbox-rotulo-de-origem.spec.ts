@@ -42,13 +42,13 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers/test";
 import { createClient } from "@supabase/supabase-js";
 
 import { carregarEnvLocal } from "../../scripts/lib/env-de-teste";
 
 const CREDS_PATH = path.join(process.cwd(), ".e2e-creds.json");
-const EVIDENCIA = path.join(process.cwd(), ".superpowers/evidence/inbox-rotulo-de-origem");
+const EVIDENCIA = path.join(process.cwd(), "evidence/inbox-rotulo-de-origem");
 
 interface Creds {
   password: string;

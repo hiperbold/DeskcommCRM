@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { createClient } from "@supabase/supabase-js";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 
 import { credenciaisSupabaseDeTeste } from "../../scripts/lib/env-de-teste";
 
@@ -164,6 +164,6 @@ test("o fluxo publicado por fora do construtor abre com os nós que estão no ar
   expect(area, "o nó está no DOM mas não tem área na tela").toBeGreaterThan(1000);
 
   await page.screenshot({
-    path: path.join(RAIZ, ".superpowers/evidence/followup-publicado-abre-cheio.png"),
+    path: path.join(RAIZ, "evidence/followup-publicado-abre-cheio.png"),
   });
 });

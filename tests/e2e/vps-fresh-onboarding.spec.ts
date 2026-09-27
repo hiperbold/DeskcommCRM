@@ -15,7 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "./helpers/test";
 import { createClient } from "@supabase/supabase-js";
 
 import { PROVEDOR_POR_ID } from "@/lib/ai/pontos/provedores";
@@ -25,7 +25,7 @@ import { generateTotp, msUntilNextTotpWindow } from "./utils/totp";
 const OWNER_EMAIL = "dono@qa.local";
 const OWNER_PASSWORD = "QaVps!2026#Dono";
 const OWNER_STATE_PATH = path.join(process.cwd(), ".e2e-owner.json");
-const EVIDENCE_DIR = path.join(process.cwd(), ".superpowers/evidence/vps-qa");
+const EVIDENCE_DIR = path.join(process.cwd(), "evidence/vps-qa");
 
 const svc = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,

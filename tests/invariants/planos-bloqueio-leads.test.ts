@@ -18,7 +18,7 @@ import { motivoDoErro, sql } from "./psql-transporte";
  *     ("o chat nunca para", decisão 5);
  *  2. criar lead por INSERT direto em `crm_leads` dá PT402;
  *  3. no modo `avisar` (o padrão, e o único ligado em qualquer banco ao fim
- *     da fase, ver o cabeçalho de `20260923120000_0907_planos_bloqueio.sql`),
+ *     da fase, ver o cabeçalho de `20260923120500_0907_planos_bloqueio.sql`),
  *     a mesma organização no mesmo teto cria o lead normalmente: a fase não
  *     muda comportamento nenhum fora do modo `bloquear`.
  *

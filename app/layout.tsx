@@ -26,7 +26,16 @@ import { PublicEnvScript } from "./public-env-script";
 import "./globals.css";
 import "@/hiperbold/marca.css";
 
-// Hiperbold: Inter no lugar da Atkinson, com o mesmo nome de variável para não editar o globals.css nem tests/unit/tailwind-tokens.test.ts.
+// Hiperbold: Inter no lugar da Atkinson, com o mesmo nome de variável para não
+// editar o globals.css nem tests/unit/tailwind-tokens.test.ts.
+//
+// ⚠️ Risco herdado do upstream (não resolvido aqui): a main passou a servir
+// fonte LOCAL (`app/fonts/`, ver README de lá) porque `next/font/google`
+// baixava a fonte durante o build e o build caía quando o Google não
+// respondia. As três fontes da marca Hiperbold (Inter, Assistant, IBM Plex
+// Mono) continuam via `next/font/google` e sujeitas ao mesmo risco, vencer
+// isso exigiria vendorizar os arquivos woff2 destas três fontes, fora do
+// escopo desta resolução de merge.
 const atkinson = Inter({
   subsets: ["latin", "latin-ext"],
   weight: ["400", "500", "600", "700"],
@@ -65,10 +74,7 @@ async function marcaResolvida(): Promise<{
   readonly marca: MarcaResolvida;
 }> {
   const linha = await marcaDaInstalacao();
-  const marca = resolverMarca(
-    [camadaDaInstalacao(linha), camadaDoAmbiente(env)],
-    REGUA_DO_PRODUTO,
-  );
+  const marca = resolverMarca([camadaDaInstalacao(linha), camadaDoAmbiente(env)], REGUA_DO_PRODUTO);
   return { linha, marca };
 }
 
@@ -98,14 +104,7 @@ export async function generateMetadata(): Promise<Metadata> {
       "Centralize o atendimento por WhatsApp num funil só. Agentes de IA resolvem o que dá pra resolver e passam para o time humano o que importa — com tudo registrado. Multi-tenant, LGPD-nativo, feito para operações brasileiras.",
     applicationName: name,
     authors: [{ name }],
-    keywords: [
-      "CRM",
-      "atendimento",
-      "WhatsApp",
-      "IA conversacional",
-      "LGPD",
-      "multi-tenant",
-    ],
+    keywords: ["CRM", "atendimento", "WhatsApp", "IA conversacional", "LGPD", "multi-tenant"],
     robots: { index: false, follow: false },
     // Sem esta linha o navegador pede `/favicon.ico`, que não existe: medido em
     // produção, o 404 é a `app/not-found.tsx` INTEIRA (19.435 bytes de HTML)
@@ -272,16 +271,19 @@ async function MarcaDosClientComponents({ children }: { children: React.ReactNod
   // mandá-los engordaria o payload do RSC de TODA página com dado que ninguém lê.
   return (
     <MarcaDaInstalacaoProvider
-      marca={{ name: marca.name, logoUrl: marca.logoUrl, initial: marca.initial }}
+      marca={{
+        name: marca.name,
+        logoUrl: marca.logoUrl,
+        logoDarkUrl: marca.logoDarkUrl,
+        initial: marca.initial,
+      }}
     >
       {children}
     </MarcaDaInstalacaoProvider>
   );
 }
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
       lang="pt-BR"
@@ -302,12 +304,7 @@ export default function RootLayout({
           <MarcaDosClientComponents>
             <ThemeProvider>{children}</ThemeProvider>
           </MarcaDosClientComponents>
-          <Toaster
-            position="top-right"
-            richColors
-            closeButton
-            duration={4000}
-          />
+          <Toaster position="top-right" richColors closeButton duration={4000} />
         </Providers>
       </body>
     </html>

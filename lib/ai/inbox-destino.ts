@@ -27,6 +27,10 @@ export const REFERENCIAS_DE_AVISO = {
   // sobre um fluxo que não tem inscrição nenhuma — é exatamente essa a queixa.
   // `manager` é a mesma régua da aba Fluxos (`canWrite` em FlowsList).
   followup_flow: { tabela: "followup_flow_pointers", papel: "manager", rotulo: "Abrir o fluxo", href: (id: string) => `/app/ai/followups/${id}` },
+  // A credencial do provedor que ficou sem saldo (`lib/agent-engine/queue/espera-de-saldo.ts`).
+  // O remédio é recarregar na conta do provedor, fora do CRM; a tela de
+  // credenciais é onde se confere QUAL chave é, e onde se troca por outra.
+  ai_provider_credential: { tabela: "ai_provider_credentials", papel: "admin", rotulo: "Revisar credencial", href: () => "/app/ai/credentials" },
 } satisfies Record<string, Alvo>;
 
 export type InboxRefKind = keyof typeof REFERENCIAS_DE_AVISO | "organization" | "ai_budget" | "job_queue" | "cron_jobs" | "billing_limite" | "billing_carteira";
@@ -106,7 +110,22 @@ export const POLITICAS_DE_AVISO = {
   // de responder abre este aviso quando a carteira zera, com `ref_kind`
   // PRÓPRIO para a dedup não se misturar com `budget_exceeded` (orçamento em
   // dólar), mesma régua de `billing_limite`, resolvido no mesmo ramo especial.
-  other: { refs: ["lead", "channel_session", "appointment", "ai_agent", "billing_limite", "billing_carteira"], orientacao: "Confira a situação descrita neste aviso com a pessoa responsável." },
+  //
+  // `agent_case`: o caso que a IA abriu, na Central no instante da abertura
+  // (`lib/escalacao/caso-na-central.handler.ts`).
+  other: {
+    refs: [
+      "lead",
+      "channel_session",
+      "appointment",
+      "ai_agent",
+      "ai_provider_credential",
+      "agent_case",
+      "billing_limite",
+      "billing_carteira",
+    ],
+    orientacao: "Confira a situação descrita neste aviso com a pessoa responsável.",
+  },
 } satisfies Record<InboxKind, Politica>;
 
 /**

@@ -41,7 +41,7 @@ import { reactivateChannelSession } from "@/lib/channels/reactivate";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { metadataInicialDoCanal } from "@/lib/ai/elegibilidade/pre-go-live";
 import { encryptWebhookSecret } from "@/lib/webhooks/secrets";
-import { basePublicaDaInstalacao } from "@/lib/webhooks/url-publica";
+import { basePublicaDoWebhookMeta } from "@/lib/webhooks/url-publica";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
@@ -140,7 +140,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     () => consultar().maybeSingle(),
   );
 
-  const base = basePublicaDaInstalacao(req);
+  const base = basePublicaDoWebhookMeta(req);
   const desfecho = data?.id ? await lerDesfechoDoWebhook(admin, data.id) : null;
   return ok({
     connected: Boolean(data),
@@ -164,7 +164,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           // link de `/admin/google` na Agenda. Para o admin de um tenant qualquer
           // o link seria um 404; a tela diz a ele quem procurar.
           configurarEm: authz.user.is_platform_admin && !authz.user.support ? "/admin/meta" : null,
-          fields: ["messages", "message_template_status_update"],
+          // `smb_message_echoes`: o que a empresa manda pelo app WhatsApp Business
+          // num número em coexistência. Sem coexistência a Meta não o envia, então
+          // assinar é inofensivo para quem não usa.
+          fields: ["messages", "message_template_status_update", "smb_message_echoes"],
         }
       : null,
     /**
@@ -352,7 +355,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           wabaId: waba_id,
           tokenCifrado: cifrado,
           webhookPathToken,
-          base: basePublicaDaInstalacao(req),
+          base: basePublicaDoWebhookMeta(req),
           requestId,
         })
       : null;

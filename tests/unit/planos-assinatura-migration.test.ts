@@ -582,7 +582,7 @@ describe("0908 Tarefa 2: recusa por modo leitura nos quatro gatilhos de criaçã
 
 describe("0908 Tarefa 2: ausência da recusa por modo leitura em leads, aceite de convite e conexões (decisão 7)", () => {
   const MIGRATION_0907 = readFileSync(
-    join(process.cwd(), "supabase/migrations/20260923120000_0907_planos_bloqueio.sql"),
+    join(process.cwd(), "supabase/migrations/20260923120500_0907_planos_bloqueio.sql"),
     "utf8",
   );
 

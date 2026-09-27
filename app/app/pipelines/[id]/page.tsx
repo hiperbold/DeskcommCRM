@@ -32,5 +32,12 @@ export default async function PipelinePage({
   // Fase F3, tarefa 9: item "leads" para o "Novo Lead" deste funil.
   const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
   const bloqueio = bloqueioDoBotao(estado, "leads");
-  return <PipelinePageClient pipelineId={id} initialName={pipeline.name} bloqueio={bloqueio} />;
+  return (
+    <PipelinePageClient
+      pipelineId={id}
+      initialName={pipeline.name}
+      bloqueio={bloqueio}
+      role={activeOrg.role}
+    />
+  );
 }

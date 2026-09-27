@@ -26,10 +26,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./helpers/test";
 
 const CREDS_PATH = path.join(process.cwd(), ".e2e-creds.json");
-const EVIDENCIA = path.join(process.cwd(), ".superpowers/evidence/ia-360-w3");
+const EVIDENCIA = path.join(process.cwd(), "evidence/ia-360-w3");
 
 interface Creds {
   password: string;

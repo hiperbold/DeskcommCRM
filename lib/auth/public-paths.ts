@@ -3,6 +3,8 @@
  * Match precedence: array order. First match wins.
  */
 export const PUBLIC_PATHS: RegExp[] = [
+  // Link público persistido: org e destino são resolvidos exclusivamente no servidor.
+  /^\/api\/v1\/rastreio\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^\/$/,
   /^\/login(\/.*)?$/,
   /^\/signup$/,
@@ -21,6 +23,9 @@ export const PUBLIC_PATHS: RegExp[] = [
   // `createClientDeEntradaComGoogle`. Âncora `$` de propósito: nenhum sub-path
   // futuro nasce público de carona.
   /^\/auth\/callback$/,
+  // Retorno de OAuth social: documento público sem efeitos que reconecta a
+  // navegação interna para manter os cookies de sessão sob SameSite=Strict.
+  /^\/auth\/social-return$/,
   /^\/403$/,
   /^\/admin\/forbidden$/,
   /^\/404$/,
@@ -88,7 +93,31 @@ export const PUBLIC_PATHS: RegExp[] = [
   // Ancoradas com `$` de propósito. `/^\/api\/v1\/messages/` sem âncora daria
   // carona a `/api/v1/messages/[id]`, que NÃO tem suporte a Bearer.
   /^\/api\/v1\/messages$/,
+  // ATUALIZAR LEAD SERVER-TO-SERVER. Mesma dualidade de `/api/v1/messages`
+  // acima: sessão de navegador OU Bearer `dsk_…`, resolvidos por
+  // `lib/api/auth-dual.ts` DENTRO da rota (`app/api/v1/leads/[id]/route.ts`).
+  // Existe para a integração de monitoramento processual (n8n consultando
+  // Escavador/Jusbrasil/Codilo/Judit), que não tem navegador.
+  //
+  // O segmento é uma FORMA DE UUID, nunca `[^/]+` — `/api/v1/leads/` tem
+  // irmãos literais no mesmo nível (`bulk`, `at-risk`, `import`, `proposals`,
+  // `reactivations`) que `[^/]+$` alcançaria por engano, tornando-os "públicos"
+  // (proxy não decide) quando nenhum deles tem suporte a Bearer.
+  /^\/api\/v1\/leads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  // MARCAR/REMARCAR/CANCELAR COMPROMISSO SERVER-TO-SERVER. Mesma dualidade dos
+  // dois de cima: sessão OU Bearer `dsk_…`, resolvidos por `lib/api/auth-dual.ts`
+  // DENTRO da rota (`app/api/v1/agenda/agendamentos/route.ts`, função
+  // `despachar`). `GET` (listar) segue só-sessão — este path cobre os quatro
+  // verbos porque o proxy filtra por PATH, não por método; quem decide o
+  // método é a própria rota, como sempre foi.
+  /^\/api\/v1\/agenda\/agendamentos$/,
   /^\/api\/v1\/conversations\/open-with-contact$/,
+  // CRIAÇÃO DE RASCUNHO SUGERIDO SERVER-TO-SERVER (issue #1611). Mesma
+  // dualidade da linha acima: sessão OU Bearer `dsk_…` com escopo `mcp:write`,
+  // resolvida por `lib/api/auth-dual.ts` DENTRO da rota
+  // (`app/api/v1/conversations/[id]/drafts/route.ts`). O `GET`/leitura do
+  // rascunho é da sessão do atendente (caixa de entrada) e NÃO entra aqui.
+  /^\/api\/v1\/conversations\/[^/]+\/drafts$/,
   // Upload outbound: primeiro passo do envio de MÍDIA por token. Sem ele, o
   // cartão de fidelidade (a única das automações que não é texto) não teria
   // como sair depois do corte de gateway.

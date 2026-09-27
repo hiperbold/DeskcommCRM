@@ -29,6 +29,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "server-convert",
     groups: "full",
     costPerMessage: false,
+    alteraMensagemEnviada: true,
   },
   // Hetero-restrição: não me banem, mas a Meta me proíbe e me cobra.
   meta_cloud: {
@@ -42,6 +43,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "opus-only",
     groups: "limited",
     costPerMessage: true,
+    alteraMensagemEnviada: false,
   },
   // Mesma hetero-restrição do canal oficial, por baixo: é um BSP: a WABA é da
   // Meta, os templates são aprovados pela Meta e a janela de 24h é da Meta. O
@@ -75,6 +77,7 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "server-convert",
     groups: "none",
     costPerMessage: true,
+    alteraMensagemEnviada: false,
   },
   zernio: {
     freeformOutsideWindow: false,
@@ -85,6 +88,27 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "opus-only",
     groups: "limited",
     costPerMessage: true,
+    alteraMensagemEnviada: false,
+  },
+  // Parceiro homologado pela Meta que espelha a Cloud API (recorte do #1130):
+  // a WABA, a janela de 24h e o custo são da Meta. O parceiro muda o TRANSPORTE
+  // (host, token), não o que o WhatsApp permite — então o perfil é o do canal
+  // oficial.
+  //
+  // `canManageTemplates: true`: os modelos são os da Cloud API e o parceiro
+  // expõe os mesmos endpoints de catálogo; a tela cria e sincroniza por lá.
+  // `requiresTemplates: true` porque a regra da Meta é real: fora da janela de
+  // 24h, só modelo aprovado passa.
+  datafy: {
+    freeformOutsideWindow: false,
+    requiresTemplates: true,
+    canManageTemplates: true,
+    banRisk: false,
+    minIntervalMs: 6000,
+    voiceNote: "opus-only",
+    groups: "limited",
+    costPerMessage: true,
+    alteraMensagemEnviada: false,
   },
   // A mesma física do canal por QR, por outro transporte: a instância é um
   // aparelho pareado ao WhatsApp comum, sem WABA por trás. Não existe janela de
@@ -103,6 +127,10 @@ export const CHANNEL_CAPABILITIES: Record<ProviderDeMensagem, ChannelCapabilitie
     voiceNote: "server-convert",
     groups: "full",
     costPerMessage: false,
+    // O adapter ainda não implementa editMessage/revokeMessage: declarar
+    // false aqui é o que impede a tela de oferecer editar/apagar sem o
+    // canal saber cumprir.
+    alteraMensagemEnviada: false,
   },
 };
 
@@ -128,6 +156,8 @@ export const CHANNEL_PROVIDER_SOCIAL: ChannelProvider = "zernio_social";
 export const CHANNEL_PROVIDER_ZERNIO: ChannelProvider = "zernio";
 /** Instância de WhatsApp num servidor de API não oficial, conectada por token. */
 export const CHANNEL_PROVIDER_UAZAPI: ChannelProvider = "uazapi";
+/** Parceiro que espelha a Cloud API — canal opcional da instalação, desligado por padrão. */
+export const CHANNEL_PROVIDER_DATAFY: ChannelProvider = "datafy";
 /** Chamada de voz WhatsApp (spec 18). Não transporta mensagem — ver abaixo. */
 export const CHANNEL_PROVIDER_WACALLS: ChannelProvider = "wacalls";
 
@@ -152,6 +182,7 @@ export const PROVIDERS_DE_MENSAGEM = [
   "zernio",
   "uazapi",
   "zernio_social",
+  "datafy",
 ] as const satisfies readonly ProviderDeMensagem[];
 
 /**

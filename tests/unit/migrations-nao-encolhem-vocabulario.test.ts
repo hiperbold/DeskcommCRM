@@ -103,6 +103,43 @@ const REMOCOES_DELIBERADAS: Record<string, { valores: string[]; porque: string }
       "porque migration aplicada não se edita: o evento é história, a consequência foi " +
       "consertada.",
   },
+  "20260922164700_0387_canal_datafy.sql::webhook_events_log_provider_check": {
+    valores: ["uazapi"],
+    porque:
+      "MESMA FORMA do caso 0312/0292 acima, agora no merge de 2026-09-27: duas " +
+      "branches represadas. A 0900 (fork Hiperbold, 16/09, renumerada de 0385 " +
+      "para 0900 no merge de 27/09 porque o autor tomou o número 0385) somou " +
+      "`uazapi` a este CHECK; a 0387 (autor, 22/09) reconstruiu a mesma lista a " +
+      "partir do que ENXERGAVA (sem `uazapi`, porque a 0900 vivia só no fork até " +
+      "este merge) e somou `datafy`. Nenhum dos dois lados errou: sozinha, na " +
+      "branch em que nasceu, a 0387 não perde nada. O buraco só existe na árvore " +
+      "em que as duas se encontram. A 0903 (`channel_sessions_provider_recupera_uazapi`, " +
+      "fork Hiperbold, aplicada antes deste merge) não fecha este buraco, porque " +
+      "ela não toca `webhook_events_log_provider_check` (só os dois CHECKs de " +
+      "`channel_sessions`) e migration aplicada não se edita. A forward-fix é a " +
+      "0911 (`vocabulario_de_canais_depois_do_autor`, fork Hiperbold, com " +
+      "timestamp depois de toda a cadeia do autor), que reafirma a UNIÃO: os " +
+      "valores da 0387 mais `uazapi` da 0900. O estado FINAL da cadeia tem os " +
+      "dois provedores, e é o mesmo vocabulário do bloco único do apêndice em " +
+      "`baseline.sql`.",
+  },
+  "20260922200000_0903_channel_sessions_provider_recupera_uazapi.sql::channel_sessions_provider_check": {
+    valores: ["datafy"],
+    porque:
+      "MESMA FORMA dos casos acima, agora do lado do CHECK de `channel_sessions` " +
+      "(o de `webhook_events_log` está na entrada da 0387, acima). A 0903 " +
+      "(fork Hiperbold) já estava APLICADA quando este merge trouxe a 0387 " +
+      "(autor, 22/09, canal_datafy) para a árvore: seu texto reconstrói " +
+      "`channel_sessions_provider_check` a partir do vocabulário que o fork " +
+      "conhecia antes do merge (com `uazapi`, sem `datafy`, porque a 0387 não " +
+      "existia nessa branch). Como o timestamp da 0903 (20260922200000) é " +
+      "depois do da 0387 (20260922164700), a cadeia aplica a 0903 por cima e " +
+      "perde `datafy` em silêncio. Migration aplicada não se edita, então o " +
+      "conserto não é reescrever a 0903: é a 0911 " +
+      "(`vocabulario_de_canais_depois_do_autor`, fork Hiperbold, timestamp " +
+      "depois de toda a cadeia do autor), que reafirma a UNIÃO final (`uazapi` " +
+      "e `datafy` juntos), igual ao bloco único do apêndice em `baseline.sql`.",
+  },
 };
 
 /** Uma reconstrução de constraint encontrada na cadeia. */

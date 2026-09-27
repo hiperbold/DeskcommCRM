@@ -54,17 +54,15 @@ describe("(A) puladas de ferramenta MCP nunca vira impediment de prévia", () =>
   });
 
   it("no_candidate continua condicionado a impediments vazio — é o contrato que a ausência acima protege", () => {
-    const marcador =
-      "if (preview.result.candidates.length === 0 && preview.result.impediments.length === 0)";
+    const marcador = "if (p.result.candidates.length === 0 && p.result.impediments.length === 0)";
     expect(FONTE).toContain(marcador);
     const idx = FONTE.indexOf(marcador);
     expect(FONTE.slice(idx, idx + 250)).toContain("no_candidate");
   });
 
   it("controle negativo: o detector acusa a guarda de no_candidate enfraquecida (sem checar impediments)", () => {
-    const marcador =
-      "if (preview.result.candidates.length === 0 && preview.result.impediments.length === 0)";
-    const enfraquecido = FONTE.replace(marcador, "if (preview.result.candidates.length === 0)");
+    const marcador = "if (p.result.candidates.length === 0 && p.result.impediments.length === 0)";
+    const enfraquecido = FONTE.replace(marcador, "if (p.result.candidates.length === 0)");
     expect(enfraquecido).not.toBe(FONTE);
     expect(enfraquecido).not.toContain(marcador);
   });

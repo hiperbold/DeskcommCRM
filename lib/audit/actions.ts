@@ -29,6 +29,7 @@
  * `tests/unit/audit-lista-do-painel-e-derivada.test.tsx` reprova quem tentar.
  */
 export const AUDIT_ACTIONS = [
+  "ad_tracking_link.saved",
   "auth.login_success",
   "auth.login_failed",
   /** Teto de tentativas barrou antes de chegar ao provedor (issue #64). */
@@ -132,6 +133,10 @@ export const AUDIT_ACTIONS = [
   "lead.tags_changed",
   "message.sent",
   "message.received",
+  "message.edited",
+  "message.revoked",
+  "message.hidden_in_crm",
+  "message.restored_in_crm",
   // Uma rodada do cron `recover-stuck-messages` que de fato marcou mensagem
   // como falha (rodada vazia não vira linha — varredura não é mutação).
   "message.recover_stuck_run",
@@ -157,6 +162,9 @@ export const AUDIT_ACTIONS = [
   "lgpd.consent_changed",
   "lgpd.manually_approved",
   "webhook.hmac_invalid",
+  // Uma rodada do cron `webhook-replay` que reprocessou ou desistiu de algum
+  // arquivo de webhook do canal por QR (rodada vazia não vira linha).
+  "webhook.replay_run",
   "lgpd.sla_alarm_triggered",
   "lgpd.sla_watcher_run",
   "platform_admin.inbox_listed",
@@ -185,6 +193,7 @@ export const AUDIT_ACTIONS = [
   "ai.credential_created",
   "ai.credential_deleted",
   "ai.credential_revalidated",
+  "ai.knowledge_reindex_all",
   "ai_agent.created",
   "ai_agent.updated",
   "ai_agent.archived",
@@ -294,6 +303,12 @@ export const AUDIT_ACTIONS = [
   "ai.skill_imported",
   "ai.skill_installed",
   "ai.skill_uninstalled",
+  // Edição pela tela (Fase 2 do PLANO-CONFIG-UI-AGENTE): nova versão + ponteiro
+  // movido. O corpo é texto que o agente lê — mudar isso muda o comportamento,
+  // então fica auditado.
+  "ai.skill_saved",
+  // Rollback para uma versão anterior (Fase 5): move o ponteiro sem criar versão.
+  "ai.skill_restored",
   "ai.router_created",
   "ai.router_updated",
   "ai.router_deleted",
@@ -303,9 +318,12 @@ export const AUDIT_ACTIONS = [
   "followup_flow.published",
   "followup_flow.disabled",
   "followup_flow.deleted",
+  "followup_flow.duplicated",
   "followup_flow.rolled_back",
   "followup.worker_run",
   "followup.silence_sweep_run",
+  // Roteiros de atendimento encerrados por prazo (0397) — só quando houve efeito.
+  "followup.roteiros_expirados",
   "followup_enrollment.created",
   "followup_enrollment.cancelled",
   // As quatro intervenções humanas num follow-up em andamento (0145). São
@@ -339,6 +357,12 @@ export const AUDIT_ACTIONS = [
   "conversation.handoff_auto_return_run",
   "conversation.note_added",
   "conversation.note_deleted",
+  // Rascunho sugerido por integração (issue #1611): quem criou o texto que a
+  // pessoa vai revisar, e — separado — quem clicou em enviar. O envio em si já
+  // é `messages` com `sent_via='user'`; estas duas linhas contam a metade que
+  // ficava invisível (o ERP sugeriu, o atendente decidiu).
+  "conversation.draft_created",
+  "conversation.draft_used",
   "ai.case_replied",
   // O agente participando do chamado — separado de `ai.case_replied` (a pessoa
   // respondendo) porque juntar os dois apagaria justamente quem agiu.
@@ -430,6 +454,12 @@ export const AUDIT_ACTIONS = [
   // O `metadata` carrega o dataset (identificador, não segredo) e um booleano
   // dizendo se o token foi trocado. O token, nem em metadata.
   "ad_platform_connection.updated",
+  "ad_conversion.retry_requested",
+  // O que cada etapa do funil informa ao Google Ads (0436) e a ação de
+  // conversão criada NA CONTA do cliente pela tela. A segunda escreve na conta
+  // de mídia, então precisa de dono na trilha como a conexão acima.
+  "google_ads_conversion_rules.updated",
+  "google_ads_conversion_action.created",
   // A conexão de LEITURA da organização com a conta de anúncios (0214).
   // Ação SEPARADA da de cima, e não um `metadata.purpose` na mesma: a pergunta
   // que cada trilha responde é diferente. "Quem apontou minhas vendas para este
@@ -637,6 +667,9 @@ export const AUDIT_ACTIONS = [
   "catalog_product.updated",
   "catalog_product.deleted",
   "catalog_product.imported",
+  // As fotos do produto (migration 0390): subir uma, e reordenar/remover.
+  "catalog_product.photo_added",
+  "catalog_product.photos_updated",
 
   // As tarefas do CRM (migration 0210). Tarefa é combinado de trabalho entre
   // pessoas do time — quem a criou, quem mudou o prazo e quem a apagou é
@@ -1013,6 +1046,38 @@ export const AUDIT_ACTIONS = [
   // filtro do painel. Só audita quando o `UPDATE` de fato pausou uma linha
   // (nunca uma corrida perdida contra outra transição de status).
   "prospecting.paused",
+
+  // ── Cadastro com aprovação (migration 0383, recorte do PR #714) ─────────
+  // O pedido de empresa nova numa instalação em `com_aprovacao`, e a decisão
+  // do administrador da instalação. `approved` leva o `organization_id` da
+  // empresa que nasceu da aprovação — é a única ligação entre o pedido e ela.
+  "registration.requested",
+  "registration.approved",
+  "registration.rejected",
+
+  // ── Sons dos avisos da Central (migration 0441) ─────────────────────────
+  // O arquivo de som que a organização escolheu para a etapa que avisa e para
+  // o pedido de pessoa — e a volta ao bipe do produto.
+  "settings.notification_sound_updated",
+  "settings.notification_sound_removed",
+  // O interruptor do Jev (PATCH /api/v1/ai/jev). Ligar manda cada mensagem
+  // recebida dos clientes, uma de cada vez e sem o histórico da conversa, para
+  // um fornecedor nos EUA: "quem ligou, quando, e se o aceite foi dado ali" é a
+  // pergunta de LGPD que só estas linhas respondem.
+  // `desligado` também sai quando a exclusão da última chave apta dele o
+  // desliga (`DELETE /api/v1/ai/credentials/:id`, metadata.motivo "chave_excluida").
+  "ai.jev.ligado",
+  "ai.jev.desligado",
+  "ai.jev.modo_alterado",
+  // Uma tarefa do Jev mudou de estado (observando/decidindo/desligada) pelo
+  // PATCH com `tarefa`; metadata.tarefa diz qual, e estado_anterior o de antes.
+  "ai.jev.tarefa_alterada",
+  // O pedido de descadastro é do cliente e o padrão é irreversível — mas a
+  // regra W-02 do catálogo de negócio prevê o override: admin desbloqueia à
+  // mão. Sem esta linha, a ação existiria sem rastro de QUEM a desfez, que é
+  // o dado que importa quando alguém pergunta "por que este cliente voltou a
+  // receber?".
+  "contact.unblocked",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

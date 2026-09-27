@@ -1,4 +1,5 @@
 import { followupGatilhoPresencaHandler } from "@/lib/followup/gatilho-presenca.handler";
+import { followupGatilhoRetornoHandler } from "@/lib/followup/gatilho-retorno.handler";
 /**
  * Centralised handler registration for the event_log dispatcher.
  *
@@ -16,11 +17,15 @@ import { automationRulesHandler } from "@/lib/automation/engine.handler";
 import { followupReactivityHandler } from "@/lib/followup/reactivity.handler";
 import { campanhaRespostaHandler } from "@/lib/campanhas/resposta.handler";
 import { followupGatilhoEtapaHandler } from "@/lib/followup/gatilho-etapa.handler";
+import { followupGatilhoLeadHandler } from "@/lib/followup/gatilho-lead.handler";
 import { followupGatilhoCasoHandler } from "@/lib/followup/gatilho-caso.handler";
+import { casoNaCentralHandler } from "@/lib/escalacao/caso-na-central.handler";
 import { mediaPersistHandler } from "@/workers/media-persist-worker.handler";
 import { mediaDeriveHandler } from "@/workers/media-derive-worker.handler";
 import { webPushInboundHandler } from "@/lib/notifications/push.handler";
+import { conversaoDeQualificacaoHandler } from "@/lib/conversoes/qualificacao.handler";
 import { conversaoDeVendaHandler } from "@/lib/conversoes/envio.handler";
+import { avisoDeEtapaHandler } from "@/lib/leads/aviso-de-etapa.handler";
 import { avisoDeCasoAoSuporteHandler } from "@/lib/escalacao/aviso-ao-suporte.handler";
 import { registerHandler } from "@/lib/event-log/dispatcher";
 
@@ -35,6 +40,10 @@ export function ensureHandlersRegistered(): void {
   // LLM, pelo mesmo motivo dela — é escrita curta no banco, sem rede de
   // terceiro, e não pode ficar atrás de um consumidor que pode estourar.
   registerHandler(campanhaRespostaHandler);
+  // Mesmo critério: o gatilho do cliente que volta é escrita curta no banco e
+  // precisa rodar antes do LLM. Depois da reatividade, para o match_reply dos
+  // fluxos já vivos ler a mensagem primeiro.
+  registerHandler(followupGatilhoRetornoHandler);
   registerHandler(aiResponseHandler);
   registerHandler(aiSentimentHandler);
   registerHandler(aiHandoffFromSentimentHandler);
@@ -43,7 +52,15 @@ export function ensureHandlersRegistered(): void {
   registerHandler(lgpdRedactHandler);
   registerHandler(automationRulesHandler);
   registerHandler(followupGatilhoEtapaHandler);
+  // Escrita curta no banco (um item na Central), vizinha do gatilho de etapa
+  // que consome o mesmo evento.
+  registerHandler(avisoDeEtapaHandler);
+  registerHandler(followupGatilhoLeadHandler);
   registerHandler(followupGatilhoCasoHandler);
+  // O caso aberto na Central, na hora — escrita curta no banco (um item), ao
+  // lado do outro consumidor de `ai.case_opened` que só escreve no banco, e
+  // longe do aviso ao suporte, que sai por rede de terceiro.
+  registerHandler(casoNaCentralHandler);
   registerHandler(followupGatilhoPresencaHandler);
   registerHandler(mediaPersistHandler);
   registerHandler(mediaDeriveHandler);
@@ -58,5 +75,6 @@ export function ensureHandlersRegistered(): void {
   // fechamento — depende de rede de terceiro e não pode atrasar quem escreve
   // no banco. Falha dele nunca segura os handlers acima.
   registerHandler(conversaoDeVendaHandler);
+  registerHandler(conversaoDeQualificacaoHandler);
   _registered = true;
 }

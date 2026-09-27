@@ -287,6 +287,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           value_cents: linha.value_cents,
           tags: linha.tags,
           source: linha.source,
+          via_planilha: true,
         },
       );
       resumo.criados += 1;

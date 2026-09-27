@@ -7,6 +7,8 @@ import { InboxLayout } from "@/components/inbox/InboxLayout";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
+import { lerRascunho, type AvisoDeRascunho } from "@/lib/inbox/rascunho-sugerido";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Inbox" };
@@ -14,7 +16,7 @@ export const metadata: Metadata = { title: "Inbox" };
 export default async function InboxPage({
   searchParams,
 }: {
-  searchParams: Promise<{ id?: string }>;
+  searchParams: Promise<{ id?: string; rascunho?: string }>;
 }) {
   const user = await loadAuthUser();
   if (!user) redirect("/login");
@@ -39,9 +41,29 @@ export default async function InboxPage({
       </div>
     );
   }
-  const { id } = await searchParams;
+  const { id, rascunho } = await searchParams;
   // Fase F3, tarefa 9: item "leads" para o "Novo Lead" do painel lateral.
   const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
   const bloqueio = bloqueioDoBotao(estado, "leads");
-  return <InboxLayout initialSelectedId={id ?? null} bloqueio={bloqueio} />;
+  // ?rascunho= é a ponta da caixa de entrada da issue #1611: o texto mora no
+  // servidor, e a URL só carrega o ID. Aqui a leitura acontece com a SESSÃO do
+  // atendente (RLS), então um rascunho de outra organização vira
+  // "não encontrado" por construção. Os três recusos (outra conversa, já usado,
+  // vencido) viram aviso — a issue pede a conversa abrindo "sem texto e com
+  // aviso", e silenciar faria o atendente achar que o texto nunca existiu.
+  let avisoDeRascunho: AvisoDeRascunho | null = null;
+  if (rascunho && id) {
+    const db = await createClient();
+    avisoDeRascunho = {
+      conversationId: id,
+      leitura: await lerRascunho(db, {
+        organizationId: activeOrg.orgId,
+        conversationId: id,
+        draftId: rascunho,
+      }),
+    };
+  }
+  return (
+    <InboxLayout initialSelectedId={id ?? null} bloqueio={bloqueio} rascunho={avisoDeRascunho} />
+  );
 }

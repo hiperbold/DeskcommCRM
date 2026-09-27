@@ -21,7 +21,8 @@ export type MotivoDaPuladaNoTurno = MotivoDaPulada | "entregue_ao_operador";
 
 export async function montarFerramentasDoTurno(
   cfg: CrmEdgeConfig,
-  ids: { organizationId: string; jobId: string },
+  /** `contactId` é repassado como está para `interno` (`buildMcpTurnTools`), que o aceita. */
+  ids: { organizationId: string; jobId: string; contactId?: string },
   agentConfig: PublishedAgentConfig,
   log: Logger,
   options?: { readOnly: boolean },

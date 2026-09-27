@@ -7,7 +7,7 @@
  * o card do negócio, e sem aviso nenhum ninguém no time descobre. Este
  * helper é o que cada caminho AUTOMÁTICO chama depois de reconhecer o PT402
  * de `crm_leads` (gatilho `trg_crm_leads_billing_bloqueio`, migration
- * 20260923120000_0907). Caminhos de PESSOA (criar, clonar, importar, mover à
+ * 20260923120500_0907). Caminhos de PESSOA (criar, clonar, importar, mover à
  * mão, quadro, lote, reativação, MCP) NÃO chamam isto: a recusa aparece na
  * hora, na tela, pela frase fixa de `recusaDoPlano`; avisar de novo na
  * Central seria duplicar o que a pessoa já está vendo.

@@ -157,6 +157,17 @@ export interface PontoDeIa {
    */
   fixo?: { razao: string; usa?: { provider: string; modelId: string } };
   registraEm: DestinoDeTelemetria;
+  /**
+   * O ponto sabe ser decidido pelo Jev (`lib/ai/decisao/`), que devolve decisão
+   * tipada em vez de texto. Só marque o ponto que TEM chamador do Jev:
+   * `tests/unit/pontos-de-ia-decisao-rapida.test.ts` cobra os dois lados, porque
+   * ponto marcado sem chamador é botão que não controla nada.
+   */
+  decisaoRapida?: {
+    primitiva: "score" | "choice" | "noul";
+    /** O que o Jev faz neste ponto, para quem não é engenheiro. Vai à tela. */
+    oQueOJevFaz: string;
+  };
 }
 
 export const PONTOS_DE_IA: readonly PontoDeIa[] = [
@@ -256,6 +267,11 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     sintomaDeFalha:
       "A conversa cai sempre no mesmo agente, ou em nenhum — como se os roteadores que você configurou não existissem.",
     registraEm: "llm_calls",
+    decisaoRapida: {
+      primitiva: "choice",
+      oQueOJevFaz:
+        "Lê a última mensagem do cliente, sozinha, e escolhe entre as intenções do seu roteador qual agente deve atender.",
+    },
   },
   {
     id: "stage_classifier",
@@ -298,6 +314,11 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     sintomaDeFalha:
       "Cliente irritado não é mais escalado para um humano, e a insatisfação só aparece quando ele já sumiu.",
     registraEm: "llm_calls",
+    decisaoRapida: {
+      primitiva: "score",
+      oQueOJevFaz:
+        "Percebe, geralmente em menos de um segundo, se o cliente está irritado — e avisa para passar a conversa a uma pessoa.",
+    },
   },
   {
     id: "followup_classify",
@@ -323,6 +344,19 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "llm_calls",
   },
 
+  {
+    id: "flow_validate",
+    rotulo: "Validar a resposta do fluxo",
+    oQueFaz:
+      "Quando o fluxo está esperando uma resposta, lê a mensagem do cliente com o contexto da conversa e devolve SÓ o dado que deve ser salvo — ou diz que ele não respondeu.",
+    papel: "entender",
+    exige: {},
+    emissor: "lib/agent-engine/agent/flow-validate.ts",
+    sintomaDeFalha:
+      "Dado errado entra no cadastro do cliente (ex.: o modelo grava a resposta na pergunta errada) ou o cliente fica sem a pergunta seguinte.",
+    registraEm: "llm_calls",
+  },
+
   // ────────────────────────── Proteger a operação ──────────────────────────
   {
     id: "jailbreak_detect",
@@ -335,6 +369,11 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     sintomaDeFalha:
       "O agente passa a aceitar instruções de estranhos e pode falar em nome da empresa coisas que você nunca autorizou.",
     registraEm: "llm_calls",
+    decisaoRapida: {
+      primitiva: "choice",
+      oQueOJevFaz:
+        "Percebe, na mensagem do cliente, quem tenta enganar o agente para ele fugir das suas regras — e soma esse sinal ao da sua IA de sempre, sem nunca apagá-lo.",
+    },
   },
   {
     id: "promise_semantic",

@@ -53,8 +53,11 @@ function fakeSweepDb(opts: {
       chamadasDeContatoSilencioso.push(orgId);
       return opts.silentContactIds;
     },
-    async loadTriggerNodeId() {
-      return "trigger-node";
+    async loadContatosComRetornoVivo() {
+      return new Set<string>();
+    },
+    async loadTriggerNode() {
+      return { id: "trigger-node", pedeAgente: false };
     },
     async insertEnrollment() {
       return { inserted: true };

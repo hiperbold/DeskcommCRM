@@ -878,7 +878,6 @@ export type Database = {
         Update: { id?: string; organization_id?: string; actor_user_id?: string; auth_session_id?: string; access_mode?: string; previous_organization_id?: string | null; created_at?: string; expires_at?: string; ended_at?: string | null }
         Relationships: [{ foreignKeyName: "platform_support_sessions_organization_id_fkey"; columns: ["organization_id"]; isOneToOne: false; referencedRelation: "organizations"; referencedColumns: ["id"] }]
       }
-
       ad_conversion_dispatches: {
         Row: {
           attempted_at: string
@@ -887,11 +886,15 @@ export type Database = {
           detail: string | null
           event_id: string | null
           event_name: string
+          event_occurred_at: string | null
+          google_action_id: string | null
           id: string
           lead_id: string
           organization_id: string
           platform: string
           reason: string | null
+          remote_request_id: string | null
+          remote_requested_at: string | null
           status: string
           updated_at: string
           value_cents: number | null
@@ -903,11 +906,15 @@ export type Database = {
           detail?: string | null
           event_id?: string | null
           event_name: string
+          event_occurred_at?: string | null
+          google_action_id?: string | null
           id?: string
           lead_id: string
           organization_id: string
           platform: string
           reason?: string | null
+          remote_request_id?: string | null
+          remote_requested_at?: string | null
           status: string
           updated_at?: string
           value_cents?: number | null
@@ -919,11 +926,15 @@ export type Database = {
           detail?: string | null
           event_id?: string | null
           event_name?: string
+          event_occurred_at?: string | null
+          google_action_id?: string | null
           id?: string
           lead_id?: string
           organization_id?: string
           platform?: string
           reason?: string | null
+          remote_request_id?: string | null
+          remote_requested_at?: string | null
           status?: string
           updated_at?: string
           value_cents?: number | null
@@ -951,9 +962,13 @@ export type Database = {
           created_at: string
           dataset_id: string | null
           enabled: boolean
+          google_api: string
           google_conversion_action_id: string | null
           google_customer_id: string | null
           google_login_customer_id: string | null
+          google_qualification_action_id: string | null
+          google_qualification_configured_at: string | null
+          google_qualification_stage_id: string | null
           google_refresh_token_encrypted: string | null
           id: string
           organization_id: string
@@ -961,15 +976,25 @@ export type Database = {
           test_event_code: string | null
           updated_at: string
           updated_by: string | null
+
+          google_send_hashed_phone: boolean
+
+          google_purchase_value_mode: string
+
+          google_purchase_category: string
         }
         Insert: {
           access_token_encrypted?: string | null
           created_at?: string
           dataset_id?: string | null
           enabled?: boolean
+          google_api?: string
           google_conversion_action_id?: string | null
           google_customer_id?: string | null
           google_login_customer_id?: string | null
+          google_qualification_action_id?: string | null
+          google_qualification_configured_at?: string | null
+          google_qualification_stage_id?: string | null
           google_refresh_token_encrypted?: string | null
           id?: string
           organization_id: string
@@ -977,15 +1002,25 @@ export type Database = {
           test_event_code?: string | null
           updated_at?: string
           updated_by?: string | null
+
+          google_send_hashed_phone?: boolean
+
+          google_purchase_value_mode?: string
+
+          google_purchase_category?: string
         }
         Update: {
           access_token_encrypted?: string | null
           created_at?: string
           dataset_id?: string | null
           enabled?: boolean
+          google_api?: string
           google_conversion_action_id?: string | null
           google_customer_id?: string | null
           google_login_customer_id?: string | null
+          google_qualification_action_id?: string | null
+          google_qualification_configured_at?: string | null
+          google_qualification_stage_id?: string | null
           google_refresh_token_encrypted?: string | null
           id?: string
           organization_id?: string
@@ -993,6 +1028,12 @@ export type Database = {
           test_event_code?: string | null
           updated_at?: string
           updated_by?: string | null
+
+          google_send_hashed_phone?: boolean
+
+          google_purchase_value_mode?: string
+
+          google_purchase_category?: string
         }
         Relationships: [
           {
@@ -1001,6 +1042,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "organizations"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ad_qualification_stage_org_fk"
+            columns: ["organization_id", "google_qualification_stage_id"]
+            isOneToOne: false
+            referencedRelation: "crm_stages"
+            referencedColumns: ["organization_id", "id"]
           },
         ]
       }
@@ -1930,6 +1978,7 @@ export type Database = {
           active_kb_version_id: string | null
           agent_id: string | null
           chunks_count: number
+          content_hash: string | null
           created_at: string
           id: string
           ingested_at: string | null
@@ -1948,6 +1997,7 @@ export type Database = {
           active_kb_version_id?: string | null
           agent_id?: string | null
           chunks_count?: number
+          content_hash?: string | null
           created_at?: string
           id?: string
           ingested_at?: string | null
@@ -1966,6 +2016,7 @@ export type Database = {
           active_kb_version_id?: string | null
           agent_id?: string | null
           chunks_count?: number
+          content_hash?: string | null
           created_at?: string
           id?: string
           ingested_at?: string | null
@@ -2368,6 +2419,7 @@ export type Database = {
           agent_id: string
           created_at: string
           examples: string[]
+          flow_pointer_id: string | null
           id: string
           intent_description: string
           intent_name: string
@@ -2380,6 +2432,7 @@ export type Database = {
           agent_id: string
           created_at?: string
           examples?: string[]
+          flow_pointer_id?: string | null
           id?: string
           intent_description: string
           intent_name: string
@@ -2392,6 +2445,7 @@ export type Database = {
           agent_id?: string
           created_at?: string
           examples?: string[]
+          flow_pointer_id?: string | null
           id?: string
           intent_description?: string
           intent_name?: string
@@ -2407,6 +2461,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "ai_agents"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_router_members_flow_pointer_mesma_org"
+            columns: ["organization_id", "flow_pointer_id"]
+            isOneToOne: false
+            referencedRelation: "followup_flow_pointers"
+            referencedColumns: ["organization_id", "id"]
           },
           {
             foreignKeyName: "ai_router_members_organization_id_fkey"
@@ -4633,13 +4694,16 @@ export type Database = {
           external_id: string | null
           id: string
           last_activity_at: string | null
+          lost_from_stage_id: string | null
           lost_reason: string | null
+          won_reason: string | null
           organization_id: string
           owner_agent_id: string | null
           owner_kind: string | null
           owner_user_id: string | null
           pipeline_id: string
           position_in_stage: number
+          retomado_de_lead_id: string | null
           source: string
           source_metadata: Json
           stage_changed_at: string | null
@@ -4664,12 +4728,15 @@ export type Database = {
           id?: string
           last_activity_at?: string | null
           lost_reason?: string | null
+          won_reason?: string | null
           organization_id: string
           owner_agent_id?: string | null
           owner_kind?: string | null
           owner_user_id?: string | null
           pipeline_id: string
           position_in_stage?: number
+          retomado_de_lead_id?: string | null
+          lost_from_stage_id?: string | null
           source?: string
           source_metadata?: Json
           stage_changed_at?: string | null
@@ -4694,12 +4761,15 @@ export type Database = {
           id?: string
           last_activity_at?: string | null
           lost_reason?: string | null
+          won_reason?: string | null
           organization_id?: string
           owner_agent_id?: string | null
           owner_kind?: string | null
           owner_user_id?: string | null
           pipeline_id?: string
           position_in_stage?: number
+          retomado_de_lead_id?: string | null
+          lost_from_stage_id?: string | null
           source?: string
           source_metadata?: Json
           stage_changed_at?: string | null
@@ -4742,6 +4812,13 @@ export type Database = {
           {
             foreignKeyName: "crm_leads_stage_id_fkey"
             columns: ["stage_id"]
+            isOneToOne: false
+            referencedRelation: "crm_stages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_crm_leads_lost_from_stage"
+            columns: ["lost_from_stage_id"]
             isOneToOne: false
             referencedRelation: "crm_stages"
             referencedColumns: ["id"]
@@ -4824,6 +4901,7 @@ export type Database = {
           requires_human: boolean
           slug: string
           updated_at: string
+          win_probability: number | null
         }
         Insert: {
           agent_stage_hint?: string | null
@@ -4844,6 +4922,7 @@ export type Database = {
           requires_human?: boolean
           slug: string
           updated_at?: string
+          win_probability?: number | null
         }
         Update: {
           agent_stage_hint?: string | null
@@ -4864,6 +4943,7 @@ export type Database = {
           requires_human?: boolean
           slug?: string
           updated_at?: string
+          win_probability?: number | null
         }
         Relationships: [
           {
@@ -5928,6 +6008,68 @@ export type Database = {
           },
         ]
       }
+      jev_observacoes: {
+        Row: {
+          concordou: boolean | null
+          confianca_jev: number | null
+          conversation_id: string | null
+          created_at: string
+          estado: string
+          id: string
+          job_id: string | null
+          latencia_ms: number | null
+          message_id: string | null
+          modelo: string | null
+          organization_id: string
+          probabilidade_jev: number | null
+          rotulo_atual: string | null
+          rotulo_jev: string | null
+          tarefa: string
+        }
+        Insert: {
+          concordou?: never
+          confianca_jev?: number | null
+          conversation_id?: string | null
+          created_at?: string
+          estado: string
+          id?: string
+          job_id?: string | null
+          latencia_ms?: number | null
+          message_id?: string | null
+          modelo?: string | null
+          organization_id: string
+          probabilidade_jev?: number | null
+          rotulo_atual?: string | null
+          rotulo_jev?: string | null
+          tarefa: string
+        }
+        Update: {
+          concordou?: never
+          confianca_jev?: number | null
+          conversation_id?: string | null
+          created_at?: string
+          estado?: string
+          id?: string
+          job_id?: string | null
+          latencia_ms?: number | null
+          message_id?: string | null
+          modelo?: string | null
+          organization_id?: string
+          probabilidade_jev?: number | null
+          rotulo_atual?: string | null
+          rotulo_jev?: string | null
+          tarefa?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "jev_observacoes_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_queue: {
         Row: {
           attempts: number
@@ -6640,6 +6782,7 @@ export type Database = {
           revoked_at: string | null
           sent_at: string
           sent_by_user_id: string | null
+          sent_on_behalf_of_user_id: string | null
           sent_via: string
           service_revision: number | null
           status: string
@@ -6678,6 +6821,7 @@ export type Database = {
           revoked_at?: string | null
           sent_at?: string
           sent_by_user_id?: string | null
+          sent_on_behalf_of_user_id?: string | null
           sent_via?: string
           service_revision?: number | null
           status?: string
@@ -6716,6 +6860,7 @@ export type Database = {
           revoked_at?: string | null
           sent_at?: string
           sent_by_user_id?: string | null
+          sent_on_behalf_of_user_id?: string | null
           sent_via?: string
           service_revision?: number | null
           status?: string
@@ -8813,6 +8958,233 @@ export type Database = {
           },
         ]
       }
+      google_ads_landing_pages: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          message_template: string
+          organization_id: string
+          updated_at: string
+          updated_by: string | null
+          whatsapp_e164: string
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          message_template?: string
+          organization_id: string
+          updated_at?: string
+          updated_by?: string | null
+          whatsapp_e164: string
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          message_template?: string
+          organization_id?: string
+          updated_at?: string
+          updated_by?: string | null
+          whatsapp_e164?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "google_ads_landing_pages_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      google_ads_click_refs: {
+        Row: {
+          contact_id: string | null
+          created_at: string
+          gbraid: string | null
+          gclid: string | null
+          id: string
+          matched_at: string | null
+          organization_id: string
+          query_raw: Json
+          token: string
+          wbraid: string | null
+
+          tracking_link_id: string | null
+        }
+        Insert: {
+          contact_id?: string | null
+          created_at?: string
+          gbraid?: string | null
+          gclid?: string | null
+          id?: string
+          matched_at?: string | null
+          organization_id: string
+          query_raw?: Json
+          token: string
+          wbraid?: string | null
+
+          tracking_link_id?: string | null
+        }
+        Update: {
+          contact_id?: string | null
+          created_at?: string
+          gbraid?: string | null
+          gclid?: string | null
+          id?: string
+          matched_at?: string | null
+          organization_id?: string
+          query_raw?: Json
+          token?: string
+          wbraid?: string | null
+
+          tracking_link_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "google_ads_click_refs_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "google_ads_click_refs_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+
+      ad_tracking_links: {
+        Row: {
+          id: string
+          organization_id: string
+          name: string
+          whatsapp_e164: string
+          message_template: string
+          use_case: string
+          utm: Json
+          enabled: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          name: string
+          whatsapp_e164: string
+          message_template: string
+          use_case: string
+          utm?: Json
+          enabled?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          name?: string
+          whatsapp_e164?: string
+          message_template?: string
+          use_case?: string
+          utm?: Json
+          enabled?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ad_tracking_links_organization_id_fkey"
+            columns: [
+              "organization_id"
+            ]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: [
+              "id"
+            ]
+          }
+        ]
+      }
+
+      google_ads_conversion_rules: {
+        Row: {
+          category: string
+          channel: string
+          configured_at: string
+          created_at: string
+          enabled: boolean
+          event_name: string
+          google_action_id: string
+          id: string
+          included_in_conversions: boolean
+          label: string
+          organization_id: string
+          stage_id: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          category?: string
+          channel?: string
+          configured_at?: string
+          created_at?: string
+          enabled?: boolean
+          event_name: string
+          google_action_id: string
+          id?: string
+          included_in_conversions?: boolean
+          label: string
+          organization_id: string
+          stage_id: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          category?: string
+          channel?: string
+          configured_at?: string
+          created_at?: string
+          enabled?: boolean
+          event_name?: string
+          google_action_id?: string
+          id?: string
+          included_in_conversions?: boolean
+          label?: string
+          organization_id?: string
+          stage_id?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "google_ads_conversion_rules_organization_id_fkey"
+            columns: [
+              "organization_id"
+            ]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: [
+              "id"
+            ]
+          },
+          {
+            foreignKeyName: "google_ads_conversion_rules_stage_org_fk"
+            columns: [
+              "organization_id",
+              "stage_id"
+            ]
+            isOneToOne: false
+            referencedRelation: "crm_stages"
+            referencedColumns: [
+              "organization_id",
+              "id"
+            ]
+          }
+        ]
+      }
     }
     Views: {
       calendar_google_reconcilable_appointments: {
@@ -9195,6 +9567,12 @@ export type Database = {
         Args: { p_agent_id: string; p_version_id: string }
         Returns: undefined
       }
+      fn_solicitar_reenvio_conversao:
+        | { Args: { p_lead: string; p_org: string }; Returns: boolean }
+        | {
+            Args: { p_event: string; p_lead: string; p_org: string }
+            Returns: boolean
+          }
       emit_event: {
         Args: {
           p_entity_id: string
@@ -9550,6 +9928,18 @@ export type Database = {
       }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }
+
+      fn_metricas_links_rastreaveis: {
+        Args: {
+          p_org: string
+        }
+        Returns: {
+          link_id: string
+          clicks: number
+          contacts: number
+          leads: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never
