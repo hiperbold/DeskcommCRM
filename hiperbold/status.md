@@ -1,6 +1,45 @@
 # Status do fork Hiperbold
 
-Atualizado em 25/09/2026.
+Atualizado em 27/09/2026, noite. As seções abaixo desta são de 25/09 e continuam valendo para produção e para as fases F1 a F7.
+
+## Ponto de retomada (27/09/2026, fase F8, parada por limite de sessão)
+
+Nada foi publicado nem enviado ao GitHub. Nenhum agente ficou rodando. Plano da fase: `hiperbold/planos/fase-F8-tarefas.md`.
+
+**Feito e commitado:**
+- `feat/planos-assinatura` (`87b351e`): guia de uso da cobrança para o Filipe (`hiperbold/guia-cobranca.md`) e plano da F8.
+- Branch **`merge/upstream-2026-09-27`**, na worktree `~/projects/deskcommcrm-merge`: junção do autor 1.57.0 (D-028; o autor andou 1.006 commits e 48 migrações desde 22/09, não os 63 de 16/09). Commits:
+  - `ba92828` junção (28 conflitos; baseline = versão do autor + blocos do fork antes da varredura de anon; migração nova 0911 reafirma o vocabulário de canais; a 0385 do fork virou 0900 com o mesmo timestamp; a 0907 ganhou 5 min no timestamp; 3 arquivos do autor passam a ler o IP pelo helper);
+  - `6b4f42c` correções da revisão (índice único da UAZAPI de volta no baseline; retomar e clonar lead, canal Graph parceiro e gatilhos de follow-up por lead e por retorno com a trava do plano e o modo leitura; Jev do roteador vetado em conta suspensa);
+  - `ca58118` testes do fork no contrato novo do autor (cerca do Jev, custo pelo catálogo, dublês).
+
+**Portões da junção:**
+- Em `6b4f42c`: install, test:db (307 arquivos), typecheck, lint e lint:channels verdes. Unitários: 7 arquivos vermelhos. Um é o do Redis, de ambiente. Os outros seis foram corrigidos em `ca58118`; dois deles não se reproduzem isolados e parecem instabilidade de carga.
+- **Falta rodar em `ca58118`**: typecheck, lint e a suíte unitária completa. A rodada foi interrompida pelo limite de sessão. Script: `bash /mnt/f/temp/2026-09-27/merge/portoes-m3.sh` (resumo em `F:\temp\2026-09-27\merge\logs\m3-resumo.txt`). Rodar SOZINHO: a máquina travou duas vezes hoje com processos pesados em paralelo.
+- **O build não roda nesta máquina** (D-076): o `next build` do autor puro também estoura os 7 GB do WSL e derruba a sessão. O culpado principal é o Sentry 11 que o autor trouxe; sem ele o build passa com pico de 6,2 GB. Desligar a geração de source maps sem token não bastou. Antes de publicar, é preciso saber se o runner do GitHub Actions que monta a imagem aguenta.
+
+**Depois dos portões verdes:**
+1. Levar para a branch da junção os dois commits de documentação de `feat/planos-assinatura` (`git merge feat/planos-assinatura` na worktree da junção). Depois avançar `feat/planos-assinatura` para a branch da junção.
+2. Atualizar `DEBITO.md`: D-028 fechado (junção local); D-076 novo (build com mais de 7 GB, Sentry 11); D-042 e D-062 ficam como estão, com a justificativa do plano da F8.
+
+**Site de vendas** (`F:\github-projects\hipercrm-site`, branch master, **sem commit**): o executor deixou pela metade, sem revisão, estas mudanças:
+- busca do Google (SITE_URL e `src/config/site.ts`);
+- `robots.txt.ts`, `404.astro` e a imagem de compartilhamento `public/og.png`;
+- ajustes no cabeçalho, no layout, nos Termos e na Privacidade.
+
+Faltam os prints "depois" nas seis larguras (os "antes" estão em `F:\temp\2026-09-27\site\prints\antes`), o build e a revisão do diff antes de commitar.
+
+**Ainda não começado:**
+- subir o Astro de versão principal no site;
+- conferir as telas de plano no CRM local com prints (precisa do servidor de desenvolvimento, e só roda sem outro processo pesado junto).
+
+**Decisões técnicas da F8:**
+- D-042 fica: a produção roda uma réplica só.
+- D-062 fica: é raro, e o banco desfaz uma das operações.
+- A leitura de sentimento continua na conta suspensa (N28: serve a quem atende à mão).
+- O Jev do roteador não é consultado em conta suspensa.
+
+**Pergunta nova para o Filipe:** pode subir o limite de memória do WSL? Exige reiniciar o WSL, o que derruba o CRM local até religar, sem apagar dados. Com mais memória, o build volta a rodar aqui.
 
 ## Onde está tudo agora
 
