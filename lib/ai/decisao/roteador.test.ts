@@ -8,7 +8,11 @@
 import type pg from "pg";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/billing/assinatura/modo-leitura", () => ({
+// `roteador.ts` importa direto de `modo-leitura-pelo-pool.ts` (pós-junção,
+// 2026-09-27: separado de `modo-leitura.ts` para o Jev nunca alcançar o
+// `.rpc()` de `contaEmModoLeitura`, ver o comentário em `roteador.ts`), o
+// mock aqui precisa mirar o mesmo caminho.
+vi.mock("@/lib/billing/assinatura/modo-leitura-pelo-pool", () => ({
   // Default = o de sempre nesta suíte: a conta NÃO está em modo leitura, e o
   // roteador segue como antes de o veto existir. Só o describe da conta
   // suspensa muda o valor.
@@ -16,7 +20,7 @@ vi.mock("@/lib/billing/assinatura/modo-leitura", () => ({
 }));
 
 import type { RouterMember } from "@/lib/agent-engine/agent/router-config";
-import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura";
+import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura-pelo-pool";
 import { registrarFalha } from "@/lib/ai/decisao/disjuntor";
 import {
   consultarJevNoRoteador,

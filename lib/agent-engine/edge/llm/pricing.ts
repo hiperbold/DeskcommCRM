@@ -32,8 +32,6 @@
  * contrato escrito acima.
  */
 
-import { precoDoCatalogoOuNull, type LeituraDePrecoDoCatalogo } from '@/lib/ai/runtime/cost';
-
 import type { CacheTtl } from './stable-prefix';
 
 interface Preco {
@@ -163,10 +161,43 @@ interface LoggerMinimo {
  * agente) exige ZERO `fetch`, e é exatamente o resolvedor pelo `db` que
  * `run-model-call.ts` passa aqui que fecha esse buraco.
  */
+/**
+ * Mesma forma de `LeituraDePrecoDoCatalogo` (`lib/ai/runtime/cost.ts`),
+ * duplicada aqui de propósito: este arquivo é importado por módulos do Jev
+ * (`lib/ai/decisao/manipulacao.ts`, `lib/ai/decisao/roteador.ts`, só por
+ * `costCents`, a tabela escrita à mão), e a cerca
+ * (`tests/unit/jev-nunca-cala-bloqueia-nem-responde.test.ts`) trata todo
+ * `lib/ai/runtime/**` como "quem envia", importar o TIPO de lá (mesmo só
+ * para checagem estática) já entrava na cadeia da cerca como violação
+ * (achado da junção, 2026-09-27). TypeScript casa por estrutura, então este
+ * tipo local é compatível com o retorno de `precoDoCatalogoOuNull` sem
+ * precisar da mesma declaração.
+ */
+export interface LeituraDoCatalogoParaCusto {
+  preco: { inputCentsPerMillion: number; outputCentsPerMillion: number } | null;
+  falhou: boolean;
+}
+
 export type CarregadorDePrecoDoCatalogo = (
   provider: string,
   model: string,
-) => Promise<LeituraDePrecoDoCatalogo>;
+) => Promise<LeituraDoCatalogoParaCusto>;
+
+/**
+ * Só dispara se `custoCentsComCatalogo` for chamada sem `carregador` E sem um
+ * modelo conhecido pela tabela escrita à mão, não deveria acontecer em
+ * código de produção (todo chamador real informa a fonte do catálogo).
+ * Existe como o valor padrão do parâmetro só para não obrigar todo chamador a
+ * passar `carregador` explicitamente quando o modelo já resolve pela tabela
+ * (a maioria dos casos); falhar alto aqui é melhor que este arquivo importar
+ * `lib/ai/runtime/cost` só para ter um default de verdade (ver o comentário
+ * do tipo acima).
+ */
+async function carregadorNaoInformado(): Promise<LeituraDoCatalogoParaCusto> {
+  throw new Error(
+    'custoCentsComCatalogo: nenhum carregador de catálogo foi informado para um modelo fora da tabela escrita à mão',
+  );
+}
 
 /**
  * O RESOLVEDOR ÚNICO de preço para toda linha de `llm_calls` (D-050,
@@ -195,11 +226,17 @@ export type CarregadorDePrecoDoCatalogo = (
  * partes separadamente.
  *
  * `carregador` (revisão de 23/09/2026): de onde vem a leitura do catálogo
- * quando a tabela escrita à mão não conhece o modelo. Opcional, quem não
- * passar nada continua com o carregador HTTP de sempre (`precoDoCatalogoOuNull`,
- * `lib/ai/runtime/cost.ts`), o comportamento inalterado de `lib/ai/cost.ts` e
- * `lib/ai/telemetria-sem-custo.ts`. `run-model-call.ts` é o único chamador que
- * passa um carregador próprio, pelo `db` (pg.Pool) que já tem em mãos.
+ * quando a tabela escrita à mão não conhece o modelo. Para um modelo da
+ * tabela, `carregador` nunca é chamado (o `return` abaixo acontece antes),
+ * por isso pode ficar de fora em quem só usa modelo conhecido. Quem PRECISA
+ * dele (modelo fora da tabela) tem que passar um de verdade: `lib/ai/cost.ts`
+ * e `lib/ai/telemetria-sem-custo.ts` passam `precoDoCatalogoOuNull`
+ * (`lib/ai/runtime/cost.ts`, o carregador HTTP de sempre) explicitamente, e
+ * `run-model-call.ts` passa o seu, pelo `db` (pg.Pool) que já tem em mãos.
+ * Este arquivo NUNCA importa `lib/ai/runtime/cost` (a cerca do Jev trata essa
+ * pasta como "quem envia", achado da junção de 2026-09-27), por isso não há
+ * um carregador HTTP default de verdade aqui, só o `carregadorNaoInformado`
+ * que falha alto se alguém esquecer de passar um.
  */
 export async function custoCentsComCatalogo(
   provider: string,
@@ -207,7 +244,7 @@ export async function custoCentsComCatalogo(
   usage: UsoDeTokensParaCusto,
   cacheTtl: CacheTtl = '1h',
   log?: LoggerMinimo,
-  carregador: CarregadorDePrecoDoCatalogo = precoDoCatalogoOuNull,
+  carregador: CarregadorDePrecoDoCatalogo = carregadorNaoInformado,
 ): Promise<number | null> {
   const daTabela = costCents(
     model,

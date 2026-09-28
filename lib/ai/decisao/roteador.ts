@@ -47,7 +47,13 @@ import type pg from "pg";
 import type { IntentVerdict } from "@/lib/agent-engine/agent/intent-classifier";
 import type { RouterMember } from "@/lib/agent-engine/agent/router-config";
 import { costCents } from "@/lib/agent-engine/edge/llm/pricing";
-import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura";
+// Importa DIRETO de `modo-leitura-pelo-pool.ts`, não do barril
+// `modo-leitura.ts`: aquele arquivo também tem `contaEmModoLeitura`, que usa
+// `admin.rpc(...)`, e a cerca do Jev
+// (`tests/unit/jev-nunca-cala-bloqueia-nem-responde.test.ts`) reprova
+// `.rpc()` em qualquer arquivo alcançado a partir daqui, mesmo numa função que
+// o roteador nunca chama.
+import { contaEmModoLeituraPeloPool } from "@/lib/billing/assinatura/modo-leitura-pelo-pool";
 import { logger } from "@/lib/logger";
 import { scrubMessage } from "@/lib/sentry/scrub";
 

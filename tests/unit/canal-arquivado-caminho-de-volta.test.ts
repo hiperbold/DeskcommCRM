@@ -21,7 +21,7 @@
  * coluna não existe, e um caminho de volta que a exigisse quebraria a reconexão
  * inteira — por um motivo que nem existe naquele banco.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 import { audit } from "@/lib/audit";
@@ -625,6 +625,18 @@ describe("GET /api/v1/channel-sessions/[id]/qr — o QR é o ato de religar", ()
   beforeEach(() => {
     process.env.WAHA_API_BASE_URL = "http://waha.local";
     process.env.WAHA_API_KEY = "chave-de-teste";
+  });
+
+  // Achado da revisão pós-junção (2026-09-27): a atribuição direta acima
+  // (`process.env.X = ...`, não `vi.stubEnv`) nunca se desfazia, `WAHA_API_KEY`
+  // seguia setada para todo teste que rodasse DEPOIS deste describe no mesmo
+  // worker, fazendo `getWahaClient()` achar credencial onde não devia (ex.:
+  // um teste que espera canal WAHA "não configurado" passava a achar
+  // configurado). `delete` e não `vi.unstubAllEnvs()` porque a atribuição
+  // acima também não usou `vi.stubEnv`.
+  afterEach(() => {
+    delete process.env.WAHA_API_BASE_URL;
+    delete process.env.WAHA_API_KEY;
   });
 
   it("⭐ canal ARQUIVADO → 409 e o WAHA nem é consultado", async () => {

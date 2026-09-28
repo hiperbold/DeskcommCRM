@@ -36,6 +36,7 @@
  * normalmente.
  */
 import { custoCentsComCatalogo } from "@/lib/agent-engine/edge/llm/pricing";
+import { precoDoCatalogoOuNull } from "@/lib/ai/runtime/cost";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -121,6 +122,10 @@ export async function registrarTelemetriaSemCusto(input: TelemetriaSemCustoInput
             { inputTokens: input.inputTokens ?? 0, outputTokens: input.outputTokens ?? 0 },
             undefined,
             logger,
+            // `pricing.ts` não importa `lib/ai/runtime/cost` (a cerca do Jev trata
+            // essa pasta como "quem envia", achado da junção de 2026-09-27), então
+            // o carregador HTTP de sempre precisa vir explícito daqui.
+            precoDoCatalogoOuNull,
           );
     const { error } = await admin.from("llm_calls").insert({
       organization_id: input.organizationId,

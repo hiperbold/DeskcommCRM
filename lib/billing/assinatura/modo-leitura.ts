@@ -27,7 +27,6 @@
  * `alarme_planos_leitura` no log, a falha não pode passar despercebida.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type pg from "pg";
 
 import { logger } from "@/lib/logger";
 import { modoDeBillingCacheado } from "@/lib/billing/planos/modo-cacheado";
@@ -77,43 +76,14 @@ export async function contaEmModoLeitura(
 // cache PRÓPRIO por `pg.Pool` (não compartilhado com o cache por
 // `SupabaseClient` acima, nem com o de `run-model-call.ts`, que é de outro
 // consumidor/processo, mesmo desenho de `modoDeBillingPeloDb`, F3).
+//
+// Pós-junção (2026-09-27): a implementação mudou de arquivo, para
+// `./modo-leitura-pelo-pool.ts`, `lib/ai/decisao/roteador.ts` (o Jev) passou
+// a importar esta variante, e a cerca do Jev
+// (`tests/unit/jev-nunca-cala-bloqueia-nem-responde.test.ts`) reprova
+// `.rpc()` em QUALQUER arquivo alcançado, mesmo fora da função realmente
+// chamada, e este arquivo tem o `admin.rpc(...)` de `contaEmModoLeitura`
+// acima. Reexportado aqui para quem já importava pela rota antiga continuar
+// igual; só o roteador do Jev importa direto do novo arquivo.
 // ============================================================================
-
-const TTL_MODO_POOL_MS = 60_000;
-const modoPorPool = new WeakMap<pg.Pool, { modo: string | null; expiraEm: number }>();
-
-async function modoDeBillingCacheadoPeloPool(pool: pg.Pool): Promise<string | null> {
-  const cache = modoPorPool.get(pool);
-  if (cache && cache.expiraEm > Date.now()) return cache.modo;
-  const { rows } = await pool.query<{ modo: string | null }>(
-    "select modo from public.billing_settings where id = 1",
-  );
-  const modo = rows[0]?.modo ?? null;
-  modoPorPool.set(pool, { modo, expiraEm: Date.now() + TTL_MODO_POOL_MS });
-  return modo;
-}
-
-export async function contaEmModoLeituraPeloPool(
-  pool: pg.Pool,
-  organizationId: string,
-): Promise<boolean> {
-  try {
-    const modo = await modoDeBillingCacheadoPeloPool(pool);
-    if (modo !== "bloquear") {
-      return false;
-    }
-
-    const { rows } = await pool.query<{ modo_leitura: boolean | null }>(
-      "select public.fn_billing_modo_leitura($1) as modo_leitura",
-      [organizationId],
-    );
-    return Boolean(rows[0]?.modo_leitura);
-  } catch (err) {
-    logger.error("alarme_planos_leitura", {
-      organization_id: organizationId,
-      etapa: "conta_em_modo_leitura_pelo_pool",
-      error: (err instanceof Error ? err.message : String(err)).slice(0, 300),
-    });
-    return false;
-  }
-}
+export { contaEmModoLeituraPeloPool } from "./modo-leitura-pelo-pool";

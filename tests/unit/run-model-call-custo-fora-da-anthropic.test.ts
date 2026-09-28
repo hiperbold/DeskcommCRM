@@ -5,19 +5,27 @@
  * `cost_cents` real para esses modelos, não nulo para sempre.
  *
  * Este arquivo prova a ponta a ponta: `runModelCall` com `provider=openai` e
- * `model=gpt-5.6-luna` grava `cost_cents` calculado pelo catálogo `ai_models`
+ * um modelo FICTÍCIO (`gpt-6.1-nova`, propositalmente FORA da tabela escrita à
+ * mão de `pricing.ts`) grava `cost_cents` calculado pelo catálogo `ai_models`
  * (mockado aqui), exatamente como `custoCentsComCatalogo` calcularia sozinho
- * (provado em `lib/agent-engine/edge/llm/pricing.test.ts`).
+ * (provado em `lib/agent-engine/edge/llm/pricing.test.ts`). Pós-junção
+ * (2026-09-27): o autor deu preço REAL a `gpt-5.6-luna` na tabela (cache de
+ * leitura com desconto, conferido no site da OpenAI); usá-lo aqui pararia de
+ * testar o catálogo, porque a tabela resolveria primeiro, sem nunca chamar
+ * o `pool.query('select ... from ai_models')` que este arquivo prova.
  *
  * Revisão de 23/09/2026 (achado do invariante de preview): a leitura do
  * catálogo dentro de `runModelCall` deixou de ser HTTP (`createAdminClient`) e
  * passou a ser pelo MESMO `db` (pg.Pool) que o seam já recebe, por isso o
  * catálogo abaixo é servido pelo `pool.query` (`select ... from ai_models`),
  * não mais pelo mock de `@/lib/supabase/admin`. O mock de `@/lib/supabase/admin`
- * continua aqui só porque `lib/ai/runtime/cost.ts` (importado transitivamente
- * por `./pricing`) ainda importa `createAdminClient` no topo do módulo. Sem
- * o mock, essa importação exigiria env vars reais de Supabase só para o
- * módulo carregar, mesmo a função nunca sendo chamada neste caminho.
+ * continua aqui só porque `run-model-call.ts` importa `criarResolvedorDeCatalogo`
+ * de `lib/ai/runtime/cost.ts`, que ainda importa `createAdminClient` no topo do
+ * módulo (o carregador HTTP de sempre, usado por outros chamadores). Sem o
+ * mock, essa importação exigiria env vars reais de Supabase só para o módulo
+ * carregar, mesmo a função nunca sendo chamada neste caminho. `pricing.ts`
+ * (revisão da junção) não importa mais `lib/ai/runtime/cost`, ver o
+ * comentário em `lib/agent-engine/edge/llm/pricing.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -53,7 +61,7 @@ function poolComProvedorOpenAI() {
           {
             llm: {
               provider: "openai",
-              default_model: "gpt-5.6-luna",
+              default_model: "gpt-6.1-nova",
               params: {},
               enabled_models: [],
               monthly_budget_cents: null,
@@ -78,11 +86,11 @@ function poolComProvedorOpenAI() {
 }
 
 describe("runModelCall grava cost_cents pelo catálogo para modelo fora da Anthropic (D-050)", () => {
-  it("openai/gpt-5.6-luna: 1000 de entrada, 200 de saída, 800 de cache lido", async () => {
+  it("openai/gpt-6.1-nova: 1000 de entrada, 200 de saída, 800 de cache lido", async () => {
     catalogoLinhas = [
       {
         provider: "openai",
-        model_id: "gpt-5.6-luna",
+        model_id: "gpt-6.1-nova",
         input_price_per_million_cents: 20,
         output_price_per_million_cents: 120,
       },
@@ -96,7 +104,7 @@ describe("runModelCall grava cost_cents pelo catálogo para modelo fora da Anthr
         ({
           specificationVersion: "v3",
           provider: "openai",
-          modelId: "gpt-5.6-luna",
+          modelId: "gpt-6.1-nova",
           doGenerate: async () => ({
             content: [{ type: "text", text: "ok" }],
             finishReason: { unified: "stop", raw: undefined },
@@ -126,7 +134,7 @@ describe("runModelCall grava cost_cents pelo catálogo para modelo fora da Anthr
     // (1000×20 + 200×120) / 1_000_000 = 0,044 cents.
     expect(custoGravado).toBeCloseTo(0.044, 6);
     expect(params).toContain("openai");
-    expect(params).toContain("gpt-5.6-luna");
+    expect(params).toContain("gpt-6.1-nova");
   });
 
   it("lê o catálogo pelo db (pool.query), nunca por fetch: zero fetch na chamada inteira", async () => {
@@ -137,7 +145,7 @@ describe("runModelCall grava cost_cents pelo catálogo para modelo fora da Anthr
     catalogoLinhas = [
       {
         provider: "openai",
-        model_id: "gpt-5.6-luna",
+        model_id: "gpt-6.1-nova",
         input_price_per_million_cents: 20,
         output_price_per_million_cents: 120,
       },
@@ -151,7 +159,7 @@ describe("runModelCall grava cost_cents pelo catálogo para modelo fora da Anthr
         ({
           specificationVersion: "v3",
           provider: "openai",
-          modelId: "gpt-5.6-luna",
+          modelId: "gpt-6.1-nova",
           doGenerate: async () => ({
             content: [{ type: "text", text: "ok" }],
             finishReason: { unified: "stop", raw: undefined },

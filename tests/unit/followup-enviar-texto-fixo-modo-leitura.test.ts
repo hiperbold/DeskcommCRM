@@ -54,10 +54,16 @@ function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
       }
       if (tabela === "job_queue") {
         return {
+          // `enviar-texto-fixo.ts` filtra `run_after` com `.lt(...,
+          // fimDoMilissegundoCorrente())`, não `.lte(...)` (achado da junção,
+          // 2026-09-27: o autor trocou para `.lt` com o fim do milissegundo
+          // corrente, ver o comentário de `fimDoMilissegundoCorrente` no
+          // módulo, o dublê tinha que casar o mesmo método, senão a cadeia
+          // quebra em runtime com "... .lt is not a function").
           select: () => ({
             eq: () => ({
               eq: () => ({
-                lte: () => ({
+                lt: () => ({
                   order: () => ({
                     limit: async () => ({ data: [JOB], error: null }),
                   }),
@@ -69,7 +75,7 @@ function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
             eq: () => ({
               eq: () => ({
                 eq: () => ({
-                  lte: () => ({
+                  lt: () => ({
                     select: () => ({
                       maybeSingle: async () => ({
                         data: { id: JOB.id, locked_by: "worker-x", locked_at: new Date().toISOString() },

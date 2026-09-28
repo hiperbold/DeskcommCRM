@@ -28,9 +28,25 @@ vi.mock("@/lib/supabase/admin", () => ({
   }),
 }));
 
-import { _resetRuntimeCostCacheForTests } from "@/lib/ai/runtime/cost";
+import { _resetRuntimeCostCacheForTests, precoDoCatalogoOuNull } from "@/lib/ai/runtime/cost";
 
 import { costCents, custoCentsComCatalogo, precoDoModelo, type TokenUsage } from "./pricing";
+
+/**
+ * Modelo fictício, de propósito FORA da tabela escrita à mão
+ * (`USD_PER_MTOK`), para os testes de `custoCentsComCatalogo` abaixo
+ * exercitarem o CATÁLOGO de verdade. Pós-junção (2026-09-27): o autor
+ * adicionou `gpt-5.6-luna` à tabela com preço real da OpenAI (cache de
+ * leitura com desconto), então usar `gpt-5.6-luna` aqui pararia de testar o
+ * catálogo, a tabela resolveria primeiro, e sempre com o MESMO valor
+ * (`costCents` tem desconto de cache; o catálogo não), então `carregador`
+ * (o mock abaixo) nunca seria chamado. `pricing.ts` (revisão da junção) não
+ * tem mais um carregador HTTP padrão embutido (para não importar
+ * `lib/ai/runtime/cost` e cair na cerca do Jev), por isso os testes abaixo
+ * passam `precoDoCatalogoOuNull` explicitamente, o mesmo carregador que
+ * `lib/ai/cost.ts`/`lib/ai/telemetria-sem-custo.ts` usam em produção.
+ */
+const MODELO_FORA_DA_TABELA = "gpt-6.1-nova";
 
 beforeEach(() => {
   catalogoLinhas = [];
@@ -251,11 +267,11 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
     expect(resolvido).toBeGreaterThan(0);
   });
 
-  it("Luna (fora da Anthropic) ganha custo pelo catálogo, 1000 de entrada, 200 de saída, 800 de cache lido", async () => {
+  it("modelo fora da tabela ganha custo pelo catálogo, 1000 de entrada, 200 de saída, 800 de cache lido", async () => {
     catalogoLinhas = [
       {
         provider: "openai",
-        model_id: "gpt-5.6-luna",
+        model_id: MODELO_FORA_DA_TABELA,
         input_price_per_million_cents: 20,
         output_price_per_million_cents: 120,
       },
@@ -266,7 +282,7 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
       cacheReadTokens: 800,
       cacheWriteTokens: 0,
     };
-    const custo = await custoCentsComCatalogo("openai", "gpt-5.6-luna", usage);
+    const custo = await custoCentsComCatalogo("openai", MODELO_FORA_DA_TABELA, usage, "1h", undefined, precoDoCatalogoOuNull);
     // O catálogo não tem desconto de cache: os 1000 de entrada (que já INCLUEM
     // os 800 de cache lido, mesma convenção de `costCents`) vão inteiros ao
     // preço de entrada. (1000×20 + 200×120) / 1_000_000 = 0,044 cents.
@@ -285,15 +301,32 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
     const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
     // Formato que `resolverModeloDoPonto`/`ai_purpose_bindings` gravam em
     // `llm_calls.model` em alguns caminhos (produção real: 21 linhas de
-    // `openai/gpt-5.6-luna` com `cost_cents` nulo antes deste conserto).
-    const custo = await custoCentsComCatalogo("openai", "openai/gpt-5.6-luna", usage);
+    // `openai/gpt-5.6-luna` com `cost_cents` nulo antes deste conserto). O
+    // prefixo colado (`openai/gpt-5.6-luna`) não é chave exata da tabela nem
+    // do sufixo de data tolerado, então cai no catálogo mesmo com
+    // `gpt-5.6-luna` (sem prefixo) já tabelado.
+    const custo = await custoCentsComCatalogo(
+      "openai",
+      "openai/gpt-5.6-luna",
+      usage,
+      "1h",
+      undefined,
+      precoDoCatalogoOuNull,
+    );
     expect(custo).toBeCloseTo(0.044, 6);
   });
 
   it("modelo fora da tabela e fora do catálogo: null, NUNCA zero", async () => {
     catalogoLinhas = [];
     const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
-    const custo = await custoCentsComCatalogo("openai", "modelo-que-nao-existe-em-lugar-nenhum", usage);
+    const custo = await custoCentsComCatalogo(
+      "openai",
+      "modelo-que-nao-existe-em-lugar-nenhum",
+      usage,
+      "1h",
+      undefined,
+      precoDoCatalogoOuNull,
+    );
     expect(custo).toBeNull();
   });
 
@@ -301,19 +334,19 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
   // catálogo nunca pode virar custo zero.
   it("um dos dois preços nulo no catálogo: null, o resolvedor nunca cobra a metade conhecida sozinha", async () => {
     catalogoLinhas = [
-      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: null, output_price_per_million_cents: 120 },
+      { provider: "openai", model_id: MODELO_FORA_DA_TABELA, input_price_per_million_cents: null, output_price_per_million_cents: 120 },
     ];
     const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
-    const custo = await custoCentsComCatalogo("openai", "gpt-5.6-luna", usage);
+    const custo = await custoCentsComCatalogo("openai", MODELO_FORA_DA_TABELA, usage, "1h", undefined, precoDoCatalogoOuNull);
     expect(custo).toBeNull();
   });
 
   it("os dois preços zero no catálogo: null, não é diferente de desconhecido (mesma doutrina de lib/ai/cost.ts)", async () => {
     catalogoLinhas = [
-      { provider: "openai", model_id: "gpt-5.6-luna", input_price_per_million_cents: 0, output_price_per_million_cents: 0 },
+      { provider: "openai", model_id: MODELO_FORA_DA_TABELA, input_price_per_million_cents: 0, output_price_per_million_cents: 0 },
     ];
     const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
-    const custo = await custoCentsComCatalogo("openai", "gpt-5.6-luna", usage);
+    const custo = await custoCentsComCatalogo("openai", MODELO_FORA_DA_TABELA, usage, "1h", undefined, precoDoCatalogoOuNull);
     expect(custo).toBeNull();
   });
 
@@ -326,7 +359,9 @@ describe("custoCentsComCatalogo, o resolvedor único de llm_calls", () => {
       },
     };
     const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
-    await expect(custoCentsComCatalogo("openai", "gpt-5.6-luna", usage, "1h", log)).resolves.toBeNull();
+    await expect(
+      custoCentsComCatalogo("openai", MODELO_FORA_DA_TABELA, usage, "1h", log, precoDoCatalogoOuNull),
+    ).resolves.toBeNull();
     expect(avisos).toHaveLength(1);
     expect(avisos[0]![0]).toMatch(/catálogo/i);
   });
@@ -346,7 +381,7 @@ describe("custoCentsComCatalogo, o carregador opcional (revisão de 23/09/2026)"
     const chamadas: Array<[string, string]> = [];
     const carregadorPeloDb = async (provider: string, model: string) => {
       chamadas.push([provider, model]);
-      if (provider === "openai" && model === "gpt-5.6-luna") {
+      if (provider === "openai" && model === MODELO_FORA_DA_TABELA) {
         return { preco: { inputCentsPerMillion: 20, outputCentsPerMillion: 120 }, falhou: false };
       }
       return { preco: null, falhou: false };
@@ -354,14 +389,14 @@ describe("custoCentsComCatalogo, o carregador opcional (revisão de 23/09/2026)"
     const usage: TokenUsage = { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 };
     const custo = await custoCentsComCatalogo(
       "openai",
-      "gpt-5.6-luna",
+      MODELO_FORA_DA_TABELA,
       usage,
       "1h",
       undefined,
       carregadorPeloDb,
     );
     expect(custo).toBeCloseTo(0.044, 6);
-    expect(chamadas).toEqual([["openai", "gpt-5.6-luna"]]);
+    expect(chamadas).toEqual([["openai", MODELO_FORA_DA_TABELA]]);
   });
 
   it("modelo da tabela escrita à mão nunca chega ao carregador injetado", async () => {
