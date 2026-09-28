@@ -15,7 +15,7 @@ Nada foi publicado nem enviado ao GitHub. Plano da fase: `hiperbold/planos/fase-
 
 **Telas de plano conferidas** (prints em `F:\temp\2026-09-28\crm-prints\`): 8 telas, todas 200, sem erro de console e sem rolagem lateral, em 390 e 1440 px. Detalhes baixos em D-078. A bolinha com coqueiro nos prints é o ReactQueryDevtools, só em desenvolvimento.
 
-**Site de vendas** (`F:\github-projects\hipercrm-site`, master): `bd94ce6` (busca do Google sem domínio inventado, 404, og.png, botão do cabeçalho) e `5531869` (Astro 7.3.5, `npm audit` zerado, HTML e prints iguais aos da versão 5). Revisão de acessibilidade em andamento.
+**Site de vendas** (`F:\github-projects\hipercrm-site`, master): `bd94ce6` (busca do Google sem domínio inventado, 404, og.png, botão do cabeçalho) e `5531869` (Astro 7.3.5, `npm audit` zerado, HTML e prints iguais aos da versão 5). `ec9727b` (acessibilidade: axe-core zerado nas 5 páginas em 390 e 1440 px; menu na ordem do Tab; botão "Assinar" dos cartões claros de /precos estava claro sobre branco e foi corrigido). A frente 1 da F8 está fechada.
 
 **Próximo passo quando o Filipe responder:** as perguntas de `hiperbold/planos/progresso-da-noite.md`, na ordem de prioridade que ele recebeu. Publicar exige o checklist de D-075 e a conferência de D-076.
 
