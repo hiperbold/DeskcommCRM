@@ -18,4 +18,4 @@ Aberta em 27/09/2026. O Filipe pediu para seguir com tudo o que não depende das
 
 ## Perguntas novas desta fase
 
-Nenhuma até agora; as que surgirem entram aqui com o padrão adotado.
+- **Subir o limite de memória do WSL?** Exige reiniciar o WSL (o CRM local cai até religar, sem apagar dados). Sem isso o build da junção não roda nesta máquina (D-076). Padrão adotado: não mexer até o Filipe responder.
