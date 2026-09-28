@@ -2,44 +2,22 @@
 
 Atualizado em 27/09/2026, noite. As seções abaixo desta são de 25/09 e continuam valendo para produção e para as fases F1 a F7.
 
-## Ponto de retomada (27/09/2026, fase F8, parada por limite de sessão)
+## Ponto de retomada (28/09/2026, fase F8)
 
-Nada foi publicado nem enviado ao GitHub. Nenhum agente ficou rodando. Plano da fase: `hiperbold/planos/fase-F8-tarefas.md`.
+Nada foi publicado nem enviado ao GitHub. Plano da fase: `hiperbold/planos/fase-F8-tarefas.md`.
 
-**Feito e commitado:**
-- `feat/planos-assinatura` (`87b351e`): guia de uso da cobrança para o Filipe (`hiperbold/guia-cobranca.md`) e plano da F8.
-- Branch **`merge/upstream-2026-09-27`**, na worktree `~/projects/deskcommcrm-merge`: junção do autor 1.57.0 (D-028; o autor andou 1.006 commits e 48 migrações desde 22/09, não os 63 de 16/09). Commits:
-  - `ba92828` junção (28 conflitos; baseline = versão do autor + blocos do fork antes da varredura de anon; migração nova 0911 reafirma o vocabulário de canais; a 0385 do fork virou 0900 com o mesmo timestamp; a 0907 ganhou 5 min no timestamp; 3 arquivos do autor passam a ler o IP pelo helper);
-  - `6b4f42c` correções da revisão (índice único da UAZAPI de volta no baseline; retomar e clonar lead, canal Graph parceiro e gatilhos de follow-up por lead e por retorno com a trava do plano e o modo leitura; Jev do roteador vetado em conta suspensa);
-  - `ca58118` testes do fork no contrato novo do autor (cerca do Jev, custo pelo catálogo, dublês).
+**Junção do autor 1.57.0 (D-028) dentro de `feat/planos-assinatura`:**
+- `feat/planos-assinatura` avançou até o merge `6e13392` (junção `ba92828`, correções `6b4f42c` e `ca58118`, mais os documentos da F8). A worktree `~/projects/deskcommcrm-merge` e a branch `merge/upstream-2026-09-27` podem ser apagadas quando quiser; estão iguais a `feat`.
+- Portões em `ca58118`: install, test:db (307 arquivos), typecheck, lint, lint:channels e build verdes. Unitários: 1.631 de 1.634 arquivos; o do Redis é de ambiente, e os dois do autor em D-077 só falham com o `.env.local` de desenvolvimento presente (sem ele, 11 de 11). Os unitários passam a rodar sem o `.env` de desenvolvimento, como no GitHub.
+- Memória: o Filipe autorizou, e o WSL passou para 16 GB com 8 GB de swap em `F:\DevTools\WSL\swap.vhdx` (`.wslconfig`). O build passou com pico de 10,8 GB no WSL inteiro. O fork é público, então o runner do GitHub tem 16 GB; risco que sobra está em D-076 (heap de 4096 MB no `Dockerfile`).
+- Banco local atualizado pelo `baseline.sql` novo numa transação única (`psql -1 -v ON_ERROR_STOP=1`), sem erro e sem perder dado. Backup de antes: `F:\temp\2026-09-28\crm\banco-local-antes-da-juncao.dump` (formato custom do pg_dump).
+- CRM local rodando a versão juntada em localhost:3300, saudável.
 
-**Portões da junção:**
-- Em `6b4f42c`: install, test:db (307 arquivos), typecheck, lint e lint:channels verdes. Unitários: 7 arquivos vermelhos. Um é o do Redis, de ambiente. Os outros seis foram corrigidos em `ca58118`; dois deles não se reproduzem isolados e parecem instabilidade de carga.
-- **Falta rodar em `ca58118`**: typecheck, lint e a suíte unitária completa. A rodada foi interrompida pelo limite de sessão. Script: `bash /mnt/f/temp/2026-09-27/merge/portoes-m3.sh` (resumo em `F:\temp\2026-09-27\merge\logs\m3-resumo.txt`). Rodar SOZINHO: a máquina travou duas vezes hoje com processos pesados em paralelo.
-- **O build não roda nesta máquina** (D-076): o `next build` do autor puro também estoura os 7 GB do WSL e derruba a sessão. O culpado principal é o Sentry 11 que o autor trouxe; sem ele o build passa com pico de 6,2 GB. Desligar a geração de source maps sem token não bastou. Antes de publicar, é preciso saber se o runner do GitHub Actions que monta a imagem aguenta.
+**Telas de plano conferidas** (prints em `F:\temp\2026-09-28\crm-prints\`): 8 telas, todas 200, sem erro de console e sem rolagem lateral, em 390 e 1440 px. Detalhes baixos em D-078. A bolinha com coqueiro nos prints é o ReactQueryDevtools, só em desenvolvimento.
 
-**Depois dos portões verdes:**
-1. Levar para a branch da junção os dois commits de documentação de `feat/planos-assinatura` (`git merge feat/planos-assinatura` na worktree da junção). Depois avançar `feat/planos-assinatura` para a branch da junção.
-2. Atualizar `DEBITO.md`: D-028 fechado (junção local); D-076 novo (build com mais de 7 GB, Sentry 11); D-042 e D-062 ficam como estão, com a justificativa do plano da F8.
+**Site de vendas** (`F:\github-projects\hipercrm-site`, master): `bd94ce6` (busca do Google sem domínio inventado, 404, og.png, botão do cabeçalho) e `5531869` (Astro 7.3.5, `npm audit` zerado, HTML e prints iguais aos da versão 5). Revisão de acessibilidade em andamento.
 
-**Site de vendas** (`F:\github-projects\hipercrm-site`, branch master, **sem commit**): o executor deixou pela metade, sem revisão, estas mudanças:
-- busca do Google (SITE_URL e `src/config/site.ts`);
-- `robots.txt.ts`, `404.astro` e a imagem de compartilhamento `public/og.png`;
-- ajustes no cabeçalho, no layout, nos Termos e na Privacidade.
-
-Faltam os prints "depois" nas seis larguras (os "antes" estão em `F:\temp\2026-09-27\site\prints\antes`), o build e a revisão do diff antes de commitar.
-
-**Ainda não começado:**
-- subir o Astro de versão principal no site;
-- conferir as telas de plano no CRM local com prints (precisa do servidor de desenvolvimento, e só roda sem outro processo pesado junto).
-
-**Decisões técnicas da F8:**
-- D-042 fica: a produção roda uma réplica só.
-- D-062 fica: é raro, e o banco desfaz uma das operações.
-- A leitura de sentimento continua na conta suspensa (N28: serve a quem atende à mão).
-- O Jev do roteador não é consultado em conta suspensa.
-
-**Pergunta nova para o Filipe:** pode subir o limite de memória do WSL? Exige reiniciar o WSL, o que derruba o CRM local até religar, sem apagar dados. Com mais memória, o build volta a rodar aqui.
+**Próximo passo quando o Filipe responder:** as perguntas de `hiperbold/planos/progresso-da-noite.md`, na ordem de prioridade que ele recebeu. Publicar exige o checklist de D-075 e a conferência de D-076.
 
 ## Onde está tudo agora
 

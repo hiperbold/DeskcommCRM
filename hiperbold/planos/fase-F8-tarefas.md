@@ -18,4 +18,4 @@ Aberta em 27/09/2026. O Filipe pediu para seguir com tudo o que não depende das
 
 ## Perguntas novas desta fase
 
-- **Subir o limite de memória do WSL?** Exige reiniciar o WSL (o CRM local cai até religar, sem apagar dados). Sem isso o build da junção não roda nesta máquina (D-076). Padrão adotado: não mexer até o Filipe responder.
+- **Subir o limite de memória do WSL?** Exige reiniciar o WSL (o CRM local cai até religar, sem apagar dados). Sem isso o build da junção não roda nesta máquina (D-076). Respondida em 28/09/2026: o Filipe autorizou; subiu para 16 GB com 8 GB de swap, e o build passou com pico de 10,8 GB.
