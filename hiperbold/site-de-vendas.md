@@ -17,7 +17,7 @@ Arquivos que vivem em `public/site/`:
 - `precos/index.html` (/precos)
 - `_hipercrm/` (CSS e JS do build do Astro, nome escolhido para não colidir
   com `_next`)
-- `og.png`, `favicon.svg`
+- `public/site/og.png`, `public/site/favicon.svg`
 - `sitemap-index.xml`, `sitemap-0.xml`
 - `robots.txt` (escrito pelo próprio script de exportação, específico do CRM:
   libera `/` e bloqueia `/app`, `/admin`, `/api`)
@@ -49,7 +49,7 @@ próprio commit separado).
 O Next serve essas páginas por `rewrites()` em `next.config.ts` (bloco
 `beforeFiles`, para ganhar de `app/page.tsx`, que hoje redireciona `/` para
 `/app`). `/precos` e os arquivos de topo (`robots.txt`, `sitemap*.xml`,
-`og.png`, `favicon.svg`, `_hipercrm/**`) são reescritos para os arquivos
+`public/site/og.png`, `public/site/favicon.svg`, `_hipercrm/**`) são reescritos para os arquivos
 equivalentes dentro de `/site/`.
 
 `/` e `/precos` são liberados sem sessão em `lib/auth/public-paths.ts` (o
