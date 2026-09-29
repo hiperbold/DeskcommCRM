@@ -2,6 +2,17 @@
 
 Atualizado em 27/09/2026, noite. As seções abaixo desta são de 25/09 e continuam valendo para produção e para as fases F1 a F7.
 
+## Publicado em 29/09/2026 (versão c3b02ec)
+
+Autorizado pelo Filipe. crm.hiperbold.com.br roda a branch feat/planos-assinatura inteira: planos e assinatura (F1 a F8, cobrança pelo Asaas desligada, bloqueio em "avisar"), a junção do autor 1.57.0 e a página de vendas como raiz (/ e /precos, botão Entrar para /login, logo do Hiperbold CRM).
+
+- Backup antes: `D:\Hiperboldackups\hiperbold-crm\hiperbold-crm-2026-09-29_1405.dump`.
+- D-050 conferido só lendo: nenhuma chamada de IA sem custo no mês; uma organização, consumo zero.
+- Banco: o baseline em transação única deu deadlock duas vezes com o app no ar (nada gravado); aplicado pelo `hiperbold/scripts/prod-schema.sh`, sem erro inesperado. 16 tabelas de billing e os 4 planos conferidos.
+- Primeira publicação barrada pelo CI: o scheduler morria no boot por uma crase num comentário dentro da lista CRONS (corrigido em c3b02ec, com teste de cerca). A imagem do app montou no runner do GitHub sem problema de memória.
+- Conferido no ar: health ok (supabase, redis), / com o logo, /precos 200, Entrar leva a /login, /app sem sessão manda ao login, sem erro de console.
+- Pendente: o cadastro na produção está em `so_convite`, então "Assinar" leva a um cadastro fechado (decisão do Filipe); o commit 8b98d2c (documento) ainda não foi para a main.
+
 ## Ponto de retomada (28/09/2026, fase F8)
 
 Nada foi publicado nem enviado ao GitHub. Plano da fase: `hiperbold/planos/fase-F8-tarefas.md`.
