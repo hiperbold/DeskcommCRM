@@ -71,4 +71,22 @@ describe("isPublicPath", () => {
   it("nem um sub-path do lead (clone, move, lose, win, …) passa de carona", () => {
     expect(isPublicPath("/api/v1/leads/11111111-1111-4111-8111-111111111111/clone")).toBe(false);
   });
+
+  /**
+   * Página de vendas do HiperCRM (hipercrm-site) servida na raiz e em /precos
+   * por rewrite (next.config.ts). Sem sessão precisa carregar igual à raiz.
+   */
+  it("libera /precos, com ou sem barra final: página de vendas sem sessão", () => {
+    expect(isPublicPath("/precos")).toBe(true);
+    expect(isPublicPath("/precos/")).toBe(true);
+  });
+
+  it("mas não um sub-path de /precos, que não existe", () => {
+    expect(isPublicPath("/precos/qualquer")).toBe(false);
+  });
+
+  it("libera o sitemap do site de vendas (.xml não cai na exceção de extensão do proxy)", () => {
+    expect(isPublicPath("/sitemap-index.xml")).toBe(true);
+    expect(isPublicPath("/sitemap-0.xml")).toBe(true);
+  });
 });

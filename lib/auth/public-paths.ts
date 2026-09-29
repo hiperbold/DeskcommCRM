@@ -6,6 +6,17 @@ export const PUBLIC_PATHS: RegExp[] = [
   // Link público persistido: org e destino são resolvidos exclusivamente no servidor.
   /^\/api\/v1\/rastreio\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^\/$/,
+  // Página de vendas do HiperCRM (hipercrm-site, servida por rewrite em
+  // next.config.ts). Sem sessão precisa carregar igual à raiz. Ancorado, com
+  // barra final opcional e sem sub-path: /precos não tem rota filha.
+  /^\/precos\/?$/,
+  // Sitemap do site de vendas, exportado para public/site (ver
+  // hiperbold/site-de-vendas.md). O matcher do proxy (proxy.ts) só dispensa
+  // caminho com extensão .svg/.png/.jpg/.jpeg/.gif/.webp/.ico/.css/.js; .xml
+  // não está na lista, por isso precisa de entrada própria aqui (mesmo motivo
+  // do /icon logo abaixo).
+  /^\/sitemap-index\.xml$/,
+  /^\/sitemap-0\.xml$/,
   /^\/login(\/.*)?$/,
   /^\/signup$/,
   /^\/auth\/confirm$/,

@@ -14,7 +14,10 @@ export default defineConfig([
   // Cópias compiladas da demonstração e binários baixados pelo Playwright
   // vivem no scratch local. Os scripts escritos à mão em .superpowers seguem
   // sob lint; somente estes dois tipos de artefato gerado ficam de fora.
-  globalIgnores([".next/", "node_modules/", "dist/", "supabase/", "next-env.d.ts", ".claude/worktrees/", ".superpowers/**/bundles/", ".superpowers/**/playwright-browsers/"]),
+  // `public/site/` é o build estático do hipercrm-site (Astro), exportado
+  // pronto por `npm run exportar:crm` naquele repo: JS/CSS minificados sem
+  // fonte aqui (ver hiperbold/site-de-vendas.md), não código deste projeto.
+  globalIgnores([".next/", "node_modules/", "dist/", "supabase/", "next-env.d.ts", ".claude/worktrees/", ".superpowers/**/bundles/", ".superpowers/**/playwright-browsers/", "public/site/"]),
   nextPlugin.configs["core-web-vitals"],
   reactHooks.configs.flat.recommended,
   ...tseslint.configs.recommended,

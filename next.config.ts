@@ -94,6 +94,24 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "*.supabase.in" },
     ],
   },
+  // Página de vendas do HiperCRM (hipercrm-site, Astro estático) servida como
+  // raiz de crm.hiperbold.com.br. O build exportado mora em public/site (ver
+  // hiperbold/site-de-vendas.md). `beforeFiles` para ganhar de app/page.tsx,
+  // que hoje redireciona "/" para "/app".
+  async rewrites() {
+    return {
+      beforeFiles: [
+        { source: "/", destination: "/site/index.html" },
+        { source: "/precos", destination: "/site/precos/index.html" },
+        { source: "/_hipercrm/:path*", destination: "/site/_hipercrm/:path*" },
+        { source: "/og.png", destination: "/site/og.png" },
+        { source: "/favicon.svg", destination: "/site/favicon.svg" },
+        { source: "/robots.txt", destination: "/site/robots.txt" },
+        { source: "/sitemap-index.xml", destination: "/site/sitemap-index.xml" },
+        { source: "/sitemap-0.xml", destination: "/site/sitemap-0.xml" },
+      ],
+    };
+  },
   async headers() {
     return [
       {
