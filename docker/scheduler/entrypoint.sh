@@ -145,7 +145,7 @@ CRONS="
 # organização (até 20 × 500 chamadas, ver lib/billing/tokens/conferir-
 # carteira.ts) antes de conferir a carteira dela, uma rodada normal fica bem
 # abaixo disso (o gatilho já debita quase tudo em tempo real), mas o teto
-# folgado evita o `curl -m` cortar uma rodada que, por algum motivo raro,
+# folgado evita o curl -m cortar uma rodada que, por algum motivo raro,
 # tenha muito para recuperar.
 25 5 * * *|90|api/v1/cron/conferir-carteira-de-tokens
 # O VENCIMENTO DA ASSINATURA (F4, Tarefa 5). 05:40 UTC (este container roda
