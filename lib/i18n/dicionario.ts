@@ -2751,6 +2751,9 @@ export const DICIONARIO: Traducoes = {
   "Em produção, o endereço (base URL) precisa começar com https://.": {
     es: "En producción, la dirección (base URL) debe comenzar con https://.",
   },
+  "O endereço (base URL) precisa começar com https://.": {
+    es: "La dirección (base URL) debe comenzar con https://.",
+  },
   "Este endereço respondeu com um redirecionamento, e o CRM não segue redirecionamento em endereço cadastrado pela empresa. Informe o endereço final da API.": {
     es: "Esta dirección respondió con una redirección, y el CRM no sigue redirecciones en una dirección registrada por la empresa. Informa la dirección final de la API.",
   },

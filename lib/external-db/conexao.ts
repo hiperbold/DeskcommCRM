@@ -14,12 +14,29 @@
  *
  * O teto de pools é finito: sem ele, uma instalação com muitas conexões abertas
  * esgota sockets do processo.
+ *
+ * ─── Conecta pelo IP validado, nunca pelo nome (D-084, M2) ──────────────────
+ *
+ * A guarda (`validarHostDeBanco`) resolve o nome e valida o IP. Se o `pg`
+ * conectasse pelo nome, ele resolveria DE NOVO, e cada reconexão do pool também:
+ * o DNS de quem cadastrou pode devolver um IP público para a guarda e o interno
+ * para o connect (DNS rebinding). Por isso quem abre pool ou teste passa o IP
+ * que a guarda devolveu (`enderecoValidado`) e o `pg` recebe `host = IP`: não há
+ * mais resolução depois da validação, nem no pool nem numa reconexão. O nome
+ * original vai em `ssl.servername`, para o SNI e a verificação do certificado
+ * (`verify-ca`/`verify-full`) continuarem valendo contra o nome, não contra o IP.
+ * O IP entra na chave do pool: se o DNS legítimo mudar, a próxima abertura
+ * (que valida de novo) cria outro pool em vez de reaproveitar o antigo.
  */
+import { isIP } from "node:net";
+
 import pg from "pg";
 
 import { logger } from "@/lib/logger";
 
-import type { ConexaoExterna, ModoTls } from "./types";
+import { normalizarHost } from "./guardas";
+
+import type { ConexaoExterna } from "./types";
 
 const MAX_POOLS = 32;
 const MAX_CONEXOES_POR_POOL = 2;
@@ -32,33 +49,47 @@ const IDLE_TX_TIMEOUT_MS = 15_000;
 type Entrada = { chave: string; pool: pg.Pool };
 const pools = new Map<string, Entrada>();
 
-function chaveDaConexao(c: ConexaoExterna): string {
-  return [c.id, c.versao, c.host, c.port, c.database, c.username, c.sslMode].join("\u0000");
+function chaveDaConexao(c: ConexaoExterna, enderecoValidado: string): string {
+  return [c.id, c.versao, c.host, enderecoValidado, c.port, c.database, c.username, c.sslMode].join("\u0000");
 }
 
-function sslPara(modo: ModoTls): pg.PoolConfig["ssl"] {
-  switch (modo) {
+/**
+ * O nome que o certificado do servidor tem de cobrir, ou `undefined` quando o
+ * host cadastrado já é um IP literal (o Node recusa IP como SNI, e o `pg` só
+ * põe `servername` quando o host NÃO é IP, o que aqui nunca acontece).
+ */
+function nomeParaTls(c: ConexaoExterna): string | undefined {
+  const nome = normalizarHost(c.host);
+  if (nome === null || isIP(nome) !== 0) return undefined;
+  return nome;
+}
+
+function sslPara(c: ConexaoExterna): pg.PoolConfig["ssl"] {
+  const servername = nomeParaTls(c);
+  const comNome = servername === undefined ? {} : { servername };
+  switch (c.sslMode) {
     case "disable":
       return false;
     case "prefer":
     case "require":
       // Sem CA configurada não há como verificar a cadeia; `require` cifra mesmo
       // assim. `verify-*` usa as CAs do sistema e falha fechado se não bater.
-      return { rejectUnauthorized: false };
+      return { rejectUnauthorized: false, ...comNome };
     case "verify-ca":
     case "verify-full":
-      return { rejectUnauthorized: true };
+      return { rejectUnauthorized: true, ...comNome };
   }
 }
 
-function configDe(c: ConexaoExterna): pg.PoolConfig {
+function configDe(c: ConexaoExterna, enderecoValidado: string): pg.PoolConfig {
   return {
-    host: c.host,
+    // O IP que a guarda validou, nunca o nome: ver o bloco no topo do arquivo.
+    host: enderecoValidado,
     port: c.port,
     database: c.database,
     user: c.username,
     password: c.password,
-    ssl: sslPara(c.sslMode),
+    ssl: sslPara(c),
     max: MAX_CONEXOES_POR_POOL,
     connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
     idleTimeoutMillis: IDLE_TIMEOUT_MS,
@@ -83,9 +114,12 @@ function evictarSeNecessario(): void {
   }
 }
 
-/** Pool da conexão, criando/invalidando conforme o cadastro atual. */
-export function obterPool(c: ConexaoExterna): pg.Pool {
-  const chave = chaveDaConexao(c);
+/**
+ * Pool da conexão, criando/invalidando conforme o cadastro atual.
+ * `enderecoValidado` é o IP que `validarHostDeBanco` devolveu para `c.host`.
+ */
+export function obterPool(c: ConexaoExterna, enderecoValidado: string): pg.Pool {
+  const chave = chaveDaConexao(c, enderecoValidado);
   const existente = pools.get(c.id);
   if (existente && existente.chave === chave) {
     pools.delete(c.id);
@@ -96,7 +130,7 @@ export function obterPool(c: ConexaoExterna): pg.Pool {
     pools.delete(c.id);
     void existente.pool.end().catch(() => undefined);
   }
-  const pool = new pg.Pool(configDe(c));
+  const pool = new pg.Pool(configDe(c, enderecoValidado));
   pool.on("connect", (client) => client.on("error", handlerDeErro(c.id)));
   pool.on("error", () => undefined);
   pools.set(c.id, { chave, pool });
@@ -157,9 +191,12 @@ function mensagemSegura(err: unknown): string {
   return "erro desconhecido";
 }
 
-/** Testa a conexão com um Client descartável, sem poluir o cache de pools. */
-export async function testarConexao(c: ConexaoExterna): Promise<ResultadoDeTeste> {
-  const client = new pg.Client(configDe(c));
+/**
+ * Testa a conexão com um Client descartável, sem poluir o cache de pools.
+ * `enderecoValidado`: o IP que a guarda devolveu, pelo mesmo motivo de `obterPool`.
+ */
+export async function testarConexao(c: ConexaoExterna, enderecoValidado: string): Promise<ResultadoDeTeste> {
+  const client = new pg.Client(configDe(c, enderecoValidado));
   // O erro do socket é tratado pelo catch; sem listener o Node derruba o processo
   // se o servidor cair no meio do teste.
   client.on("error", () => undefined);

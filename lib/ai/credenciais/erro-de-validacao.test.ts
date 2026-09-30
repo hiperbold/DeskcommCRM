@@ -100,6 +100,28 @@ describe("descreverErroDeValidacao", () => {
     });
   });
 
+  describe("https_required: a frase acompanha a regra de cada origem", () => {
+    it("ORGANIZAÇÃO: https vale sempre, então a frase não diz 'em produção'", () => {
+      const frase = descreverErroDeValidacao("unsafe_url:https_required", "custom", "organizacao").frase;
+      expect(frase).toBe("O endereço (base URL) precisa começar com https://.");
+      expect(frase).not.toMatch(/produção/);
+      // O padrão de quem não diz a origem é o lado que fecha.
+      expect(descreverErroDeValidacao("unsafe_url:https_required", "custom").frase).toBe(frase);
+    });
+
+    it("INSTALAÇÃO: https só é exigido em produção, e a frase segue dizendo isso", () => {
+      expect(descreverErroDeValidacao("unsafe_url:https_required", undefined, "instalacao").frase).toBe(
+        "Em produção, o endereço (base URL) precisa começar com https://.",
+      );
+    });
+  });
+
+  it("o código único que o servidor grava para a organização vira a frase única (D-084, M3)", () => {
+    const unica = descreverErroDeValidacao("unsafe_url:dns_failed", "custom", "organizacao").frase;
+    expect(descreverErroDeValidacao("unsafe_url:destino_recusado", "custom", "organizacao").frase).toBe(unica);
+    expect(descreverErroDeValidacao("unsafe_url:destino_recusado", "custom", "organizacao").generico).toBe(false);
+  });
+
   it("null é string vazia", () => {
     expect(descreverErroDeValidacao(null).frase).toBe("");
   });

@@ -38,7 +38,27 @@ const banco = vi.hoisted(() => ({
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
+// A gravação do binding sai pelo cliente de SERVIÇO (migração 0915: o banco recusa
+// `base_url` e `credential_id` vindos da sessão do usuário). O cliente de sessão
+// abaixo NÃO tem `upsert` de propósito: uma rota que voltasse a gravar por ele
+// quebraria aqui, em vez de passar por mock e só falhar em produção.
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({
+    from: (tabela: string) => {
+      expect(tabela).toBe("ai_purpose_bindings");
+      return {
+        upsert: (linha: Record<string, unknown>) => {
+          banco.upserts.push(linha);
+          return {
+            select: () => ({
+              maybeSingle: async () => ({ data: { id: "22222222-2222-4222-8222-222222222222", ...linha }, error: null }),
+            }),
+          };
+        },
+      };
+    },
+  }),
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     from: (tabela: string) => {
@@ -51,14 +71,6 @@ vi.mock("@/lib/supabase/server", () => ({
           if (tabela !== "ai_provider_credentials") return { data: null, error: null };
           const provedor = credencialPedida ? banco.credenciais[credencialPedida] : undefined;
           return { data: provedor ? { id: credencialPedida, provider: provedor } : null, error: null };
-        },
-        upsert: (linha: Record<string, unknown>) => {
-          banco.upserts.push(linha);
-          return {
-            select: () => ({
-              maybeSingle: async () => ({ data: { id: "22222222-2222-4222-8222-222222222222", ...linha }, error: null }),
-            }),
-          };
         },
       };
       chain.eq = (coluna: string, valor: string) => {
@@ -166,6 +178,18 @@ describe("PUT /api/v1/ai/providers, base_url", () => {
     const corpo = (await res.json()) as { error: { code: string } };
     expect(corpo.error.code).toBe("credencial_invalida");
     expect(banco.upserts).toHaveLength(0);
+  });
+
+  it("grava a organização da SESSÃO, nunca a que vier no corpo (o cliente de serviço não tem RLS)", async () => {
+    const res = await put({
+      base_url: "https://gateway.exemplo/v1",
+      credential_id: CREDENCIAL_DA_ORG,
+      organization_id: "99999999-9999-4999-8999-999999999999",
+    });
+
+    expect(res.status).toBe(200);
+    expect(banco.upserts).toHaveLength(1);
+    expect(banco.upserts[0]).toMatchObject({ organization_id: "11111111-1111-4111-8111-111111111111" });
   });
 
   it("sem base_url continua gravando (a régua só julga endereço de empresa)", async () => {

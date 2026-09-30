@@ -35,6 +35,14 @@
 -- roda com o papel de quem grava. O papel da sessão (current_setting('role'))
 -- atravessa a troca de dono, como provado no comentário de fn_billing_e_servidor.
 --
+-- lock_timeout (D-084, B3): create trigger pega SHARE ROW EXCLUSIVE em
+-- channel_sessions, que espera qualquer escrita em andamento e, enquanto espera,
+-- enfileira todas as escritas seguintes: com o app no ar, a tabela parada. Com
+-- `set lock_timeout` a criação falha em 5s em vez de esperar sem limite, e o
+-- reaplicar tenta de novo. É `set` de sessão, e não `set local`, porque o
+-- baseline é aplicado instrução por instrução, sem transação, onde `set local`
+-- não vale; o `reset` logo depois devolve a sessão ao que ela tinha.
+--
 -- Idempotente e seguro com o app no ar, instrução por instrução: create or
 -- replace da função e do gatilho, sem reescrever linha nenhuma, sem constraint
 -- nova (nenhuma linha existente é revalidada).
@@ -70,7 +78,11 @@ begin
 end
 $$;
 
+set lock_timeout = '5s';
+
 create or replace trigger trg_channel_sessions_trava_uazapi_base_url
   before insert or update of uazapi_base_url on public.channel_sessions
   for each row
   execute function public.fn_channel_sessions_trava_uazapi_base_url();
+
+reset lock_timeout;

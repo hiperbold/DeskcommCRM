@@ -22,6 +22,8 @@ import { audit } from "@/lib/audit";
 import { bufToBytea, encryptKey } from "@/lib/crypto/aes_gcm";
 import type { ProvedorComChave } from "@/lib/ai/pontos/provedores";
 import { validateProviderKey } from "@/lib/ai/provider-validators";
+import { codigoParaOrganizacao } from "@/lib/automation/destino-recusado";
+import { logger } from "@/lib/logger";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
 export type ResultadoDeGuardar =
@@ -266,6 +268,13 @@ async function validarEmSegundoPlano(
     const baseUrl =
       provider === "custom" ? await lerBaseUrlDaCredencial(admin, credentialId) : undefined;
     const r = await validateProviderKey(provider, apiKey, baseUrl);
+    if (!r.ok && codigoParaOrganizacao(r.error) !== r.error) {
+      logger.warn("[ai.credentials] endereço recusado na validação", {
+        credentialId,
+        organizationId,
+        motivo: r.error,
+      });
+    }
     await admin
       .from("ai_provider_credentials")
       .update(
@@ -275,7 +284,13 @@ async function validarEmSegundoPlano(
               validation_error: null,
               models_available: r.models,
             }
-          : { validated_at: null, validation_error: r.error, models_available: null },
+          : {
+              validated_at: null,
+              // O código que a organização lê não separa "não resolve" de "rede
+              // interna" (oráculo de nomes do compose); o motivo real fica no log.
+              validation_error: codigoParaOrganizacao(r.error),
+              models_available: null,
+            },
       )
       .eq("id", credentialId)
       .eq("organization_id", organizationId);

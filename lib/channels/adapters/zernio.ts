@@ -34,12 +34,12 @@
  *    conviverem.
  */
 import { createAdminClient } from "@/lib/supabase/admin";
-import type { FetchedMedia } from "@/lib/messaging/media/types";
+import { lerComTeto } from "@/lib/messaging/media/ler-com-teto";
+import { MAX_MEDIA_BYTES, MediaTooLargeError, type FetchedMedia } from "@/lib/messaging/media/types";
 
 import { resolveZernioCreds } from "../zernio/credentials";
 import { zernioTemplateOps } from "../zernio/templates";
-import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
-import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
+import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
 import { zernioMediaFetchInit } from "../zernio/webhook";
 import type {
   ChannelAdapter,
@@ -75,6 +75,15 @@ function attachmentFields(env: OutboundEnvelope): Record<string, unknown> {
       return { ...base, attachmentType: "audio", voiceNote: true };
     default:
       return { ...base, attachmentType: "file" };
+  }
+}
+
+/** A URL é do mesmo servidor (esquema, host e porta) que o endereço-base do provedor? */
+function mesmaOrigem(url: string, base: string): boolean {
+  try {
+    return new URL(url).origin === new URL(base).origin;
+  } catch {
+    return false;
   }
 }
 
@@ -326,21 +335,31 @@ export const zernioAdapter: ChannelAdapter = {
     });
     if (!creds) throw new Error("zernio_not_configured: sem credencial para baixar a mídia.");
 
-    // A URL do anexo vem do PAYLOAD do webhook, e este fetch leva a API key do
+    // A URL do anexo vem do PAYLOAD do webhook, e este fetch levava a API key do
     // tenant no Authorization. Sem guarda, um payload com
     // `http://169.254.169.254/...` faz o servidor buscar metadado de nuvem —
     // e, pior que o SSRF comum, ENTREGA a credencial ao host que o payload
     // escolheu. O irmão WAHA resolve por construção
     // (`lib/messaging/media/waha-source.ts`), descartando host e porta do
     // payload; aqui não dá para reconstruir sobre uma base fixa porque o
-    // provedor pode servir mídia de outro host, então vale o par que o repo
-    // já usa em `lib/automation/actions/call-webhook.ts`: o textual recusa de
-    // graça o que dá (esquema, http em produção, literal IPv6, faixa privada)
-    // e o outro paga o DNS e julga o IP resolvido, fechando o rebinding.
-    assertSafeOutboundUrl(input.url);
-    await assertDestinoResolvidoSeguro(new URL(input.url).hostname);
-
-    const res = await fetch(input.url, zernioMediaFetchInit(creds.apiKey));
+    // provedor pode servir mídia de outro host (uma CDN), então valem três
+    // travas juntas (D-084, B2):
+    //
+    //   1. DESTINO: a régua de organização (`fetchParaDestinoDaOrganizacao`) julga
+    //      o endereço a cada requisição, exige https sempre (o guarda textual
+    //      sozinho só exigia com NODE_ENV=production, que o worker não define) e
+    //      NÃO segue redirect: um 3xx vira recusa, e a chave nunca é reenviada ao
+    //      destino do redirect.
+    //   2. CHAVE: o Bearer só vai quando a URL é do host do PRÓPRIO provedor
+    //      (`creds.baseUrl`), como em `lib/channels/social/adapter.ts`. Mídia de
+    //      outro host (CDN) é baixada SEM a credencial.
+    //   3. TETO: o corpo é lido em pedaços até `MAX_MEDIA_BYTES`; um fluxo maior
+    //      falha esta mídia sem derrubar o processo.
+    const doProvedor = mesmaOrigem(input.url, creds.baseUrl);
+    const res = await fetchParaDestinoDaOrganizacao()(
+      input.url,
+      doProvedor ? zernioMediaFetchInit(creds.apiKey) : {},
+    );
     if (!res.ok) {
       // 400 costuma ser mídia já descartada pela plataforma, e 401 credencial —
       // desfechos diferentes, e o status no erro é o que distingue os dois para
@@ -348,7 +367,8 @@ export const zernioAdapter: ChannelAdapter = {
       throw new Error(`zernio_media_failed: ${res.status} ${res.statusText}`.trim());
     }
 
-    const buffer = Buffer.from(await res.arrayBuffer());
+    const buffer = await lerComTeto(res, MAX_MEDIA_BYTES);
+    if (!buffer) throw new MediaTooLargeError();
     // O `content-type` da resposta manda sobre a dica do webhook: é o que o
     // arquivo REALMENTE é, e é ele que vai no `contentType` do upload.
     const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || input.hintMime || "application/octet-stream";

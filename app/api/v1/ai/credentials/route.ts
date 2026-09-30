@@ -17,6 +17,7 @@ import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { guardarCredencial } from "@/lib/ai/credenciais/guardar";
+import { codigoNuloParaOrganizacao } from "@/lib/automation/destino-recusado";
 import { IDS_COM_CHAVE } from "@/lib/ai/pontos/provedores";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -62,7 +63,13 @@ export async function GET(): Promise<Response> {
   if (error) {
     return fail("internal_error", "Erro ao listar credentials.", 500, { requestId });
   }
-  return ok(data ?? [], { requestId });
+  // Linhas gravadas antes do código único ainda podem trazer o código cru da
+  // régua de destino; a organização nunca o recebe (oráculo de nomes internos).
+  const linhas = (data ?? []).map((linha) => ({
+    ...linha,
+    validation_error: codigoNuloParaOrganizacao(linha.validation_error),
+  }));
+  return ok(linhas, { requestId });
 }
 
 export async function POST(req: NextRequest): Promise<Response> {

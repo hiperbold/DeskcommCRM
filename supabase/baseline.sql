@@ -53233,7 +53233,9 @@ grant execute on function public.fn_billing_margem_do_ciclo(uuid, date) to servi
 -- (fn_billing_e_servidor). Sem ele o admin da organização apontava o servidor da
 -- conexão para a rede interna pelo PostgREST, pulando a validação do cadastro.
 -- Cria função: entra ANTES da VARREDURA anon. Reaplicável com o app no ar,
--- instrução por instrução. Racional completo no arquivo da migration.
+-- instrução por instrução. O create trigger vai entre `set lock_timeout = '5s'` e
+-- `reset lock_timeout` (D-084, B3): sem prazo, ele esperaria sem limite uma escrita
+-- em andamento e enfileiraria as seguintes. Racional completo no arquivo da migration.
 create or replace function public.fn_channel_sessions_trava_uazapi_base_url()
 returns trigger
 language plpgsql
@@ -53266,10 +53268,74 @@ begin
 end
 $$;
 
+set lock_timeout = '5s';
+
 create or replace trigger trg_channel_sessions_trava_uazapi_base_url
   before insert or update of uazapi_base_url on public.channel_sessions
   for each row
   execute function public.fn_channel_sessions_trava_uazapi_base_url();
+
+reset lock_timeout;
+
+-- ---- endereço próprio e chave de um ponto de IA só são gravados pelo servidor (migration 0915, fork Hiperbold, D-084 B1) ----
+--
+-- Gatilho BEFORE INSERT OR UPDATE OF base_url, credential_id em
+-- ai_purpose_bindings: recusa (42501) gravar ou mudar as duas colunas quando quem
+-- grava não é o servidor (fn_billing_e_servidor). Sem ele o admin da organização
+-- pulava as travas do PUT (régua de destino, exige credencial da empresa)
+-- gravando pelo PostgREST. O PUT passou a gravar pelo cliente de serviço.
+-- Cria função: entra ANTES da VARREDURA anon. Reaplicável com o app no ar,
+-- instrução por instrução. O create trigger vai entre `set lock_timeout = '5s'` e
+-- `reset lock_timeout` (D-084, B3), pelo mesmo motivo do bloco da 0914. Racional
+-- completo no arquivo da migration.
+create or replace function public.fn_ai_purpose_bindings_trava_endereco_e_chave()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if not public.fn_billing_e_servidor() then
+    if tg_op = 'INSERT' then
+      if new.base_url is not null or new.credential_id is not null then
+        raise exception 'base_url e credential_id do ponto de IA só podem ser alterados pelo servidor' using errcode = '42501';
+      end if;
+    elsif tg_op = 'UPDATE' then
+      if new.base_url is distinct from old.base_url
+        or (new.credential_id is distinct from old.credential_id and new.credential_id is not null)
+        or (new.credential_id is null and old.credential_id is not null and new.base_url is not null)
+      then
+        raise exception 'base_url e credential_id do ponto de IA só podem ser alterados pelo servidor' using errcode = '42501';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_ai_purpose_bindings_trava_endereco_e_chave() is
+  '0915 (D-084, B1): recusa gravar ou mudar ai_purpose_bindings.base_url e credential_id quando quem grava não é o servidor (fn_billing_e_servidor: conexão direta sem SET ROLE ou service_role). Sem isto o admin da organização pulava as travas do PUT (régua de destino, exige credencial da empresa, credencial da própria organização) gravando pelo PostgREST (GRANT de escrita a authenticated, policy só exige admin). errcode 42501, mensagem fixa. Passam: INSERT com as duas colunas nulas, UPDATE que não muda as duas colunas e UPDATE que limpa credential_id em ponto sem base_url (a FK on delete set null da 0141 faz isso). O PUT grava pelo cliente de serviço.';
+
+revoke execute on function public.fn_ai_purpose_bindings_trava_endereco_e_chave() from public, anon, authenticated;
+grant execute on function public.fn_ai_purpose_bindings_trava_endereco_e_chave() to service_role;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_ai_purpose_bindings_trava_endereco_e_chave() from agent_worker';
+  end if;
+end
+$$;
+
+set lock_timeout = '5s';
+
+create or replace trigger trg_ai_purpose_bindings_trava_endereco_e_chave
+  before insert or update of base_url, credential_id on public.ai_purpose_bindings
+  for each row
+  execute function public.fn_ai_purpose_bindings_trava_endereco_e_chave();
+
+reset lock_timeout;
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

@@ -26,6 +26,7 @@ import {
 } from "@/lib/messaging/media/transcription";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { codigoParaOrganizacao } from "@/lib/automation/destino-recusado";
 import { motivoDaRecusaDeDestino } from "@/lib/automation/destinos-internos-autorizados";
 import { DETALHE_TECNICO } from "@/lib/event-log/aviso-de-evento-morto";
 
@@ -453,8 +454,11 @@ function buildDeriveDeps(
           "imagem",
           "o endereço configurado para a visão não foi aceito como destino, então não enviei a imagem nem a chave para lá — confira o endereço do provedor em Agente de IA e Provedores; endereço escolhido pela empresa não pode apontar para a rede interna do servidor",
           undefined,
-          recusa,
+          // O aviso da Central é lido pela organização: vai o código único, e não o
+          // que separa "não resolve" de "IP interno". O motivo real fica no log.
+          codigoParaOrganizacao(recusa),
         );
+        logger.warn("[media-derive] endereço da visão recusado", { organization_id: orgId, motivo: recusa });
         return MARCADOR_NAO_LIDA;
       }
     }

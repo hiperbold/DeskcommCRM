@@ -6,6 +6,7 @@
  * As frases são chaves de `t()`: pt-BR aqui, espanhol em `lib/i18n/dicionario.ts`.
  */
 import { PROVEDOR_DO_JEV } from "@/lib/ai/decisao/credencial";
+import { codigoParaOrganizacao, DESTINO_RECUSADO } from "@/lib/automation/destino-recusado";
 
 export interface ErroDescrito {
   frase: string;
@@ -64,11 +65,12 @@ export function descreverErroDeValidacao(
   origem: OrigemDoEnderecoDoErro = "organizacao",
 ): ErroDescrito {
   if (!codigo) return { frase: "", chaveErrada: false, generico: false };
+  // `DESTINO_RECUSADO` é o código único que o servidor já grava e devolve no
+  // lugar dos três da régua quando a origem é organização (`codigoParaOrganizacao`);
+  // linhas antigas ainda podem trazer os três crus, e a organização vê a mesma frase.
   if (
-    origem === "organizacao" &&
-    (codigo === "unsafe_url:dns_failed" ||
-      codigo === "unsafe_url:dns_empty" ||
-      codigo === "unsafe_url:private_ip")
+    codigo === DESTINO_RECUSADO ||
+    (origem === "organizacao" && codigoParaOrganizacao(codigo) === DESTINO_RECUSADO)
   ) {
     return { frase: ENDERECO_NAO_ACEITO_DA_ORGANIZACAO, chaveErrada: false, generico: false };
   }
@@ -106,8 +108,13 @@ export function descreverErroDeValidacao(
     };
   }
   if (codigo === "unsafe_url:https_required") {
+    // Endereço de organização exige https sempre (`motivoDaRecusaDeDestino`);
+    // só o da instalação segue com https apenas em produção.
     return {
-      frase: "Em produção, o endereço (base URL) precisa começar com https://.",
+      frase:
+        origem === "organizacao"
+          ? "O endereço (base URL) precisa começar com https://."
+          : "Em produção, o endereço (base URL) precisa começar com https://.",
       chaveErrada: false,
       generico: false,
     };

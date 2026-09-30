@@ -18,10 +18,10 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { carregarConexao } from "@/lib/external-db/credenciais";
 import { testarConexao } from "@/lib/external-db/conexao";
-import { faixasAutorizadasParaBanco } from "@/lib/external-db/faixas-autorizadas";
 import { validarHostDeBanco } from "@/lib/external-db/guardas";
 import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import { respostaDeAcesso, seModuloDesligado } from "../../../_falha";
@@ -53,10 +53,19 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const leitura = await carregarConexao(admin, activeOrg.orgId, id);
   if (!leitura.ok) return respostaDeAcesso(leitura.motivo, { requestId, idioma: authUser.idioma });
 
-  const alvo = await validarHostDeBanco(leitura.conexao.host, await faixasAutorizadasParaBanco());
-  if (!alvo.ok) return respostaDeAcesso("host_bloqueado", { requestId, idioma: authUser.idioma });
+  const alvo = await validarHostDeBanco(leitura.conexao.host);
+  // Mesma resposta para "não resolveu" e "rede interna" (D-084, M3); o motivo real
+  // fica no log. Depois, o teste conecta pelo IP validado (D-084, M2).
+  if (!alvo.ok) {
+    logger.warn("[external-db.test] destino recusado pela guarda de rede", { requestId, motivo: alvo.motivo });
+    return respostaDeAcesso("host_bloqueado", { requestId, idioma: authUser.idioma });
+  }
+  const [enderecoValidado] = alvo.enderecos;
+  if (enderecoValidado === undefined) {
+    return respostaDeAcesso("host_bloqueado", { requestId, idioma: authUser.idioma });
+  }
 
-  const resultado = await testarConexao(leitura.conexao);
+  const resultado = await testarConexao(leitura.conexao, enderecoValidado);
   const agora = new Date().toISOString();
 
   await admin

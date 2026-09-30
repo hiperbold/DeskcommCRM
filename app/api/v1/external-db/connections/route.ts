@@ -22,7 +22,6 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { cifrarSenha } from "@/lib/external-db/credenciais";
-import { faixasAutorizadasParaBanco } from "@/lib/external-db/faixas-autorizadas";
 import { validarHostDeBanco } from "@/lib/external-db/guardas";
 import { criarConexaoSchema } from "@/lib/external-db/schemas";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -30,7 +29,7 @@ import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
-import { seModuloDesligado } from "../_falha";
+import { respostaDeDestinoInformadoRecusado, seModuloDesligado } from "../_falha";
 
 export const dynamic = "force-dynamic";
 
@@ -93,17 +92,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
   const input = parsed.data;
 
-  const alvo = await validarHostDeBanco(input.host, await faixasAutorizadasParaBanco());
+  const alvo = await validarHostDeBanco(input.host);
   if (!alvo.ok) {
-    const dns = alvo.motivo === "dns_falhou" || alvo.motivo === "dns_vazio";
-    return fail(
-      dns ? "validation_failed" : "external_db_destino_bloqueado",
-      dns
-        ? t("Não foi possível resolver o endereço informado. Confira o host.")
-        : t("O endereço informado não é um destino permitido pela política de rede."),
-      422,
-      { requestId, details: { motivo: alvo.motivo } },
-    );
+    return respostaDeDestinoInformadoRecusado(alvo.motivo, { requestId, idioma: authz.user.idioma });
   }
 
   const admin = createAdminClient();

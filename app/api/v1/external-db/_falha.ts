@@ -17,9 +17,11 @@ import type { NextResponse } from "next/server";
 
 import { fail, type ApiError } from "@/lib/api/wrappers";
 import type { MotivoAcesso } from "@/lib/external-db/acesso";
+import type { MotivoHostBloqueado } from "@/lib/external-db/guardas";
 import { traduzir } from "@/lib/i18n/dicionario";
 import type { Idioma } from "@/lib/i18n/idiomas";
 import { moduloLigado } from "@/lib/instalacao/modulos";
+import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /**
@@ -31,6 +33,27 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export async function seModuloDesligado(requestId: string): Promise<NextResponse<ApiError> | null> {
   if (await moduloLigado(createAdminClient(), "banco_externo")) return null;
   return fail("not_found", "Not found.", 404, { requestId });
+}
+
+/**
+ * A recusa do host informado no cadastro ou na edição (POST e PATCH). Um código e
+ * UMA frase para todo motivo da guarda: "o nome não resolve" e "resolve para a
+ * rede interna" respondendo diferente faria da rota um oráculo de nomes que
+ * existem dentro da rede do servidor (D-084, M3). O motivo real fica só no log.
+ */
+export function respostaDeDestinoInformadoRecusado(
+  motivo: MotivoHostBloqueado,
+  { requestId, idioma }: { requestId: string; idioma?: Idioma },
+): NextResponse<ApiError> {
+  logger.warn("[external-db] host informado recusado pela guarda de rede", { requestId, motivo });
+  return fail(
+    "external_db_destino_bloqueado",
+    idioma
+      ? traduzir("O endereço informado não é um destino permitido pela política de rede.", idioma)
+      : "O endereço informado não é um destino permitido pela política de rede.",
+    422,
+    { requestId },
+  );
 }
 
 export function respostaDeAcesso(
@@ -55,13 +78,6 @@ export function respostaDeAcesso(
       return fail(
         "external_db_destino_bloqueado",
         t("O endereço desta conexão não é um destino permitido pela política de rede."),
-        422,
-        { requestId },
-      );
-    case "dns_falhou":
-      return fail(
-        "validation_failed",
-        t("Não foi possível resolver o endereço desta conexão. Confira o host."),
         422,
         { requestId },
       );

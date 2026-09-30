@@ -23,6 +23,7 @@
  * sem fim não pode encher a memória do processo antes de a conferência rodar.
  */
 import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
+import { lerComTeto } from "@/lib/messaging/media/ler-com-teto";
 
 /** Foto de perfil do WhatsApp é pequena; acima disto é resposta errada. */
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
@@ -55,32 +56,6 @@ export function tipoDeImagemPelaAssinatura(buf: Uint8Array): TipoDeImagem | null
 export type ResultadoDoAvatar =
   | { ok: true; buf: Buffer; contentType: TipoDeImagem }
   | { ok: false; motivo: "http" | "vazio" | "grande" | "nao_imagem" };
-
-/** Lê o corpo até `teto` bytes; `null` quando passa dele (e para de ler). */
-async function lerComTeto(res: Response, teto: number): Promise<Buffer | null> {
-  const declarado = Number(res.headers.get("content-length"));
-  if (Number.isFinite(declarado) && declarado > teto) return null;
-
-  if (!res.body) {
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.byteLength > teto ? null : buf;
-  }
-
-  const leitor = res.body.getReader();
-  const pedacos: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await leitor.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > teto) {
-      await leitor.cancel().catch(() => undefined);
-      return null;
-    }
-    pedacos.push(value);
-  }
-  return Buffer.concat(pedacos);
-}
 
 /**
  * Baixa a foto pela régua de organização e confere que é imagem de verdade.

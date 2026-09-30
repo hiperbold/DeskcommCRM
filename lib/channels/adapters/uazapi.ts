@@ -25,7 +25,8 @@
  */
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
-import type { FetchedMedia } from "@/lib/messaging/media/types";
+import { lerComTeto } from "@/lib/messaging/media/ler-com-teto";
+import { MAX_MEDIA_BYTES, MediaTooLargeError, type FetchedMedia } from "@/lib/messaging/media/types";
 
 import { resolveUazapiCreds, type UazapiCredentials } from "../uazapi/credentials";
 import { saudeDoEstadoUazapi } from "../uazapi/saude";
@@ -163,7 +164,11 @@ async function baixarComGuarda(url: string, dica: string | null | undefined): Pr
   // viraria mídia visível para a organização.
   const res = await fetchParaDestinoDaOrganizacao()(url, { signal: AbortSignal.timeout(PRAZO_MS) });
   if (!res.ok) throw new Error(`uazapi_media_failed: ${res.status} ${res.statusText}`.trim());
-  const buffer = Buffer.from(await res.arrayBuffer());
+  // O link é público e o servidor dele é da organização: `res.arrayBuffer()` leria
+  // um fluxo de vários GB inteiro e derrubaria o worker de mídia. A leitura é em
+  // pedaços, com o teto de mídia do sistema, e para no primeiro byte acima dele.
+  const buffer = await lerComTeto(res, MAX_MEDIA_BYTES);
+  if (!buffer) throw new MediaTooLargeError();
   const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || dica || "application/octet-stream";
   return { buffer, mime };
 }

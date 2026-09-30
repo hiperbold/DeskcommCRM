@@ -7,8 +7,10 @@
 import { createHmac } from "node:crypto";
 import { registerAction } from "@/lib/automation/actions";
 import type { ActionCtx, ActionResultDetail } from "@/lib/automation/types";
+import { codigoParaOrganizacao } from "@/lib/automation/destino-recusado";
 import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
 import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
+import { logger } from "@/lib/logger";
 import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 
 const TIMEOUT_MS = 10_000;
@@ -136,7 +138,15 @@ export async function executeCallWebhook(
       // compose passava por ele. Este segundo resolve e julga o IP.
       await assertDestinoResolvidoSeguro(new URL(url).hostname);
     } catch (err) {
-      return { type: "call_webhook", status: "failed", error: (err as Error).message };
+      const motivo = (err as Error).message;
+      const visivel = codigoParaOrganizacao(motivo);
+      // O `error` vai para `automation_rule_runs.actions_result`, que a organização
+      // lê: "não resolve" versus "IP interno" seria oráculo dos nomes do compose.
+      // O motivo real fica no log do servidor.
+      if (visivel !== motivo) {
+        logger.warn("[automation.call_webhook] endereço recusado", { motivo });
+      }
+      return { type: "call_webhook", status: "failed", error: visivel };
     }
   }
 

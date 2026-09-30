@@ -14,6 +14,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
 import { validateProviderKey } from "@/lib/ai/provider-validators";
+import { codigoParaOrganizacao } from "@/lib/automation/destino-recusado";
 import { lerBaseUrlDaCredencial } from "@/lib/ai/credenciais/guardar";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -83,6 +84,17 @@ export async function POST(
   const baseUrl =
     row.provider === "custom" ? await lerBaseUrlDaCredencial(admin, row.id) : undefined;
   const result = await validateProviderKey(row.provider, apiKey, baseUrl);
+  // A organização lê este código (na resposta, na coluna e na trilha de auditoria)
+  // e ele não pode separar "o nome não resolve" de "resolve para IP interno":
+  // seria um oráculo dos nomes do compose. O motivo real fica só no log.
+  const erroVisivel = result.ok ? null : codigoParaOrganizacao(result.error);
+  if (!result.ok && erroVisivel !== result.error) {
+    logger.warn("[ai.credentials] endereço recusado na revalidação", {
+      credentialId: id,
+      organizationId: activeOrg.orgId,
+      motivo: result.error,
+    });
+  }
   const patch = result.ok
     ? {
         validated_at: new Date().toISOString(),
@@ -91,7 +103,7 @@ export async function POST(
       }
     : {
         validated_at: null,
-        validation_error: result.error,
+        validation_error: erroVisivel,
         // Não conservar o catálogo de uma validação anterior: a credencial
         // deixou de ser confiável e a lista antiga faria a tela parecer pronta.
         models_available: null,
@@ -120,7 +132,7 @@ export async function POST(
       provider: row.provider,
       label: row.label,
       ok: result.ok,
-      error: result.ok ? null : result.error,
+      error: erroVisivel,
     },
   });
 

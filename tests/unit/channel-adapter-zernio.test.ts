@@ -22,6 +22,24 @@ vi.stubGlobal("fetch", fetchMock);
 
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({}) }));
 
+// A régua de destino da organização resolve o nome antes de julgar; aqui só o DNS
+// é simulado (e o `env`, que o guarda lê para a lista de destinos da instalação).
+const DNS: Record<string, string[]> = {
+  "zernio.com": ["93.184.216.34"],
+  "cdn.exemplo": ["93.184.216.35"],
+};
+vi.mock("node:dns/promises", () => {
+  const lookup = async (host: string) => {
+    const enderecos = DNS[host];
+    if (!enderecos) throw new Error("ENOTFOUND");
+    return enderecos.map((address) => ({ address, family: 4 }));
+  };
+  // O default é obrigatório: sem ele o vitest recusa o mock na coleta.
+  return { lookup, default: { lookup } };
+});
+vi.mock("@/lib/env", () => ({ env: { IA_DESTINOS_INTERNOS_PERMITIDOS: "" } }));
+vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() } }));
+
 const credsRef: { current: unknown } = { current: null };
 vi.mock("@/lib/channels/zernio/credentials", () => ({
   resolveZernioCreds: async () => credsRef.current,
@@ -29,6 +47,7 @@ vi.mock("@/lib/channels/zernio/credentials", () => ({
 }));
 
 import { zernioAdapter } from "@/lib/channels/adapters/zernio";
+import { MAX_MEDIA_BYTES, MediaTooLargeError } from "@/lib/messaging/media/types";
 
 const CREDS = {
   accountId: "6a3572a15f7d1751ab117832",
@@ -381,5 +400,113 @@ describe("fetchInboundMedia não busca onde o payload mandar", () => {
     });
     expect(r.mime).toBe("image/png");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * D-084 (B2): o download da mídia recebida não segue redirect com a chave, manda
+ * a chave só ao host do provedor, exige https e tem teto de bytes.
+ *
+ * O critério é o que SAIU pelo `fetch` (URL, cabeçalho, quantas vezes), e não a
+ * exceção: um redirect seguido com o Bearer já teria entregue a credencial.
+ */
+describe("fetchInboundMedia: redirect, chave e teto (D-084, B2)", () => {
+  const DO_PROVEDOR = "https://zernio.com/api/v1/media/abc123";
+  const DE_CDN = "https://cdn.exemplo/arquivo.png";
+  const busca = (url: string) => zernioAdapter.fetchInboundMedia!({ organizationId: ORG, sessionRef: CREDS.accountId, url });
+  const cabecalhoDaChamada = (i: number) =>
+    ((fetchMock.mock.calls[i]?.[1] ?? {}) as { headers?: Record<string, string> }).headers ?? {};
+
+  beforeEach(() => {
+    credsRef.current = CREDS;
+  });
+
+  it("URL do provedor que responde 302: recusa, sai UMA vez, sem redirect automático e sem seguir o Location", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(null, { status: 302, headers: { location: "https://169.254.169.254/latest/meta-data/" } }),
+    );
+
+    await expect(busca(DO_PROVEDOR)).rejects.toThrow(/unsafe_url:redirect_not_followed/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(DO_PROVEDOR);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).redirect).toBe("manual");
+  });
+
+  it("URL do provedor: leva o Bearer da chave", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([1, 2, 3, 4]), { status: 200, headers: { "content-type": "image/png" } }),
+    );
+
+    const r = await busca(DO_PROVEDOR);
+
+    expect(cabecalhoDaChamada(0)).toMatchObject({ Authorization: "Bearer sk_test" });
+    expect(r.buffer.byteLength).toBe(4);
+    expect(r.mime).toBe("image/png");
+  });
+
+  it("URL de OUTRO host (CDN): baixa SEM a chave", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Uint8Array([9, 9]), { status: 200, headers: { "content-type": "image/png" } }),
+    );
+
+    const r = await busca(DE_CDN);
+
+    expect(r.buffer.byteLength).toBe(2);
+    const enviados = JSON.stringify(cabecalhoDaChamada(0));
+    expect(enviados).not.toMatch(/sk_test|authorization/i);
+  });
+
+  it("host parecido com o do provedor (subdomínio de terceiro, outra porta) não ganha a chave", async () => {
+    DNS["zernio.com.atacante.exemplo"] = ["93.184.216.40"];
+    fetchMock.mockImplementation(
+      async () => new Response(new Uint8Array([1]), { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    const parecidas = [
+      "https://zernio.com.atacante.exemplo/api/v1/media/abc",
+      "https://zernio.com:8443/api/v1/media/abc",
+    ];
+    for (const url of parecidas) await busca(url);
+
+    expect(fetchMock).toHaveBeenCalledTimes(parecidas.length);
+    for (let i = 0; i < parecidas.length; i += 1) {
+      expect(JSON.stringify(cabecalhoDaChamada(i))).not.toMatch(/sk_test/);
+    }
+    delete DNS["zernio.com.atacante.exemplo"];
+  });
+
+  it("exige https: http de nome público não chega ao fetch (o guarda antigo só exigia em produção)", async () => {
+    await expect(busca("http://cdn.exemplo/arquivo.png")).rejects.toThrow(/unsafe_url:https_required/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("nome público que resolve para IP interno: nada sai", async () => {
+    DNS["rebinding.exemplo"] = ["10.0.0.5"];
+    await expect(busca("https://rebinding.exemplo/x.png")).rejects.toThrow(/unsafe_url:/);
+    expect(fetchMock).not.toHaveBeenCalled();
+    delete DNS["rebinding.exemplo"];
+  });
+
+  it("fluxo sem fim: falha a mídia no teto, sem ler tudo, e cancela o fluxo", async () => {
+    const UM_MB = 1024 * 1024;
+    const bloco = new Uint8Array(UM_MB);
+    let puxadas = 0;
+    let cancelado = false;
+    const corpo = new ReadableStream<Uint8Array>({
+      pull(controle) {
+        puxadas += 1;
+        controle.enqueue(bloco);
+      },
+      cancel() {
+        cancelado = true;
+      },
+    });
+    fetchMock.mockResolvedValueOnce(new Response(corpo, { status: 200, headers: { "content-type": "video/mp4" } }));
+
+    await expect(busca(DO_PROVEDOR)).rejects.toBeInstanceOf(MediaTooLargeError);
+
+    expect(puxadas).toBeGreaterThan(MAX_MEDIA_BYTES / UM_MB - 1);
+    expect(puxadas).toBeLessThan(MAX_MEDIA_BYTES / UM_MB + 10);
+    expect(cancelado, "o fluxo ficou aberto depois de estourar o teto").toBe(true);
   });
 });

@@ -151,8 +151,6 @@ function mensagemDeAcesso(motivo: string): string {
       return "a chave de criptografia da instalação não está disponível; isso é configuração do servidor.";
     case "host_bloqueado":
       return "o endereço dessa conexão não é um destino permitido pela política de rede.";
-    case "dns_falhou":
-      return "não foi possível resolver o endereço dessa conexão agora.";
     default:
       return "não foi possível abrir a conexão.";
   }

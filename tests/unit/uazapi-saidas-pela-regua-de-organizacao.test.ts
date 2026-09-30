@@ -57,6 +57,7 @@ vi.mock("@/lib/channels/uazapi/credentials", async (original) => ({
 }));
 
 import { uazapiAdapter } from "@/lib/channels/adapters/uazapi";
+import { MAX_MEDIA_BYTES, MediaTooLargeError } from "@/lib/messaging/media/types";
 import {
   registrarWebhookUazapi,
   removerWebhookUazapi,
@@ -123,6 +124,72 @@ describe("achado 2: download de mídia do link que o servidor devolveu", () => {
     expect(midia.mime).toBe("audio/ogg");
     expect(midia.buffer.byteLength).toBe(3);
     expect(fetchCalls).toHaveLength(1);
+  });
+});
+
+describe("D-084 (M4): o download da mídia tem teto de bytes", () => {
+  const LINK = "https://cdn.publico.exemplo/enorme.bin";
+  const UM_MB = 1024 * 1024;
+
+  /** Um corpo que nunca acaba: 1 MB por puxada, e conta quantas vezes foi puxado. */
+  function fluxoSemFim() {
+    const contagem = { puxadas: 0, cancelado: false };
+    const bloco = new Uint8Array(UM_MB);
+    const corpo = new ReadableStream<Uint8Array>({
+      pull(controle) {
+        contagem.puxadas += 1;
+        controle.enqueue(bloco);
+      },
+      cancel() {
+        contagem.cancelado = true;
+      },
+    });
+    return { contagem, corpo };
+  }
+
+  it("fluxo sem fim e sem content-length: falha a mídia, para de ler no teto e cancela o fluxo", async () => {
+    const { contagem, corpo } = fluxoSemFim();
+    respostas[LINK] = () => new Response(corpo, { status: 200, headers: { "content-type": "video/mp4" } });
+
+    await expect(uazapiAdapter.fetchInboundMedia!({ ...escopo, url: LINK })).rejects.toBeInstanceOf(
+      MediaTooLargeError,
+    );
+
+    // 50 MB de teto: bastam ~51 puxadas de 1 MB (mais a folga da fila interna). Sem teto,
+    // este teste nunca terminaria; um limite frouxo demais também o reprovaria.
+    expect(contagem.puxadas).toBeGreaterThan(MAX_MEDIA_BYTES / UM_MB - 1);
+    expect(contagem.puxadas).toBeLessThan(MAX_MEDIA_BYTES / UM_MB + 10);
+    expect(contagem.cancelado, "o fluxo ficou aberto depois de estourar o teto").toBe(true);
+  });
+
+  it("content-length declarado acima do teto: falha sem ler o corpo", async () => {
+    const { contagem, corpo } = fluxoSemFim();
+    respostas[LINK] = () =>
+      new Response(corpo, {
+        status: 200,
+        headers: { "content-length": String(MAX_MEDIA_BYTES + 1), "content-type": "video/mp4" },
+      });
+
+    await expect(uazapiAdapter.fetchInboundMedia!({ ...escopo, url: LINK })).rejects.toBeInstanceOf(
+      MediaTooLargeError,
+    );
+    expect(contagem.puxadas, "leu o corpo de uma resposta que já se declarou grande demais").toBeLessThanOrEqual(1);
+  });
+
+  it("controle positivo: mídia dentro do teto continua sendo baixada inteira, em pedaços", async () => {
+    const pedaco = new Uint8Array(UM_MB).fill(7);
+    const corpo = new ReadableStream<Uint8Array>({
+      start(controle) {
+        for (let i = 0; i < 3; i += 1) controle.enqueue(pedaco);
+        controle.close();
+      },
+    });
+    respostas[LINK] = () => new Response(corpo, { status: 200, headers: { "content-type": "video/mp4" } });
+
+    const midia = await uazapiAdapter.fetchInboundMedia!({ ...escopo, url: LINK, hintMime: "video/mp4" });
+
+    expect(midia.buffer.byteLength).toBe(3 * UM_MB);
+    expect(midia.mime).toBe("video/mp4");
   });
 });
 

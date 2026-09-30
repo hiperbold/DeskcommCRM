@@ -515,7 +515,32 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
     const corpos = inboxInsertMock.mock.calls.map((c) =>
       String((c[0] as { body?: string } | undefined)?.body ?? ""),
     );
-    expect(corpos.some((b) => b.includes("unsafe_url:private_ip"))).toBe(true);
+    // D-084 (M3): o aviso é lido pela organização, e "resolve para IP interno" não
+    // pode se distinguir de "não resolve" (oráculo dos nomes do compose).
+    expect(corpos.some((b) => b.includes("unsafe_url:destino_recusado"))).toBe(true);
+    expect(corpos.some((b) => b.includes("private_ip"))).toBe(false);
+  });
+
+  it("nome que NÃO resolve dá o MESMO código no aviso que o nome que resolve para IP interno", async () => {
+    const codigoDoAviso = async (): Promise<string[]> => {
+      inboxInsertMock.mockClear();
+      factoryMock.mockClear();
+      bindingDaVez = { ...BINDING_COM_ENDPOINT, base_url: "https://coletor.exemplo/v1" };
+      await deriveMessageMedia(eventRow());
+      await depsDaChamada().describeImage(Buffer.from("jpeg"), "image/jpeg");
+      expect(factoryMock).not.toHaveBeenCalled();
+      return inboxInsertMock.mock.calls
+        .map((c) => String((c[0] as { body?: string } | undefined)?.body ?? ""))
+        .flatMap((b) => b.match(/unsafe_url:[a-z_]+/g) ?? []);
+    };
+
+    dns.resposta = [{ address: "10.1.2.3", family: 4 }];
+    const internoResolvido = await codigoDoAviso();
+    dns.erro = new Error("ENOTFOUND");
+    const naoResolve = await codigoDoAviso();
+
+    expect(internoResolvido).toEqual(["unsafe_url:destino_recusado"]);
+    expect(naoResolve).toEqual(internoResolvido);
   });
 
   it("não manda a chave do serviço de transcrição para endereço interno", async () => {

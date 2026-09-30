@@ -6,27 +6,24 @@
  * (`lib/automation/outbound-ip.ts`). Sem uma guarda própria, cadastrar uma
  * conexão vira "posso fazer o servidor falar com qualquer coisa da rede dele".
  *
- * ⚠️ AS FAIXAS PRIVADAS SÓ PASSAM SE O DONO DA INSTALAÇÃO AS AUTORIZOU.
+ * ⚠️ AS FAIXAS PRIVADAS (RFC1918) SÃO SEMPRE BLOQUEADAS.
  *
- * Antes, RFC1918 era permitido supondo que "admin é o dono da VPS" e que um
- * Postgres na LAN é caso real. Isso não vale quando a instalação tem várias
- * empresas: o admin de UMA delas cadastra a conexão, e o servidor (que é de
- * todas) abriria TCP para a rede interna. Então:
+ * O admin de UMA empresa cadastra a conexão e o servidor (que é de todas)
+ * abriria TCP para a rede interna. Endereço escolhido por ORGANIZAÇÃO nunca
+ * aponta para dentro, esteja ou não na lista de destinos internos da instalação
+ * (regra 2 de `lib/automation/destinos-internos-autorizados.ts`: aquela lista só
+ * vale para destino configurado pela INSTALAÇÃO, e o banco externo é sempre
+ * cadastrado por uma organização). Por isso esta guarda não recebe lista
+ * nenhuma:
  *
- *   - RFC1918 (10/8, 172.16/12, 192.168/16) é BLOQUEADO, exceto o IP que a lista
- *     de destinos internos da instalação cobre (`destinosInternosAutorizados`, a
- *     mesma que vale para a IA e que o dono edita em /admin/destinos-internos).
- *     Quem chama passa as faixas já lidas; sem elas, nada privado passa. O que
- *     se compara é o IP resolvido, nunca o nome.
- *   - link-local/metadata (169.254/16), loopback, CGNAT, multicast, reservadas
- *     e TEST-NET continuam BLOQUEADOS SEMPRE, lista ou não: nenhum deles é um
- *     banco de dados de cliente, e o 169.254.169.254 entrega credencial de
- *     instância de nuvem.
+ *   - RFC1918 (10/8, 172.16/12, 192.168/16), link-local/metadata (169.254/16),
+ *     loopback, CGNAT, multicast, reservadas e TEST-NET são BLOQUEADOS SEMPRE.
+ *     O 169.254.169.254 entrega credencial de instância de nuvem.
  *
- * A janela de DNS-rebinding é a mesma descrita em `outbound-ip.ts`: entre a
- * resolução desta guarda e a que o `pg` faz, o DNS pode mudar. Fechar de vez
- * exigiria fixar o IP na conexão, o que muda SNI e quebra TLS com vários
- * destinos. A dívida fica declarada, não escondida.
+ * DNS rebinding: entre a resolução desta guarda e a do `pg` o DNS poderia mudar.
+ * Quem chama fecha a janela conectando pelo IP que ESTA guarda devolveu
+ * (`enderecos`), nunca pelo nome: ver `conexao.ts` (host = IP, nome original em
+ * `ssl.servername`).
  */
 import { lookup } from "node:dns/promises";
 import { isIP, isIPv4, isIPv6 } from "node:net";
@@ -51,15 +48,7 @@ function ipv4ParaInt(ip: string): number | null {
   return total;
 }
 
-/**
- * Uma faixa IPv4 que o dono da instalação autorizou: a mesma forma que
- * `faixasDeclaradas` (`lib/automation/destinos-internos-autorizados.ts`) devolve.
- * Declarada aqui, em vez de importada, para esta guarda não arrastar env e banco
- * para quem só quer julgar um IP.
- */
-export type FaixaAutorizada = { readonly base: number; readonly mascara: number };
-
-/** RFC1918: bloqueadas, salvo o IP que uma faixa autorizada cobre. */
+/** RFC1918: bloqueadas sempre (destino escolhido por organização nunca aponta para dentro). */
 const FAIXAS_PRIVADAS: ReadonlyArray<readonly [string, number]> = [
   ["10.0.0.0", 8],
   ["172.16.0.0", 12],
@@ -73,11 +62,7 @@ function noBloco(alvo: number, base: string, prefixo: number): boolean {
   return ((alvo & mascara) >>> 0) === ((baseInt & mascara) >>> 0);
 }
 
-/**
- * Faixas IPv4 que NUNCA são destino de banco, nem com lista autorizada. As
- * privadas (10/8, 172.16/12, 192.168/16) ficam em `FAIXAS_PRIVADAS`: essas só
- * passam quando o dono da instalação as autorizou.
- */
+/** Faixas IPv4 (não RFC1918) que NUNCA são destino de banco. */
 const FAIXAS_PROIBIDAS: ReadonlyArray<readonly [string, number]> = [
   ["0.0.0.0", 8], // "este host"
   ["100.64.0.0", 10], // CGNAT
@@ -146,7 +131,7 @@ function byte(bytes: ReadonlyArray<number>, i: number): number {
   return bytes[i] ?? 0;
 }
 
-function ipv6Proibido(bytes: ReadonlyArray<number>, autorizadas: ReadonlyArray<FaixaAutorizada>): boolean {
+function ipv6Proibido(bytes: ReadonlyArray<number>): boolean {
   if (bytes.length !== 16) return true; // não é IPv6: trata como perigoso
   if (bytes.every((b) => b === 0)) return true; // ::
   if (bytes.slice(0, 15).every((b) => b === 0) && byte(bytes, 15) === 1) return true; // ::1
@@ -174,26 +159,17 @@ function ipv6Proibido(bytes: ReadonlyArray<number>, autorizadas: ReadonlyArray<F
   // IPv4 embutido: `::ffff:a.b.c.d` (mapeado) e `::a.b.c.d` (compatível, legado).
   const dezZeros = bytes.slice(0, 10).every((b) => b === 0);
   if (dezZeros && byte(bytes, 10) === 0xff && byte(bytes, 11) === 0xff) {
-    return ipDeBancoProibido(
-      `${byte(bytes, 12)}.${byte(bytes, 13)}.${byte(bytes, 14)}.${byte(bytes, 15)}`,
-      autorizadas,
-    );
+    return ipDeBancoProibido(`${byte(bytes, 12)}.${byte(bytes, 13)}.${byte(bytes, 14)}.${byte(bytes, 15)}`);
   }
   if (dezZeros && byte(bytes, 10) === 0 && byte(bytes, 11) === 0) {
     const embutido = `${byte(bytes, 12)}.${byte(bytes, 13)}.${byte(bytes, 14)}.${byte(bytes, 15)}`;
-    if (embutido !== "0.0.0.0") return ipDeBancoProibido(embutido, autorizadas);
+    if (embutido !== "0.0.0.0") return ipDeBancoProibido(embutido);
   }
   return false;
 }
 
-/**
- * Um literal de IP é proibido? Exportado para teste direto da política.
- *
- * `autorizadas` são as faixas da lista de destinos internos da instalação: elas
- * liberam SÓ as faixas privadas (RFC1918). Sem elas (o padrão), tudo o que é
- * privado é proibido.
- */
-export function ipDeBancoProibido(ip: string, autorizadas: ReadonlyArray<FaixaAutorizada> = []): boolean {
+/** Um literal de IP é proibido? Exportado para teste direto da política. */
+export function ipDeBancoProibido(ip: string): boolean {
   if (isIPv4(ip)) {
     const alvo = ipv4ParaInt(ip);
     if (alvo === null) return true; // não parseou: trata como perigoso
@@ -201,9 +177,7 @@ export function ipDeBancoProibido(ip: string, autorizadas: ReadonlyArray<FaixaAu
       if (noBloco(alvo, base, prefixo)) return true;
     }
     for (const [base, prefixo] of FAIXAS_PRIVADAS) {
-      if (noBloco(alvo, base, prefixo)) {
-        return !autorizadas.some((f) => ((alvo & f.mascara) >>> 0) === ((f.base & f.mascara) >>> 0));
-      }
+      if (noBloco(alvo, base, prefixo)) return true;
     }
     return false;
   }
@@ -211,14 +185,14 @@ export function ipDeBancoProibido(ip: string, autorizadas: ReadonlyArray<FaixaAu
   if (isIPv6(ip)) {
     const bytes = ipv6ParaBytes(ip);
     if (bytes === null) return true; // não parseou: trata como perigoso
-    return ipv6Proibido(bytes, autorizadas);
+    return ipv6Proibido(bytes);
   }
 
   return true; // nem IPv4 nem IPv6
 }
 
 /** Tira colchetes de IPv6 literal e recusa host com espaço, barra ou vazio. */
-function normalizarHost(host: string): string | null {
+export function normalizarHost(host: string): string | null {
   const h = host.trim().replace(/^\[/, "").replace(/\]$/, "");
   if (h === "" || h.length > 255) return null;
   if (/[\s/\\]/.test(h)) return null;
@@ -229,17 +203,14 @@ function normalizarHost(host: string): string | null {
  * Valida o destino: literal de IP é julgado direto; hostname é resolvido e
  * recusado se QUALQUER endereço cair em faixa proibida (rebinding devolve um
  * público e um privado; o `pg` pode escolher o privado, então recusa tudo).
- * `autorizadas`: ver `ipDeBancoProibido`.
+ * `enderecos` é o que foi validado: quem conecta usa ESSE IP, não o nome.
  */
-export async function validarHostDeBanco(
-  host: string,
-  autorizadas: ReadonlyArray<FaixaAutorizada> = [],
-): Promise<ResultadoDeHost> {
+export async function validarHostDeBanco(host: string): Promise<ResultadoDeHost> {
   const h = normalizarHost(host);
   if (h === null) return { ok: false, motivo: "host_invalido" };
 
   if (isIP(h) !== 0) {
-    if (ipDeBancoProibido(h, autorizadas)) return { ok: false, motivo: "ip_especial" };
+    if (ipDeBancoProibido(h)) return { ok: false, motivo: "ip_especial" };
     return { ok: true, enderecos: [h] };
   }
 
@@ -253,7 +224,7 @@ export async function validarHostDeBanco(
   if (enderecos.length === 0) return { ok: false, motivo: "dns_vazio" };
 
   for (const { address } of enderecos) {
-    if (ipDeBancoProibido(address, autorizadas)) return { ok: false, motivo: "ip_especial" };
+    if (ipDeBancoProibido(address)) return { ok: false, motivo: "ip_especial" };
   }
   return { ok: true, enderecos: enderecos.map((e) => e.address) };
 }

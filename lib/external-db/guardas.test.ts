@@ -17,13 +17,6 @@ vi.mock("node:dns/promises", () => {
   return { lookup, default: { lookup } };
 });
 
-/** A lista de destinos internos da instalação, já no formato que a guarda recebe. */
-const faixa = (base: number[], prefixo: number) => ({
-  base: base.reduce((acc, o) => acc * 256 + o, 0),
-  mascara: prefixo === 0 ? 0 : (0xffffffff << (32 - prefixo)) >>> 0,
-});
-const LISTA_10_1 = [faixa([10, 1, 0, 0], 16)];
-
 describe("ipDeBancoProibido", () => {
   it.each([
     "169.254.169.254", // metadata de nuvem
@@ -49,7 +42,7 @@ describe("ipDeBancoProibido", () => {
     "0000:0000:0000:0000:0000:0000:0000:0001", // loopback expandido
     "0:0:0:0:0:0:0:0", // :: expandido
     "64:ff9b::192.168.1.1", // NAT64 apontando para LAN
-    // RFC1918: bloqueada para destino de organização, salvo lista autorizada.
+    // RFC1918: sempre bloqueada para destino de organização (D-084, M1).
     "10.1.2.3",
     "10.255.255.255",
     "172.16.5.5",
@@ -102,67 +95,62 @@ describe("validarHostDeBanco", () => {
     await expect(validarHostDeBanco("8.8.8.8")).resolves.toEqual({ ok: true, enderecos: ["8.8.8.8"] });
   });
 
-  it("recusa IP de LAN (10.x, 172.16.x, 192.168.x) quando a instalação não autorizou nada", async () => {
-    for (const ip of ["10.0.0.7", "172.16.5.5", "192.168.0.10"]) {
+  it("recusa IP de LAN (10.x, 172.16.x, 192.168.x), sempre", async () => {
+    for (const ip of ["10.0.0.7", "10.1.2.3", "172.16.5.5", "192.168.0.10"]) {
       await expect(validarHostDeBanco(ip)).resolves.toEqual({ ok: false, motivo: "ip_especial" });
     }
-    // Lista vazia é o mesmo que ausente.
-    await expect(validarHostDeBanco("10.0.0.7", [])).resolves.toEqual({ ok: false, motivo: "ip_especial" });
   });
 
-  it("aceita o IP de LAN que a lista da instalação cobre, e só ele", async () => {
-    await expect(validarHostDeBanco("10.1.2.3", LISTA_10_1)).resolves.toEqual({
-      ok: true,
-      enderecos: ["10.1.2.3"],
-    });
-    // Fora da faixa autorizada segue recusado, inclusive dentro de 10/8.
-    await expect(validarHostDeBanco("10.2.0.1", LISTA_10_1)).resolves.toEqual({
-      ok: false,
-      motivo: "ip_especial",
-    });
-    await expect(validarHostDeBanco("172.16.5.5", LISTA_10_1)).resolves.toEqual({
-      ok: false,
-      motivo: "ip_especial",
-    });
+  it("a guarda não tem porta de entrada para lista de destinos internos da instalação", async () => {
+    // A lista só vale para destino da INSTALAÇÃO; o banco externo é escolhido por
+    // organização. Mesmo que alguém passe um segundo argumento (JS, cast), o IP
+    // privado segue recusado: a assinatura ignora qualquer lista.
+    const tudo = { base: 0, mascara: 0 };
+    const comLista = validarHostDeBanco as unknown as (h: string, lista: unknown[]) => ReturnType<typeof validarHostDeBanco>;
+    await expect(comLista("10.1.2.3", [tudo])).resolves.toEqual({ ok: false, motivo: "ip_especial" });
+    const ipComLista = ipDeBancoProibido as unknown as (ip: string, lista: unknown[]) => boolean;
+    expect(ipComLista("10.1.2.3", [tudo])).toBe(true);
+    expect(validarHostDeBanco.length).toBe(1);
+    expect(ipDeBancoProibido.length).toBe(1);
   });
 
-  it("a lista NÃO abre o que nunca é banco: metadata de nuvem, loopback e CGNAT seguem bloqueados", async () => {
-    const tudo = [faixa([0, 0, 0, 0], 0)];
+  it("metadata de nuvem, loopback e CGNAT seguem bloqueados", async () => {
     for (const ip of ["169.254.169.254", "127.0.0.1", "100.64.0.1", "::1"]) {
-      await expect(validarHostDeBanco(ip, tudo)).resolves.toEqual({ ok: false, motivo: "ip_especial" });
+      await expect(validarHostDeBanco(ip)).resolves.toEqual({ ok: false, motivo: "ip_especial" });
     }
   });
 
-  it("IPv4 privado escondido em IPv6 mapeado também depende da lista", async () => {
-    await expect(validarHostDeBanco("[::ffff:10.1.2.3]")).resolves.toEqual({
-      ok: false,
-      motivo: "ip_especial",
-    });
-    await expect(validarHostDeBanco("[::ffff:10.1.2.3]", LISTA_10_1)).resolves.toMatchObject({ ok: true });
-    await expect(validarHostDeBanco("[::ffff:10.9.9.9]", LISTA_10_1)).resolves.toEqual({
-      ok: false,
-      motivo: "ip_especial",
-    });
+  it("IPv4 privado escondido em IPv6 mapeado também é recusado", async () => {
+    for (const ip of ["[::ffff:10.1.2.3]", "[::ffff:10.9.9.9]", "[::ffff:192.168.0.1]"]) {
+      await expect(validarHostDeBanco(ip)).resolves.toEqual({ ok: false, motivo: "ip_especial" });
+    }
   });
 
-  it("nome que resolve para IP privado: recusa sem lista, passa com a faixa cobrindo o IP resolvido", async () => {
+  it("nome que resolve para IP privado é recusado, inclusive com meia resolução (assinatura do rebinding)", async () => {
     await expect(validarHostDeBanco("banco.lan.exemplo")).resolves.toEqual({
       ok: false,
       motivo: "ip_especial",
     });
-    await expect(validarHostDeBanco("banco.lan.exemplo", LISTA_10_1)).resolves.toEqual({
-      ok: true,
-      enderecos: ["10.1.2.3"],
-    });
-    // Meia resolução (um IP coberto, outro não) é a assinatura do rebinding.
-    dns.mapa["banco.lan.exemplo"] = ["10.1.2.3", "10.9.9.9"];
+    dns.mapa["banco.lan.exemplo"] = ["8.8.8.8", "10.9.9.9"];
     try {
-      await expect(validarHostDeBanco("banco.lan.exemplo", LISTA_10_1)).resolves.toEqual({
+      await expect(validarHostDeBanco("banco.lan.exemplo")).resolves.toEqual({
         ok: false,
         motivo: "ip_especial",
       });
     } finally {
       dns.mapa["banco.lan.exemplo"] = ["10.1.2.3"];
+    }
+  });
+
+  it("nome público devolve os endereços validados, que é onde quem conecta deve se prender", async () => {
+    dns.mapa["banco.publico.exemplo"] = ["8.8.8.8", "1.1.1.1"];
+    try {
+      await expect(validarHostDeBanco("banco.publico.exemplo")).resolves.toEqual({
+        ok: true,
+        enderecos: ["8.8.8.8", "1.1.1.1"],
+      });
+    } finally {
+      delete dns.mapa["banco.publico.exemplo"];
     }
   });
 

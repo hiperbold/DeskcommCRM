@@ -348,7 +348,14 @@ export async function PUT(req: NextRequest): Promise<Response> {
     }
   }
 
-  const { data: gravado, error } = await db
+  // A gravação sai pelo cliente de SERVIÇO, e não pela sessão do usuário: a
+  // migração 0915 recusa `base_url` e `credential_id` vindos de qualquer papel
+  // que não seja o servidor, para que um admin não pule as travas acima
+  // gravando direto pelo PostgREST. As checagens de papel (admin), de destino e
+  // de credencial já foram feitas, e a organização vem da sessão (`org.orgId`),
+  // nunca do corpo: o cliente de serviço não filtra por RLS, então o
+  // `organization_id` gravado é a única fronteira entre empresas aqui.
+  const { data: gravado, error } = await createAdminClient()
     .from("ai_purpose_bindings")
     .upsert(
       {
