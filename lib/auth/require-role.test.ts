@@ -4,7 +4,8 @@
  * Prova: 401 sem sessão; 403 forbidden_tenant sem org; 403 forbidden_role
  * padronizado com audit `authz.denied` (sem PII); grant no role mínimo;
  * fail-closed quando fn_user_role_in_org devolve null (membership revogado);
- * bypass de platform admin só com opt-in.
+ * bypass de platform admin só com opt-in, e mesmo com opt-in só para o escopo
+ * `full` com a MFA em dia (D-103).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +19,7 @@ vi.mock("@/lib/auth/server", () => ({
   // Sessão sem dívida de MFA: esta suíte mede rank de papel; o gate de segundo
   // fator tem suíte própria em tests/unit/require-role-mfa.test.ts.
   mfaEmDivida: vi.fn(async () => false),
+  sessionAal: vi.fn(async () => "aal2"),
   loadAuthUser: vi.fn(),
   resolveActiveOrg: vi.fn(),
 }));
@@ -42,8 +44,17 @@ function authUserFixture(role: Role | null, platformAdmin = false): AuthUser {
 }
 
 /** Configura sessão + role efetivo devolvido pelo banco (fn_user_role_in_org). */
-function session(role: Role | null, opts: { dbRole?: string | null; platformAdmin?: boolean } = {}) {
+function session(
+  role: Role | null,
+  opts: {
+    dbRole?: string | null;
+    platformAdmin?: boolean;
+    /** Escopo da linha em `platform_admins` (default `full`, o dono da instalação). */
+    escopo?: "full" | "support_readonly" | null;
+  } = {},
+) {
   const platformAdmin = opts.platformAdmin ?? false;
+  const escopo = opts.escopo === undefined ? "full" : opts.escopo;
   const dbRole = opts.dbRole === undefined ? role : opts.dbRole;
   vi.mocked(loadAuthUser).mockResolvedValue(
     role || platformAdmin ? authUserFixture(role, platformAdmin) : null,
@@ -57,6 +68,15 @@ function session(role: Role | null, opts: { dbRole?: string | null; platformAdmi
         ? { data: dbRole, error: null }
         : { data: null, error: null },
     ),
+    from: (tabela: string) => {
+      const b: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "is"]) b[m] = () => b;
+      b.maybeSingle = async () => ({
+        data: tabela === "platform_admins" && escopo ? { scope: escopo } : null,
+        error: null,
+      });
+      return b;
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
 }
@@ -200,5 +220,58 @@ describe("requireRole — helper único (spec 13 §4)", () => {
     session("viewer", { platformAdmin: true });
     const granted = await requireRole("admin", { allowPlatformAdmin: true });
     expect(granted.ok).toBe(true);
+  });
+
+  // D-103: `is_platform_admin` responde "tem linha em platform_admins", que vale
+  // também para o operador de suporte `support_readonly`. O atalho lê o escopo.
+  describe("atalho de platform admin (allowPlatformAdmin)", () => {
+    it("⭐ support_readonly NÃO ganha o atalho: vale pelo papel que tem na empresa", async () => {
+      session("viewer", { platformAdmin: true, escopo: "support_readonly" });
+      const res = await requireRole("admin", { allowPlatformAdmin: true });
+      expect(res.ok).toBe(false);
+      if (res.ok) throw new Error("unreachable");
+      expect(res.response.status).toBe(403);
+      expect((await res.response.json()).error.code).toBe("forbidden_role");
+    });
+
+    it("support_readonly que é admin da empresa continua passando, pelo papel", async () => {
+      session("admin", { platformAdmin: true, escopo: "support_readonly" });
+      expect((await requireRole("admin", { allowPlatformAdmin: true })).ok).toBe(true);
+    });
+
+    it("linha revogada/ilegível em platform_admins nega o atalho (falha fechada)", async () => {
+      session("viewer", { platformAdmin: true, escopo: null });
+      expect((await requireRole("admin", { allowPlatformAdmin: true })).ok).toBe(false);
+    });
+
+    it("full com a sessão em dívida de MFA (aal1 de quem tem fator) NÃO ganha o atalho", async () => {
+      const servidor = await import("@/lib/auth/server");
+      vi.mocked(servidor.mfaEmDivida).mockResolvedValue(true);
+      try {
+        session("viewer", { platformAdmin: true, escopo: "full" });
+        const res = await requireRole("admin", { allowPlatformAdmin: true });
+        expect(res.ok).toBe(false);
+      } finally {
+        vi.mocked(servidor.mfaEmDivida).mockResolvedValue(false);
+      }
+    });
+
+    it("⭐ com organizationId explícito, support_readonly NÃO age em empresa da qual não é membro", async () => {
+      const OUTRA = "33333333-3333-4333-8333-333333333333";
+      session("viewer", { platformAdmin: true, escopo: "support_readonly", dbRole: null });
+      const res = await requireRole("admin", { allowPlatformAdmin: true, organizationId: OUTRA });
+      expect(res.ok).toBe(false);
+      if (res.ok) throw new Error("unreachable");
+      expect((await res.response.json()).error.code).toBe("forbidden_tenant");
+    });
+
+    it("com organizationId explícito, o full em dia segue alcançando a empresa (controle positivo)", async () => {
+      const OUTRA = "33333333-3333-4333-8333-333333333333";
+      session("viewer", { platformAdmin: true, escopo: "full", dbRole: null });
+      const res = await requireRole("admin", { allowPlatformAdmin: true, organizationId: OUTRA });
+      expect(res.ok).toBe(true);
+      if (!res.ok) throw new Error("unreachable");
+      expect(res.org.orgId).toBe(OUTRA);
+    });
   });
 });

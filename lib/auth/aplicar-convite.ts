@@ -36,9 +36,10 @@ import type { InvitePayload } from "@/lib/auth/invite-token";
  *   e-mail fica listado como **Pendente para sempre** na aba Membros, e o
  *   administrador reenvia ou revoga um convite que já foi aceito.
  *
- * Convite sem linha (emitido antes desta migration, ou instalação cujo envio
- * não tinha service-role) segue o fluxo: a checagem de revogação de MEMBERSHIP
- * dentro de `fn_accept_team_invite` continua valendo.
+ * Convite sem linha (o dono de um tenant novo, criado por `/api/v1/admin/tenants`)
+ * segue o fluxo quando o token traz `invited_by`: a checagem de revogação de
+ * MEMBERSHIP dentro de `fn_accept_team_invite` continua valendo. Sem linha e sem
+ * convidador o token não tem dono e é recusado (D-089).
  */
 
 export type ResultadoDoConvite =
@@ -62,6 +63,12 @@ export async function aplicarConvite(params: {
     .eq("organization_id", payload.organization_id)
     .maybeSingle();
   if (linhaDoConvite?.revoked_at) return { ok: false, motivo: "invalid_or_expired" };
+  // Sem linha E sem `invited_by`: token que nenhum emissor atual produz (todos
+  // gravam quem convidou). Era o formato do convite assinado pela action do
+  // onboarding, que não conferia papel (D-089): um viewer emitia admin para uma
+  // segunda conta e o aceite virava vínculo. Sem linha o convite segue válido
+  // SÓ quando traz o convidador (o dono de um tenant novo nasce assim).
+  if (!linhaDoConvite && !payload.invited_by) return { ok: false, motivo: "invalid_or_expired" };
 
   // Org, papel e convidador vêm EXCLUSIVAMENTE do token assinado; o usuário,
   // de quem chamou. Nada aqui vem de body de requisição.

@@ -20,6 +20,7 @@ import type { NextResponse } from "next/server";
 
 import { fail, type ApiError } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
+import { escopoCompletoDaPlataforma } from "@/lib/auth/portao-de-escrita";
 import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK, type ActiveOrg, type AuthUser, type Role } from "@/lib/auth/types";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -35,7 +36,12 @@ interface RequireRoleOpts {
   requestId?: string;
   /** resource_type gravado no audit `authz.denied` (ex.: "api_tokens"). */
   resource?: string;
-  /** Platform admin (role transversal) bypassa o rank do tenant. */
+  /**
+   * Platform admin (role transversal) bypassa o rank do tenant, mas SÓ o de
+   * escopo `full` e com o segundo fator em dia (D-103). O `support_readonly`
+   * e a sessão aal1 de quem tem fator caem no caminho normal: valem pelo papel
+   * que têm na organização, como qualquer membro.
+   */
   allowPlatformAdmin?: boolean;
   /**
    * Override da org onde o role é resolvido (default: org ativa do cookie).
@@ -44,6 +50,24 @@ interface RequireRoleOpts {
    * NUNCA do body. O role vem de `fn_user_role_in_org(p_org)` nessa org.
    */
   organizationId?: string;
+}
+
+/**
+ * O admin de plataforma tem escopo `full` e a sessão está em dia com a MFA?
+ * Falha fechada: erro de leitura ou linha ausente dão `false`, e a leitura de
+ * MFA que lança também (quem decide acesso não trata leitura que não aconteceu
+ * como resposta).
+ */
+async function adminDePlataformaCompletoComMfa(userId: string): Promise<boolean> {
+  try {
+    if (!(await escopoCompletoDaPlataforma(userId))) return false;
+    return !(await mfaEmDivida());
+  } catch (error) {
+    logger.error("[auth] atalho de plataforma negado: leitura falhou", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
 }
 
 /**
@@ -62,6 +86,15 @@ export async function requireRole(min: Role, opts: RequireRoleOpts = {}): Promis
   if (user.support && user.support.status !== "active") {
     return { ok: false, response: fail("forbidden", "O acompanhamento terminou. Saia para continuar.", 403, { requestId }) };
   }
+  // O atalho de plataforma é avaliado UMA vez e serve às duas portas abaixo (org
+  // do recurso e retorno antecipado). `is_platform_admin` sozinho responde "tem
+  // linha em platform_admins", que vale também para `support_readonly`: por isso
+  // o escopo é lido, e a sessão precisa ter provado o fator se ele existe.
+  const atalhoDePlataforma =
+    allowPlatformAdmin && user.is_platform_admin && !user.support
+      ? await adminDePlataformaCompletoComMfa(user.id)
+      : false;
+
   let org: ActiveOrg | null;
   if (organizationId) {
     const membership = user.organizations.find((o) => o.organization_id === organizationId);
@@ -73,7 +106,7 @@ export async function requireRole(min: Role, opts: RequireRoleOpts = {}): Promis
           name: membership.organization_name,
           role: membership.role,
         }
-      : allowPlatformAdmin && user.is_platform_admin
+      : atalhoDePlataforma
         ? { orgId: organizationId, name: "—", role: "viewer" }
         : null;
   } else {
@@ -86,7 +119,7 @@ export async function requireRole(min: Role, opts: RequireRoleOpts = {}): Promis
     };
   }
 
-  if (allowPlatformAdmin && user.is_platform_admin && !user.support) {
+  if (atalhoDePlataforma) {
     return { ok: true, user, org };
   }
 

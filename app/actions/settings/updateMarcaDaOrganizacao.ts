@@ -5,8 +5,8 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import { normalizarHex } from "@/lib/branding/rampa";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import {
@@ -99,21 +99,12 @@ export async function updateMarcaDaOrganizacao(
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
-  // DEPOIS do papel, de propósito: quem nem tem o papel recebe `forbidden_role`,
-  // que é a verdade sobre ele. Só quem passaria pelo papel é cobrado pelo
-  // segundo fator — a ordem é o que faz cada código dizer a coisa certa.
-  //
-  // ⚠️ `mfaEmDivida()` DEIXOU DE RECEBER PAPEL, no merge com a frente que tornou
-  // a verificação em duas etapas opcional. Ele consultava a política antes de
-  // olhar a sessão; agora não consulta — quem TEM fator prova, qualquer que seja
-  // o papel. A cobrança aqui fica MAIS abrangente, não menos: um manager com
-  // fator e sessão `aal1` passava por este ponto e agora é barrado.
-  if (await mfaEmDivida()) {
-    return { ok: false, error: "mfa_required" };
-  }
+  // O portão confere o papel ANTES do segundo fator, de propósito: quem nem tem
+  // o papel recebe `forbidden_role`, que é a verdade sobre ele. Só quem passaria
+  // pelo papel é cobrado por `mfaEmDivida()` (quem TEM fator prova, qualquer que
+  // seja o papel): a ordem é o que faz cada código dizer a coisa certa.
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");

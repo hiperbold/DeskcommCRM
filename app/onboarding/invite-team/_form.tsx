@@ -56,6 +56,10 @@ export function InviteTeamForm() {
         toast.error(`${t("Falha:")} ${res.error}`);
         return;
       }
+      if (res && res.ok && res.recusados?.length) {
+        // O plano recusou: a frase vem pronta do servidor, nunca o texto do banco.
+        toast.error(res.recusados[0]!.motivo);
+      }
       if (res && res.ok && res.undelivered?.length) {
         // Sem serviço de email configurado: mostra os links de aceite pro
         // admin mandar por conta própria — nunca fingir que o email saiu.

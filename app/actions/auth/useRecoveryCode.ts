@@ -9,6 +9,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { hashRecoveryCode } from "@/lib/auth/recovery-codes";
+import { avisarSobreCodigosDeRecuperacao } from "@/lib/auth/aviso-de-codigos-de-recuperacao";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 
 export type UseRecoveryCodeResult =
@@ -108,6 +109,11 @@ export async function useRecoveryCode(
     for (const f of factors?.factors ?? []) {
       await admin.auth.admin.mfa.deleteFactor({ userId: targetUser.id, id: f.id });
     }
+    // Sem fator não há o que recuperar: os códigos que sobraram (os outros nove
+    // e qualquer um que tenha vazado) não valem mais. O cadastro seguinte gera
+    // um conjunto novo. Só depois de os fatores saírem de fato: se a remoção
+    // falhou, a pessoa ainda precisa deles.
+    await admin.from("user_recovery_codes").delete().eq("user_id", targetUser.id);
   } catch (err) {
     console.error("[useRecoveryCode] failed to delete factors", err);
     // Non-fatal: user still gets a recovery_used redirect; on next login the
@@ -127,7 +133,10 @@ export async function useRecoveryCode(
     userAgent,
   });
 
-  // 6) Redirect to /login fresh — user logs in normally and re-enrolls MFA.
+  // 6) O dono da conta é avisado: o código queima o segundo fator inteiro.
+  await avisarSobreCodigosDeRecuperacao({ email: targetUser.email, evento: "usado", ip });
+
+  // 7) Redirect to /login fresh: user logs in normally and re-enrolls MFA.
   const params = new URLSearchParams({ recovery_used: "1" });
   // Sanitiza aqui também: este `next` volta para /login e de lá alimenta o
   // redirect de signInWithPassword — carregar destino externo por este caminho

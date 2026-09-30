@@ -42,6 +42,13 @@ interface Cenario {
 function montarStub({ role, temFator, aal }: Cenario) {
   return {
     rpc: vi.fn(async () => ({ data: role, error: null })),
+    // Leitura da própria linha de `platform_admins` (escopo do atalho de plataforma).
+    from: () => {
+      const b: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "is"]) b[m] = () => b;
+      b.maybeSingle = async () => ({ data: { scope: "full" }, error: null });
+      return b;
+    },
     auth: {
       mfa: {
         listFactors: vi.fn(async () => ({
@@ -229,11 +236,21 @@ describe("requireRole — os caminhos que não passam pela leitura paralela", ()
     expect(createClient).not.toHaveBeenCalled();
   });
 
-  it("platform admin com opt-in passa sem ler papel nem MFA, como antes", async () => {
-    preparar({ role: "viewer", temFator: true, aal: "aal1", isPlatformAdmin: true });
+  it("platform admin FULL com a sessão em dia (aal2) e opt-in passa sem ler o papel", async () => {
+    preparar({ role: "viewer", temFator: true, aal: "aal2", isPlatformAdmin: true });
+    const stub = montarStub({ role: "viewer", temFator: true, aal: "aal2" });
+    vi.mocked(createClient).mockResolvedValue(stub as unknown as Awaited<ReturnType<typeof createClient>>);
     const r = await requireRole("admin", { allowPlatformAdmin: true });
     expect(r.ok).toBe(true);
-    expect(createClient).not.toHaveBeenCalled();
+    expect(stub.rpc).not.toHaveBeenCalled();
+  });
+
+  it("⭐ platform admin com fator e sessão aal1 NÃO ganha o atalho (D-103): cai no papel", async () => {
+    // Antes o atalho devolvia ok ANTES de olhar papel e MFA: a sessão aal1 de um
+    // admin de plataforma (senha vazada) agia em qualquer rota com opt-in.
+    preparar({ role: "viewer", temFator: true, aal: "aal1", isPlatformAdmin: true });
+    const r = await requireRole("admin", { allowPlatformAdmin: true });
+    expect(r.ok).toBe(false);
   });
 
   it("acompanhamento ativo NÃO usa o atalho de platform admin: papel e MFA são lidos", async () => {

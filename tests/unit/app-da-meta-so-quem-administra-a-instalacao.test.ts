@@ -42,6 +42,8 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: {
       getUser: async () => ({ data: { user: { id: USUARIO } }, error: null }),
       mfa: {
+        // Sem fator cadastrado: `mfaEmDivida()` (real) é falso.
+        listFactors: async () => ({ data: { totp: [] }, error: null }),
         getAuthenticatorAssuranceLevel: async () => ({ data: { currentLevel: "aal2" }, error: null }),
       },
     },

@@ -8,7 +8,7 @@ import { invalidarAppDaMeta } from "@/lib/channels/meta/app";
 import { audit } from "@/lib/audit";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { logger } from "@/lib/logger";
-import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { requirePlatformAdminFull } from "@/lib/auth/portao-de-escrita";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptWebhookSecret } from "@/lib/webhooks/secrets";
 
@@ -195,7 +195,7 @@ const SEM_SEGREDO: UpdateMetaAppResult = { ok: false, error: "app_secret_obrigat
  * que o produto oferece desse valor.
  */
 export async function updateMetaApp(input: MetaAppInput): Promise<UpdateMetaAppResult> {
-  const { user: authUser } = await requirePlatformAdmin();
+  const { user: authUser } = await requirePlatformAdminFull();
 
   const parsed = entradaSchema.safeParse(input);
   if (!parsed.success) {
@@ -267,7 +267,7 @@ export async function updateMetaApp(input: MetaAppInput): Promise<UpdateMetaAppR
  * avisa em vez de trocar sozinha.
  */
 export async function rotacionarVerifyTokenDaMeta(): Promise<UpdateMetaAppResult> {
-  const { user: authUser } = await requirePlatformAdmin();
+  const { user: authUser } = await requirePlatformAdminFull();
 
   const gravado = await oQueEstaGravado();
   if (!gravado.ok) return gravado.recusa;

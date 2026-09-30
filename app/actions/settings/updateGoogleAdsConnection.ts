@@ -6,8 +6,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { MODOS_DE_VALOR_DA_VENDA, VALORES_DE_CATEGORIA } from "@/lib/conversoes/regras-google";
@@ -77,10 +77,8 @@ export async function updateGoogleAdsConnection(
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
-  if (await mfaEmDivida()) return { ok: false, error: "mfa_required" };
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
   const admin = createAdminClient();
 

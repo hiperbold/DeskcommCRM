@@ -17,7 +17,7 @@ import { supportWriteError } from "@/lib/impersonate/support";
 import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, resolveActiveOrg, sessionAal, isMfaEnrolled } from "@/lib/auth/server";
+import { loadAuthUser, resolveActiveOrg, sessionAal, isMfaEnrolled, mfaEmDivida } from "@/lib/auth/server";
 import { empresaExigeMfa, exigeCadastroDeMfa } from "@/lib/auth/politica-mfa";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -42,6 +42,12 @@ export async function definirExigenciaDeMfa(exigir: boolean): Promise<ResultadoD
 
   if (org.role !== "admin") {
     return { ok: false, erro: "Só um administrador pode mudar essa regra." };
+  }
+  // Desligar a exigência derruba a proteção de TODOS os administradores da
+  // empresa: quem tem fator e entrou só com a senha (aal1) não mexe nisso.
+  // Depois do papel, como em `requireRole`.
+  if (await mfaEmDivida()) {
+    return { ok: false, erro: "Informe o código de 6 dígitos da verificação em duas etapas antes de mudar essa regra." };
   }
 
   const admin = createAdminClient();
@@ -147,6 +153,9 @@ export async function desativarMfaDaConta(): Promise<ResultadoDaPolitica> {
     const { error } = await supabase.auth.mfa.unenroll({ factorId: f.id });
     if (error) return { ok: false, erro: "Não consegui remover a verificação agora." };
   }
+  // Sem fator, os códigos de recuperação não têm função e não podem ficar
+  // valendo: um código antigo removeria o fator de um cadastro futuro (D-136).
+  await admin.from("user_recovery_codes").delete().eq("user_id", user.id);
 
   await audit({
     action: "security.mfa_desativada",

@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { requirePlatformAdminFull } from "@/lib/auth/portao-de-escrita";
 import { ensureTenantForUser } from "@/lib/auth/provision";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -35,7 +35,7 @@ export type DecideRegistrationResult =
 export async function decideRegistrationRequest(
   input: z.input<typeof entradaSchema>,
 ): Promise<DecideRegistrationResult> {
-  const { user } = await requirePlatformAdmin();
+  const { user } = await requirePlatformAdminFull();
 
   const parsed = entradaSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid_input" };

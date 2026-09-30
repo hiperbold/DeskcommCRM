@@ -65,6 +65,16 @@ export async function confirmMfaEnroll(
     code_hash: hashRecoveryCode(c),
   }));
 
+  // Códigos de um cadastro ANTERIOR não sobrevivem ao novo: eles seguiam
+  // valendo depois de desligar e religar a verificação, e um código antigo
+  // vazado removia o fator novo (D-136). Só o conjunto recém-gerado vale.
+  const apagou = isServiceRoleConfigured()
+    ? await createAdminClient().from("user_recovery_codes").delete().eq("user_id", user.id)
+    : await supabase.from("user_recovery_codes").delete().eq("user_id", user.id);
+  if (apagou.error) {
+    console.error("[confirmMfaEnroll] failed to delete old recovery codes:", apagou.error.message);
+  }
+
   // Try user-scoped first (RLS policy `recovery_codes_self` permits insert
   // where user_id = auth.uid()). Fall back to admin if RLS rejects (e.g. AAL
   // policy mismatch).

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
-import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { requirePlatformAdminFull } from "@/lib/auth/portao-de-escrita";
 import { acharChave } from "@/lib/instalacao/catalogo";
 import { estadoParaTela, gravarPelaTela, voltarAoAmbiente, type EstadoParaTela } from "@/lib/instalacao/config";
 
@@ -26,7 +26,7 @@ export type ResultadoDaGravacao =
 /**
  * Grava uma chave da instalação pela tela.
  *
- * ── O gate é `requirePlatformAdmin()`, e a razão é a mesma de `updateBranding` ─
+ * ── O gate é `requirePlatformAdminFull()`, e a razão é a mesma de `updateBranding` ─
  *
  * Server Action não é rota: não passa por `requireRole` nem pelo layout de
  * `/admin`. Um POST direto na action, com sessão de um platform admin, entraria
@@ -56,7 +56,7 @@ export async function salvarConfiguracaoDaInstalacao(
   chave: string,
   valor: string,
 ): Promise<ResultadoDaGravacao> {
-  const { user } = await requirePlatformAdmin();
+  const { user } = await requirePlatformAdminFull();
 
   const doCatalogo = acharChave(chave);
   if (!doCatalogo || doCatalogo.controle !== "edita") {
@@ -113,7 +113,7 @@ export async function salvarConfiguracaoDaInstalacao(
  * padrão". Sem linha, o resolvedor lê o `.env` de novo e pode semear outra vez.
  */
 export async function voltarConfiguracaoAoPadrao(chave: string): Promise<ResultadoDaGravacao> {
-  const { user } = await requirePlatformAdmin();
+  const { user } = await requirePlatformAdminFull();
 
   const doCatalogo = acharChave(chave);
   if (!doCatalogo || doCatalogo.controle !== "edita") {

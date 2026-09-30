@@ -42,8 +42,9 @@ let erroDeLeitura: { code: string; message: string } | null = null;
 const gravacoes: Record<string, unknown>[] = [];
 
 vi.mock("@/lib/auth/requirePlatformAdmin", () => ({
-  requirePlatformAdmin: async () => ({ user: { id: USUARIO } }),
+  requirePlatformAdmin: async () => ({ user: { id: USUARIO }, platformAdmin: { scope: "full" } }),
 }));
+vi.mock("@/lib/auth/server", () => ({ mfaEmDivida: async () => false, sessionAal: async () => "aal2" }));
 
 vi.mock("next/headers", () => ({ headers: async () => new Headers() }));
 

@@ -6,8 +6,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptWebhookSecret } from "@/lib/webhooks/secrets";
@@ -101,12 +101,11 @@ export async function updateAdInsightsConnection(
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
-  // Depois do papel, pelo mesmo motivo de `updateAdPlatformConnection.ts`: quem
-  // nem tem o papel recebe a verdade sobre ele, não uma cobrança de segundo fator.
-  if (await mfaEmDivida()) return { ok: false, error: "mfa_required" };
+  // O portão confere o papel ANTES do MFA, pelo mesmo motivo de
+  // `updateAdPlatformConnection.ts`: quem nem tem o papel recebe a verdade sobre
+  // ele, não uma cobrança de segundo fator.
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
   const admin = createAdminClient();
 
@@ -203,10 +202,8 @@ export async function disconnectAdInsights(): Promise<UpdateAdInsightsConnection
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
-  if (await mfaEmDivida()) return { ok: false, error: "mfa_required" };
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
   const admin = createAdminClient();
   const { error } = await admin

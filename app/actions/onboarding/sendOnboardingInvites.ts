@@ -3,21 +3,24 @@
 /**
  * Server Action: bulk-invite teammates from the onboarding wizard.
  *
- * Reuses the canonical invite token + email template (EPIC-09) directly so
- * we don't pay the cost of a self-call to the API route. Failures to send
- * email do NOT block onboarding progression.
+ * Emite pelo MESMO caminho de `/api/v1/team/invite` (`emitirConvite`): o convite
+ * vira linha em `team_invites`, então aparece na tela de Equipe, pode ser
+ * revogado e passa pelo teto de membros do plano. Só administrador chega aqui
+ * (`requireOnboardingCtx`). Failures to send email do NOT block onboarding
+ * progression.
+ *
+ * Antes esta action assinava o token na mão, sem linha e sem conferir papel: um
+ * viewer convidava uma segunda conta como admin (D-089).
  */
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { env } from "@/lib/env";
-import { signInviteToken, INVITE_TTL_SECONDS } from "@/lib/auth/invite-token";
-import { buildInviteEmail } from "@/lib/email/templates/invite";
-import { sendEmail } from "@/lib/email/roteador";
-import { marcaDaSaida } from "@/lib/branding/saida";
+import { recusaDoPlano } from "@/lib/billing/planos/recusa-do-plano";
 import { inviteOnboardingSchema } from "@/lib/schemas/onboarding";
+import { emitirConvite } from "@/lib/team/convites";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { requireOnboardingCtx, patchOnboardingState, OnboardingError } from "./_shared";
 
 type PapelHumano = "viewer" | "agent" | "manager" | "admin";
@@ -30,8 +33,14 @@ export type SendInvitesResult =
       /** Convites cujo email NÃO saiu (ex.: nenhum transporte configurado) — o link
        * de aceite é devolvido para o admin enviar manualmente. */
       undelivered?: { email: string; accept_url: string }[];
+      /** Convites que o PLANO recusou (teto de membros, conta suspensa), com a frase para a tela. */
+      recusados?: { email: string; motivo: string }[];
     }
-  | { ok: false; error: "auth_required" | "no_active_org" | "invalid_input"; details?: unknown };
+  | {
+      ok: false;
+      error: "auth_required" | "no_active_org" | "forbidden" | "mfa_required" | "invalid_input";
+      details?: unknown;
+    };
 
 interface InvitePayload {
   // Convite é para PESSOA: só papel humano. `ai_operator` não entra aqui de
@@ -70,67 +79,39 @@ export async function sendOnboardingInvites(payload: InvitePayload): Promise<Sen
     throw err;
   }
 
-  // env.* é runtime → correto na imagem genérica self-host (ver browser.ts).
-  const baseUrl = env.NEXT_PUBLIC_APP_URL;
   const inviterName = ctx.fullName ?? ctx.email ?? "Um colega";
-  // Fora do laço: a marca é a mesma para o lote inteiro (mesma organização).
-  const marca = await marcaDaSaida(ctx.orgId);
+  const requestId = randomUUID();
+  const admin = createAdminClient();
 
   let sent = 0;
   let failed = 0;
   const undelivered: { email: string; accept_url: string }[] = [];
+  const recusados: { email: string; motivo: string }[] = [];
   for (const inv of input.invitations) {
     const email = inv.email.trim().toLowerCase();
-    const inviteId = randomUUID();
-    const exp = Math.floor(Date.now() / 1000) + INVITE_TTL_SECONDS;
-    const token = signInviteToken({
-      invite_id: inviteId,
-      email,
-      organization_id: ctx.orgId,
-      role: inv.role,
-      exp,
-    });
-    const acceptUrl = `${baseUrl.replace(/\/$/, "")}/team/accept-invite/${token}`;
-    const expiresAt = new Date(exp * 1000);
-    const { subject, html, text } = buildInviteEmail({
-      inviterName,
-      orgName: ctx.orgName,
-      acceptUrl,
-      role: inv.role,
-      expiresAt,
-      marca,
-    });
-    const result = await sendEmail({
-      to: email,
-      subject,
-      html,
-      text,
-      fromName: marca.nome,
-      tags: [
-        { name: "kind", value: "team_invite" },
-        { name: "src", value: "onboarding" },
-        { name: "org", value: ctx.orgId },
-      ],
-    });
-    if (result.ok) sent += 1;
-    else {
-      failed += 1;
-      undelivered.push({ email, accept_url: acceptUrl });
-    }
-
-    await audit({
-      action: "member.invited",
-      actorUserId: ctx.userId,
-      organizationId: ctx.orgId,
-      resourceType: "membership",
-      resourceId: inviteId,
-      metadata: {
+    try {
+      const emitido = await emitirConvite(admin, {
         email,
         role: inv.role,
-        email_dispatched: result.ok,
-        source: "onboarding",
-      },
-    });
+        organizationId: ctx.orgId,
+        orgName: ctx.orgName,
+        inviterId: ctx.userId,
+        inviterName,
+        requestId,
+      });
+      if (emitido.email_dispatched) sent += 1;
+      else {
+        failed += 1;
+        undelivered.push({ email, accept_url: emitido.accept_url });
+      }
+    } catch (err) {
+      // Teto de membros ou conta suspensa: um item do lote, o resto segue (mesmo
+      // contrato de `/api/v1/team/invite`). Qualquer outro erro é defeito.
+      const recusa = recusaDoPlano(err);
+      if (!recusa) throw err;
+      failed += 1;
+      recusados.push({ email, motivo: recusa.mensagem });
+    }
   }
 
   await patchOnboardingState(ctx.orgId, {
@@ -147,7 +128,7 @@ export async function sendOnboardingInvites(payload: InvitePayload): Promise<Sen
   // devolve os links de aceite pro admin enviar manualmente (mesmo contrato do
   // fallback de /app/team/invite). Redirect só no caminho 100% entregue.
   if (failed > 0) {
-    return { ok: true, sent, failed, undelivered };
+    return { ok: true, sent, failed, undelivered, ...(recusados.length ? { recusados } : {}) };
   }
 
   redirect("/onboarding");

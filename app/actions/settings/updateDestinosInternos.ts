@@ -5,7 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { requirePlatformAdminFull } from "@/lib/auth/portao-de-escrita";
 import {
   entradaDeDestinoValida,
   estadoDosDestinosInternos,
@@ -52,7 +52,7 @@ const entradaSchema = z.object({
 export async function updateDestinosInternos(
   input: z.infer<typeof entradaSchema>,
 ): Promise<UpdateDestinosInternosResult> {
-  const { user } = await requirePlatformAdmin();
+  const { user } = await requirePlatformAdminFull();
 
   const parsed = entradaSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: "invalid_input" };

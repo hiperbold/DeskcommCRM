@@ -6,8 +6,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import {
   apagarDadosOperacionaisDaOrg,
   type ContagensApagadas,
@@ -65,12 +65,10 @@ export async function apagarDadosOperacionaisDaOrganizacao(input: {
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden_role" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
-  if (await mfaEmDivida()) {
-    return { ok: false, error: "mfa_required" };
-  }
+  // Apagar é irreversível: além do portão comum (papel admin ou plataforma de
+  // escopo full, MFA em dia), exige o segundo fator PROVADO nesta sessão.
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg, { exigirAal2: true });
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
   const supabase = createAdminClient();
 

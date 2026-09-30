@@ -8,7 +8,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { audit } from "@/lib/audit";
 import { tenantSchema, type TenantInput } from "@/lib/schemas/settings";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { paisesOferecidos } from "@/lib/legal/perfil-do-pais";
 
@@ -27,9 +27,8 @@ export async function updateTenant(input: TenantInput): Promise<UpdateTenantResu
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
 /**
  * A ESCRITA EM `organizations` VAI PELO ADMIN CLIENT — e não é preguiça.

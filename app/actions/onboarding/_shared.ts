@@ -5,7 +5,8 @@
  * session — no body-derived ids ever).
  */
 import { supportWriteError } from "@/lib/impersonate/support";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
+import { ROLE_RANK } from "@/lib/auth/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { OnboardingState } from "@/lib/schemas/onboarding";
 
@@ -15,6 +16,7 @@ export class OnboardingError extends Error {
       | "auth_required"
       | "no_active_org"
       | "forbidden"
+      | "mfa_required"
       | "not_found"
       | "db_error",
     message: string,
@@ -33,12 +35,40 @@ export interface OnboardingCtx {
   email: string;
 }
 
-export async function requireOnboardingCtx(): Promise<OnboardingCtx> {
+/**
+ * O onboarding é ato de ADMINISTRADOR, em organização AINDA NÃO concluída.
+ *
+ * As actions daqui escrevem com service role (renomeiam a empresa, mudam o
+ * fuso, religam o agente padrão, aplicam o quadro de funil e assinam convites),
+ * então o portão tem que ser o da própria action: server action é endpoint
+ * público, e o id dela está no bundle do formulário. Antes só a sessão e a
+ * organização ativa eram conferidas, e um viewer convidado chegava a virar
+ * admin pelo convite do passo "equipe" (D-089, D-090).
+ *
+ *  1. papel `admin` na organização ativa;
+ *  2. `mfaEmDivida()`: sessão aal1 de quem TEM fator não conduz o onboarding;
+ *  3. `onboarded_at` nulo: depois de concluído, nenhuma delas roda de novo.
+ *     `permitirConcluido` existe só para `finishOnboarding`, que é idempotente
+ *     de propósito (segundo clique cai no redirect) e continua exigindo admin.
+ */
+export async function requireOnboardingCtx(
+  opts: { permitirConcluido?: boolean } = {},
+): Promise<OnboardingCtx> {
   const user = await loadAuthUser();
   if (!user) throw new OnboardingError("auth_required", "Auth required.");
   if (supportWriteError(user.support)) throw new OnboardingError("forbidden", "Acompanhamento somente leitura ou encerrado.");
   const activeOrg = await resolveActiveOrg(user);
   if (!activeOrg) throw new OnboardingError("no_active_org", "Sem organização ativa.");
+  if (ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
+    throw new OnboardingError("forbidden", "Só um administrador conduz o onboarding.");
+  }
+  if (await mfaEmDivida()) {
+    throw new OnboardingError("mfa_required", "Confirme a verificação em duas etapas.");
+  }
+  if (!opts.permitirConcluido) {
+    const { onboardedAt } = await loadOnboardingState(activeOrg.orgId);
+    if (onboardedAt) throw new OnboardingError("forbidden", "O onboarding desta organização já foi concluído.");
+  }
   return {
     userId: user.id,
     orgId: activeOrg.orgId,

@@ -12,6 +12,7 @@ import { supportWriteError } from "@/lib/impersonate/support";
 import { revalidatePath } from "next/cache";
 import { audit } from "@/lib/audit";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type DisconnectResult =
@@ -26,9 +27,8 @@ export async function disconnectNuvemshop(): Promise<DisconnectResult> {
   const activeOrg = await resolveActiveOrg(user);
   if (!activeOrg) return { ok: false, error: "no_active_org" };
 
-  if (activeOrg.role !== "admin" && !user.is_platform_admin) {
-    return { ok: false, error: "forbidden" };
-  }
+  const portao = await portaoDeAdminDaOrganizacao(user, activeOrg);
+  if (!portao.ok) return { ok: false, error: "forbidden" };
 
   const admin = createAdminClient();
   const { data: existing, error: lookupErr } = await admin

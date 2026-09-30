@@ -126,6 +126,12 @@ export interface DadosDoPasso {
  * primeiro seria cobrar um passo a mais para chegar ao mesmo lugar.
  */
 export async function dadosDoPasso(orgId: string, negocio: string): Promise<DadosDoPasso> {
+  // Arquivo "use server": esta função é endpoint público e recebia o `orgId` por
+  // argumento. Sem o portão, qualquer sessão lia o quadro de OUTRA empresa e
+  // gastava a chave de IA dela. A organização é a da sessão, e só admin em
+  // onboarding em curso chega aqui (D-090).
+  const ctx = await requireOnboardingCtx();
+  if (ctx.orgId !== orgId) throw new OnboardingError("forbidden", "Organização diferente da sessão.");
   const admin = createAdminClient();
   const atual = await carregarQuadroAtual(admin, orgId);
 
@@ -137,7 +143,7 @@ export async function dadosDoPasso(orgId: string, negocio: string): Promise<Dado
     oQueFaz = "";
   }
 
-  const ctx = { nome: negocio, oQueFaz };
+  const contexto = { nome: negocio, oQueFaz };
   const cerebro = await cerebroDoFuncionario(admin, orgId);
 
   if ("erro" in cerebro) {
@@ -151,7 +157,7 @@ export async function dadosDoPasso(orgId: string, negocio: string): Promise<Dado
     };
   }
 
-  const sugestao = await sugerirFunil(ctx, async ({ system, prompt }) => {
+  const sugestao = await sugerirFunil(contexto, async ({ system, prompt }) => {
     const r = await generateText({
       model: buildModel(cerebro.provider, cerebro.apiKey, cerebro.model),
       system,

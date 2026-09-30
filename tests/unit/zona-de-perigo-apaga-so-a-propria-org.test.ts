@@ -46,6 +46,10 @@ const auditadas: Array<Record<string, unknown>> = [];
 let papel = "admin";
 let ehPlatformAdmin = false;
 let mfaPendente = false;
+/** Nível da sessão. Apagar é irreversível e exige o segundo fator PROVADO. */
+let nivelDaSessao: "aal1" | "aal2" = "aal2";
+/** Escopo da linha em `platform_admins` do usuário (quando ele é admin de plataforma). */
+let escopoDaPlataforma: "full" | "support_readonly" = "full";
 let nomeNoBanco: string | null = NOME_DA_ORG;
 /** Quando setado, o DELETE nesta tabela devolve erro — simula a parada no meio. */
 let tabelaQueFalha: string | null = null;
@@ -65,6 +69,20 @@ vi.mock("@/lib/auth/server", () => ({
   loadAuthUser: vi.fn(async () => ({ id: USER, is_platform_admin: ehPlatformAdmin })),
   resolveActiveOrg: vi.fn(async () => ({ orgId: ORG, name: NOME_DA_ORG, role: papel })),
   mfaEmDivida: vi.fn(async () => mfaPendente),
+  sessionAal: vi.fn(async () => nivelDaSessao),
+}));
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({
+    from: (tabela: string) => {
+      const b: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "is"]) b[m] = () => b;
+      b.maybeSingle = async () => ({
+        data: tabela === "platform_admins" ? { scope: escopoDaPlataforma } : null,
+        error: null,
+      });
+      return b;
+    },
+  }),
 }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => clienteFalso() }));
 
@@ -124,6 +142,8 @@ beforeEach(() => {
   papel = "admin";
   ehPlatformAdmin = false;
   mfaPendente = false;
+  nivelDaSessao = "aal2";
+  escopoDaPlataforma = "full";
   nomeNoBanco = NOME_DA_ORG;
   tabelaQueFalha = null;
   for (const k of Object.keys(linhasPorTabela)) delete linhasPorTabela[k];
@@ -211,12 +231,36 @@ describe("zona de perigo: quem pode puxar o gatilho", () => {
     expect(delecoes).toEqual([]);
   });
 
-  it("platform admin passa mesmo sem papel de admin no tenant", async () => {
+  it("platform admin de escopo FULL passa mesmo sem papel de admin no tenant", async () => {
     papel = "viewer";
     ehPlatformAdmin = true;
     const r = await apagarDadosOperacionaisDaOrganizacao({ confirmNome: NOME_DA_ORG });
     expect(r.ok).toBe(true);
     expect(delecoes.length).toBe(RAIZES_DO_APAGAMENTO.length);
+  });
+
+  it("⭐ platform admin support_readonly que é só viewer da empresa NÃO apaga nada (D-137)", async () => {
+    // O cenário da auditoria: o operador de suporte, na sessão própria (sem modo
+    // de acompanhamento), digita o nome da empresa cliente e apaga tudo. Antes o
+    // portão era `is_platform_admin && papel < admin`, que vale para qualquer
+    // linha não revogada de platform_admins, inclusive a de suporte só leitura.
+    papel = "viewer";
+    ehPlatformAdmin = true;
+    escopoDaPlataforma = "support_readonly";
+    const r = await apagarDadosOperacionaisDaOrganizacao({ confirmNome: NOME_DA_ORG });
+    expect(r).toEqual({ ok: false, error: "forbidden_role" });
+    expect(delecoes).toEqual([]);
+    expect(auditadas).toEqual([]);
+  });
+
+  it("apagar exige o segundo fator PROVADO: sessão aal1 é recusada mesmo sem fator pendente", async () => {
+    // mfaEmDivida() é falso para quem nunca cadastrou fator. Para uma operação
+    // irreversível isso não basta: a pessoa precisa ativar a verificação antes.
+    mfaPendente = false;
+    nivelDaSessao = "aal1";
+    const r = await apagarDadosOperacionaisDaOrganizacao({ confirmNome: NOME_DA_ORG });
+    expect(r).toEqual({ ok: false, error: "mfa_required" });
+    expect(delecoes).toEqual([]);
   });
 });
 

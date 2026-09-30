@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { audit } from "@/lib/audit";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
-import { ROLE_RANK } from "@/lib/auth/types";
+import { portaoDeAdminDaOrganizacao } from "@/lib/auth/portao-de-escrita";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import {
   interfaceSettingsSchema,
@@ -39,9 +39,8 @@ export async function atualizarInterfaceDaEmpresa(input: InterfaceSettings): Pro
   if (supportWriteError(authUser.support)) return { ok: false, error: "forbidden" };
   const activeOrg = await resolveActiveOrg(authUser);
   if (!activeOrg) return { ok: false, error: "forbidden_tenant" };
-  if (!authUser.is_platform_admin && ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
-    return { ok: false, error: "forbidden_role" };
-  }
+  const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
+  if (!portao.ok) return { ok: false, error: portao.erro };
 
   // Mesma guarda da escolha por vínculo: recusa a seleção que deixaria a empresa
   // sem NENHUMA área além das essenciais. As essenciais continuariam aparecendo

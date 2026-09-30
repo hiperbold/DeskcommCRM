@@ -75,11 +75,14 @@ function adminComConvite(linha: { revoked_at: string | null } | null) {
   };
 }
 
-async function aplicar(linha: { revoked_at: string | null } | null) {
+async function aplicar(
+  linha: { revoked_at: string | null } | null,
+  payload: typeof PAYLOAD & { invited_by?: string } = PAYLOAD,
+) {
   const { createAdminClient } = await import("@/lib/supabase/admin");
   vi.mocked(createAdminClient).mockReturnValue(adminComConvite(linha) as never);
   const { aplicarConvite } = await import("@/lib/auth/aplicar-convite");
-  return aplicarConvite({ userId: USUARIO_ID, payload: PAYLOAD });
+  return aplicarConvite({ userId: USUARIO_ID, payload });
 }
 
 describe("aplicarConvite consulta a LINHA, não só o token", () => {
@@ -108,12 +111,21 @@ describe("aplicarConvite consulta a LINHA, não só o token", () => {
     expect(rpcDoAceite).toHaveBeenCalled();
   });
 
-  it("convite SEM linha segue o fluxo — emitido antes da migration 0238", async () => {
-    // Congela a decisão que o cabeçalho do módulo documenta: ausência de linha
-    // NÃO é revogação. Sem este caso, alguém "endureceria" a guarda para
-    // `!linha || linha.revoked_at` e quebraria todo convite antigo, numa
-    // instalação que não tem como reemitir o que já foi enviado.
-    expect((await aplicar(null)).ok).toBe(true);
+  it("convite SEM linha mas COM convidador segue o fluxo: o dono de um tenant novo nasce assim", async () => {
+    // Ausência de linha NÃO é revogação. `/api/v1/admin/tenants` emite o convite
+    // do dono sem gravar `team_invites` (a idempotência é do `invite_id` da
+    // criação), mas o token sempre traz `invited_by`. Endurecer a guarda para
+    // `!linha || linha.revoked_at` quebraria a criação de organizações.
+    expect((await aplicar(null, { ...PAYLOAD, invited_by: USUARIO_ID })).ok).toBe(true);
+  });
+
+  it("⭐ convite SEM linha e SEM convidador é recusado: o formato da action do onboarding sem portão (D-089)", async () => {
+    // Um viewer emitia token com papel admin pela action do onboarding, que não
+    // gravava linha nem `invited_by`. Nenhum emissor atual produz esse formato;
+    // o token que sobrou na rua (validade de 24h) não vira vínculo.
+    const r = await aplicar(null);
+    expect(r).toEqual({ ok: false, motivo: "invalid_or_expired" });
+    expect(rpcDoAceite).not.toHaveBeenCalled();
   });
 
   it("a recusa da própria função do banco (42501) também não é vínculo", async () => {

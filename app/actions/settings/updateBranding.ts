@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 
 import { audit } from "@/lib/audit";
-import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
+import { requirePlatformAdminFull } from "@/lib/auth/portao-de-escrita";
 import { invalidarMarcaDaInstalacao } from "@/lib/branding/instalacao";
 import { normalizarHex } from "@/lib/branding/rampa";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
@@ -58,7 +58,9 @@ export type UpdateBrandingResult =
  * `platform_admins`, e `aal2` quando `mfa_required`) e é o MESMO gate do layout
  * de `/admin` — então, para quem chega pela tela, nada muda: essa pessoa já
  * passou por ele para ver o formulário. O que muda é o caminho que não passa
- * pela tela. Ele redireciona em vez de devolver `{ ok: false }`, e o formulário
+ * pela tela. A ESCRITA usa `requirePlatformAdminFull()`, que acrescenta o que o
+ * layout não cobra: escopo `full` (o `support_readonly` só olha) e
+ * `mfaEmDivida()` (sessão aal1 de quem tem fator não grava). Ele redireciona em vez de devolver `{ ok: false }`, e o formulário
  * não embrulha a chamada em `try/catch`, então o `NEXT_REDIRECT` sobe para o
  * runtime como deve.
  *
@@ -78,7 +80,7 @@ export async function updateBranding(
     return { ok: false, error: "validation_failed", details: parsed.error.flatten() };
   }
 
-  const { user: authUser } = await requirePlatformAdmin();
+  const { user: authUser } = await requirePlatformAdminFull();
 
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");
