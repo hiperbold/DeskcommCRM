@@ -242,6 +242,15 @@ export function createDefaultRegistry(opts?: {
       return allowlistedFetch(url, init, { allowlist: allow });
     };
   };
+  // `baseUrl` só chega aqui vindo do binding do painel (`ai_purpose_bindings`),
+  // escolhido por quem administra UMA organização, e a chamada leva a chave dela.
+  // A allowlist do egress segue o endereço escolhido, então sozinha ela
+  // AUTORIZARIA um destino interno: por isso o endereço da empresa passa
+  // também, ANTES dela, pela régua de destino de organização (decisão 22-d), a
+  // cada requisição. Sem `baseUrl` o endpoint é o canônico do provedor (ou o do
+  // `.env` da instalação) e só a allowlist vale, como sempre.
+  const contidoOuJulgado = (endpoint: string, baseUrl: string | undefined): typeof fetch =>
+    baseUrl ? fetchParaDestinoDaOrganizacao(contain(endpoint)) : contain(endpoint);
   return {
     anthropic: (apiKey, modelId) =>
       createAnthropic({ apiKey, fetch: contain(ANTHROPIC_ENDPOINT) })(modelId),
@@ -268,7 +277,7 @@ export function createDefaultRegistry(opts?: {
         apiKey,
         baseURL: endpoint,
         headers: cabecalhosDeAtribuicaoOpenRouter(),
-        fetch: contain(endpoint),
+        fetch: contidoOuJulgado(endpoint, baseUrl),
       });
       // Chat Completions, NÃO Responses: a OpenRouter fala a API da OpenAI
       // (chat/completions). O `createOpenAI()(modelId)` desta versão do SDK usa
@@ -288,7 +297,7 @@ export function createDefaultRegistry(opts?: {
      */
     deepseek: (apiKey, modelId, baseUrl) => {
       const endpoint = baseUrl ?? DEEPSEEK_ENDPOINT;
-      const contido = contain(endpoint);
+      const contido = contidoOuJulgado(endpoint, baseUrl);
       const fetchFinal =
         opts?.deepseekThinking === 'disabled' ? comRaciocinioDesligado(contido) : contido;
       return createOpenAI({ apiKey, baseURL: endpoint, fetch: fetchFinal })(modelId);
@@ -301,7 +310,7 @@ export function createDefaultRegistry(opts?: {
      */
     requesty: (apiKey, modelId, baseUrl) => {
       const endpoint = baseUrl ?? REQUESTY_ENDPOINT;
-      return createOpenAI({ apiKey, baseURL: endpoint, fetch: contain(endpoint) }).chat(modelId);
+      return createOpenAI({ apiKey, baseURL: endpoint, fetch: contidoOuJulgado(endpoint, baseUrl) }).chat(modelId);
     },
     /**
      * Provedor personalizado (#1642): o endpoint É DO OPERADOR e vem na

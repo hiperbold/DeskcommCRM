@@ -30,6 +30,8 @@ import {
 import { PAPEIS, PONTOS_DE_IA, PONTO_POR_ID } from "@/lib/ai/pontos/registro";
 import { PROVEDORES, ehProvedorSuportado } from "@/lib/ai/pontos/provedores";
 import { validarBinding } from "@/lib/ai/pontos/validar-binding";
+import { descreverErroDeValidacao } from "@/lib/ai/credenciais/erro-de-validacao";
+import { motivoDaRecusaDeDestino } from "@/lib/automation/destinos-internos-autorizados";
 import { lerAmbiente } from "@/lib/instalacao/ambiente";
 import { modeloDeTranscricaoEmVigor } from "@/lib/messaging/media/transcription";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -257,6 +259,24 @@ export async function PUT(req: NextRequest): Promise<Response> {
 
   const ponto = PONTO_POR_ID.get(corpo.purpose);
   if (!ponto) return fail("ponto_desconhecido", `"${corpo.purpose}" não é um ponto do sistema`, 404);
+
+  // O endereço é escolha de uma ORGANIZAÇÃO e quem chama é o servidor, com a
+  // chave dela no cabeçalho. `z.string().url()` só confere a forma: sem esta
+  // recusa o admin gravava o metadata da nuvem (169.254.169.254), localhost ou
+  // um serviço do compose, e o servidor fazia o POST para lá. É a MESMA régua
+  // que o provedor personalizado e a visão já usam (decisão 22-d); o uso
+  // também a aplica a cada chamada, porque um nome que passou a resolver para
+  // IP interno depois de gravado só se pega lá.
+  if (corpo.base_url) {
+    const recusa = await motivoDaRecusaDeDestino(corpo.base_url, "organizacao");
+    if (recusa) {
+      return fail(
+        "base_url_recusada",
+        t(descreverErroDeValidacao(recusa).frase),
+        422,
+      );
+    }
+  }
 
   const db = await createClient();
 

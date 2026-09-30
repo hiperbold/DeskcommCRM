@@ -529,6 +529,18 @@ async function decifrarChave(
 }
 
 /**
+ * O `baseUrl` de `instanciar` só vem de `ai_purpose_bindings.base_url`, tabela
+ * POR ORGANIZAÇÃO editada por quem a administra, e a chamada leva a chave da
+ * empresa no cabeçalho. Endereço escolhido por ela passa pela régua de destino
+ * a cada requisição (decisão 22-d), senão o admin apontaria o provedor para o
+ * metadata da nuvem ou para um serviço interno do compose. Sem `baseUrl` vale o
+ * endpoint canônico do provedor e nada muda: não há endereço de empresa a julgar.
+ */
+function guardaDoEndereco(baseUrl: string | null): { fetch?: typeof fetch } {
+  return baseUrl ? { fetch: fetchParaDestinoDaOrganizacao() } : {};
+}
+
+/**
  * Instancia o provider. Espelha `createDefaultRegistry` do agent-engine — e a
  * duplicação é consciente e temporária: unificar exige que estes workers falem
  * `pg.Pool`, que é a dívida registrada no handoff. Provider desconhecido
@@ -549,14 +561,14 @@ function instanciar(
     case "google":
       return createGoogleGenerativeAI({ apiKey })(modelId);
     case "openrouter":
-      return createOpenAI({ apiKey, baseURL: baseUrl ?? OPENROUTER_BASE_URL }).chat(modelId); // ver providers.ts
+      return createOpenAI({ apiKey, baseURL: baseUrl ?? OPENROUTER_BASE_URL, ...guardaDoEndereco(baseUrl) }).chat(modelId); // ver providers.ts
     // A DeepSeek fala a API da OpenAI. Sem este caso, uma organização em
     // DeepSeek cairia no `default` (null) e a pilha antiga seguiria para o
     // padrão com aviso — a tela ofereceria um provedor que estes workers ignoram.
     case "deepseek":
-      return createOpenAI({ apiKey, baseURL: baseUrl ?? DEEPSEEK_ENDPOINT })(modelId);
+      return createOpenAI({ apiKey, baseURL: baseUrl ?? DEEPSEEK_ENDPOINT, ...guardaDoEndereco(baseUrl) })(modelId);
     case "requesty":
-      return createOpenAI({ apiKey, baseURL: baseUrl ?? REQUESTY_ENDPOINT }).chat(modelId); // ver providers.ts
+      return createOpenAI({ apiKey, baseURL: baseUrl ?? REQUESTY_ENDPOINT, ...guardaDoEndereco(baseUrl) }).chat(modelId); // ver providers.ts
     // Provedor personalizado (#1642): endpoint do operador. Sem `baseUrl` não
     // há onde ir — `null` deixa o chamador cair no padrão COM AVISO, que é o
     // contrato deste switch; inventar um endpoint seria mandar a chave do

@@ -23,6 +23,7 @@ import {
 } from "@/lib/ai/embeddings/chave";
 import { gatewayHeaders, type ModelId } from "@/lib/ai/gateway";
 import { registrarTelemetriaSemCusto } from "@/lib/ai/telemetria-sem-custo";
+import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
 
 export interface EmbedOptions {
   organizationId: string;
@@ -83,7 +84,16 @@ export async function embedText(
     ? modelId
     : createOpenAI({
         apiKey: chave.apiKey ?? "",
-        ...(chave.baseUrl ? { baseURL: chave.baseUrl } : {}),
+        // O endereço só existe aqui quando veio do binding da ORGANIZAÇÃO (o
+        // `.env` da instalação entra pelo gateway, que não passa por este
+        // ramo), e quem chama é o servidor, com a chave da empresa no
+        // cabeçalho: cada requisição passa pela régua de destino da
+        // organização antes de sair (decisão 22-d), senão o admin de uma
+        // empresa apontaria o embedding para o metadata da nuvem ou para um
+        // serviço interno do compose.
+        ...(chave.baseUrl
+          ? { baseURL: chave.baseUrl, fetch: fetchParaDestinoDaOrganizacao() }
+          : {}),
       }).textEmbeddingModel(modelId.replace(/^openai\//, ""));
 
   const result = await embed({
