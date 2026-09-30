@@ -25,13 +25,25 @@ function extraiBlocoBaseline(): string {
   return BASELINE.slice(posicaoMarcador, fim + 1);
 }
 
+/**
+ * O preenchimento inicial de `billing_usage_counters`, nas DUAS formas que
+ * existem: `do update` na migration 0905 (já aplicada, nunca editada) e
+ * `do nothing` no baseline (0912, D-053 item 2: o baseline é reaplicado inteiro
+ * a cada atualização e só pode CRIAR a linha que falta). A divergência é
+ * declarada, uma só, e coberta por um teste próprio abaixo; a comparação do
+ * resto do bloco troca as duas formas por um marcador.
+ */
+const PREENCHIMENTO_INICIAL =
+  /insert into public\.billing_usage_counters \(organization_id, item, valor\)\nselect cl\.organization_id, 'leads', count\(\*\)\nfrom public\.crm_leads cl\nwhere cl\.status = 'open'\ngroup by cl\.organization_id\non conflict \(organization_id, item\) do (?:update\nset valor = excluded\.valor,\nupdated_at = now\(\)|nothing);/;
+
 /** Remove linhas de comentário (--) e linhas em branco, para comparar só o SQL. */
 function removeComentariosEBrancas(sql: string): string {
   return sql
     .split("\n")
     .map((linha) => linha.trim())
     .filter((linha) => linha.length > 0 && !linha.startsWith("--"))
-    .join("\n");
+    .join("\n")
+    .replace(PREENCHIMENTO_INICIAL, "<preenchimento inicial de billing_usage_counters>");
 }
 
 describe("0905 uso dos planos e trava (parte 1, Tarefa 2)", () => {
@@ -90,8 +102,8 @@ describe("0905 uso dos planos e trava (parte 1, Tarefa 2)", () => {
     }
   });
 
-  it("o preenchimento inicial conta leads abertos e é idempotente por on conflict do update", () => {
-    for (const sql of [MIGRATION, extraiBlocoBaseline()]) {
+  it("o preenchimento inicial conta leads abertos e é idempotente por on conflict do update (migration 0905, já aplicada)", () => {
+    for (const sql of [MIGRATION]) {
       expect(sql).toMatch(/from public\.crm_leads cl/);
       expect(sql).toMatch(/where cl\.status = 'open'/);
       expect(sql).toMatch(/group by cl\.organization_id/);
@@ -109,6 +121,29 @@ describe("0905 uso dos planos e trava (parte 1, Tarefa 2)", () => {
       expect(preenchimento).toMatch(/group by cl\.organization_id/);
       expect(preenchimento).not.toMatch(/valor = (public\.)?billing_usage_counters\.valor \+/);
     }
+  });
+
+  it("D-053 item 2 (0912): no BASELINE o preenchimento inicial só cria a linha que falta (on conflict do nothing), nunca sobrescreve", () => {
+    // O baseline é reaplicado INTEIRO a cada atualização de produção, sem trava:
+    // sobrescrever o contador ali deixava um lead confirmado entre a foto e o
+    // upsert com erro de 1 até o conferidor diário. Aqui o comando só cria a
+    // linha ausente; a deriva de contador existente é do
+    // fn_billing_conferir_contador (cron diário).
+    const bloco = extraiBlocoBaseline();
+    const inicio = bloco.indexOf("insert into public.billing_usage_counters (organization_id, item, valor)\nselect cl.organization_id");
+    expect(inicio, "o preenchimento inicial sumiu do bloco 0905 do baseline").toBeGreaterThan(-1);
+    const preenchimento = bloco.slice(inicio, bloco.indexOf(";", inicio) + 1);
+    expect(preenchimento).toMatch(/from public\.crm_leads cl/);
+    expect(preenchimento).toMatch(/where cl\.status = 'open'/);
+    expect(preenchimento).toMatch(/group by cl\.organization_id/);
+    expect(preenchimento).toMatch(/on conflict \(organization_id, item\) do nothing;$/);
+    expect(preenchimento).not.toMatch(/do update/);
+    expect(preenchimento).not.toMatch(/excluded\.valor/);
+    // E é a ÚNICA passada de recálculo em todo o baseline: um segundo
+    // `insert ... select ... from public.crm_leads` no contador reabriria a
+    // sobrescrita a cada reaplicação (o `greatest` da 0910 saiu do baseline).
+    const passadas = BASELINE.split("insert into public.billing_usage_counters (organization_id, item, valor)\nselect cl.organization_id").length - 1;
+    expect(passadas).toBe(1);
   });
 
   it("authenticated perde tudo nas duas tabelas e recebe de volta só o select de billing_usage_counters", () => {
@@ -494,15 +529,16 @@ describe("0905 os gatilhos que avisam (parte 2, Tarefa 3)", () => {
         // BASELINE é o arquivo INTEIRO: as três ocorrências da 0905 acima
         // MAIS a soma do BEFORE de crm_leads na 0907 (que continua existindo
         // para o caso em que o bloqueio ESTÁ ativo, conferida em
-        // planos-bloqueio-migration.test.ts) MAIS a recalibração da
-        // 0910/D-063 (achado baixo 5 da revisão da F3: repete o
-        // preenchimento inicial da 0905 com greatest(valor atual,
-        // recalculado), depois dela no arquivo). Total: 5. A redefinição da
+        // planos-bloqueio-migration.test.ts). Total: 4. A recalibração da
+        // 0910/D-063 (greatest) NÃO conta mais: saiu do baseline na 0912
+        // (D-053 item 2), porque o baseline é reaplicado inteiro a cada
+        // atualização e só o preenchimento da 0905 (agora on conflict do
+        // nothing) pode existir lá. A redefinição da
         // 0910/D-055 repete o MESMO insert de sempre (corpo idêntico, só o
         // bloco exception ganhou a gravação em billing_trigger_alarmes): não
         // é um insert novo no contador, é o corpo antigo ficando morto no
         // arquivo, por isso excluído acima em vez de contado aqui.
-        expect(ocorrenciasDeInsert).toBe(5);
+        expect(ocorrenciasDeInsert).toBe(4);
       }
     }
   });

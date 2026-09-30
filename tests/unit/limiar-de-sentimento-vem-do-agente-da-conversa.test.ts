@@ -364,3 +364,29 @@ describe("limiar de sentimento — o agente da conversa é quem manda (#486)", (
     ).toBeNull();
   });
 });
+
+describe("D-057: a linha de custo da classificação diz de quem é a chave", () => {
+  async function origemGravada(origem: "binding" | "credencial_da_organizacao" | "padrao"): Promise<unknown> {
+    vi.mocked(resolverModeloDoPonto).mockResolvedValue({
+      model: "modelo-dublê",
+      modelId: "anthropic/claude-haiku-4-5",
+      origem,
+    } as unknown as Awaited<ReturnType<typeof resolverModeloDoPonto>>);
+    await rodar({ sessaoDaConversa: SESSAO_CLINICA });
+    const linhas = vi
+      .mocked(logInvocation)
+      .mock.calls.map((c) => c[0])
+      .filter((l) => l.invocation_kind === "sentiment_classify");
+    expect(linhas.length, "a classificação não deixou linha de custo").toBeGreaterThan(0);
+    return linhas[linhas.length - 1]?.origem_da_chave;
+  }
+
+  it("modelo que caiu na chave do .env da instalação grava chave_da_instalacao (a única que debita a carteira)", async () => {
+    expect(await origemGravada("padrao")).toBe("chave_da_instalacao");
+  });
+
+  it("modelo resolvido por binding ou por credencial que o cliente cadastrou grava credencial_da_organizacao (nunca debita)", async () => {
+    expect(await origemGravada("binding")).toBe("credencial_da_organizacao");
+    expect(await origemGravada("credencial_da_organizacao")).toBe("credencial_da_organizacao");
+  });
+});

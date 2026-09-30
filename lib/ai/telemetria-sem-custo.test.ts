@@ -101,6 +101,53 @@ describe("registrarTelemetriaSemCusto", () => {
     expect(row["cost_cents"]).toBeCloseTo(0.000084, 9);
   });
 
+  it("D-053 item 3: grava o provedor REAL e cota pelo provedor do modelo (providerParaPreco), sem perder o custo", async () => {
+    catalogoLinhas = [
+      {
+        provider: "openai",
+        model_id: "text-embedding-3-small",
+        input_price_per_million_cents: 2,
+        output_price_per_million_cents: 0,
+      },
+    ];
+    await registrarTelemetriaSemCusto({
+      organizationId: "org-1",
+      purpose: "embedding_indexar",
+      provider: "gateway",
+      providerParaPreco: "openai",
+      model: "openai/text-embedding-3-small",
+      inputTokens: 42,
+      origemDaChave: "chave_da_instalacao",
+    });
+
+    const row = insertMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(row).toMatchObject({ provider: "gateway", origem_da_chave: "chave_da_instalacao" });
+    expect(row["cost_cents"]).toBeCloseTo(0.000084, 9);
+  });
+
+  it("sem providerParaPreco, o preço é procurado no próprio provider gravado (o catálogo não tem `gateway`: nulo, nunca zero)", async () => {
+    catalogoLinhas = [
+      {
+        provider: "openai",
+        model_id: "text-embedding-3-small",
+        input_price_per_million_cents: 2,
+        output_price_per_million_cents: 0,
+      },
+    ];
+    await registrarTelemetriaSemCusto({
+      organizationId: "org-1",
+      purpose: "embedding_indexar",
+      provider: "gateway",
+      model: "openai/text-embedding-3-small",
+      inputTokens: 42,
+    });
+
+    const row = insertMock.mock.calls[0]![1] as Record<string, unknown>;
+    expect(row["cost_cents"]).toBeNull();
+    // Sem origem informada, a coluna fica nula: nula não debita a carteira.
+    expect(row["origem_da_chave"]).toBeNull();
+  });
+
   it("embedding/visão sem preço no catálogo continuam com cost_cents nulo (nunca zero)", async () => {
     catalogoLinhas = [];
     await registrarTelemetriaSemCusto({

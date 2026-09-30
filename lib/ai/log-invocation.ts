@@ -5,6 +5,7 @@
  * return without waiting for the audit insert; failures bubble to logger only.
  */
 
+import type { OrigemDaChaveLlm } from "@/lib/agent-engine/edge/llm/credentials";
 import { normalizarErro } from "@/lib/agent-engine/edge/llm/run-model-call";
 import type { ProvedorComChave } from "@/lib/ai/pontos/provedores";
 import type { OrigemDaEscolha } from "@/lib/ai/pontos/resolver";
@@ -63,6 +64,18 @@ export interface LogInvocationInput {
   provider?: ProvedorComChave;
   /** Quem decidiu usar este modelo — a coluna "por que este modelo" da tela de Execuções. */
   origem_da_escolha?: OrigemDaEscolha;
+  /**
+   * De QUEM é a chave que pagou esta chamada (0906, carteira de tokens; D-057).
+   * `chave_da_instalacao` é a única origem que DEBITA a carteira; `credencial_da_organizacao`
+   * (a chave que o cliente cadastrou) nunca debita.
+   *
+   * Ausente ou `null` = quem chama NÃO sabe, e a coluna fica nula, que também
+   * não debita: na dúvida, nunca cobrar do cliente o que ele pagou com a
+   * própria chave. Quem chama só passa um valor quando o RESOLVEDOR do modelo
+   * disse de quem é a chave (`origemDaChaveDoModelo`, `lib/ai/gateway-binding.ts`),
+   * nunca um palpite. O Jev (provedor `typesafe`) não passa nada aqui.
+   */
+  origem_da_chave?: OrigemDaChaveLlm | null;
   finish_reason?: string | null;
   /**
    * Quando quem chama já tem o código canônico da falha (o Jev devolve o seu).
@@ -103,6 +116,8 @@ export function logInvocation(row: LogInvocationInput): void {
           provider: row.provider ?? providerDoModelo(row.model),
           model: row.model,
           origem_da_escolha: row.origem_da_escolha ?? null,
+          // 0906: nula quando quem chama não sabe (ver o tipo). Nula não debita.
+          origem_da_chave: row.origem_da_chave ?? null,
           input_tokens: row.prompt_tokens,
           output_tokens: row.completion_tokens,
           cost_cents: row.cost_cents,

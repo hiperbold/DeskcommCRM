@@ -19,6 +19,15 @@ vi.mock("@/lib/channels/uazapi/ingest", () => ({
   ingestUazapiMensagem: (...args: unknown[]) => ingestUazapiMensagem(...(args as [])),
 }));
 
+// Este arquivo mede o caminho POR PROCESSO do guard. Sem isto, o `.env.local` de
+// quem roda o teste (com Redis de desenvolvimento configurado) faria o guard
+// falar com um Redis real e o estado vazaria entre execuções. O caminho
+// compartilhado tem arquivo próprio: `uazapi-replay-guard-compartilhado.test.ts`.
+vi.mock("@/lib/env", async (importOriginal) => {
+  const original = await importOriginal<{ env: Record<string, unknown> }>();
+  return { ...original, env: { ...original.env, UPSTASH_REDIS_REST_URL: "", UPSTASH_REDIS_REST_TOKEN: "" } };
+});
+
 import { CHANNEL_PROVIDER_UAZAPI } from "@/lib/channels/capabilities";
 import { handleInboundWebhook, type InboundWebhookInput } from "@/lib/channels/inbound";
 import {
@@ -125,38 +134,37 @@ function adminDeSaude() {
 describe("replay-guard puro", () => {
   beforeEach(() => esquecerEventosUazapiVistos());
 
-  it("primeira vez que vê a chave, sem marcar: não é repetido, e continua não sendo depois de checar de novo", () => {
+  it("primeira vez que vê a chave, sem marcar: não é repetido, e continua não sendo depois de checar de novo", async () => {
     const chave = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
-    expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
+    expect(await eventoUazapiRepetido(chave, 1_000)).toBe(false);
     // `eventoUazapiRepetido` só LÊ: checar de novo sem marcar não muda nada.
-    expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
+    expect(await eventoUazapiRepetido(chave, 1_000)).toBe(false);
   });
 
-  it("depois de marcada, a chave é repetida dentro da janela", () => {
+  it("depois de marcada, a chave é repetida dentro da janela", async () => {
     const chave = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
-    expect(eventoUazapiRepetido(chave, 1_000)).toBe(false);
-    marcarEventoUazapiVisto(chave, 1_000);
-    expect(eventoUazapiRepetido(chave, 1_000 + JANELA_DE_REPLAY_MS - 1)).toBe(true);
+    expect(await eventoUazapiRepetido(chave, 1_000)).toBe(false);
+    await marcarEventoUazapiVisto(chave, 1_000);
+    expect(await eventoUazapiRepetido(chave, 1_000 + JANELA_DE_REPLAY_MS - 1)).toBe(true);
   });
 
-  it("depois que a janela vence, a chave marcada deixa de ser repetida", () => {
+  it("depois que a janela vence, a chave marcada deixa de ser repetida", async () => {
     const chave = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
-    marcarEventoUazapiVisto(chave, 1_000);
-    expect(eventoUazapiRepetido(chave, 1_000 + JANELA_DE_REPLAY_MS + 1)).toBe(false);
+    await marcarEventoUazapiVisto(chave, 1_000);
+    expect(await eventoUazapiRepetido(chave, 1_000 + JANELA_DE_REPLAY_MS + 1)).toBe(false);
   });
 
   it("corpo diferente (1 byte que seja) gera chave diferente", () => {
     const a = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
-    const b = chaveDoEventoUazapi("sess-1", "connection", "corpo-b");
-    expect(a).not.toBe(b);
+    const b = chaveDoEventoUazapi("sess-1", "connection", "corpo-b");    expect(a).not.toBe(b);
   });
 
-  it("mesmo corpo, sessão diferente: chaves diferentes, uma não bloqueia a outra", () => {
+  it("mesmo corpo, sessão diferente: chaves diferentes, uma não bloqueia a outra", async () => {
     const a = chaveDoEventoUazapi("sess-1", "connection", "corpo-a");
     const b = chaveDoEventoUazapi("sess-2", "connection", "corpo-a");
-    marcarEventoUazapiVisto(a, 1_000);
-    expect(eventoUazapiRepetido(a, 1_000)).toBe(true);
-    expect(eventoUazapiRepetido(b, 1_000)).toBe(false);
+    await marcarEventoUazapiVisto(a, 1_000);
+    expect(await eventoUazapiRepetido(a, 1_000)).toBe(true);
+    expect(await eventoUazapiRepetido(b, 1_000)).toBe(false);
   });
 });
 

@@ -78,6 +78,14 @@ export interface TelemetriaSemCustoInput {
   /** Casa com o `id` do ponto em `lib/ai/pontos/registro.ts`. */
   purpose: string;
   provider: string;
+  /**
+   * O provedor cujo PREÇO vale para esta chamada, quando difere do que se grava
+   * em `provider`. Ausente = o mesmo `provider`. Existe porque `provider` agora
+   * diz por ONDE a chamada saiu (`gateway`, `custom`) e o catálogo `ai_models`
+   * só conhece o provedor do MODELO: embedding via gateway continua custando o
+   * preço do `text-embedding-3-small` da OpenAI (D-053 item 3).
+   */
+  providerParaPreco?: string;
   model: string;
   /** Ausente = 0. Transcrição não tem token de entrada (é cobrada por minuto). */
   inputTokens?: number;
@@ -91,6 +99,26 @@ export interface TelemetriaSemCustoInput {
    * decisão 3 da fase).
    */
   origemDaChave?: "chave_da_instalacao" | "credencial_da_organizacao" | null;
+}
+
+/**
+ * O modelo REAL de uma chamada, para a coluna `llm_calls.model` (D-053 item 3).
+ *
+ * Vale o que foi CONFIGURADO (é o id que casa com o catálogo de preço); sem ele
+ * (nulo, vazio ou só espaços) vale o id que o provedor devolveu na resposta; e
+ * só na falta dos dois a lacuna sai declarada como `desconhecido`, nunca como
+ * string vazia (que a tela de uso mostrava como modelo em branco).
+ */
+export function modeloRealDaChamada(
+  configurado: string | null | undefined,
+  devolvidoPeloProvedor: string | null | undefined,
+): string {
+  for (const candidato of [configurado, devolvidoPeloProvedor]) {
+    // Teto de 200: o id devolvido por um endereço próprio do cliente é texto
+    // de fora e vai direto para `llm_calls`.
+    if (typeof candidato === "string" && candidato.trim() !== "") return candidato.slice(0, 200);
+  }
+  return "desconhecido";
 }
 
 /**
@@ -117,7 +145,7 @@ export async function registrarTelemetriaSemCusto(input: TelemetriaSemCustoInput
       input.purpose === "transcricao_de_audio"
         ? null
         : await custoCentsComCatalogo(
-            input.provider,
+            input.providerParaPreco ?? input.provider,
             input.model,
             { inputTokens: input.inputTokens ?? 0, outputTokens: input.outputTokens ?? 0 },
             undefined,
@@ -136,8 +164,8 @@ export async function registrarTelemetriaSemCusto(input: TelemetriaSemCustoInput
       input_tokens: input.inputTokens ?? 0,
       output_tokens: input.outputTokens ?? 0,
       cost_cents: costCents,
-      // 0906: nula quando o chamador não sabe (embedding hoje não sabe sem
-      // reestruturar a resolução de credencial; ver hiperbold/planos).
+      // 0906: nula quando o chamador não sabe. Embedding (D-057) e os demais
+      // pontos passam a origem que o resolvedor deles já conhece.
       origem_da_chave: input.origemDaChave ?? null,
     });
     if (error) {

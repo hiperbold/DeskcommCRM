@@ -46,6 +46,7 @@
  * aqui governa a CHAVE e não o MODELO, e por isso que a versão de índice grava
  * com que modelo foi calculada (`ai_knowledge_versions.embedding_model`).
  */
+import type { OrigemDaChaveLlm } from "@/lib/agent-engine/edge/llm/credentials";
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
@@ -63,6 +64,49 @@ export type OrigemDaChave =
   | "credencial_da_organizacao"
   | "gateway_da_instalacao"
   | "chave_da_instalacao";
+
+/**
+ * A origem da chave de embedding no vocabulário de `llm_calls.origem_da_chave`
+ * (0906, carteira de tokens; D-057), que só conhece DE QUEM é a chave:
+ *
+ *  - `binding_do_ponto` e `credencial_da_organizacao`: a chave é uma linha de
+ *    `ai_provider_credentials` DA PRÓPRIA organização (as duas leituras deste
+ *    arquivo filtram `organization_id`), a que o cliente cadastrou. Nunca debita.
+ *  - `gateway_da_instalacao` e `chave_da_instalacao`: a chave vem do `.env` da
+ *    instalação (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`), a que a Hiperbold
+ *    paga. É a origem que debita, quando o peso do ponto for maior que zero
+ *    (hoje `embedding_indexar` e `embedding_consultar` pesam 0).
+ *
+ * `Record` e não `switch`: um degrau novo da escada em `OrigemDaChave` quebra a
+ * compilação aqui, em vez de cair em silêncio numa das duas origens.
+ */
+const ORIGEM_NO_VOCABULARIO_DE_LLM_CALLS: Record<OrigemDaChave, OrigemDaChaveLlm> = {
+  binding_do_ponto: "credencial_da_organizacao",
+  credencial_da_organizacao: "credencial_da_organizacao",
+  gateway_da_instalacao: "chave_da_instalacao",
+  chave_da_instalacao: "chave_da_instalacao",
+};
+
+export function origemDaChaveParaLlmCalls(origem: OrigemDaChave): OrigemDaChaveLlm {
+  return ORIGEM_NO_VOCABULARIO_DE_LLM_CALLS[origem];
+}
+
+/**
+ * O provedor REAL por onde a chamada de embedding sai, no que `llm_calls.provider`
+ * grava (D-053 item 3). O modelo é fixo (`text-embedding-3-small`, da OpenAI),
+ * mas o provedor que atende nem sempre é a OpenAI:
+ *
+ *  - pelo gateway da instalação: `gateway`;
+ *  - por endereço próprio (`baseUrl`, o do binding do painel): `custom`, o mesmo
+ *    rótulo que o painel usa para "compatível com OpenAI, endereço seu". O
+ *    endereço em si NÃO vai para a telemetria: pode carregar credencial;
+ *  - direto na OpenAI: `openai`.
+ */
+export function provedorDoEmbedding(chave: Pick<ChaveDeEmbedding, "viaGateway" | "baseUrl">): string {
+  if (chave.viaGateway) return "gateway";
+  if (chave.baseUrl) return "custom";
+  return "openai";
+}
 
 export const EXPLICACAO_DA_ORIGEM: Record<OrigemDaChave, string> = {
   binding_do_ponto: "Escolhida por você no painel de Provedores.",

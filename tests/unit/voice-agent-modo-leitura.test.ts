@@ -171,6 +171,20 @@ describe("workers/voice-agent: portão de conta suspensa (D-065)", () => {
     expect(mocks.bridgeCtor).toHaveBeenCalledTimes(1);
   });
 
+  it("conta ativa sem agente de voz: também encerra o socket e não abre a sessão de IA", async () => {
+    mocks.getActiveVoiceAgent.mockResolvedValue(null);
+    const { handleAudioSocketConnection } = await importWorker(adminStub({ modo: "avisar" }));
+    const socket = fakeSocket();
+
+    await handleAudioSocketConnection(socket, UUID, Buffer.alloc(0));
+
+    // Passou pelo portão da conta (não está em leitura) e caiu no caminho de
+    // "sem agente ativo": é o mesmo desfecho da conta suspensa, por outra razão.
+    expect(mocks.getActiveVoiceAgent).toHaveBeenCalledWith(ORG_ID);
+    expect(socket.end).toHaveBeenCalledTimes(1);
+    expect(mocks.bridgeCtor).not.toHaveBeenCalled();
+  });
+
   it("falha ao ler o modo (RPC do banco erra): segue como se não estivesse bloqueada (fail-open)", async () => {
     const { handleAudioSocketConnection } = await importWorker(
       adminStub({ modo: "bloquear", rpcErro: "tempo esgotado" }),

@@ -26,13 +26,26 @@ function extraiBloco0907Baseline(): string {
   return BASELINE.slice(posicaoMarcador, fim + 1);
 }
 
+/**
+ * O preenchimento inicial de `billing_usage_counters` existe em duas formas
+ * por decisão (D-053 item 2, migration 0912): `do update` na migration 0905
+ * (já aplicada, nunca editada) e `do nothing` no baseline, que é reaplicado
+ * inteiro a cada atualização e só pode criar a linha que falta. A divergência é
+ * coberta em `tests/unit/planos-uso-migration.test.ts`; aqui as duas formas
+ * viram um marcador, para o resto do bloco continuar comparado palavra por
+ * palavra.
+ */
+const PREENCHIMENTO_INICIAL =
+  /insert into public\.billing_usage_counters \(organization_id, item, valor\)\nselect cl\.organization_id, 'leads', count\(\*\)\nfrom public\.crm_leads cl\nwhere cl\.status = 'open'\ngroup by cl\.organization_id\non conflict \(organization_id, item\) do (?:update\nset valor = excluded\.valor,\nupdated_at = now\(\)|nothing);/;
+
 /** Remove linhas de comentário (--) e linhas em branco, para comparar só o SQL. */
 function removeComentariosEBrancas(sql: string): string {
   return sql
     .split("\n")
     .map((linha) => linha.trim())
     .filter((linha) => linha.length > 0 && !linha.startsWith("--"))
-    .join("\n");
+    .join("\n")
+    .replace(PREENCHIMENTO_INICIAL, "<preenchimento inicial de billing_usage_counters>");
 }
 
 describe("0907 bloqueio do plano (Tarefa 1): posição e igualdade do bloco no baseline", () => {

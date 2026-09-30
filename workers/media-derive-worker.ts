@@ -9,7 +9,7 @@ import type pg from "pg";
 
 import { extractPdfText } from "@/lib/ai/rag/extractors/pdf";
 import { visaoEmVigor } from "@/lib/ai/pontos/capacidade-em-vigor";
-import { registrarTelemetriaSemCusto } from "@/lib/ai/telemetria-sem-custo";
+import { modeloRealDaChamada, registrarTelemetriaSemCusto } from "@/lib/ai/telemetria-sem-custo";
 import { resolveOrgLlmConfig, type LlmEdgeConfig } from "@/lib/agent-engine/edge/llm/credentials";
 import { createDefaultRegistry } from "@/lib/agent-engine/edge/llm/providers";
 import { createPool } from "@/lib/agent-engine/db/pool";
@@ -483,7 +483,11 @@ function buildDeriveDeps(
       organizationId: orgId,
       purpose: "visao_de_imagem",
       provider: llm.provider,
-      model: llm.defaultModel ?? "",
+      // O modelo REAL da chamada (D-053 item 3). `defaultModel` é o que o
+      // factory recebeu; sem ele (nulo ou vazio) o que vale é o id que o
+      // provedor devolveu na resposta, e só na falta dos dois a lacuna sai
+      // declarada como `desconhecido`, nunca como string vazia.
+      model: modeloRealDaChamada(llm.defaultModel, res.response?.modelId),
       // `?.`: alguns testes deste worker mockam `generateText` sem `usage`,
       // a produção sempre devolve o objeto, mas nada aqui depende disso.
       inputTokens: res.usage?.inputTokens ?? 0,
@@ -624,7 +628,17 @@ function buildDeriveDeps(
           // apontar para um endereço interno, e telemetria não é o lugar
           // para isso vazar. Um rótulo estável identifica "é o serviço
           // próprio da instalação, não a OpenAI" sem carregar o endereço.
-          { provider: "transcricao_propria", model: modeloDoServicoProprio },
+          //
+          // D-057: a chave deste serviço é `TRANSCRIPTION_API_KEY`, do `.env`
+          // da INSTALAÇÃO (nunca uma credencial cadastrada pela organização),
+          // então a origem é `chave_da_instalacao`. Cobrada por minuto e com
+          // tokens zerados (D-051), a chamada não pesa nada na carteira; a
+          // origem fica gravada certa para o dia em que pesar.
+          {
+            provider: "transcricao_propria",
+            model: modeloDoServicoProprio,
+            origemDaChave: "chave_da_instalacao",
+          },
         ),
       )
     : transcricaoPadrao;

@@ -5,7 +5,7 @@
  * gravador), nos dois caminhos (Postgres e HTTP), com o banco de mentira só
  * respondendo às consultas.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
@@ -44,6 +44,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.support.mockResolvedValue(null);
   mocks.guard.mockResolvedValue({ ok: true, user: { id: AGENTE, idioma: "pt-BR" }, org: { orgId: ORG } });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 /** Postgres de mentira: `roteiroValido` diz se a consulta de roteiros o acha (mesma empresa + atendimento). */
@@ -98,6 +102,11 @@ describe("caminho Postgres", () => {
 
 /** Supabase de mentira para o caminho HTTP: registra filtros e o que foi inserido. */
 function http(roteiroValido: boolean) {
+  // D-077: o setup de testes carrega o `.env.local` de desenvolvimento, que
+  // define SUPABASE_DB_URL e faria a rota tomar o caminho Postgres. "Instalação
+  // sem SUPABASE_DB_URL" é o que este bloco afirma, então a variável é retirada
+  // aqui em vez de depender de quem roda ter ou não o arquivo local.
+  vi.stubEnv("SUPABASE_DB_URL", undefined);
   const inseridos: unknown[] = [];
   const filtrosDoRoteiro: Array<[string, unknown]> = [];
   const from = vi.fn((tabela: string) => {

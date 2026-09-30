@@ -407,6 +407,12 @@ Enquanto o gateway não existe, o cliente compra pacote adicional falando com vo
 - **N8. Preço anual** dos três planos, e se tem desconto.
 - **N9. Preço do pacote adicional de tokens**, e de quantos tokens ele é.
 
+### Respondidas pelo Filipe em 29/09/2026 (artefato de perguntas)
+
+- **N8 e pergunta 1, o anual:** além do mensal, **semestral com 10% de desconto e anual com 20%**, cobrados no valor total do período, com possibilidade de parcelar no cartão. Preço sempre arredondado **para baixo** até o final 49 ou 99 mais próximo. Pela regra: Pro R$ 1.049 no semestral e R$ 1.899 no anual; Max R$ 2.149 e R$ 3.799; Escale R$ 3.199 e R$ 5.749 (conta: mensal × meses × desconto, depois o arredondamento). **Em aberto:** no Asaas o parcelado é venda parcelada, não assinatura, então o semestral e o anual parcelados não renovam sozinhos, e o dinheiro entra parcela a parcela, mês a mês; receber tudo de uma vez exige antecipação, que tem taxa e estava fora do escopo (seção 8). Falta o Filipe dizer: máximo de parcelas, quem paga a taxa do parcelamento, se liga a antecipação, e como renova no fim do período.
+- **Pergunta 10, remarcação:** cobrar **o dobro do custo** do token (custo de 1 por milhão vira 2 por milhão). O cliente vê só o valor cobrado, nunca o custo.
+- **N9, pacote adicional:** seguir a recomendação: medir o custo real por atendimento e trazer duas ou três opções de pacote, com tamanho e preço, já com a remarcação de 2 vezes.
+
 ### As que já existiam
 
 São 18, agrupadas pelo assunto e ordenadas pelo que trava mais coisa. Cada uma diz qual fase ela segura e o que eu faço se você não responder. **Nenhuma delas trava a F1.**

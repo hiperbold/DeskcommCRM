@@ -179,6 +179,55 @@ describe("embedText", () => {
       });
     });
 
+    it("D-053 item 3 e D-057: cada caminho da chave grava o provedor REAL e a origem no vocabulário de llm_calls", async () => {
+      const casos = [
+        {
+          nome: "credencial da organização, direto na OpenAI",
+          chave: { apiKey: "sk-org", baseUrl: null, viaGateway: false, origem: "credencial_da_organizacao" },
+          provider: "openai",
+          origem: "credencial_da_organizacao",
+        },
+        {
+          nome: "binding do painel com endereço próprio",
+          chave: { apiKey: "sk-b", baseUrl: "https://gateway.da-empresa.exemplo/v1", viaGateway: false, origem: "binding_do_ponto" },
+          provider: "custom",
+          origem: "credencial_da_organizacao",
+        },
+        {
+          nome: "binding do painel sem endereço próprio",
+          chave: { apiKey: "sk-b", baseUrl: null, viaGateway: false, origem: "binding_do_ponto" },
+          provider: "openai",
+          origem: "credencial_da_organizacao",
+        },
+        {
+          nome: "gateway da instalação",
+          chave: { apiKey: null, baseUrl: null, viaGateway: true, origem: "gateway_da_instalacao" },
+          provider: "gateway",
+          origem: "chave_da_instalacao",
+        },
+        {
+          nome: "chave OpenAI da instalação",
+          chave: { apiKey: "sk-inst", baseUrl: null, viaGateway: false, origem: "chave_da_instalacao" },
+          provider: "openai",
+          origem: "chave_da_instalacao",
+        },
+      ] as const;
+
+      for (const caso of casos) {
+        insertMock.mockReset();
+        chaveMock = () => ({ ...caso.chave, rotulo: null, avisos: [] });
+        await embedText("oi", { organizationId: "org-1" });
+        const row = insertMock.mock.calls[0]![1] as Record<string, unknown>;
+        expect(row, caso.nome).toMatchObject({
+          provider: caso.provider,
+          origem_da_chave: caso.origem,
+          model: "openai/text-embedding-3-small",
+        });
+        // O endereço nunca vai para a telemetria: pode levar credencial.
+        expect(JSON.stringify(row), caso.nome).not.toContain("gateway.da-empresa");
+      }
+    });
+
     it("sem `ponto`, usa o padrão de indexar (mesmo default de resolverChaveDeEmbedding)", async () => {
       await embedText("a", { organizationId: "org-1" });
 

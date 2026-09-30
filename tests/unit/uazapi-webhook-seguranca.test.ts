@@ -31,6 +31,15 @@ vi.mock("@/lib/channels/uazapi/ingest", () => ({
   ingestUazapiMensagem: (...args: unknown[]) => ingestUazapiMensagem(...(args as [])),
 }));
 
+// O guarda de replay fala com o Redis quando há um configurado; o `.env.local`
+// de desenvolvimento tem um, e a chave gravada numa execução faria a seguinte
+// (dentro de 5 min) sair como `evento_repetido`. Aqui o guarda fica só na
+// memória do processo, como no CI.
+vi.mock("@/lib/env", async (importOriginal) => {
+  const original = await importOriginal<{ env: Record<string, unknown> }>();
+  return { ...original, env: { ...original.env, UPSTASH_REDIS_REST_URL: "", UPSTASH_REDIS_REST_TOKEN: "" } };
+});
+
 import { CHANNEL_PROVIDER_UAZAPI } from "@/lib/channels/capabilities";
 import {
   handleInboundWebhook,

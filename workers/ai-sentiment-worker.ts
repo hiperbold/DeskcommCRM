@@ -35,6 +35,7 @@ import { ttlDaAutorizacaoMs } from "@/lib/ai/elegibilidade/gate";
 import { DEFAULT_CLASSIFIER_MODEL } from "@/lib/ai/gateway";
 import { resolverModeloDoPonto } from "@/lib/ai/gateway-binding";
 import { logInvocation, type LogInvocationInput } from "@/lib/ai/log-invocation";
+import { origemDaChaveDoModelo } from "@/lib/ai/origem-da-chave-do-modelo";
 import { DEFAULT_SENTIMENT_THRESHOLD, SENTIMENT_SYSTEM_PROMPT } from "@/lib/ai/prompts/sentiment";
 import type { EventRow } from "@/lib/event-log/dispatcher";
 import { normalizarIdioma } from "@/lib/i18n/idiomas";
@@ -386,6 +387,8 @@ export async function processSentiment(event: EventRow): Promise<SentimentResult
           ...comum,
           ...(clima?.ok ? ({ origem_da_escolha: "jev_cobriu" } as const) : {}),
           model: resolvido.modelId,
+          // D-057: de quem é a chave, dita pelo resolvedor do modelo.
+          origem_da_chave: origemDaChaveDoModelo(resolvido.origem),
           prompt_tokens: 0,
           completion_tokens: 0,
           latency_ms: Date.now() - inicio,
@@ -400,6 +403,8 @@ export async function processSentiment(event: EventRow): Promise<SentimentResult
           ...comum,
           ...origem,
           model: resolvido.modelId,
+          // D-057: de quem é a chave, dita pelo resolvedor do modelo.
+          origem_da_chave: origemDaChaveDoModelo(resolvido.origem),
           prompt_tokens: medido.promptTokens,
           completion_tokens: medido.completionTokens,
           latency_ms: latenciaMs,

@@ -409,9 +409,11 @@ async function uazapiInbound(
   const chaveDoEvento = usaGuardaDeReplay
     ? chaveDoEventoUazapi(input.session.id, tipoDoEvento, input.rawBody)
     : null;
-  if (chaveDoEvento && eventoUazapiRepetido(chaveDoEvento)) {
-    return { ok: true, body: { status: "ignored", reason: "evento_repetido" } };
-  }
+  // A consulta (que pode ir ao Redis) roda depois das recusas baratas de cada
+  // ramo: corpo fora do contrato não paga a ida à rede.
+  const repetido = async () =>
+    chaveDoEvento !== null && (await eventoUazapiRepetido(chaveDoEvento));
+  const recusaDeRepetido = { ok: true, body: { status: "ignored", reason: "evento_repetido" } } as const;
 
   // ─── Desfecho de entrega: move o estado, não cria linha ────────────────────
   if ((envelope.EventType ?? "") === "messages_update") {
@@ -421,6 +423,7 @@ async function uazapiInbound(
     }
     const desfecho = parseUazapiAtualizacao(leituraDoStatus.envelope);
     if (!desfecho.ok) return { ok: true, body: { status: "ignored", reason: desfecho.motivo } };
+    if (await repetido()) return recusaDeRepetido;
 
     const aplicado = await aplicarStatusUazapi(admin, {
       organizationId: input.session.organization_id,
@@ -429,7 +432,7 @@ async function uazapiInbound(
     });
     // Só chega aqui se `aplicarStatusUazapi` não lançou: processado de
     // verdade, agora sim marca a chave.
-    if (chaveDoEvento) marcarEventoUazapiVisto(chaveDoEvento);
+    if (chaveDoEvento) await marcarEventoUazapiVisto(chaveDoEvento);
     return { ok: true, body: { status: "status", desfecho: desfecho.atualizacao.status, ...aplicado } };
   }
 
@@ -450,6 +453,7 @@ async function uazapiInbound(
     }
     const conexao = parseUazapiConexao(leituraDaConexao.envelope);
     if (!conexao.ok) return { ok: true, body: { status: "ignored", reason: conexao.motivo } };
+    if (await repetido()) return recusaDeRepetido;
 
     const desfecho = await sincronizarSaudeDaConexao(
       admin,
@@ -461,7 +465,7 @@ async function uazapiInbound(
       "empurrao",
     );
     // Só chega aqui se `sincronizarSaudeDaConexao` não lançou.
-    if (chaveDoEvento) marcarEventoUazapiVisto(chaveDoEvento);
+    if (chaveDoEvento) await marcarEventoUazapiVisto(chaveDoEvento);
     return { ok: true, body: { status: "saude", estado: conexao.conexao.estado, desfecho } };
   }
 

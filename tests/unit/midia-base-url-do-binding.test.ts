@@ -346,6 +346,8 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
       provider: "openrouter",
       model: "acme/visao-1",
       cost_cents: null,
+      // D-057: a origem vem do resolvedor (aqui, a credencial da própria organização).
+      origem_da_chave: "credencial_da_organizacao",
     });
   });
 
@@ -558,6 +560,7 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
         input_tokens: 0,
         output_tokens: 0,
         cost_cents: null,
+        origem_da_chave: "credencial_da_organizacao",
       });
     });
 
@@ -580,6 +583,8 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
         provider: "transcricao_propria",
         model: "whisper-large-v3",
         cost_cents: null,
+        // D-057: `TRANSCRIPTION_API_KEY` é do .env da instalação, nunca do cliente.
+        origem_da_chave: "chave_da_instalacao",
       });
     });
 

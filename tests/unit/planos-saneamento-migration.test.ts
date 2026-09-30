@@ -21,13 +21,25 @@ function extraiBloco0910Baseline(): string {
   return BASELINE.slice(posicaoMarcador, fim + 1);
 }
 
+/**
+ * O recálculo por `greatest` de `billing_usage_counters` (D-063) existe SÓ na
+ * migration 0910 (já aplicada, nunca editada): o baseline deixou de repeti-lo
+ * (D-053 item 2, migration 0912), porque o baseline é reaplicado inteiro a cada
+ * atualização e o preenchimento da 0905 agora só cria a linha que falta.
+ * Removido do texto antes de comparar o resto do bloco palavra por palavra; a
+ * ausência no baseline tem teste próprio, no fim deste arquivo.
+ */
+const RECALCULO_D063 =
+  /insert into public\.billing_usage_counters \(organization_id, item, valor\)\nselect cl\.organization_id, 'leads', count\(\*\)\nfrom public\.crm_leads cl\nwhere cl\.status = 'open'\ngroup by cl\.organization_id\non conflict \(organization_id, item\) do update\nset valor = greatest\(public\.billing_usage_counters\.valor, excluded\.valor\),\nupdated_at = now\(\);\n?/;
+
 /** Remove linhas de comentário (--) e linhas em branco, para comparar só o SQL. */
 function removeComentariosEBrancas(sql: string): string {
   return sql
     .split("\n")
     .map((linha) => linha.trim())
     .filter((linha) => linha.length > 0 && !linha.startsWith("--"))
-    .join("\n");
+    .join("\n")
+    .replace(RECALCULO_D063, "");
 }
 
 describe("0910 saneamento do plano: posição e igualdade do bloco no baseline", () => {
@@ -377,12 +389,24 @@ describe("0910 D-062: sem mudança de SQL, só justificativa documentada", () =>
 });
 
 describe("0910 D-063: segundo recálculo de billing_usage_counters com merge por greatest", () => {
-  it("repete o recálculo da 0905 trocando a sobrescrita cega por greatest(atual, recalculado)", () => {
-    for (const sql of [MIGRATION_0910, extraiBloco0910Baseline()]) {
-      expect(sql).toMatch(
-        /select cl\.organization_id, 'leads', count\(\*\)\s*\n\s*from public\.crm_leads cl\s*\n\s*where cl\.status = 'open'\s*\n\s*group by cl\.organization_id\s*\n\s*on conflict \(organization_id, item\) do update\s*\n\s*set valor = greatest\(public\.billing_usage_counters\.valor, excluded\.valor\),/,
-      );
-    }
+  it("a migration 0910 (já aplicada, intocada) repete o recálculo da 0905 trocando a sobrescrita cega por greatest(atual, recalculado)", () => {
+    expect(MIGRATION_0910).toMatch(
+      /select cl\.organization_id, 'leads', count\(\*\)\s*\n\s*from public\.crm_leads cl\s*\n\s*where cl\.status = 'open'\s*\n\s*group by cl\.organization_id\s*\n\s*on conflict \(organization_id, item\) do update\s*\n\s*set valor = greatest\(public\.billing_usage_counters\.valor, excluded\.valor\),/,
+    );
+  });
+
+  it("D-053 item 2 (0912): o BLOCO DO BASELINE não repete mais o recálculo (o baseline é reaplicado inteiro e só pode criar a linha que falta)", () => {
+    const bloco = extraiBloco0910Baseline();
+    // Nenhuma passada de RECÁLCULO (insert ... select ... from crm_leads) neste
+    // bloco: a única do baseline é a da 0905 (`on conflict do nothing`, coberta
+    // em planos-uso-migration.test.ts). O `insert` do gatilho de leads (D-055,
+    // redefinido aqui) soma +1 por lead e é outra coisa.
+    expect(bloco).not.toMatch(
+      /insert into public\.billing_usage_counters \(organization_id, item, valor\)\s*select cl\.organization_id/,
+    );
+    expect(bloco).not.toMatch(/greatest\(public\.billing_usage_counters\.valor/);
+    // O motivo fica escrito ao lado, para o próximo leitor não "restaurar" o comando.
+    expect(bloco).toContain("SUPERADO NO BASELINE (migration 0912, D-053 item 2)");
   });
 
   it("não usa mais a sobrescrita cega (excluded.valor sozinho) nesta migração", () => {

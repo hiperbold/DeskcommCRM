@@ -39957,6 +39957,17 @@ create trigger trg_billing_usage_counters_updated_at
 -- idempotente por resultado: rodar de novo recalcula o valor real, não soma
 -- nem duplica.
 --
+-- ⚠️ SUPERADO NO BASELINE (migration 0912, D-053 item 2): a frase acima e o
+-- parágrafo seguinte descrevem o `on conflict do update` que roda na
+-- migration 0905 (já aplicada, nunca editada). O baseline, que é reaplicado
+-- INTEIRO a cada atualização de produção, agora só CRIA a linha que falta
+-- (`on conflict do nothing`): sobrescrever o contador a cada reaplicação
+-- deixava um lead confirmado entre a foto e o upsert com erro de 1 até o
+-- conferidor diário. Corrigir deriva de contador que já existe é trabalho do
+-- fn_billing_conferir_contador (cron diário, 04:55 UTC), que trava a linha
+-- e corrige nos dois sentidos. Espelhamento migration x baseline: os testes
+-- de mirror da 0905 e da 0910 trocam este único comando por esta forma.
+--
 -- D-053 (2), revisitado na revisão pós-auditoria da F3 (achado baixo 5): a
 -- correção 1 daquela revisão (fn_billing_bloqueio_ativo, ver 0907 e o
 -- comentário editado NO LUGAR em fn_billing_trava_crm_leads, logo abaixo) só
@@ -39975,9 +39986,7 @@ select cl.organization_id, 'leads', count(*)
 from public.crm_leads cl
 where cl.status = 'open'
 group by cl.organization_id
-on conflict (organization_id, item) do update
-  set valor = excluded.valor,
-      updated_at = now();
+on conflict (organization_id, item) do nothing;
 
 -- 3. Permissões das duas tabelas novas, no molde da 0904: authenticated
 -- perde tudo e recebe de volta só o select de billing_usage_counters
@@ -52770,14 +52779,16 @@ grant execute on function public.fn_reserve_channel_connection(uuid,uuid,text,te
 --
 -- Prova de banco (a fusão nunca decresce um valor já incrementado, e ainda
 -- sobe até o valor real quando ele é maior): tests/invariants/saneamento-autor.test.ts.
-insert into public.billing_usage_counters (organization_id, item, valor)
-select cl.organization_id, 'leads', count(*)
-from public.crm_leads cl
-where cl.status = 'open'
-group by cl.organization_id
-on conflict (organization_id, item) do update
-  set valor = greatest(public.billing_usage_counters.valor, excluded.valor),
-      updated_at = now();
+--
+-- ⚠️ SUPERADO NO BASELINE (migration 0912, D-053 item 2): a migration 0910
+-- (já aplicada, nunca editada) mantém o recálculo por greatest acima, mas o
+-- baseline NÃO o repete mais. O preenchimento da 0905, mais acima, passou a
+-- só criar a linha que falta (`on conflict do nothing`), e uma segunda
+-- passada de recálculo a cada reaplicação (que ainda podia deixar o contador
+-- acima do real, na direção oposta) deixou de ter o que corrigir. A deriva de
+-- um contador que já existe é do conferidor diário
+-- (fn_billing_conferir_contador, agendado às 04:55 UTC), nos dois sentidos.
+-- O teste de mirror da 0910 tira este comando da migration antes de comparar.
 
 -- ============================================================================
 -- PARTE 3 (fase F7, lote 1b): D-069 completo. fn_billing_estender_carencia
@@ -53010,6 +53021,81 @@ begin
   end if;
 end
 $$;
+-- ---- aceitar um convite não dobra a conta do membro (migration 0912, fork Hiperbold, D-053 item 1) ----
+--
+-- Só troca o CORPO de fn_billing_trava_user_organizations (0905/0907), sem
+-- DDL em tabela nem recriar o gatilho: reaplicável com o app no ar. No
+-- BEFORE INSERT do aceite o vínculo novo ainda não é visível e o convite
+-- pendente do mesmo e-mail continua contando, então a conferência de aviso
+-- contava a pessoa duas vezes (aviso espúrio numa organização exatamente no
+-- teto). Com convite pendente e válido do e-mail (isenção 1 da 0907) o
+-- convite já ocupava a vaga e a conferência de aviso não roda. Bloqueio e
+-- demais casos (aceite sem convite, dono do provisionamento, readmissão sem
+-- convite) ficam como estavam. Racional completo no arquivo da migration.
+create or replace function public.fn_billing_trava_user_organizations()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_novo_ativo boolean;
+  v_antigo_ativo boolean;
+  v_invited_by_antigo uuid;
+  v_invited_at_antigo timestamptz;
+  v_convite_ja_ocupava_a_vaga boolean;
+begin
+  v_novo_ativo := new.accepted_at is not null and new.revoked_at is null and not new.provisional_until_handover;
+
+  if tg_op = 'INSERT' then
+    v_antigo_ativo := false;
+    v_invited_by_antigo := null;
+    v_invited_at_antigo := null;
+  else
+    v_antigo_ativo := old.accepted_at is not null and old.revoked_at is null and not old.provisional_until_handover;
+    v_invited_by_antigo := old.invited_by;
+    v_invited_at_antigo := old.invited_at;
+  end if;
+
+  if v_novo_ativo and not v_antigo_ativo then
+    -- Isenção 1 da 0907: existe convite pendente e válido para o e-mail deste
+    -- usuário nesta organização. Guardada numa variável porque agora decide
+    -- DUAS coisas: liberar o bloqueio (como antes) e dispensar a conferência
+    -- de aviso abaixo (0912): o convite já ocupava a vaga.
+    v_convite_ja_ocupava_a_vaga :=
+      public.fn_billing_convite_pendente_do_membro(new.organization_id, new.user_id);
+
+    if not (
+      v_convite_ja_ocupava_a_vaga
+      or public.fn_billing_veio_de_aceite_de_convite(
+        new.invited_by, new.invited_at, v_invited_by_antigo, v_invited_at_antigo, tg_op = 'INSERT'
+      )
+      or public.fn_billing_dono_do_provisionamento(new.organization_id, new.user_id, new.role)
+    ) then
+      if public.fn_billing_bloqueia(new.organization_id, 'membros', null) then
+        raise exception 'Limite do plano atingido' using errcode = 'PT402', detail = 'membros';
+      end if;
+    end if;
+
+    -- 0912: só confere o teto (e avisa) quando o vínculo SOMA um ocupante. Com
+    -- convite pendente do mesmo e-mail a pessoa já estava contada como convite,
+    -- e neste BEFORE INSERT o vínculo novo ainda não é visível: conferir aqui
+    -- contaria a mesma pessoa duas vezes.
+    if not v_convite_ja_ocupava_a_vaga then
+      perform public.fn_billing_conferir_teto(new.organization_id, 'membros', null);
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_trava_user_organizations() is
+  'Gatilho de plano (Tarefa 3, decisão 5): chama fn_billing_conferir_teto(membros) na transição para ativo (accepted_at preenchido, revoked_at nulo, provisional_until_handover falso), cobrindo aceite direto, readmissão de revogado e insert já ativo. O admin provisório nunca conta. Fase F3 (migration 0907, decisão 4, item 2): antes do bloqueio de verdade, três isenções (convite pendente do e-mail, aceite sem linha de convite, dono do provisionamento) liberam o aceite mesmo no teto. 0912 (D-053, item 1): quando a isenção 1 vale (convite pendente e válido do mesmo e-mail), a conferência de aviso NÃO roda, porque o convite já ocupava a vaga e, neste BEFORE INSERT, o vínculo novo ainda não é visível: conferir contaria a mesma pessoa duas vezes e abriria aviso espúrio numa organização exatamente no teto. Os demais casos (aceite sem convite, dono do provisionamento, readmissão sem convite) seguem conferindo e avisando.';
+
+revoke execute on function public.fn_billing_trava_user_organizations() from public, anon, authenticated;
+grant execute on function public.fn_billing_trava_user_organizations() to service_role;
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

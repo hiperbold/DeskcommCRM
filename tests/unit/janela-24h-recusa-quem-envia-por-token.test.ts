@@ -178,6 +178,12 @@ describe("envio por token respeita a janela de 24h", () => {
   });
 
   it("canal por QR, sem janela: nada muda (o texto segue sendo aceito)", async () => {
+    // D-077: o `.env.local` de desenvolvimento aponta para um WAHA, e com ele
+    // configurado o envio tenta falar com o servidor (o teste estoura os 15 s).
+    // O desfecho afirmado abaixo é o de instalação SEM WAHA, então as duas
+    // variáveis saem daqui; o `afterEach` devolve o ambiente.
+    vi.stubEnv("WAHA_API_BASE_URL", undefined);
+    vi.stubEnv("WAHA_API_KEY", undefined);
     const { supabase, capturas } = criarDubleDoHandler({
       conversation: conversa({ provider: "waha", lastInboundAt: null }),
     });

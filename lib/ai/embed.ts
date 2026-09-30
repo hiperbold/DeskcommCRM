@@ -15,6 +15,8 @@ import { embed } from "ai";
 import {
   DIMENSOES_DO_EMBEDDING,
   MODELO_DE_EMBEDDING,
+  origemDaChaveParaLlmCalls,
+  provedorDoEmbedding,
   resolverChaveDeEmbedding,
   type ChaveDeEmbedding,
   type PontoDeEmbedding,
@@ -118,9 +120,19 @@ export async function embedText(
   await registrarTelemetriaSemCusto({
     organizationId: opts.organizationId,
     purpose: opts.ponto ?? "embedding_indexar",
-    provider: "openai",
+    // O provedor REAL da chamada (D-053 item 3): gateway, endereço próprio ou
+    // OpenAI direto. Era "openai" fixo, e a divisão de custo por provedor
+    // atribuía à OpenAI o que saía por outro caminho.
+    provider: provedorDoEmbedding(chave),
+    // O MODELO do embedding é a mesma OpenAI por contrato em qualquer caminho,
+    // então o preço vem do catálogo dela (`openai` + `text-embedding-3-small`),
+    // e não de uma linha "gateway"/"custom" que o catálogo não tem.
+    providerParaPreco: "openai",
     model: modelId,
     inputTokens: promptTokens,
+    // D-057: de quem é a chave, no vocabulário de `llm_calls`. Peso 0 na carteira
+    // hoje, mas a origem fica gravada e certa para o dia em que o peso mudar.
+    origemDaChave: origemDaChaveParaLlmCalls(chave.origem),
   });
 
   return { embedding: result.embedding, promptTokens, model: modelId };

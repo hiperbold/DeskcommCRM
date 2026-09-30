@@ -43,6 +43,7 @@ import { modoDeBillingCacheado } from "@/lib/billing/planos/modo-cacheado";
 import { computeCost } from "@/lib/ai/cost";
 import { silencioVigente } from "@/lib/inbox/comando-da-conversa";
 import { logInvocation } from "@/lib/ai/log-invocation";
+import { origemDaChaveDoModelo } from "@/lib/ai/origem-da-chave-do-modelo";
 import { elegivelParaWorkerLegado, precisaRecuperarLegado } from "@/lib/ai/agents/no-ar";
 import { renderSystemPrompt } from "@/lib/ai/render-system-prompt";
 import { triggerHandoff } from "@/lib/ai/handoff/orchestrator";
@@ -324,6 +325,8 @@ export async function processMessageReceived(row: EventRow): Promise<ProcessResu
         message_id: persisted.outbound_message_id,
         invocation_kind: "bot_respond",
         model: resolvido.modelId,
+        // D-057: de quem é a chave, dita pelo resolvedor do modelo.
+        origem_da_chave: origemDaChaveDoModelo(resolvido.origem),
         prompt_tokens: response.prompt_tokens,
         completion_tokens: response.completion_tokens,
         latency_ms: response.latency_ms,
@@ -350,6 +353,8 @@ export async function processMessageReceived(row: EventRow): Promise<ProcessResu
       message_id: persisted.outbound_message_id,
       invocation_kind: "bot_respond",
       model: resolvido.modelId,
+      // D-057: de quem é a chave, dita pelo resolvedor do modelo.
+      origem_da_chave: origemDaChaveDoModelo(resolvido.origem),
       prompt_tokens: response.prompt_tokens,
       completion_tokens: response.completion_tokens,
       latency_ms: response.latency_ms,
@@ -376,6 +381,8 @@ export async function processMessageReceived(row: EventRow): Promise<ProcessResu
       message_id: ctx.message_id,
       invocation_kind: "bot_respond",
       model: resolvido.modelId,
+      // D-057: de quem é a chave, dita pelo resolvedor do modelo.
+      origem_da_chave: origemDaChaveDoModelo(resolvido.origem),
       prompt_tokens: 0,
       completion_tokens: 0,
       latency_ms: 0,
