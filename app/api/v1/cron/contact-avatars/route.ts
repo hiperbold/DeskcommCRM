@@ -27,6 +27,7 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { DEFAULT_CHANNEL_PROVIDER, getAdapter, type ChannelProvider } from "@/lib/channels";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { baixarAvatar } from "@/lib/channels/avatar-download";
 import { PROVIDERS_DE_MENSAGEM } from "@/lib/channels/capabilities";
 import { autorizaCron } from "@/lib/auth/cron-auth";
 
@@ -36,9 +37,6 @@ export const dynamic = "force-dynamic";
 const SCAN_LIMIT = 25;
 /** Revisita a foto a cada 7 dias — gente troca de foto, mas não toda hora. */
 const REFRESH_AFTER_DAYS = 7;
-/** Foto de perfil do WhatsApp é pequena; acima disto é resposta errada. */
-const MAX_BYTES = 2 * 1024 * 1024;
-
 interface ContactRow {
   id: string;
   organization_id: string;
@@ -185,18 +183,23 @@ async function handle(req: NextRequest): Promise<Response> {
         continue;
       }
 
-      const img = await fetch(profilePictureURL);
-      if (!img.ok) {
+      // A URL vem do servidor do canal, que pode ser da ORGANIZAÇÃO (D-083,
+      // achado 1): o download passa pela régua de destino de organização (sem
+      // redirect, sem rede interna) e só sobra o que tem assinatura de imagem e
+      // cabe no teto. O que não é imagem não vira arquivo no bucket, que a
+      // própria organização lê. Recusa de destino LANÇA e cai no catch abaixo.
+      const foto = await baixarAvatar(profilePictureURL);
+      if (!foto.ok) {
         await carimbar(null);
         falhas++;
+        logger.warn("[contact-avatars] foto descartada", {
+          contact_id: c.id,
+          motivo: foto.motivo,
+          requestId,
+        });
         continue;
       }
-      const buf = Buffer.from(await img.arrayBuffer());
-      if (buf.byteLength === 0 || buf.byteLength > MAX_BYTES) {
-        await carimbar(null);
-        falhas++;
-        continue;
-      }
+      const { buf, contentType } = foto;
 
       // Caminho estável por contato: `upsert` sobrescreve a foto antiga em vez
       // de acumular um arquivo órfão por refresh (7 dias × N contatos viraria
@@ -204,7 +207,7 @@ async function handle(req: NextRequest): Promise<Response> {
       const path = `${c.organization_id}/avatars/${c.id}.jpg`;
       const { error: upErr } = await admin.storage
         .from("whatsapp-media")
-        .upload(path, buf, { contentType: "image/jpeg", upsert: true });
+        .upload(path, buf, { contentType, upsert: true });
       if (upErr) {
         await carimbar(null);
         falhas++;

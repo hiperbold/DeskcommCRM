@@ -26,14 +26,23 @@
  */
 
 /**
- * O dia em que a recusa passa a valer, em ISO (UTC). São ~30 dias a partir da
- * versão que leva o aviso (19/09/2026) — prazo declarado, não medido: é a
- * janela que o dono do produto escolheu para o parque se ajustar.
+ * O dia em que a recusa passa a valer, em ISO (UTC). Era 19/10/2026 (~30 dias a
+ * partir da versão que levou o aviso, 19/09/2026) e foi ANTECIPADA para
+ * 30/09/2026.
  *
- * Mover esta data para frente é afrouxar um degrau que já foi anunciado a quem
- * opera. Se for preciso, que seja com a razão escrita aqui e o aviso refeito.
+ * A razão da antecipação: neste fork da Hiperbold o cadastro é só por convite e
+ * há uma organização, então não existe parque de empresas a esperar. E a espera
+ * tinha custo de segredo (achado da auditoria da D-083): até a data, a chamada
+ * seguia com a chave do `.env`, a que paga TODAS as empresas do servidor, para
+ * um endereço que UMA delas escolheu. Mover a data para TRÁS aperta a regra, não
+ * a afrouxa. A fase de aviso continua no código (o relógio injetado a exercita),
+ * mas com o relógio real ela não acontece mais.
+ *
+ * Mover esta data para frente é afrouxar o degrau: só com a razão escrita aqui,
+ * sabendo que a chave da instalação volta a poder sair para o endereço de uma
+ * empresa.
  */
-export const RECUSA_A_PARTIR_DE = "2026-10-19T00:00:00.000Z";
+export const RECUSA_A_PARTIR_DE = "2026-09-30T00:00:00.000Z";
 
 /** Como a data aparece para quem lê o aviso na Central e em Execuções. */
 export function prazoLegivel(iso: string = RECUSA_A_PARTIR_DE): string {

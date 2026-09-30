@@ -23,8 +23,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { metadataInicialDoCanal } from "@/lib/ai/elegibilidade/pre-go-live";
-import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
-import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
+import {
+  fetchParaDestinoDaOrganizacao,
+  motivoDaRecusaDeDestino,
+} from "@/lib/automation/destinos-internos-autorizados";
 
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "../archived";
 import { CHANNEL_PROVIDER_UAZAPI } from "../capabilities";
@@ -68,7 +70,11 @@ async function chamar(
   caminho: string,
   corpo?: Record<string, unknown>,
 ): Promise<{ res: Response; json: unknown }> {
-  const res = await fetch(`${baseUrl}${caminho}`, {
+  // Régua de organização a cada requisição, sem redirect (D-083, achado 4): o
+  // `baseUrl` pode vir da linha gravada, e o token viaja no cabeçalho. Um 3xx ou
+  // um destino interno vira erro ANTES de o token sair, e quem chama já trata
+  // erro de rede sem ecoar a causa.
+  const res = await fetchParaDestinoDaOrganizacao()(`${baseUrl}${caminho}`, {
     method: corpo ? "POST" : "GET",
     headers: { token, accept: "application/json", ...(corpo ? { "content-type": "application/json" } : {}) },
     ...(corpo ? { body: JSON.stringify(corpo) } : {}),
@@ -90,10 +96,10 @@ export async function validarInstanciaUazapi(input: { servidor: string; token: s
   const token = input.token.trim();
   if (!token) return { ok: false, reason: "Informe o token da instância." };
 
-  try {
-    assertSafeOutboundUrl(baseUrl);
-    await assertDestinoResolvidoSeguro(new URL(baseUrl).hostname);
-  } catch {
+  // A mesma régua que `chamar` aplica a cada requisição: o cadastro recusa cedo,
+  // com mensagem fixa (sem dizer se foi nome que não resolve ou rede interna), e o
+  // uso continua recusando se a linha for gravada por outro caminho.
+  if (await motivoDaRecusaDeDestino(baseUrl, "organizacao")) {
     return { ok: false, reason: "Este endereço de servidor não é permitido." };
   }
 

@@ -86,9 +86,9 @@ export function criarFetchSeguro(
   const buscar = deps.fetch ?? globalThis.fetch;
   return async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    // Explícito: `assertSafeOutboundUrl` só barra http em produção.
+    // Explícito: `assertSafeOutboundUrl` só barra http em produção, sem a opção.
     if (new URL(url).protocol !== "https:") throw new Error("unsafe_url:https_required");
-    assertSafeOutboundUrl(url);
+    assertSafeOutboundUrl(url, { httpsSempre: true });
     await validarHost(new URL(url).hostname);
     const res = await buscar(input, { ...init, redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {

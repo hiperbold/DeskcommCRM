@@ -276,6 +276,23 @@ export async function PUT(req: NextRequest): Promise<Response> {
         422,
       );
     }
+
+    // Endereço próprio exige chave PRÓPRIA da empresa (decisão 22-a). Sem
+    // `credential_id`, o uso cairia na chave do `.env`, a que paga todas as
+    // empresas da instalação, e ela sairia para um endereço que UMA delas
+    // escolheu. O uso também recusa (run-model-call), mas recusar já na
+    // gravação evita deixar a tela dizendo "salvo" sobre um ponto que nunca vai
+    // funcionar. Vem DEPOIS da régua de destino: endereço interno segue com a
+    // recusa própria dele.
+    if (!corpo.credential_id) {
+      return fail(
+        "base_url_exige_chave_da_empresa",
+        t(
+          "Um endereço próprio só pode ser usado com a chave da própria empresa. Escolha uma chave cadastrada em Agente de IA › Provedores ou tire o endereço próprio deste ponto.",
+        ),
+        422,
+      );
+    }
   }
 
   const db = await createClient();

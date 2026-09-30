@@ -423,7 +423,7 @@ function SemChave({ dados, recarregar }: { dados: DadosDoJev; recarregar: () => 
 function ProblemaDaChave({ dados, recarregar }: { dados: DadosDoJev; recarregar: () => Promise<void> }) {
   const t = useT();
   const [testando, setTestando] = useState(false);
-  const erro = descreverErroDeValidacao(dados.chave.erro_de_validacao, PROVEDOR_DO_JEV);
+  const erro = descreverErroDeValidacao(dados.chave.erro_de_validacao, PROVEDOR_DO_JEV, "instalacao");
   const motivo = !dados.chave.existe
     ? t("O Jev está ligado, mas sem chave ativa: enquanto isso, ele não mede nada.")
     : !dados.chave.erro_de_validacao

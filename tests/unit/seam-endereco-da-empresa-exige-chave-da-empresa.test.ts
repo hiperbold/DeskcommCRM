@@ -374,3 +374,55 @@ describe("o degrau do prazo", () => {
     }
   });
 });
+
+/**
+ * O RELÓGIO REAL, auditoria da D-083 (30/09/2026).
+ *
+ * Neste fork da Hiperbold o cadastro é só por convite e a espera do degrau de
+ * aviso só custava segredo: até 19/10 a chave do `.env`, a que paga todas as
+ * empresas, seguia para o endereço que uma delas escolheu. `RECUSA_A_PARTIR_DE`
+ * foi antecipada para 30/09/2026. Os casos acima injetam o relógio para
+ * exercitar a virada; estes NÃO injetam nada, que é o que roda em produção.
+ * O relógio só anda para frente, então o que eles afirmam vale para sempre: se
+ * alguém empurrar a data de novo, ficam vermelhos.
+ */
+describe("com o relógio real, a chave da instalação nunca sai para o endereço da empresa", () => {
+  it("o prazo já venceu (a data não pode voltar a ser futura)", () => {
+    expect(Date.parse(RECUSA_A_PARTIR_DE)).toBeLessThanOrEqual(Date.parse("2026-09-30T00:00:00.000Z"));
+    expect(Date.now()).toBeGreaterThanOrEqual(Date.parse(RECUSA_A_PARTIR_DE));
+  });
+
+  it("sem relógio injetado: recusa, e a fábrica NUNCA recebe a chave da instalação", async () => {
+    const { pool, consultas } = poolFalso({ baseUrl: ENDERECO_DA_EMPRESA, empresaTemCredencial: false });
+    const { registry, chamadas } = registrySpiao();
+
+    await expect(
+      runModelCall(
+        pool,
+        cfg,
+        { tenantId: ORG, purpose: "stage_classifier", messages: [{ role: "user", content: "oi" }] },
+        { registry },
+      ),
+    ).rejects.toBeInstanceOf(LlmEnderecoExigeChaveDaEmpresaError);
+
+    expect(chamadas).toHaveLength(0);
+    // Aviso de RECUSA, e não o do prazo: não há mais "a chamada SEGUIU".
+    const [, titulo] = avisosNaCentral(consultas)[0]!.params as [string, string];
+    expect(titulo).toBe(TITULO_ENDERECO_SEM_CHAVE_DA_EMPRESA);
+  });
+
+  it("controle: sem relógio injetado, a empresa COM chave própria segue chamando o endereço", async () => {
+    const { pool } = poolFalso({ baseUrl: ENDERECO_DA_EMPRESA, empresaTemCredencial: true });
+    const { registry, chamadas } = registrySpiao();
+
+    await runModelCall(
+      pool,
+      cfg,
+      { tenantId: ORG, purpose: "stage_classifier", messages: [{ role: "user", content: "oi" }] },
+      { registry },
+    );
+
+    expect(chamadas).toHaveLength(1);
+    expect(chamadas[0]).toMatchObject({ apiKey: "chave-da-empresa", baseUrl: ENDERECO_DA_EMPRESA });
+  });
+});

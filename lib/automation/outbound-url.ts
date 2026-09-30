@@ -15,7 +15,19 @@
 const PRIVATE_HOST_RX =
   /^(localhost|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.)/i;
 
-export function assertSafeOutboundUrl(url: string): void {
+export type OpcoesDaUrlSegura = {
+  /**
+   * Exige https qualquer que seja o `NODE_ENV`. Vale para todo destino
+   * escolhido por uma ORGANIZAÇÃO: a imagem do worker não define `NODE_ENV`, e
+   * "só em produção" deixava http passar lá, o que torna prática a janela de
+   * DNS rebinding (o nome vira IP interno entre a conferência e a conexão) e
+   * manda a chamada, e o que ela carrega, em claro. Endereço da INSTALAÇÃO
+   * continua como sempre: quem paga a máquina escolhe o destino.
+   */
+  httpsSempre?: boolean;
+};
+
+export function assertSafeOutboundUrl(url: string, opcoes: OpcoesDaUrlSegura = {}): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -25,7 +37,7 @@ export function assertSafeOutboundUrl(url: string): void {
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("unsafe_url:scheme");
   }
-  if (parsed.protocol === "http:" && process.env.NODE_ENV === "production") {
+  if (parsed.protocol === "http:" && (opcoes.httpsSempre || process.env.NODE_ENV === "production")) {
     throw new Error("unsafe_url:https_required");
   }
   if (parsed.hostname.startsWith("[")) {

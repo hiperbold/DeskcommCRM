@@ -25,6 +25,13 @@ let linhaDoContato: Record<string, unknown> = {};
 /** Endereços que o cron pediu ao canal. */
 const pedidos: string[] = [];
 
+// O download passa pela régua de destino de organização (D-083): o host de teste
+// não existe, então a resolução de DNS é substituída, sem tirar a régua do caminho.
+vi.mock("@/lib/automation/outbound-ip", () => ({
+  assertDestinoResolvidoSeguro: async () => undefined,
+  ipEhEspecial: () => false,
+}));
+
 vi.mock("@/lib/env", () => ({
   env: { INTERNAL_CRON_SECRET: "segredo-de-teste", INTERNAL_SECRET: "segredo-de-teste" },
 }));
@@ -92,7 +99,8 @@ beforeEach(() => {
   pedidos.length = 0;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 })),
+    // Assinatura de JPEG: o cron só grava o que tem cara de imagem (D-083).
+    vi.fn(async () => new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]), { status: 200 })),
   );
 });
 

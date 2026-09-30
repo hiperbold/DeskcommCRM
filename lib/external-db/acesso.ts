@@ -18,6 +18,7 @@ import { moduloLigado } from "@/lib/instalacao/modulos";
 
 import { carregarConexao, type MotivoSemConexao } from "./credenciais";
 import { obterPool } from "./conexao";
+import { faixasAutorizadasParaBanco } from "./faixas-autorizadas";
 import { validarHostDeBanco } from "./guardas";
 import type { ConexaoExterna } from "./types";
 
@@ -41,7 +42,7 @@ export async function abrirAcesso(
   const leitura = await carregarConexao(admin, organizationId, connectionId);
   if (!leitura.ok) return { ok: false, motivo: leitura.motivo };
 
-  const alvo = await validarHostDeBanco(leitura.conexao.host);
+  const alvo = await validarHostDeBanco(leitura.conexao.host, await faixasAutorizadasParaBanco());
   // "Bloqueado" e "não resolveu" são coisas diferentes para quem lê: a primeira
   // pede trocar o host, a segunda pode ser DNS indisponível agora. O código da
   // resposta carrega essa diferença.

@@ -442,7 +442,9 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
   });
 
   it("recusa endereço de metadados no binding da visão e não manda a chave", async () => {
-    bindingDaVez = { ...BINDING_COM_ENDPOINT, base_url: "http://169.254.169.254/v1" };
+    // https de propósito: http de organização é recusado antes (https_required), e
+    // este caso mede a recusa do destino interno.
+    bindingDaVez = { ...BINDING_COM_ENDPOINT, base_url: "https://169.254.169.254/v1" };
 
     await deriveMessageMedia(eventRow());
     const texto = await depsDaChamada().describeImage(Buffer.from("jpeg"), "image/jpeg");
@@ -710,7 +712,8 @@ describe("worker de mídia: base_url do binding de visão (#855)", () => {
       // apontar para dentro sozinha".
       comDestinosAutorizados("10.1.0.0/16");
       vi.stubEnv("OPENROUTER_API_KEY", "");
-      bindingDaVez = { ...BINDING_COM_ENDPOINT, base_url: "http://10.1.2.7:8080/v1" };
+      // https: o http da organização já cai em https_required, antes da lista.
+      bindingDaVez = { ...BINDING_COM_ENDPOINT, base_url: "https://10.1.2.7:8080/v1" };
 
       await deriveMessageMedia(eventRow());
       const texto = await depsDaChamada().describeImage(Buffer.from("jpeg"), "image/jpeg");

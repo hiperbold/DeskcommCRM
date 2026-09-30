@@ -128,7 +128,9 @@ export async function executeCallWebhook(
   if (!url) return { type: "call_webhook", status: "failed", error: "missing_url" };
   if (!opts.skipUrlCheck) {
     try {
-      assertSafeOutboundUrl(url);
+      // A URL do webhook é escolha da organização: https sempre, e não só com
+      // NODE_ENV=production (a imagem do worker não o define).
+      assertSafeOutboundUrl(url, { httpsSempre: true });
       // Guard textual não resolve nome: um hostname público apontando para
       // 169.254.169.254 (metadata da nuvem) ou para os serviços internos da rede do
       // compose passava por ele. Este segundo resolve e julga o IP.

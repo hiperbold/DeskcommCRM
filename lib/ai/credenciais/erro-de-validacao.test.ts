@@ -62,6 +62,44 @@ describe("descreverErroDeValidacao", () => {
     expect(descreverErroDeValidacao("provider_status_503", "typesafe").frase).toMatch(/^O provedor está fora/);
   });
 
+  describe("endereço recusado pela régua de destino", () => {
+    const NOME_NAO_RESOLVE = "unsafe_url:dns_failed";
+    const NOME_VAZIO = "unsafe_url:dns_empty";
+    const IP_INTERNO = "unsafe_url:private_ip";
+
+    it("origem ORGANIZAÇÃO: a mesma frase para nome que não resolve e nome que resolve para IP interno", () => {
+      // Frases diferentes viravam oráculo: o admin de uma empresa descobria, por
+      // tentativa, quais nomes existem na rede interna do compose.
+      const frases = [NOME_NAO_RESOLVE, NOME_VAZIO, IP_INTERNO].map(
+        (c) => descreverErroDeValidacao(c, "custom", "organizacao").frase,
+      );
+      expect(new Set(frases).size).toBe(1);
+      expect(frases[0]).toMatch(/rede interna/);
+      // O padrão de quem não diz a origem é o lado que fecha.
+      expect(descreverErroDeValidacao(NOME_NAO_RESOLVE, "custom").frase).toBe(frases[0]);
+      expect(descreverErroDeValidacao(IP_INTERNO, "custom").frase).toBe(frases[0]);
+      const r = descreverErroDeValidacao(NOME_NAO_RESOLVE, "custom", "organizacao");
+      expect(r.generico).toBe(false);
+      expect(r.chaveErrada).toBe(false);
+    });
+
+    it("origem INSTALAÇÃO: as frases continuam distintas, como eram", () => {
+      const naoResolve = descreverErroDeValidacao(NOME_NAO_RESOLVE, undefined, "instalacao").frase;
+      const interno = descreverErroDeValidacao(IP_INTERNO, undefined, "instalacao").frase;
+      expect(naoResolve).toBe("Este servidor não encontrou o endereço: o nome não resolve. Confira a base URL.");
+      expect(interno).toBe(
+        "Este endereço não é aceito: um endereço cadastrado pela empresa não pode apontar para a rede interna do servidor (localhost, IP privado ou serviço interno).",
+      );
+    });
+
+    it("os outros códigos de endereço não mudam na origem organização", () => {
+      expect(descreverErroDeValidacao("unsafe_url:https_required", "custom", "organizacao").frase).toMatch(/https/);
+      expect(descreverErroDeValidacao("unsafe_url:redirect_not_followed", "custom", "organizacao").frase).toMatch(
+        /redirecionamento/,
+      );
+    });
+  });
+
   it("null é string vazia", () => {
     expect(descreverErroDeValidacao(null).frase).toBe("");
   });

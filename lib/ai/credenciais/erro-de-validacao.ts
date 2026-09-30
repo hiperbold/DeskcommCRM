@@ -34,8 +34,44 @@ const RECUSA_DA_TYPESAFE = {
   chaveOuCredito: "A TypeSafe recusou a chave. Confira se ela está inteira e se a conta na TypeSafe tem crédito.",
 } as const;
 
-export function descreverErroDeValidacao(codigo: string | null, provedor?: string): ErroDescrito {
+/**
+ * Quem escolheu o endereço que gerou o erro. Espelha `OrigemDoDestino` de
+ * `lib/automation/destinos-internos-autorizados.ts`, declarado aqui de propósito:
+ * este módulo é importado por componentes de cliente, e aquele arrasta DNS e
+ * banco para o bundle.
+ */
+export type OrigemDoEnderecoDoErro = "instalacao" | "organizacao";
+
+/**
+ * A frase única para "o nome não resolve" e "o nome resolve para IP interno" de
+ * um endereço escolhido por uma ORGANIZAÇÃO. Frases diferentes viravam oráculo:
+ * quem administra uma empresa sondava, por tentativa, quais nomes existem na
+ * rede interna do compose (nome que não existe = "não resolve"; nome que existe
+ * = "rede interna"). A frase diz as duas hipóteses, sem escolher.
+ */
+const ENDERECO_NAO_ACEITO_DA_ORGANIZACAO =
+  "Este endereço não é aceito: o nome não resolve para um servidor público, ou aponta para a rede interna do servidor (localhost, IP privado ou serviço interno). Confira a base URL.";
+
+/**
+ * `origem` vale só para o endereço: o padrão é `organizacao` (o lado que
+ * fecha, para quem chamar sem pensar). Quem mostra erro de endereço da
+ * INSTALAÇÃO passa `instalacao` e segue com a frase que separa os casos, porque
+ * quem lê é o dono da máquina e a distinção o ajuda a corrigir.
+ */
+export function descreverErroDeValidacao(
+  codigo: string | null,
+  provedor?: string,
+  origem: OrigemDoEnderecoDoErro = "organizacao",
+): ErroDescrito {
   if (!codigo) return { frase: "", chaveErrada: false, generico: false };
+  if (
+    origem === "organizacao" &&
+    (codigo === "unsafe_url:dns_failed" ||
+      codigo === "unsafe_url:dns_empty" ||
+      codigo === "unsafe_url:private_ip")
+  ) {
+    return { frase: ENDERECO_NAO_ACEITO_DA_ORGANIZACAO, chaveErrada: false, generico: false };
+  }
   const ehTypeSafe = provedor === PROVEDOR_DO_JEV;
 
   if (codigo === "auth_failed_401") {

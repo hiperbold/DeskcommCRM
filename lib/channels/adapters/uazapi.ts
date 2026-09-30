@@ -24,8 +24,7 @@
  * de fora, que é a porta de SSRF que os irmãos fecham do mesmo jeito.
  */
 import { createAdminClient } from "@/lib/supabase/admin";
-import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
-import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
+import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
 import type { FetchedMedia } from "@/lib/messaging/media/types";
 
 import { resolveUazapiCreds, type UazapiCredentials } from "../uazapi/credentials";
@@ -73,7 +72,11 @@ async function chamar(
   corpo?: Record<string, unknown>,
   metodo: "GET" | "POST" = "POST",
 ): Promise<{ res: Response; json: Json }> {
-  const res = await fetch(`${creds.baseUrl}${caminho}`, {
+  // O servidor é da CONEXÃO e o admin da organização o escolhe (D-083, achado
+  // 4): cada requisição passa pela régua de organização ANTES de o token sair,
+  // sem redirect. Julgar aqui, e não só no cadastro, pega a linha gravada por
+  // outro caminho e o nome que passou a resolver para IP interno depois.
+  const res = await fetchParaDestinoDaOrganizacao()(`${creds.baseUrl}${caminho}`, {
     method: metodo,
     headers: {
       token: creds.token,
@@ -154,12 +157,11 @@ function idDaMensagem(json: Json): string | null {
 
 async function baixarComGuarda(url: string, dica: string | null | undefined): Promise<FetchedMedia> {
   // A URL de download vem do servidor da instância, e em última análise de um
-  // payload externo. O par textual + DNS é o mesmo do canal intermediado: recusa
-  // esquema, faixa privada e rebinding antes de o processo buscar qualquer coisa.
-  assertSafeOutboundUrl(url);
-  await assertDestinoResolvidoSeguro(new URL(url).hostname);
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(PRAZO_MS) });
+  // payload externo. A régua de organização (D-083, achado 2) recusa esquema,
+  // faixa privada e rebinding antes de o processo buscar qualquer coisa, e NÃO
+  // segue redirect: um link público que responde 302 para um destino interno
+  // viraria mídia visível para a organização.
+  const res = await fetchParaDestinoDaOrganizacao()(url, { signal: AbortSignal.timeout(PRAZO_MS) });
   if (!res.ok) throw new Error(`uazapi_media_failed: ${res.status} ${res.statusText}`.trim());
   const buffer = Buffer.from(await res.arrayBuffer());
   const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || dica || "application/octet-stream";

@@ -297,7 +297,10 @@ export async function motivoDaRecusaDeDestino(
   const faixas = origem === "instalacao" ? faixasDeclaradas(await destinosInternosAutorizados()) : [];
 
   try {
-    assertSafeOutboundUrl(endereco);
+    // Endereço de ORGANIZAÇÃO exige https sempre, e não só com NODE_ENV=production:
+    // a imagem do worker não define `NODE_ENV`, e http lá deixava a janela de DNS
+    // rebinding prática. Endereço da instalação segue como sempre.
+    assertSafeOutboundUrl(endereco, { httpsSempre: origem === "organizacao" });
   } catch (erro) {
     const codigo = erro instanceof Error ? erro.message : String(erro);
     if (!(faixas.length > 0 && codigo === "unsafe_url:private_host")) return codigo;

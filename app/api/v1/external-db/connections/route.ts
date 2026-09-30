@@ -22,6 +22,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { cifrarSenha } from "@/lib/external-db/credenciais";
+import { faixasAutorizadasParaBanco } from "@/lib/external-db/faixas-autorizadas";
 import { validarHostDeBanco } from "@/lib/external-db/guardas";
 import { criarConexaoSchema } from "@/lib/external-db/schemas";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
   const input = parsed.data;
 
-  const alvo = await validarHostDeBanco(input.host);
+  const alvo = await validarHostDeBanco(input.host, await faixasAutorizadasParaBanco());
   if (!alvo.ok) {
     const dns = alvo.motivo === "dns_falhou" || alvo.motivo === "dns_vazio";
     return fail(

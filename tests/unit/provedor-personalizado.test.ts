@@ -150,14 +150,17 @@ describe("o endereço da empresa não alcança a rede interna do servidor", () =
     vi.unstubAllEnvs();
   });
 
+  // Endereços em https de propósito: http de organização é recusado ANTES de
+  // qualquer julgamento de destino (https_required), e o que estes casos medem é
+  // a recusa do destino interno. O http tem o caso próprio logo abaixo.
   it.each([
-    ["loopback", "http://127.0.0.1:4000/v1"],
-    ["localhost", "http://localhost/v1"],
-    ["metadados de nuvem", "http://169.254.169.254/latest"],
-    ["rede privada", "http://10.0.0.5/v1"],
-    ["serviço do compose (nome que resolve para IP privado)", "http://db:5432"],
+    ["loopback", "https://127.0.0.1:4000/v1"],
+    ["localhost", "https://localhost/v1"],
+    ["metadados de nuvem", "https://169.254.169.254/latest"],
+    ["rede privada", "https://10.0.0.5/v1"],
+    ["serviço do compose (nome que resolve para IP privado)", "https://db:5432"],
     ["nome público que passou a apontar para dentro", "https://virou-interno.exemplo/v1"],
-    ["literal IPv6", "http://[::1]:4000/v1"],
+    ["literal IPv6", "https://[::1]:4000/v1"],
   ])("teste de conexão recusa %s SEM chamar a rede", async (_rotulo, endereco) => {
     const espiao = vi.fn();
     vi.stubGlobal("fetch", espiao);
@@ -170,6 +173,30 @@ describe("o endereço da empresa não alcança a rede interna do servidor", () =
     const descrito = descreverErroDeValidacao(r.error, "custom");
     expect(descrito.generico).toBe(false);
     expect(descrito.chaveErrada).toBe(false);
+  });
+
+  it("http:// de organização é recusado SEM NODE_ENV=production, em todos os caminhos", async () => {
+    // A imagem do worker não define NODE_ENV; aqui ele é "test".
+    expect(process.env.NODE_ENV).not.toBe("production");
+    const espiao = vi.fn();
+    vi.stubGlobal("fetch", espiao);
+
+    expect(await validateCustomKey("sk-x", "http://gw.exemplo/v1")).toEqual({
+      ok: false,
+      error: "unsafe_url:https_required",
+    });
+    const guardado = fetchParaDestinoDaOrganizacao(espiao);
+    await expect(guardado("http://gw.exemplo/v1/chat/completions", { method: "POST" })).rejects.toThrow(
+      "unsafe_url:https_required",
+    );
+    await expect(
+      generateText({
+        model: registry.custom!("sk-x", "gpt-x", "http://gw.exemplo/v1"),
+        prompt: "oi",
+        maxRetries: 0,
+      }),
+    ).rejects.toThrow(/unsafe_url:https_required/);
+    expect(espiao, "a chave saiu em http").not.toHaveBeenCalled();
   });
 
   it("em produção, http:// é recusado", async () => {
@@ -202,7 +229,7 @@ describe("o endereço da empresa não alcança a rede interna do servidor", () =
     const interno = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
     const guardado = fetchParaDestinoDaOrganizacao(interno);
 
-    await expect(guardado("http://db/v1/chat/completions", { method: "POST" })).rejects.toThrow(
+    await expect(guardado("https://db/v1/chat/completions", { method: "POST" })).rejects.toThrow(
       "unsafe_url:private_ip",
     );
     expect(interno).not.toHaveBeenCalled();
@@ -217,8 +244,8 @@ describe("o endereço da empresa não alcança a rede interna do servidor", () =
   });
 
   it.each([
-    ["registry do turno", () => registry.custom!("sk-x", "gpt-x", "http://127.0.0.1:4000/v1")],
-    ["ensaio da aba Teste", () => buildModel("custom", "sk-x", "gpt-x", "http://127.0.0.1:4000/v1")],
+    ["registry do turno", () => registry.custom!("sk-x", "gpt-x", "https://127.0.0.1:4000/v1")],
+    ["ensaio da aba Teste", () => buildModel("custom", "sk-x", "gpt-x", "https://127.0.0.1:4000/v1")],
   ])("o modelo do provedor personalizado usa a régua (%s)", async (_rotulo, montar) => {
     const espiao = vi.fn();
     vi.stubGlobal("fetch", espiao);

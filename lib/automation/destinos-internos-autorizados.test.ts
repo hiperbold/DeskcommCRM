@@ -136,11 +136,25 @@ describe("os seis casos da decisão 22-d (#1004, item 7)", () => {
   it("3. listado, mas configurado por uma ORGANIZAÇÃO → recusa", async () => {
     banco.lista = ["10.1.0.0/16"];
 
-    // Mesmíssimo endereço do caso 2. Só muda quem o escolheu — e é isso que a
+    // Mesmíssimo endereço do caso 2 (em https: http já é recusa própria da
+    // organização, ver o caso abaixo). Só muda quem o escolheu, e é isso que a
     // decisão 22-d diz: "a empresa continua sem poder apontar para dentro".
-    await expect(motivoDaRecusaDeDestino("http://10.1.2.7:8080/v1", "organizacao")).resolves.toBe(
+    await expect(motivoDaRecusaDeDestino("https://10.1.2.7:8080/v1", "organizacao")).resolves.toBe(
       "unsafe_url:private_host",
     );
+  });
+
+  it("3b. organização: http é recusado SEMPRE, mesmo sem NODE_ENV=production; instalação não", async () => {
+    // A imagem do worker não define NODE_ENV. Aqui ele é "test" (nem produção),
+    // e mesmo assim o http da organização não passa.
+    expect(process.env.NODE_ENV).not.toBe("production");
+    banco.lista = [];
+    await expect(motivoDaRecusaDeDestino("http://gateway.exemplo/v1", "organizacao")).resolves.toBe(
+      "unsafe_url:https_required",
+    );
+    await expect(motivoDaRecusaDeDestino("https://gateway.exemplo/v1", "organizacao")).resolves.toBeNull();
+    // Endereço da instalação segue como sempre: http fora de produção passa.
+    await expect(motivoDaRecusaDeDestino("http://gateway.exemplo/v1", "instalacao")).resolves.toBeNull();
   });
 
   it("4. listado, mas com esquema ou protocolo que as guardas recusam → recusa", async () => {

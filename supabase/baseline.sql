@@ -53226,6 +53226,51 @@ comment on function public.fn_billing_margem_do_ciclo(uuid, date) is
 revoke execute on function public.fn_billing_margem_do_ciclo(uuid, date) from public, anon, authenticated;
 grant execute on function public.fn_billing_margem_do_ciclo(uuid, date) to service_role;
 
+-- ---- o servidor da conexão UAZAPI só é gravado pelo servidor da aplicação (migration 0914, fork Hiperbold, D-083 achado 4) ----
+--
+-- Gatilho BEFORE INSERT OR UPDATE OF uazapi_base_url em channel_sessions: recusa
+-- (42501) gravar ou mudar a coluna quando quem grava não é o servidor
+-- (fn_billing_e_servidor). Sem ele o admin da organização apontava o servidor da
+-- conexão para a rede interna pelo PostgREST, pulando a validação do cadastro.
+-- Cria função: entra ANTES da VARREDURA anon. Reaplicável com o app no ar,
+-- instrução por instrução. Racional completo no arquivo da migration.
+create or replace function public.fn_channel_sessions_trava_uazapi_base_url()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if not public.fn_billing_e_servidor() and (
+    (tg_op = 'INSERT' and new.uazapi_base_url is not null)
+    or (tg_op = 'UPDATE' and new.uazapi_base_url is distinct from old.uazapi_base_url)
+  ) then
+    raise exception 'uazapi_base_url só pode ser alterado pelo servidor' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_channel_sessions_trava_uazapi_base_url() is
+  '0914 (D-083, achado 4): recusa gravar ou mudar channel_sessions.uazapi_base_url quando quem grava não é o servidor (fn_billing_e_servidor: conexão direta sem SET ROLE ou service_role). Sem isto o admin da organização apontava o servidor da conexão para a rede interna pelo PostgREST (GRANT ALL a authenticated, policy de escrita só exige admin), pulando a validação do cadastro. errcode 42501, mensagem fixa. INSERT com a coluna nula (canal que não é UAZAPI) e UPDATE que não muda o valor passam. O cadastro legítimo grava pelo cliente de serviço (salvarConexaoUazapi).';
+
+revoke execute on function public.fn_channel_sessions_trava_uazapi_base_url() from public, anon, authenticated;
+grant execute on function public.fn_channel_sessions_trava_uazapi_base_url() to service_role;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_channel_sessions_trava_uazapi_base_url() from agent_worker';
+  end if;
+end
+$$;
+
+create or replace trigger trg_channel_sessions_trava_uazapi_base_url
+  before insert or update of uazapi_base_url on public.channel_sessions
+  for each row
+  execute function public.fn_channel_sessions_trava_uazapi_base_url();
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

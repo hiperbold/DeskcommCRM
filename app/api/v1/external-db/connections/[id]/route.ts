@@ -20,6 +20,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { cifrarSenha } from "@/lib/external-db/credenciais";
 import { fecharPool } from "@/lib/external-db/conexao";
+import { faixasAutorizadasParaBanco } from "@/lib/external-db/faixas-autorizadas";
 import { validarHostDeBanco } from "@/lib/external-db/guardas";
 import { atualizarConexaoSchema } from "@/lib/external-db/schemas";
 import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
@@ -103,7 +104,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
   }
 
   if (input.host !== undefined) {
-    const alvo = await validarHostDeBanco(input.host);
+    const alvo = await validarHostDeBanco(input.host, await faixasAutorizadasParaBanco());
     if (!alvo.ok) {
       const dns = alvo.motivo === "dns_falhou" || alvo.motivo === "dns_vazio";
       return fail(

@@ -18,6 +18,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { carregarConexao } from "@/lib/external-db/credenciais";
 import { testarConexao } from "@/lib/external-db/conexao";
+import { faixasAutorizadasParaBanco } from "@/lib/external-db/faixas-autorizadas";
 import { validarHostDeBanco } from "@/lib/external-db/guardas";
 import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -52,7 +53,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const leitura = await carregarConexao(admin, activeOrg.orgId, id);
   if (!leitura.ok) return respostaDeAcesso(leitura.motivo, { requestId, idioma: authUser.idioma });
 
-  const alvo = await validarHostDeBanco(leitura.conexao.host);
+  const alvo = await validarHostDeBanco(leitura.conexao.host, await faixasAutorizadasParaBanco());
   if (!alvo.ok) return respostaDeAcesso("host_bloqueado", { requestId, idioma: authUser.idioma });
 
   const resultado = await testarConexao(leitura.conexao);

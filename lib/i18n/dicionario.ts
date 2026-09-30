@@ -2754,6 +2754,12 @@ export const DICIONARIO: Traducoes = {
   "Este endereço respondeu com um redirecionamento, e o CRM não segue redirecionamento em endereço cadastrado pela empresa. Informe o endereço final da API.": {
     es: "Esta dirección respondió con una redirección, y el CRM no sigue redirecciones en una dirección registrada por la empresa. Informa la dirección final de la API.",
   },
+  "Este endereço não é aceito: o nome não resolve para um servidor público, ou aponta para a rede interna do servidor (localhost, IP privado ou serviço interno). Confira a base URL.": {
+    es: "Esta dirección no se acepta: el nombre no resuelve a un servidor público, o apunta a la red interna del servidor (localhost, IP privada o servicio interno). Revisa la base URL.",
+  },
+  "Um endereço próprio só pode ser usado com a chave da própria empresa. Escolha uma chave cadastrada em Agente de IA › Provedores ou tire o endereço próprio deste ponto.": {
+    es: "Una dirección propia solo puede usarse con la clave de la propia empresa. Elige una clave registrada en Agente de IA › Proveedores o quita la dirección propia de este punto.",
+  },
   "Este endereço não é aceito: um endereço cadastrado pela empresa não pode apontar para a rede interna do servidor (localhost, IP privado ou serviço interno).": {
     es: "Esta dirección no se acepta: una dirección registrada por la empresa no puede apuntar a la red interna del servidor (localhost, IP privada o servicio interno).",
   },

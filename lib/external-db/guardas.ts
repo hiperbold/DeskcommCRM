@@ -6,17 +6,22 @@
  * (`lib/automation/outbound-ip.ts`). Sem uma guarda própria, cadastrar uma
  * conexão vira "posso fazer o servidor falar com qualquer coisa da rede dele".
  *
- * ⚠️ A POLÍTICA AQUI É DIFERENTE DA DO WEBHOOK, e é deliberado.
+ * ⚠️ AS FAIXAS PRIVADAS SÓ PASSAM SE O DONO DA INSTALAÇÃO AS AUTORIZOU.
  *
- * `assertDestinoResolvidoSeguro` bloqueia TODA faixa privada, porque um webhook
- * é cadastrado por `manager` e não deve alcançar a rede interna do compose. Aqui
- * quem cadastra é `admin` — na prática, o dono da VPS — e o caso de uso legítimo
- * inclui um Postgres na mesma rede local. Então:
+ * Antes, RFC1918 era permitido supondo que "admin é o dono da VPS" e que um
+ * Postgres na LAN é caso real. Isso não vale quando a instalação tem várias
+ * empresas: o admin de UMA delas cadastra a conexão, e o servidor (que é de
+ * todas) abriria TCP para a rede interna. Então:
  *
- *   - RFC1918 (10/8, 172.16/12, 192.168/16) é PERMITIDO: LAN é caso real.
+ *   - RFC1918 (10/8, 172.16/12, 192.168/16) é BLOQUEADO, exceto o IP que a lista
+ *     de destinos internos da instalação cobre (`destinosInternosAutorizados`, a
+ *     mesma que vale para a IA e que o dono edita em /admin/destinos-internos).
+ *     Quem chama passa as faixas já lidas; sem elas, nada privado passa. O que
+ *     se compara é o IP resolvido, nunca o nome.
  *   - link-local/metadata (169.254/16), loopback, CGNAT, multicast, reservadas
- *     e TEST-NET continuam BLOQUEADOS SEMPRE: nenhum deles é um banco de dados
- *     de cliente, e o 169.254.169.254 entrega credencial de instância de nuvem.
+ *     e TEST-NET continuam BLOQUEADOS SEMPRE, lista ou não: nenhum deles é um
+ *     banco de dados de cliente, e o 169.254.169.254 entrega credencial de
+ *     instância de nuvem.
  *
  * A janela de DNS-rebinding é a mesma descrita em `outbound-ip.ts`: entre a
  * resolução desta guarda e a que o `pg` faz, o DNS pode mudar. Fechar de vez
@@ -47,8 +52,31 @@ function ipv4ParaInt(ip: string): number | null {
 }
 
 /**
- * Faixas IPv4 que NUNCA são destino de banco. Note a ausência de 10/8, 172.16/12
- * e 192.168/16: essas são permitidas de propósito (LAN do dono).
+ * Uma faixa IPv4 que o dono da instalação autorizou: a mesma forma que
+ * `faixasDeclaradas` (`lib/automation/destinos-internos-autorizados.ts`) devolve.
+ * Declarada aqui, em vez de importada, para esta guarda não arrastar env e banco
+ * para quem só quer julgar um IP.
+ */
+export type FaixaAutorizada = { readonly base: number; readonly mascara: number };
+
+/** RFC1918: bloqueadas, salvo o IP que uma faixa autorizada cobre. */
+const FAIXAS_PRIVADAS: ReadonlyArray<readonly [string, number]> = [
+  ["10.0.0.0", 8],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+];
+
+function noBloco(alvo: number, base: string, prefixo: number): boolean {
+  const baseInt = ipv4ParaInt(base);
+  if (baseInt === null) return false;
+  const mascara = prefixo === 0 ? 0 : (0xffffffff << (32 - prefixo)) >>> 0;
+  return ((alvo & mascara) >>> 0) === ((baseInt & mascara) >>> 0);
+}
+
+/**
+ * Faixas IPv4 que NUNCA são destino de banco, nem com lista autorizada. As
+ * privadas (10/8, 172.16/12, 192.168/16) ficam em `FAIXAS_PRIVADAS`: essas só
+ * passam quando o dono da instalação as autorizou.
  */
 const FAIXAS_PROIBIDAS: ReadonlyArray<readonly [string, number]> = [
   ["0.0.0.0", 8], // "este host"
@@ -118,7 +146,7 @@ function byte(bytes: ReadonlyArray<number>, i: number): number {
   return bytes[i] ?? 0;
 }
 
-function ipv6Proibido(bytes: ReadonlyArray<number>): boolean {
+function ipv6Proibido(bytes: ReadonlyArray<number>, autorizadas: ReadonlyArray<FaixaAutorizada>): boolean {
   if (bytes.length !== 16) return true; // não é IPv6: trata como perigoso
   if (bytes.every((b) => b === 0)) return true; // ::
   if (bytes.slice(0, 15).every((b) => b === 0) && byte(bytes, 15) === 1) return true; // ::1
@@ -148,25 +176,34 @@ function ipv6Proibido(bytes: ReadonlyArray<number>): boolean {
   if (dezZeros && byte(bytes, 10) === 0xff && byte(bytes, 11) === 0xff) {
     return ipDeBancoProibido(
       `${byte(bytes, 12)}.${byte(bytes, 13)}.${byte(bytes, 14)}.${byte(bytes, 15)}`,
+      autorizadas,
     );
   }
   if (dezZeros && byte(bytes, 10) === 0 && byte(bytes, 11) === 0) {
     const embutido = `${byte(bytes, 12)}.${byte(bytes, 13)}.${byte(bytes, 14)}.${byte(bytes, 15)}`;
-    if (embutido !== "0.0.0.0") return ipDeBancoProibido(embutido);
+    if (embutido !== "0.0.0.0") return ipDeBancoProibido(embutido, autorizadas);
   }
   return false;
 }
 
-/** Um literal de IP é proibido? Exportado para teste direto da política. */
-export function ipDeBancoProibido(ip: string): boolean {
+/**
+ * Um literal de IP é proibido? Exportado para teste direto da política.
+ *
+ * `autorizadas` são as faixas da lista de destinos internos da instalação: elas
+ * liberam SÓ as faixas privadas (RFC1918). Sem elas (o padrão), tudo o que é
+ * privado é proibido.
+ */
+export function ipDeBancoProibido(ip: string, autorizadas: ReadonlyArray<FaixaAutorizada> = []): boolean {
   if (isIPv4(ip)) {
     const alvo = ipv4ParaInt(ip);
     if (alvo === null) return true; // não parseou: trata como perigoso
     for (const [base, prefixo] of FAIXAS_PROIBIDAS) {
-      const baseInt = ipv4ParaInt(base);
-      if (baseInt === null) continue;
-      const mascara = prefixo === 0 ? 0 : (0xffffffff << (32 - prefixo)) >>> 0;
-      if (((alvo & mascara) >>> 0) === ((baseInt & mascara) >>> 0)) return true;
+      if (noBloco(alvo, base, prefixo)) return true;
+    }
+    for (const [base, prefixo] of FAIXAS_PRIVADAS) {
+      if (noBloco(alvo, base, prefixo)) {
+        return !autorizadas.some((f) => ((alvo & f.mascara) >>> 0) === ((f.base & f.mascara) >>> 0));
+      }
     }
     return false;
   }
@@ -174,7 +211,7 @@ export function ipDeBancoProibido(ip: string): boolean {
   if (isIPv6(ip)) {
     const bytes = ipv6ParaBytes(ip);
     if (bytes === null) return true; // não parseou: trata como perigoso
-    return ipv6Proibido(bytes);
+    return ipv6Proibido(bytes, autorizadas);
   }
 
   return true; // nem IPv4 nem IPv6
@@ -192,13 +229,17 @@ function normalizarHost(host: string): string | null {
  * Valida o destino: literal de IP é julgado direto; hostname é resolvido e
  * recusado se QUALQUER endereço cair em faixa proibida (rebinding devolve um
  * público e um privado; o `pg` pode escolher o privado, então recusa tudo).
+ * `autorizadas`: ver `ipDeBancoProibido`.
  */
-export async function validarHostDeBanco(host: string): Promise<ResultadoDeHost> {
+export async function validarHostDeBanco(
+  host: string,
+  autorizadas: ReadonlyArray<FaixaAutorizada> = [],
+): Promise<ResultadoDeHost> {
   const h = normalizarHost(host);
   if (h === null) return { ok: false, motivo: "host_invalido" };
 
   if (isIP(h) !== 0) {
-    if (ipDeBancoProibido(h)) return { ok: false, motivo: "ip_especial" };
+    if (ipDeBancoProibido(h, autorizadas)) return { ok: false, motivo: "ip_especial" };
     return { ok: true, enderecos: [h] };
   }
 
@@ -212,7 +253,7 @@ export async function validarHostDeBanco(host: string): Promise<ResultadoDeHost>
   if (enderecos.length === 0) return { ok: false, motivo: "dns_vazio" };
 
   for (const { address } of enderecos) {
-    if (ipDeBancoProibido(address)) return { ok: false, motivo: "ip_especial" };
+    if (ipDeBancoProibido(address, autorizadas)) return { ok: false, motivo: "ip_especial" };
   }
   return { ok: true, enderecos: enderecos.map((e) => e.address) };
 }

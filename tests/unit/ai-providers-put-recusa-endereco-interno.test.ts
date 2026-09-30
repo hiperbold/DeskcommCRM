@@ -27,7 +27,13 @@ vi.mock("node:dns/promises", () => {
   return { lookup, default: { lookup } };
 });
 
-const banco = vi.hoisted(() => ({ upserts: [] as Array<Record<string, unknown>> }));
+const CREDENCIAL_DA_ORG = "33333333-3333-4333-8333-333333333333";
+
+const banco = vi.hoisted(() => ({
+  upserts: [] as Array<Record<string, unknown>>,
+  /** As credenciais que a organização tem, por id (provedor). */
+  credenciais: {} as Record<string, string>,
+}));
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: vi.fn(async () => null) }));
@@ -35,11 +41,17 @@ vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
-    from: () => {
+    from: (tabela: string) => {
+      let credencialPedida: string | null = null;
       const chain: Record<string, unknown> = {
         // Modelo fora do catálogo passa com aviso (validarBinding); é o que
-        // este arquivo precisa, porque o assunto aqui é o endereço.
-        maybeSingle: async () => ({ data: null, error: null }),
+        // este arquivo precisa, porque o assunto aqui é o endereço. A tabela de
+        // credenciais responde só pelas que a organização tem.
+        maybeSingle: async () => {
+          if (tabela !== "ai_provider_credentials") return { data: null, error: null };
+          const provedor = credencialPedida ? banco.credenciais[credencialPedida] : undefined;
+          return { data: provedor ? { id: credencialPedida, provider: provedor } : null, error: null };
+        },
         upsert: (linha: Record<string, unknown>) => {
           banco.upserts.push(linha);
           return {
@@ -49,7 +61,11 @@ vi.mock("@/lib/supabase/server", () => ({
           };
         },
       };
-      for (const m of ["select", "eq", "is"]) chain[m] = () => chain;
+      chain.eq = (coluna: string, valor: string) => {
+        if (coluna === "id") credencialPedida = valor;
+        return chain;
+      };
+      for (const m of ["select", "is"]) chain[m] = () => chain;
       return chain;
     },
   }),
@@ -74,6 +90,7 @@ function put(corpo: Record<string, unknown>) {
 
 beforeEach(() => {
   banco.upserts = [];
+  banco.credenciais = { [CREDENCIAL_DA_ORG]: "openrouter" };
   vi.mocked(requireRole).mockResolvedValue({
     ok: true,
     user: { id: "actor", idioma: "pt-BR" },
@@ -82,12 +99,14 @@ beforeEach(() => {
 });
 
 describe("PUT /api/v1/ai/providers, base_url", () => {
+  // Em https de propósito: http é recusado antes de qualquer julgamento de
+  // destino (caso próprio abaixo), e aqui se mede a recusa do destino interno.
   it.each([
-    ["metadados de nuvem", "http://169.254.169.254/latest/meta-data"],
-    ["localhost", "http://localhost:3000/v1"],
-    ["loopback", "http://127.0.0.1:4000/v1"],
-    ["rede privada 10.x", "http://10.0.0.5/v1"],
-    ["serviço do compose (nome que resolve para IP privado)", "http://db:5432"],
+    ["metadados de nuvem", "https://169.254.169.254/latest/meta-data"],
+    ["localhost", "https://localhost:3000/v1"],
+    ["loopback", "https://127.0.0.1:4000/v1"],
+    ["rede privada 10.x", "https://10.0.0.5/v1"],
+    ["serviço do compose (nome que resolve para IP privado)", "https://db:5432"],
     ["nome público que passou a apontar para dentro", "https://virou-interno.exemplo/v1"],
   ])("recusa %s com 422, mensagem em português, e NÃO grava", async (_rotulo, endereco) => {
     const res = await put({ base_url: endereco });
@@ -100,13 +119,53 @@ describe("PUT /api/v1/ai/providers, base_url", () => {
     expect(banco.upserts, "o endereço interno foi gravado").toHaveLength(0);
   });
 
-  it("aceita https público e grava o endereço", async () => {
+  it("recusa http mesmo para host público, sem NODE_ENV=production, e NÃO grava", async () => {
+    expect(process.env.NODE_ENV).not.toBe("production");
+    const res = await put({ base_url: "http://gateway.exemplo/v1", credential_id: CREDENCIAL_DA_ORG });
+
+    expect(res.status).toBe(422);
+    const corpo = (await res.json()) as { error: { code: string; message: string } };
+    expect(corpo.error.code).toBe("base_url_recusada");
+    expect(corpo.error.message).toMatch(/https/);
+    expect(banco.upserts).toHaveLength(0);
+  });
+
+  it("aceita https público COM a chave da própria empresa e grava o endereço", async () => {
     // Controle positivo: sem ele, uma rota que recusasse tudo passaria acima.
-    const res = await put({ base_url: "https://gateway.exemplo/v1" });
+    const res = await put({ base_url: "https://gateway.exemplo/v1", credential_id: CREDENCIAL_DA_ORG });
 
     expect(res.status).toBe(200);
     expect(banco.upserts).toHaveLength(1);
-    expect(banco.upserts[0]).toMatchObject({ base_url: "https://gateway.exemplo/v1" });
+    expect(banco.upserts[0]).toMatchObject({
+      base_url: "https://gateway.exemplo/v1",
+      credential_id: CREDENCIAL_DA_ORG,
+    });
+  });
+
+  it("recusa base_url SEM credential_id com 422 e mensagem clara, e NÃO grava", async () => {
+    // Sem chave própria o uso cairia na chave do .env (a que paga todas as
+    // empresas) e ela sairia para o endereço que a empresa escolheu.
+    for (const semChave of [{}, { credential_id: null }]) {
+      const res = await put({ base_url: "https://gateway.exemplo/v1", ...semChave });
+
+      expect(res.status).toBe(422);
+      const corpo = (await res.json()) as { error: { code: string; message: string } };
+      expect(corpo.error.code).toBe("base_url_exige_chave_da_empresa");
+      expect(corpo.error.message).toMatch(/chave da própria empresa/);
+    }
+    expect(banco.upserts, "gravou endereço próprio sem chave da empresa").toHaveLength(0);
+  });
+
+  it("base_url com credential_id de OUTRA organização continua recusada e não grava", async () => {
+    const res = await put({
+      base_url: "https://gateway.exemplo/v1",
+      credential_id: "44444444-4444-4444-8444-444444444444",
+    });
+
+    expect(res.status).toBe(422);
+    const corpo = (await res.json()) as { error: { code: string } };
+    expect(corpo.error.code).toBe("credencial_invalida");
+    expect(banco.upserts).toHaveLength(0);
   });
 
   it("sem base_url continua gravando (a régua só julga endereço de empresa)", async () => {
