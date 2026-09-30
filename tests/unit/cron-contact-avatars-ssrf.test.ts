@@ -17,7 +17,7 @@ const CONTATO = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ORG = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const CAMINHO = `${ORG}/avatars/${CONTATO}.jpg`;
 
-/** O que o canal devolve como URL da foto — cada teste ajusta. */
+/** O que o canal devolve como URL da foto; cada teste ajusta. */
 let urlDaFoto = "";
 /** O que a "rede" responde por URL. */
 let respostas: Record<string, () => Response> = {};

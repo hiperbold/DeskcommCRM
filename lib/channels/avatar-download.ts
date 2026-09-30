@@ -1,5 +1,5 @@
 /**
- * Baixar a foto de perfil de um contato — a URL vem do servidor do canal, e o
+ * Baixar a foto de perfil de um contato: a URL vem do servidor do canal, e o
  * servidor do canal pode ser da ORGANIZAÇÃO (UAZAPI: cada conexão aponta para um
  * servidor que o admin escolheu).
  *
