@@ -186,7 +186,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
           {alarmesResultado.leituraFalhou ? (
             <p className="text-sm text-destructive">{t("Não foi possível ler os alarmes agora.")}</p>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <ContadorDeAlarme
                 rotulo={t("Pendente há mais de 1 hora")}
                 valor={alarmesResultado.contadores.pendenteHaMaisDeUmaHora}
@@ -202,6 +202,14 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
               <ContadorDeAlarme
                 rotulo={t("Sem vínculo nas últimas 24h")}
                 valor={alarmesResultado.contadores.semVinculoUltimas24h}
+              />
+              <ContadorDeAlarme
+                rotulo={t("Estorno sem corte nas últimas 24h")}
+                valor={alarmesResultado.contadores.estornoComCorteFalhouUltimas24h}
+              />
+              <ContadorDeAlarme
+                rotulo={t("Estorno de cobrança antiga nas últimas 24h")}
+                valor={alarmesResultado.contadores.estornoDePeriodoAntigoUltimas24h}
               />
               <ContadorDeAlarme
                 rotulo={t("Sem evento há 3 dias, assinatura ativa")}

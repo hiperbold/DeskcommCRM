@@ -386,6 +386,18 @@ export interface ContadoresDeAlarmeAsaas {
   /** `resultado = 'sem_vinculo'` nas últimas 24 horas. */
   semVinculoUltimas24h: number;
   /**
+   * Estorno total que o banco registrou mas NÃO cortou (alarme `estorno_corte_falhou`,
+   * D-086) nas últimas 24 horas: o evento fecha `aplicado`, então sem este contador o
+   * defeito não apareceria em lugar nenhum da tela.
+   */
+  estornoComCorteFalhouUltimas24h: number;
+  /**
+   * Estorno total de cobrança que não é a do período vigente (alarme
+   * `estorno_de_periodo_antigo`, D-086) nas últimas 24 horas: nada foi cortado, o admin
+   * decide.
+   */
+  estornoDePeriodoAntigoUltimas24h: number;
+  /**
    * Alarme da INSTALAÇÃO (não por organização, correção da decisão 21): `1`
    * quando existe PELO MENOS UMA assinatura Asaas ativa (`asaas_
    * subscription_id` preenchido e `asaas_assinatura_encerrada_em` nulo, em
@@ -410,6 +422,8 @@ const CONTADORES_EM_FALHA: ContadoresDeAlarmeAsaas = {
   erroUltimas24h: 0,
   divergenteUltimas24h: 0,
   semVinculoUltimas24h: 0,
+  estornoComCorteFalhouUltimas24h: 0,
+  estornoDePeriodoAntigoUltimas24h: 0,
   semEventoHa3DiasComAssinaturaAtiva: 0,
 };
 
@@ -435,7 +449,16 @@ export async function contadoresDeAlarmeAsaas(
     const ha24Horas = new Date(agora - 24 * MS_POR_HORA).toISOString();
     const ha3Dias = new Date(agora - 3 * MS_POR_DIA).toISOString();
 
-    const [pendenteRes, erroRes, divergenteRes, semVinculoRes, assinaturaAtivaRes, eventoRecenteRes] = await Promise.all([
+    const [
+      pendenteRes,
+      erroRes,
+      divergenteRes,
+      semVinculoRes,
+      assinaturaAtivaRes,
+      eventoRecenteRes,
+      corteFalhouRes,
+      periodoAntigoRes,
+    ] = await Promise.all([
       admin
         .from("asaas_webhook_events")
         .select("id", { count: "exact", head: true })
@@ -462,6 +485,16 @@ export async function contadoresDeAlarmeAsaas(
         .not("asaas_subscription_id", "is", null)
         .is("asaas_assinatura_encerrada_em", null),
       admin.from("asaas_webhook_events").select("id", { count: "exact", head: true }).gte("recebido_em", ha3Dias),
+      admin
+        .from("asaas_webhook_events")
+        .select("id", { count: "exact", head: true })
+        .ilike("alarme", "%estorno_corte_falhou%")
+        .gte("recebido_em", ha24Horas),
+      admin
+        .from("asaas_webhook_events")
+        .select("id", { count: "exact", head: true })
+        .ilike("alarme", "%estorno_de_periodo_antigo%")
+        .gte("recebido_em", ha24Horas),
     ]);
 
     for (const [etapa, r] of [
@@ -471,6 +504,8 @@ export async function contadoresDeAlarmeAsaas(
       ["sem_vinculo", semVinculoRes],
       ["assinatura_ativa_instalacao", assinaturaAtivaRes],
       ["evento_recente_instalacao", eventoRecenteRes],
+      ["estorno_corte_falhou", corteFalhouRes],
+      ["estorno_de_periodo_antigo", periodoAntigoRes],
     ] as const) {
       if (r.error) throw new Error(`ler alarmes (${etapa}): ${r.error.message}`);
     }
@@ -485,6 +520,8 @@ export async function contadoresDeAlarmeAsaas(
         erroUltimas24h: erroRes.count ?? 0,
         divergenteUltimas24h: divergenteRes.count ?? 0,
         semVinculoUltimas24h: semVinculoRes.count ?? 0,
+        estornoComCorteFalhouUltimas24h: corteFalhouRes.count ?? 0,
+        estornoDePeriodoAntigoUltimas24h: periodoAntigoRes.count ?? 0,
         semEventoHa3DiasComAssinaturaAtiva: semEventoHa3Dias,
       },
       leituraFalhou: false,

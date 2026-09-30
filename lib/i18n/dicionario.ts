@@ -13165,6 +13165,8 @@ export const DICIONARIO: Traducoes = {
   "Divergente nas últimas 24h": { es: "Divergente en las últimas 24h" },
   "Sem vínculo nas últimas 24h": { es: "Sin vínculo en las últimas 24h" },
   "Sem evento há 3 dias, assinatura ativa": { es: "Sin evento hace 3 días, suscripción activa" },
+  "Estorno sem corte nas últimas 24h": { es: "Reembolso sin corte en las últimas 24h" },
+  "Estorno de cobrança antiga nas últimas 24h": { es: "Reembolso de cobro antiguo en las últimas 24h" },
   Planos: { es: "Planes" },
   "Não foi possível ler os planos agora.": { es: "No se pudieron leer los planes ahora." },
   "À venda": { es: "A la venta" },

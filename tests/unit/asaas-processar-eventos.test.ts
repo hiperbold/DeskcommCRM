@@ -731,4 +731,168 @@ describe("processarEventosAsaas", () => {
     expect(logger.warn).toHaveBeenCalledWith("asaas_processar_remover_cobranca_fallback_de_assinatura_falhou", expect.any(Object));
     expect(resumo.aplicados).toBe(1);
   });
+
+  // ─── D-086: estorno total corta o acesso e os tokens ──────────────────────
+  // O que o banco decide (contrato, tokens, marcador) é provado em
+  // tests/invariants/estorno-total-corta-acesso-e-tokens.test.ts. Aqui se prova o
+  // que o PROCESSADOR faz com o que o banco devolve: remover a assinatura no
+  // Asaas (só GET e DELETE, nunca dentro de transação), gravar o marcador depois,
+  // auditar, e não agir em parcial, chargeback nem em reentrega.
+
+  describe("D-086: estorno total", () => {
+    function cenario(eventType: string, alarme: string | null, resultado = "aplicado", assinatura: string | null = "sub_est") {
+      const evento: EventoReservado = { id: "evt-60", eventType, idDoRecurso: "pay_60", leaseToken: "lease-60" };
+      const payload = payloadDePagamento({ id: "pay_60", subscription: assinatura ?? undefined });
+      payload.id = "evt-60";
+      payload.event = eventType;
+      const auditar = vi.fn(async () => undefined);
+      const db = dbFalso({
+        reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+        lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-60", payload }], error: null })),
+        aplicarEvento: vi.fn(async () => ({ data: { resultado, organizationId: "org-60", alarme }, error: null })),
+      });
+      const asaas = asaasFalso({
+        buscarCobranca: vi.fn(async () =>
+          cobrancaFake({ id: "pay_60", status: "REFUNDED", subscription: assinatura ?? undefined }),
+        ),
+      });
+      return { db, asaas, auditar };
+    }
+
+    it("estorno total de assinatura: remove a assinatura no Asaas, depois grava o marcador, e audita com o motivo", async () => {
+      const { db, asaas, auditar } = cenario(
+        "PAYMENT_REFUNDED",
+        "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente",
+      );
+      const ordem: string[] = [];
+      asaas.removerAssinatura = vi.fn(async () => {
+        ordem.push("remover");
+      });
+      db.marcarAssinaturaEncerrada = vi.fn(async () => {
+        ordem.push("marcar");
+        return { data: { jaRegistrado: false }, error: null };
+      });
+
+      await processarEventosAsaas(deps({ db, asaas, auditar }));
+
+      expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_est");
+      expect(asaas.removerCobranca).not.toHaveBeenCalled();
+      expect(ordem).toEqual(["remover", "marcar"]);
+      expect(db.marcarAssinaturaEncerrada).toHaveBeenCalledWith("org-60", "sub_est");
+      expect(auditar).toHaveBeenCalledTimes(1);
+      expect(auditar).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "billing.asaas_refund_cut",
+          organizationId: "org-60",
+          resourceType: "organization",
+          resourceId: "org-60",
+          metadata: expect.objectContaining({ motivo: "estorno_total", tipo: "assinatura", pagamento_asaas: "pay_60" }),
+        }),
+      );
+    });
+
+    it("estorno total de pacote: não remove assinatura nenhuma, só audita o corte de tokens", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_REFUNDED", "estorno_confirmado,estorno_removeu_tokens_do_pacote", "aplicado", null);
+
+      await processarEventosAsaas(deps({ db, asaas, auditar }));
+
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(asaas.removerCobranca).not.toHaveBeenCalled();
+      expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+      expect(auditar).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ motivo: "estorno_total", tipo: "pacote_tokens" }) }),
+      );
+    });
+
+    it("estorno parcial e chargeback (só alarmam): nenhuma remoção, nenhum marcador, nenhuma auditoria de corte", async () => {
+      for (const [tipo, alarme] of [
+        ["PAYMENT_PARTIALLY_REFUNDED", "parcialmente_estornado"],
+        ["PAYMENT_CHARGEBACK_REQUESTED", "chargeback_confirmado"],
+      ] as const) {
+        const { db, asaas, auditar } = cenario(tipo, alarme);
+        await processarEventosAsaas(deps({ db, asaas, auditar }));
+        expect(asaas.removerAssinatura, tipo).not.toHaveBeenCalled();
+        expect(db.marcarAssinaturaEncerrada, tipo).not.toHaveBeenCalled();
+        expect(auditar, tipo).not.toHaveBeenCalled();
+      }
+    });
+
+    it("reentrega (o banco devolve ja_aplicado, sem alarme): não remove de novo nem audita de novo", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_REFUNDED", null, "ja_aplicado");
+      const resumo = await processarEventosAsaas(deps({ db, asaas, auditar }));
+
+      expect(resumo.jaAplicados).toBe(1);
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+      expect(auditar).not.toHaveBeenCalled();
+    });
+
+    it("DELETE da assinatura falha: só loga (a conciliação refaz), sem marcador, e a auditoria do corte sai mesmo assim", async () => {
+      const { db, asaas, auditar } = cenario(
+        "PAYMENT_REFUNDED",
+        "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente",
+      );
+      asaas.removerAssinatura = vi.fn(async () => {
+        throw erroIndisponivel(500);
+      });
+      const logger = loggerFalso();
+
+      const resumo = await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.warn).toHaveBeenCalledWith("asaas_processar_remover_assinatura_falhou", expect.any(Object));
+      expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+      expect(auditar).toHaveBeenCalledTimes(1);
+      expect(resumo.aplicados).toBe(1);
+    });
+
+    it("auditoria que lança não derruba o evento nem impede a remoção", async () => {
+      const { db, asaas } = cenario(
+        "PAYMENT_REFUNDED",
+        "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente",
+      );
+      const auditar = vi.fn(async () => {
+        throw new Error("banco de auditoria fora");
+      });
+
+      const resumo = await processarEventosAsaas(deps({ db, asaas, auditar }));
+
+      expect(resumo.aplicados).toBe(1);
+      expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_est");
+    });
+
+    it("estorno_corte_falhou: loga um erro (o evento fechou aplicado, mas nada foi cortado), mantém a remoção da assinatura e não audita corte", async () => {
+      const { db, asaas, auditar } = cenario(
+        "PAYMENT_REFUNDED",
+        "estorno_confirmado,estorno_corte_falhou,remover_assinatura_pendente",
+      );
+      const logger = loggerFalso();
+
+      await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.error).toHaveBeenCalledWith("alarme_asaas_estorno_corte_falhou", expect.objectContaining({ eventoId: "evt-60" }));
+      expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_est");
+      expect(auditar).not.toHaveBeenCalled();
+    });
+
+    it("estorno_de_periodo_antigo: loga o alarme, não remove a assinatura, não grava marcador e não audita corte", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_REFUNDED", "estorno_confirmado,estorno_de_periodo_antigo");
+      const logger = loggerFalso();
+
+      await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.warn).toHaveBeenCalledWith("alarme_asaas_estorno_de_periodo_antigo", expect.objectContaining({ eventoId: "evt-60" }));
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+      expect(auditar).not.toHaveBeenCalled();
+    });
+
+    it("sem o auditar injetado o corte segue igual", async () => {
+      const { db, asaas } = cenario(
+        "PAYMENT_REFUNDED",
+        "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente",
+      );
+      await processarEventosAsaas(deps({ db, asaas }));
+      expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_est");
+    });
+  });
 });

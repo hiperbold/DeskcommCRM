@@ -1036,6 +1036,13 @@ export const AUDIT_ACTIONS = [
   "billing.asaas_order_canceled",
   "billing.asaas_subscription_canceled",
 
+  // O estorno TOTAL no Asaas cortou o acesso ou os tokens sozinho (D-086,
+  // `lib/billing/asaas/processar-eventos.ts`): quem age é o processador de
+  // eventos (sem usuário), e o `metadata` carrega só o motivo (`estorno_total`),
+  // o tipo (`assinatura` ou `pacote_tokens`), o id da cobrança e se a assinatura
+  // foi pedida para remoção. Nunca dado do pagador nem o payload do evento.
+  "billing.asaas_refund_cut",
+
   // A campanha de PROSPECÇÃO pausada pelo tick por conta suspensa (D-066,
   // `lib/prospecting/worker.ts`, `tickProspecting`). Espelha `campaign.paused`
   // (que é da campanha de DISPARO, `campaigns`/`lib/campanhas/rodada.ts`, outra

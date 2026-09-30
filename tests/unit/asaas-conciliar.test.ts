@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ClienteAsaasHttp } from "@/lib/billing/asaas/cliente";
 import {
   conciliarAsaas,
+  criarDbConciliarAsaasSobre,
   type AssinaturaAtivaParaConciliar,
   type DbConciliarAsaas,
   type DepsConciliarAsaas,
@@ -103,6 +104,8 @@ function dbFalso(overrides: Partial<DbConciliarAsaas> = {}): DbConciliarAsaas {
     listarPedidosPendentes: vi.fn(async () => ({ data: [], error: null })),
     listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [], error: null })),
     listarAssinaturasAtivas: vi.fn(async () => ({ data: [], error: null })),
+    listarContratosCanceladosComAssinaturaViva: vi.fn(async () => ({ data: [], error: null })),
+    marcarAssinaturaEncerrada: vi.fn(async () => ({ data: {}, error: null })),
     clienteAsaasDaOrganizacao: vi.fn(async () => ({ data: "cus_fake123", error: null })),
     marcarPedidoInconclusivo: vi.fn(async () => ({ data: {}, error: null })),
     registrarEventoSintetico: vi.fn(async () => ({ data: { novo: true }, error: null })),
@@ -113,6 +116,8 @@ function dbFalso(overrides: Partial<DbConciliarAsaas> = {}): DbConciliarAsaas {
         erroUltimas24h: 0,
         divergenteUltimas24h: 0,
         semVinculoUltimas24h: 0,
+        estornoComCorteFalhouUltimas24h: 0,
+        estornoDePeriodoAntigoUltimas24h: 0,
         semEventoHa3DiasComAssinaturaAtiva: 0,
       },
       leituraFalhou: false,
@@ -360,6 +365,8 @@ describe("conciliarAsaas", () => {
       erroUltimas24h: 2,
       divergenteUltimas24h: 3,
       semVinculoUltimas24h: 4,
+      estornoComCorteFalhouUltimas24h: 6,
+      estornoDePeriodoAntigoUltimas24h: 7,
       semEventoHa3DiasComAssinaturaAtiva: 5,
     };
     const db = dbFalso({ contadoresDeAlarme: vi.fn(async () => ({ contadores, leituraFalhou: false })) });
@@ -370,6 +377,8 @@ describe("conciliarAsaas", () => {
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_evento_em_erro_ultimas_24h", { quantidade: 2 });
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_evento_divergente_ultimas_24h", { quantidade: 3 });
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_evento_sem_vinculo_ultimas_24h", { quantidade: 4 });
+    expect(logger.error).toHaveBeenCalledWith("alarme_asaas_estorno_corte_falhou_ultimas_24h", { quantidade: 6 });
+    expect(logger.error).toHaveBeenCalledWith("alarme_asaas_estorno_de_periodo_antigo_ultimas_24h", { quantidade: 7 });
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_sem_evento_ha_3_dias_com_assinatura_ativa", {
       quantidade: 5,
     });
@@ -414,5 +423,127 @@ describe("conciliarAsaas", () => {
     // Poda e alarmes continuam rodando: não dependem do Asaas.
     expect(db.podarEventos).toHaveBeenCalled();
     expect(resumo.falhas).toBe(0);
+  });
+
+  describe("D-086: contrato cancelado por estorno total com a assinatura ainda viva", () => {
+    const contrato = { organizationId: "org-9", asaasSubscriptionId: "sub_estornada" };
+
+    it("pede ao banco só os contratos do AMBIENTE da instalação (sandbox não toca assinatura de produção)", async () => {
+      const listar = vi.fn(async () => ({ data: [], error: null }));
+      const db = dbFalso({ listarContratosCanceladosComAssinaturaViva: listar });
+      await conciliarAsaas(deps({ db }));
+      expect(listar).toHaveBeenCalledWith(expect.any(Number), "sandbox");
+
+      const listarProducao = vi.fn(async () => ({ data: [], error: null }));
+      await conciliarAsaas(
+        deps({
+          db: dbFalso({ listarContratosCanceladosComAssinaturaViva: listarProducao }),
+          config: { ...CONFIG_SANDBOX, ambiente: "producao" },
+        }),
+      );
+      expect(listarProducao).toHaveBeenCalledWith(expect.any(Number), "producao");
+    });
+
+    it("remove a assinatura no Asaas e DEPOIS grava o marcador", async () => {
+      const ordem: string[] = [];
+      const db = dbFalso({
+        listarContratosCanceladosComAssinaturaViva: vi.fn(async () => ({ data: [contrato], error: null })),
+        marcarAssinaturaEncerrada: vi.fn(async () => {
+          ordem.push("marcar");
+          return { data: {}, error: null };
+        }),
+      });
+      const asaas = asaasFalso({
+        removerAssinatura: vi.fn(async () => {
+          ordem.push("remover");
+        }),
+      });
+      const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+      expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_estornada");
+      expect(db.marcarAssinaturaEncerrada).toHaveBeenCalledWith("org-9", "sub_estornada");
+      expect(ordem).toEqual(["remover", "marcar"]);
+      expect(resumo.falhas).toBe(0);
+    });
+
+    it("DELETE falhou: alarma, conta a falha e NÃO grava o marcador (recompra continua barrada, sem cobrança dupla)", async () => {
+      const db = dbFalso({
+        listarContratosCanceladosComAssinaturaViva: vi.fn(async () => ({ data: [contrato], error: null })),
+      });
+      const asaas = asaasFalso({
+        removerAssinatura: vi.fn(async () => {
+          throw erroIndisponivel(503);
+        }),
+      });
+      const logger = loggerFalso();
+      const resumo = await conciliarAsaas(deps({ db, asaas, logger }));
+
+      expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledWith("alarme_asaas_remover_assinatura_pendente", expect.any(Object));
+      expect(resumo.falhas).toBe(1);
+    });
+
+    it("sem contrato nessa situação: não chama o Asaas", async () => {
+      const asaas = asaasFalso();
+      await conciliarAsaas(deps({ asaas }));
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("D-086, M3 e B2: a listagem do passo 3b só devolve contrato cortado por estorno, do ambiente da instalação", () => {
+  /** Admin falso encadeável: registra os filtros de cada consulta e devolve o resultado da tabela. */
+  function adminFalso(resultados: Record<string, { data: unknown; error: null }>) {
+    const filtros: Record<string, Array<[string, ...unknown[]]>> = {};
+    const admin = {
+      from(tabela: string) {
+        const lista: Array<[string, ...unknown[]]> = (filtros[tabela] = filtros[tabela] ?? []);
+        const builder: Record<string, unknown> = {};
+        for (const metodo of ["select", "eq", "not", "is", "in", "limit"]) {
+          builder[metodo] = (...args: unknown[]) => {
+            lista.push([metodo, ...args]);
+            return builder;
+          };
+        }
+        builder.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(resultados[tabela]).then(resolve, reject);
+        return builder;
+      },
+    };
+    return { admin: admin as never, filtros };
+  }
+
+  it("contrato cancelado pelo admin SEM evento de estorno não entra (a assinatura dele não é removida pela conciliação)", async () => {
+    const { admin, filtros } = adminFalso({
+      billing_contracts: {
+        data: [
+          { id: "c-estorno", organization_id: "org-a", asaas_subscription_id: "sub_a" },
+          { id: "c-admin", organization_id: "org-b", asaas_subscription_id: "sub_b" },
+        ],
+        error: null,
+      },
+      // só o contrato c-estorno tem evento com motivo estorno_asaas
+      billing_contract_eventos: { data: [{ contract_id: "c-estorno" }], error: null },
+    });
+    const r = await criarDbConciliarAsaasSobre(admin).listarContratosCanceladosComAssinaturaViva(50, "sandbox");
+
+    expect(r.error).toBeNull();
+    expect(r.data).toEqual([{ organizationId: "org-a", asaasSubscriptionId: "sub_a" }]);
+    expect(filtros.billing_contract_eventos).toContainEqual(["eq", "motivo", "estorno_asaas"]);
+    expect(filtros.billing_contract_eventos).toContainEqual(["in", "contract_id", ["c-estorno", "c-admin"]]);
+  });
+
+  it("filtra por status cancelada, marcador nulo e pelo AMBIENTE pedido", async () => {
+    const { admin, filtros } = adminFalso({
+      billing_contracts: { data: [], error: null },
+      billing_contract_eventos: { data: [], error: null },
+    });
+    await criarDbConciliarAsaasSobre(admin).listarContratosCanceladosComAssinaturaViva(50, "producao");
+
+    expect(filtros.billing_contracts).toContainEqual(["eq", "status", "cancelada"]);
+    expect(filtros.billing_contracts).toContainEqual(["eq", "asaas_ambiente", "producao"]);
+    expect(filtros.billing_contracts).toContainEqual(["is", "asaas_assinatura_encerrada_em", null]);
+    // sem candidato, nem consulta os eventos
+    expect(filtros.billing_contract_eventos).toBeUndefined();
   });
 });

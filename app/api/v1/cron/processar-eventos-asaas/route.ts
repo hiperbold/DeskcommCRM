@@ -37,6 +37,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
+import { audit } from "@/lib/audit";
 import { autorizaCron } from "@/lib/auth/cron-auth";
 import { criarClienteAsaas } from "@/lib/billing/asaas/cliente";
 import { configDoAsaas } from "@/lib/billing/asaas/config";
@@ -64,7 +65,7 @@ async function handle(req: NextRequest): Promise<Response> {
     const admin = createAdminClient();
     const db = criarDbEventosAsaasSobre(admin);
     const asaas = criarClienteAsaas({ fetch, config, logger });
-    resumo = await processarEventosAsaas({ db, asaas, config, logger });
+    resumo = await processarEventosAsaas({ db, asaas, config, logger, auditar: audit });
   } catch (err) {
     // O texto do erro (rede, banco, configuração) pode citar detalhe interno:
     // não é para o corpo da resposta HTTP, só para quem lê o log do servidor.

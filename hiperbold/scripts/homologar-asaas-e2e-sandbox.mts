@@ -838,12 +838,25 @@ async function etapaEstornarA(): Promise<void> {
     tokensDepois: { carteiras: snapDepois.carteiras, livro: snapDepois.livro },
     observacao: "fn_billing_estornar_pagamento (estorno MANUAL) recusa origem asaas (billing_pagamento_nao_e_manual); o estorno vindo do Asaas passa por fn_billing_asaas_aplicar_estorno.",
   });
-  checar("passo7: handler 200; o processador fez GET da cobrança e aplicou PAYMENT_REFUNDED (alarme estorno_confirmado)", entrega.status === 200 && proc.http.some((h) => h.startsWith("GET /payments/")) && linha?.resultado === "aplicado" && linha?.alarme === "estorno_confirmado", { http: proc.http, evento: resumoEvento(linha) });
+  // D-086 (migration 0916): o estorno total é cancelamento. O banco devolve os alarmes de corte e o
+  // processador remove a assinatura no Asaas (DELETE, fora de transação) e só depois grava o marcador.
+  checar("passo7: handler 200; o processador fez GET da cobrança e aplicou PAYMENT_REFUNDED (alarmes estorno_confirmado, estorno_cortou_acesso, remover_assinatura_pendente)", entrega.status === 200 && proc.http.some((h) => h.startsWith("GET /payments/")) && linha?.resultado === "aplicado" && linha?.alarme === "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente", { http: proc.http, evento: resumoEvento(linha) });
   checar("passo7: pedido passou a estornado", (f.pedidos as Dict[]).every((p) => p.status === "estornado"), (f.pedidos as Dict[]).map((p) => p.status));
   checar("passo7: nova linha REFUNDED em billing_payments ligada ao pagamento original, valor 19900, sem período", Boolean(estorno) && estorno?.estorna_pagamento_id === original?.id && estorno?.gross_cents === 19900 && estorno?.billing_period_start === null, estorno);
-  const contratoIgual = JSON.stringify(snapAntes.contrato) === JSON.stringify(snapDepois.contrato);
-  checar("passo7: o CRM NÃO mexe no contrato (continua Pro, ativa, mesmo período, assinatura viva): defeito de desenho a decidir (ver relatório)", contratoIgual, { antes: snapAntes.contrato, depois: snapDepois.contrato });
-  checar("passo7: tokens concedidos não são retirados no estorno", JSON.stringify(snapAntes.carteiras) === JSON.stringify(snapDepois.carteiras) && JSON.stringify(snapAntes.livro) === JSON.stringify(snapDepois.livro));
+  // D-086: contrato cancelado na hora, com o fim do período em now e a carência zerada.
+  const cAntes = snapAntes.contrato as Dict;
+  const cDepois = snapDepois.contrato as Dict;
+  const agoraMs = Date.now();
+  const fimMs = new Date(cDepois.current_period_end as string).getTime();
+  const carenciaMs = cDepois.bloqueio_a_partir_de ? new Date(cDepois.bloqueio_a_partir_de as string).getTime() : Number.NaN;
+  checar("passo7: o contrato foi cancelado na hora (status cancelada, cancel_at_period_end ligado, fim do período em now, não mais o de 31/10)", cDepois.status === "cancelada" && cDepois.cancel_at_period_end === true && fimMs <= agoraMs && fimMs > agoraMs - 10 * 60 * 1000, { antes: cAntes, depois: cDepois });
+  checar("passo7: a carência foi zerada no mesmo corte (bloqueio_a_partir_de <= agora), então fn_billing_modo_leitura vale na hora quando a plataforma está em bloquear", Number.isFinite(carenciaMs) && carenciaMs <= agoraMs, { bloqueio_a_partir_de: cDepois.bloqueio_a_partir_de });
+  checar("passo7: o processador removeu a assinatura no Asaas (DELETE /subscriptions) e DEPOIS gravou o marcador de encerramento", proc.http.some((h) => h.startsWith("DELETE /subscriptions/")) && cDepois.asaas_assinatura_encerrada_em !== null, { http: proc.http, marcador: cDepois.asaas_assinatura_encerrada_em });
+  const evs = (f.eventosDoContrato as Dict[]).filter((e) => e.motivo === "estorno_asaas");
+  checar("passo7: o corte deixou eventos do contrato com motivo estorno_asaas (estado, periodo, cancelar_no_fim, carencia)", ["estado", "periodo", "cancelar_no_fim"].every((tipo) => evs.some((e) => e.tipo === tipo)), evs.map((e) => e.tipo));
+  const planoDepois = (snapDepois.carteiras as Dict[]).find((c) => c.fonte === "plano");
+  const corte = (snapDepois.livro as Dict[]).find((l) => typeof l.chave === "string" && (l.chave as string).startsWith("ajuste:estorno-plano:"));
+  checar("passo7: os tokens do plano foram zerados por lançamento NEGATIVO no livro-caixa (saldo do ciclo = 0) e nenhuma linha do livro sumiu", Boolean(planoDepois) && (planoDepois?.creditado as number) === (planoDepois?.consumido as number) && Boolean(corte) && (corte?.tokens as number) < 0 && (snapDepois.livro as Dict[]).length >= (snapAntes.livro as Dict[]).length + 1, { carteira: planoDepois, corte });
 
   // Idempotência do estorno: mesma entrega de novo.
   const snapA = pick(await foto(organizationId));
@@ -855,28 +868,17 @@ async function etapaEstornarA(): Promise<void> {
 }
 
 /**
- * Extra do passo 7: depois do estorno a organização A (contrato ainda com a assinatura viva no
- * Asaas) consegue comprar de novo? Não cria nada no Asaas: a recusa vem do banco.
+ * Extra do passo 7 (D-086): depois do estorno e da remoção da assinatura, a organização A pode
+ * comprar de novo? A trava da recompra (0909, fn_billing_criar_pedido) só recusa enquanto há
+ * assinatura sem o marcador de encerramento; o passo 7 já gravou o marcador. Aqui só se confere o
+ * estado que a libera. NÃO chama iniciarCompra: uma compra real criaria outra assinatura no
+ * sandbox. Para provar a compra de ponta a ponta, rodar a etapa de compra numa organização nova.
  */
 async function etapaRecompraA(): Promise<void> {
   const organizationId = org("A");
-  const antes = pick(await foto(organizationId));
-  chamadasCliente.length = 0;
-  httpLog.length = 0;
-  const r = await iniciarCompra(depsCompra, {
-    organizationId,
-    actorId: ATOR,
-    tipo: "assinatura",
-    planCode: "pro",
-    ciclo: "monthly",
-    metodo: "CREDIT_CARD",
-    chave: randomUUID(),
-    pagador: pagadorDeTeste(Date.now()),
-  });
-  const http = [...httpLog];
-  const depois = pick(await foto(organizationId));
-  registrar("passo7_extra_recompra_apos_estorno", { resultado: r, httpParaOAsaas: http, avisosDoLogger: [...avisos] });
-  checar("passo7 extra: após o estorno, nova compra na mesma organização é recusada (assinatura Asaas ainda viva no contrato) e não chama o Asaas", r.tipo === "erro" && http.length === 0 && JSON.stringify(antes) === JSON.stringify(depois), { r, http });
+  const c = (await foto(organizationId)).contrato as Dict;
+  registrar("passo7_extra_recompra_apos_estorno", { asaas_subscription_id: c.asaas_subscription_id, asaas_assinatura_encerrada_em: c.asaas_assinatura_encerrada_em, status: c.status });
+  checar("passo7 extra: após o estorno a recompra está liberada (contrato cancelada, assinatura com o marcador de encerramento gravado; a trava da 0909 não recusa mais)", c.status === "cancelada" && c.asaas_assinatura_encerrada_em !== null, c);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

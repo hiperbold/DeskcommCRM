@@ -42,7 +42,7 @@ function dbFalso(resultadoPorTabela: Record<string, ResultadoFalso | ResultadoFa
 
   function queryFalsa(resultado: ResultadoFalso) {
     const builder: Record<string, unknown> = {};
-    const encadeavel = ["select", "eq", "order", "in", "gte", "lt", "is", "not", "limit"];
+    const encadeavel = ["select", "eq", "order", "in", "gte", "lt", "is", "not", "limit", "ilike"];
     for (const metodo of encadeavel) {
       builder[metodo] = vi.fn(() => builder);
     }
@@ -330,8 +330,32 @@ describe("contadoresDeAlarmeAsaas", () => {
       erroUltimas24h: 1,
       divergenteUltimas24h: 0,
       semVinculoUltimas24h: 3,
+      estornoComCorteFalhouUltimas24h: 0,
+      estornoDePeriodoAntigoUltimas24h: 0,
       semEventoHa3DiasComAssinaturaAtiva: 1,
     });
+  });
+
+  it("D-086: conta os estornos que não cortaram e os de cobrança antiga pelo alarme do evento, nas últimas 24h", async () => {
+    const { contadoresDeAlarmeAsaas } = await importarComEnv({});
+    const db = dbFalso({
+      // A ordem é a das consultas: pendente, erro, divergente, sem_vinculo, evento recente,
+      // estorno_corte_falhou, estorno_de_periodo_antigo.
+      asaas_webhook_events: [
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 9 },
+        { data: null, error: null, count: 4 }, // alarme estorno_corte_falhou
+        { data: null, error: null, count: 2 }, // alarme estorno_de_periodo_antigo
+      ],
+      billing_contracts: { data: null, error: null, count: 1 },
+    });
+    const resultado = await contadoresDeAlarmeAsaas(db);
+    expect(resultado.leituraFalhou).toBe(false);
+    expect(resultado.contadores.estornoComCorteFalhouUltimas24h).toBe(4);
+    expect(resultado.contadores.estornoDePeriodoAntigoUltimas24h).toBe(2);
   });
 
   it("existe assinatura ativa, mas HOUVE evento recente: o quinto contador é zero", async () => {
@@ -373,6 +397,8 @@ describe("contadoresDeAlarmeAsaas", () => {
       erroUltimas24h: 0,
       divergenteUltimas24h: 0,
       semVinculoUltimas24h: 0,
+      estornoComCorteFalhouUltimas24h: 0,
+      estornoDePeriodoAntigoUltimas24h: 0,
       semEventoHa3DiasComAssinaturaAtiva: 0,
     });
   });

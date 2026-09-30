@@ -115,6 +115,8 @@ import "server-only";
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import type { audit } from "@/lib/audit";
+
 import type { ClienteAsaasHttp, LoggerAsaas } from "./cliente";
 import type { ConfigAsaas } from "./config";
 import { type CobrancaAsaas, envelopeWebhookAsaasSchema } from "./contratos";
@@ -198,8 +200,18 @@ export interface DbEventosAsaas {
   ): Promise<RpcResultado<MarcarAssinaturaEncerradaResultado>>;
 }
 
+/**
+ * O registro de auditoria do corte por estorno total (D-086): quem age é o
+ * processador, sem usuário. Injetável (a rota do cron passa `audit`); sem ele, o
+ * corte acontece do mesmo jeito e só não deixa a linha em `api_audit_log` (o
+ * rastro de banco, `billing_contract_eventos` e o livro-caixa, continua).
+ */
+export type AuditoriaDoCorteDeEstorno = Parameters<typeof audit>[0];
+
 export interface DepsProcessarEventosAsaas {
   db: DbEventosAsaas;
+  /** Auditoria do corte por estorno total; nunca lança, nunca bloqueia (fire-and-forget). */
+  auditar?: (entrada: AuditoriaDoCorteDeEstorno) => Promise<void>;
   asaas: ClienteAsaasHttp;
   config: ConfigAsaas;
   logger: LoggerAsaas;
@@ -599,6 +611,66 @@ async function tentarRemoverAssinatura(
   }
 }
 
+/**
+ * D-086: o estorno total cortou o acesso (assinatura) ou retirou os tokens do
+ * pacote. O banco avisa pelos alarmes `estorno_cortou_acesso` e
+ * `estorno_removeu_tokens_do_pacote`; aqui vira a linha de auditoria, com o
+ * motivo. Falha de auditoria só loga: nunca desfaz nem atrasa o corte.
+ */
+function registrarAlarmesDoEstorno(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  organizationId: string | null,
+  alarmes: string[],
+): void {
+  // O banco fechou o evento como aplicado, mas o corte do estorno total NÃO aconteceu: sem
+  // este log o defeito ficaria só na coluna `alarme`. A tela do admin também conta.
+  if (alarmes.includes("estorno_corte_falhou")) {
+    deps.logger.error("alarme_asaas_estorno_corte_falhou", { eventoId: evento.id, organizationId });
+  }
+  // Estorno total de cobrança que não é a do período vigente: nada foi cortado, o admin decide.
+  if (alarmes.includes("estorno_de_periodo_antigo")) {
+    deps.logger.warn("alarme_asaas_estorno_de_periodo_antigo", { eventoId: evento.id, organizationId });
+  }
+}
+
+async function auditarCorteDeEstorno(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  organizationId: string | null,
+  alarmes: string[],
+): Promise<void> {
+  const cortouAssinatura = alarmes.includes("estorno_cortou_acesso");
+  const retirouPacote = alarmes.includes("estorno_removeu_tokens_do_pacote");
+  if (!cortouAssinatura && !retirouPacote) return;
+  if (alarmes.includes("estorno_corte_falhou")) return;
+
+  deps.logger.warn("asaas_processar_estorno_total_cortou", {
+    eventoId: evento.id,
+    tipo: retirouPacote ? "pacote_tokens" : "assinatura",
+  });
+  if (!deps.auditar) return;
+  try {
+    await deps.auditar({
+      action: "billing.asaas_refund_cut",
+      organizationId,
+      // `api_audit_log.resource_id` é uuid: o recurso é a organização, e o id da
+      // cobrança (pay_...) vai no metadata.
+      resourceType: "organization",
+      resourceId: organizationId,
+      metadata: {
+        motivo: "estorno_total",
+        pagamento_asaas: evento.idDoRecurso,
+        tipo: retirouPacote ? "pacote_tokens" : "assinatura",
+        evento_id: evento.id,
+        assinatura_removida_no_asaas_pedida: alarmes.includes("remover_assinatura_pendente"),
+      },
+    });
+  } catch (err) {
+    deps.logger.warn("asaas_processar_auditoria_do_corte_falhou", { eventoId: evento.id, tipoErro: tipoDoErro(err) });
+  }
+}
+
 async function finalizarAplicacao(
   deps: DepsProcessarEventosAsaas,
   evento: EventoReservado,
@@ -630,6 +702,8 @@ async function finalizarAplicacao(
 
   const { resultado, organizationId, alarme } = aplicado.data;
   const alarmes = alarme ? alarme.split(",") : [];
+  registrarAlarmesDoEstorno(deps, evento, organizationId, alarmes);
+  await auditarCorteDeEstorno(deps, evento, organizationId, alarmes);
   if (alarmes.includes("remover_cobranca_pendente")) {
     await tentarRemoverCobranca(deps, evento);
   }

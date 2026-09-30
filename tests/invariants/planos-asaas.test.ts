@@ -1521,8 +1521,13 @@ describe("0909 Tarefa 6: grants das três peças novas (funções internas sem g
   });
 });
 
-describe("0909 Tarefa 6: estorno não mexe em período nem em tokens (decisão 9)", () => {
-  it("pacote de tokens pago e depois estornado: carteira intacta, pedido vira estornado", () => {
+// D-086 (0916): a decisão 9 da 0909 dizia que o estorno nunca mexia em período nem em
+// tokens. O Filipe decidiu em 30/09/2026 que o estorno TOTAL é cancelamento: corta o
+// contrato e os tokens. As duas asserções abaixo afirmavam o comportamento antigo de
+// propósito e passaram a afirmar o novo; a prova detalhada está em
+// tests/invariants/estorno-total-corta-acesso-e-tokens.test.ts.
+describe("0909 Tarefa 6 (D-086, 0916): estorno total corta o pacote e cancela a assinatura", () => {
+  it("pacote de tokens pago e depois estornado: os tokens do pacote saem, pedido vira estornado", () => {
     sql(
       `select public.fn_billing_criar_pedido('${ORG_T6_ESTORNO_PACOTE}'::uuid, 'pacote_tokens', null, null, 't6pacote', 'PIX', 'sandbox', gen_random_uuid(), null);`,
     );
@@ -1537,10 +1542,10 @@ describe("0909 Tarefa 6: estorno não mexe em período nem em tokens (decisão 9
     const confEstorno = `jsonb_build_object('id','pay_t6_001','status','REFUNDED','value',30.00)`;
     const estornado = registrarEAplicarTipo("evt-t6-001b", "PAYMENT_REFUNDED", "pay_t6_001", confEstorno);
     expect(estornado).toContain('"resultado": "aplicado"');
-    expect(estornado).toContain('"alarme": "estorno_confirmado"');
+    expect(estornado).toContain('"alarme": "estorno_confirmado,estorno_removeu_tokens_do_pacote"');
 
-    // tokens intactos.
-    expect(sql(`select creditado from public.billing_token_wallets where organization_id = '${ORG_T6_ESTORNO_PACOTE}' and fonte = 'avulso' and ciclo is null;`).trim()).toBe("50000");
+    // D-086: os tokens do pacote (50000, nenhum gasto) saem por lançamento negativo.
+    expect(sql(`select creditado from public.billing_token_wallets where organization_id = '${ORG_T6_ESTORNO_PACOTE}' and fonte = 'avulso' and ciclo is null;`).trim()).toBe("0");
     // pedido vira estornado.
     expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("estornado");
     // duas linhas em billing_payments (RECEIVED + REFUNDED), a de estorno sem asaas_payment_id e sem período.
@@ -1549,7 +1554,7 @@ describe("0909 Tarefa 6: estorno não mexe em período nem em tokens (decisão 9
     expect(linhas).toContain("REFUNDED|t|t");
   });
 
-  it("assinatura paga e depois estornada: current_period_end intacto", () => {
+  it("assinatura paga e depois estornada: contrato cancelado na hora, com o fim do período em now()", () => {
     sql(
       `select public.fn_billing_criar_pedido('${ORG_T6_ESTORNO_ASSINATURA}'::uuid, 'assinatura', 'pro', 'monthly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);`,
     );
@@ -1565,8 +1570,9 @@ describe("0909 Tarefa 6: estorno não mexe em período nem em tokens (decisão 9
     const estornado = registrarEAplicarTipo("evt-t6-002b", "PAYMENT_REFUNDED", "pay_t6_002", confEstorno);
     expect(estornado).toContain('"resultado": "aplicado"');
 
-    const fimDepois = sql(`select current_period_end from public.billing_contracts where organization_id = '${ORG_T6_ESTORNO_ASSINATURA}';`).trim();
-    expect(fimDepois).toBe(fimAntes);
+    // D-086: antes o fim do período ficava intacto; agora o estorno total encerra o contrato.
+    const depois = sql(`select status || '|' || (current_period_end <= now()) from public.billing_contracts where organization_id = '${ORG_T6_ESTORNO_ASSINATURA}';`).trim();
+    expect(depois).toBe("cancelada|true");
     expect(sql(`select status from public.billing_orders where id = '${pedidoId}';`).trim()).toBe("estornado");
   });
 });

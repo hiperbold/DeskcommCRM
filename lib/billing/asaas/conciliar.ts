@@ -41,6 +41,10 @@ import "server-only";
  *      `asaas_subscription_id`, decisão 4/10) - idempotente (um recurso já
  *      removido não lança), para quando a tentativa do processador tiver
  *      falhado antes.
+ *   3b. Contratos cortados por estorno total (D-086), `cancelada` com a assinatura
+ *      ainda sem o marcador de encerramento, no ambiente da instalação: refaz
+ *      `removerAssinatura` e grava o marcador. Contrato cancelado por outro caminho
+ *      nunca entra.
  *   4. Poda: `fn_billing_asaas_podar_eventos(180)` (N38).
  *   5. Alarmes: os CONTADORES de `lib/billing/asaas/leitura.ts`
  *      (`contadoresDeAlarmeAsaas`, reaproveitados aqui em vez de
@@ -113,6 +117,19 @@ export interface AssinaturaAtivaParaConciliar {
   asaasSubscriptionId: string;
 }
 
+/**
+ * Um contrato que o estorno total cancelou (D-086) mas cuja assinatura Asaas
+ * ainda não teve a remoção confirmada: `status = 'cancelada'`, assinatura
+ * preenchida, marcador de encerramento nulo, do ambiente da instalação E com
+ * evento de contrato de motivo `estorno_asaas` (o corte grava esse motivo em todo
+ * evento que cria). O filtro pelo motivo é o que impede esta rodada de remover no
+ * Asaas a assinatura de um contrato cancelado por outro caminho.
+ */
+export interface ContratoCanceladoComAssinaturaViva {
+  organizationId: string;
+  asaasSubscriptionId: string;
+}
+
 export interface RegistrarEventoSinteticoInput {
   eventId: string;
   eventType: string;
@@ -126,6 +143,13 @@ export interface DbConciliarAsaas {
   listarPedidosPendentes(limite: number): Promise<RpcResultado<PedidoParaConciliar[]>>;
   /** Pedidos `vencido` com `asaas_payment_id` ainda gravado (decisão 10, A1). */
   listarPedidosVencidosParaRemocao(limite: number): Promise<RpcResultado<PedidoVencidoParaRemocao[]>>;
+  /** Contratos cortados por estorno total, `cancelada` com assinatura Asaas sem o marcador, do ambiente dado (D-086). */
+  listarContratosCanceladosComAssinaturaViva(
+    limite: number,
+    ambiente: AmbienteAsaas,
+  ): Promise<RpcResultado<ContratoCanceladoComAssinaturaViva[]>>;
+  /** `fn_billing_asaas_marcar_assinatura_encerrada`: grava o marcador depois do DELETE confirmado (D-086). */
+  marcarAssinaturaEncerrada(organizationId: string, asaasSubscriptionId: string): Promise<RpcResultado<unknown>>;
   /** `billing_contracts` com assinatura Asaas ativa (decisão 21). */
   listarAssinaturasAtivas(limite: number): Promise<RpcResultado<AssinaturaAtivaParaConciliar[]>>;
   /**
@@ -192,6 +216,8 @@ const CONTADORES_ZERADOS: ContadoresDeAlarmeAsaas = {
   erroUltimas24h: 0,
   divergenteUltimas24h: 0,
   semVinculoUltimas24h: 0,
+  estornoComCorteFalhouUltimas24h: 0,
+  estornoDePeriodoAntigoUltimas24h: 0,
   semEventoHa3DiasComAssinaturaAtiva: 0,
 };
 
@@ -547,6 +573,64 @@ async function refazerRemocaoDeCobrancaVencida(
   }
 }
 
+// ─── Passo 3b: refaz a remoção da assinatura de contrato cancelado por estorno total (D-086) ─
+
+/**
+ * O estorno total cancela o contrato no banco e pede a remoção da assinatura ao
+ * processador de eventos, que remove e grava o marcador. Se o DELETE falhou lá
+ * (só loga), o contrato fica `cancelada` com a assinatura viva e sem marcador, e o
+ * cliente não pode recomprar nem deve ser cobrado de novo: esta rodada refaz, só
+ * para contratos com evento `estorno_asaas` e do ambiente desta instalação. Os
+ * dois passos são idempotentes (`removerAssinatura` trata 404 como sucesso; o
+ * marcador já gravado devolve `ja_registrado`), e o marcador só entra depois do
+ * DELETE confirmado.
+ */
+async function refazerRemocaoDeAssinaturaDeContratoEstornado(
+  deps: DepsConciliarAsaas,
+  resumo: ResumoConciliarAsaas,
+  estado: EstadoDaRodada,
+): Promise<void> {
+  if (estado.configInvalida) return;
+
+  const contratos = await deps.db.listarContratosCanceladosComAssinaturaViva(
+    deps.limiteVencidos ?? LIMITE_VENCIDOS_PADRAO,
+    deps.config.ambiente,
+  );
+  if (contratos.error) {
+    deps.logger.error("asaas_conciliar_listar_contratos_estornados_falhou", { codigo: contratos.error.code });
+    resumo.falhas++;
+    return;
+  }
+
+  for (const contrato of contratos.data ?? []) {
+    try {
+      await deps.asaas.removerAssinatura(contrato.asaasSubscriptionId);
+    } catch (err) {
+      if (ehErroDeConfiguracao(err)) {
+        deps.logger.error("asaas_conciliar_erro_de_configuracao_abortando", { organizationId: contrato.organizationId });
+        estado.configInvalida = true;
+        return;
+      }
+      deps.logger.error("alarme_asaas_remover_assinatura_pendente", {
+        organizationId: contrato.organizationId,
+        tipoErro: tipoDoErro(err),
+      });
+      resumo.falhas++;
+      continue;
+    }
+    resumo.cobrancasRemovidas++;
+
+    const marcado = await deps.db.marcarAssinaturaEncerrada(contrato.organizationId, contrato.asaasSubscriptionId);
+    if (marcado.error) {
+      deps.logger.error("asaas_conciliar_marcar_assinatura_encerrada_falhou", {
+        organizationId: contrato.organizationId,
+        codigo: marcado.error.code,
+      });
+      resumo.falhas++;
+    }
+  }
+}
+
 // ─── Passo 5: alarmes (decisão 21) ─────────────────────────────────────────
 
 function alarmarContadores(logger: LoggerAsaas, contadores: ContadoresDeAlarmeAsaas): void {
@@ -561,6 +645,14 @@ function alarmarContadores(logger: LoggerAsaas, contadores: ContadoresDeAlarmeAs
   }
   if (contadores.semVinculoUltimas24h > 0) {
     logger.error("alarme_asaas_evento_sem_vinculo_ultimas_24h", { quantidade: contadores.semVinculoUltimas24h });
+  }
+  if (contadores.estornoComCorteFalhouUltimas24h > 0) {
+    logger.error("alarme_asaas_estorno_corte_falhou_ultimas_24h", { quantidade: contadores.estornoComCorteFalhouUltimas24h });
+  }
+  if (contadores.estornoDePeriodoAntigoUltimas24h > 0) {
+    logger.error("alarme_asaas_estorno_de_periodo_antigo_ultimas_24h", {
+      quantidade: contadores.estornoDePeriodoAntigoUltimas24h,
+    });
   }
   if (contadores.semEventoHa3DiasComAssinaturaAtiva > 0) {
     logger.error("alarme_asaas_sem_evento_ha_3_dias_com_assinatura_ativa", {
@@ -591,6 +683,7 @@ export async function conciliarAsaas(deps: DepsConciliarAsaas): Promise<ResumoCo
   }
 
   await refazerRemocaoDeCobrancaVencida(deps, resumo, estado);
+  await refazerRemocaoDeAssinaturaDeContratoEstornado(deps, resumo, estado);
 
   const poda = await deps.db.podarEventos(deps.diasDePoda ?? DIAS_DE_PODA_PADRAO);
   if (poda.error) {
@@ -699,6 +792,59 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
         })),
         error: null,
       };
+    },
+
+    async listarContratosCanceladosComAssinaturaViva(limite, ambiente) {
+      const { data, error } = await admin
+        .from("billing_contracts")
+        .select("id, organization_id, asaas_subscription_id")
+        .eq("status", "cancelada")
+        .eq("asaas_ambiente", ambiente)
+        .not("asaas_subscription_id", "is", null)
+        .is("asaas_assinatura_encerrada_em", null)
+        .limit(limite);
+      if (error) return { data: null, error: { code: error.code, message: error.message } };
+      const candidatos = (data ?? []) as unknown as Array<{
+        id: string;
+        organization_id: string;
+        asaas_subscription_id: string;
+      }>;
+      if (candidatos.length === 0) return { data: [], error: null };
+
+      // Só os cortados por estorno: o corte grava `estorno_asaas` em todo evento que cria.
+      const eventos = await admin
+        .from("billing_contract_eventos")
+        .select("contract_id")
+        .in(
+          "contract_id",
+          candidatos.map((c) => c.id),
+        )
+        .eq("motivo", "estorno_asaas");
+      if (eventos.error) return { data: null, error: { code: eventos.error.code, message: eventos.error.message } };
+      const cortados = new Set(((eventos.data ?? []) as unknown as Array<{ contract_id: string }>).map((e) => e.contract_id));
+
+      return {
+        data: candidatos
+          .filter((c) => cortados.has(c.id))
+          .map((c) => ({ organizationId: c.organization_id, asaasSubscriptionId: c.asaas_subscription_id })),
+        error: null,
+      };
+    },
+
+    async marcarAssinaturaEncerrada(organizationId, asaasSubscriptionId) {
+      const { data, error } = await admin.rpc("fn_billing_asaas_marcar_assinatura_encerrada" as never, {
+        p_org: organizationId,
+        p_asaas_subscription_id: asaasSubscriptionId,
+        p_actor: null,
+      } as never);
+      if (error) {
+        // Contrato que já não tem esta assinatura (P0002 ou billing_assinatura_nao_confere): a remoção bastou.
+        if (error.code === "P0002" || error.message?.includes("billing_assinatura_nao_confere")) {
+          return { data: null, error: null };
+        }
+        return { data: null, error: { code: error.code, message: error.message } };
+      }
+      return { data, error: null };
     },
 
     async listarAssinaturasAtivas(limite) {
