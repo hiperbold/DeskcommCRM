@@ -4925,6 +4925,15 @@ export const DICIONARIO: Traducoes = {
   "A conta está suspensa por falta de pagamento: as automações ficam paradas até a assinatura ser regularizada. Fale com o suporte.": {
     es: "La cuenta está suspendida por falta de pago: las automatizaciones quedan detenidas hasta que se regularice la suscripción. Habla con soporte.",
   },
+  // D-148: trocar o dono do negócio por outra pessoa exige gerente.
+  "Passar o negócio para outra pessoa exige papel de gerente.": {
+    es: "Pasar el negocio a otra persona requiere rol de gerente.",
+  },
+  // D-154: portão de escrita do modo leitura nas importações e no financeiro
+  // (lib/billing/assinatura/recusa-de-escrita.ts).
+  "A conta está suspensa por falta de pagamento: importações e lançamentos financeiros ficam parados até a assinatura ser regularizada. Fale com o suporte.": {
+    es: "La cuenta está suspendida por falta de pago: las importaciones y los asientos financieros quedan detenidos hasta que se regularice la suscripción. Habla con soporte.",
+  },
   "Falta preencher alguma configuração desta ação — abra a automação e revise.": {
     es: "Falta completar algún ajuste de esta acción. Abre la automatización y revísala.",
   },

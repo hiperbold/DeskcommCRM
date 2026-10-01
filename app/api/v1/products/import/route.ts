@@ -23,6 +23,7 @@ import { type NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
 import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusarEscritaEmModoLeitura } from "@/lib/billing/assinatura/recusa-de-escrita";
 import { moedaDaOrganizacao } from "@/lib/catalogo/moeda-da-org";
 import { chaveDoCodigo, lerPlanilha, type ErroDaLinha } from "@/lib/catalogo/planilha";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -64,6 +65,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!authz.ok) return authz.response;
   const orgId = authz.org.orgId;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
+  // D-154: conta em modo leitura não escreve em massa pela API.
+  const emLeitura = await recusarEscritaEmModoLeitura(orgId, requestId, authz.user.idioma);
+  if (emLeitura) return emLeitura;
 
   let arquivo: File;
   try {

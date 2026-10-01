@@ -87,12 +87,62 @@ export function extractBearer(authHeader: string | null): string | null {
 /** Por que um `dsk_...` não validou — neutro, sem código MCP nem HTTP status. */
 export class ApiTokenError extends Error {
   constructor(
-    public readonly reason: "malformed" | "not_found" | "revoked" | "expired" | "lookup_failed",
+    public readonly reason:
+      | "malformed"
+      | "not_found"
+      | "revoked"
+      | "expired"
+      | "lookup_failed"
+      | "tenant_suspended"
+      | "creator_inactive",
     message: string,
   ) {
     super(message);
     this.name = "ApiTokenError";
   }
+}
+
+/**
+ * Quem criou o token mantém vínculo ATIVO com a organização, com papel pelo menos
+ * igual ao que o token declara (`role:`)? O admin de plataforma ativo também vale
+ * (a policy de `api_tokens` o deixa criar sem ser membro). Falha de leitura
+ * lança `lookup_failed`: decisão de acesso não trata leitura que não aconteceu
+ * como resposta.
+ */
+async function criadorAindaPodeOQueATokenPode(
+  supabase: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  criadorId: string,
+  papelDoToken: Role,
+): Promise<boolean> {
+  const { data: vinculo, error } = await supabase
+    .from("user_organizations")
+    .select("role")
+    .eq("user_id", criadorId)
+    .eq("organization_id", organizationId)
+    .is("revoked_at", null)
+    .maybeSingle();
+  if (error) throw new ApiTokenError("lookup_failed", `Token creator lookup failed: ${error.message}`);
+  const papelDoCriador = (vinculo as { role?: string } | null)?.role as Role | undefined;
+  if (papelDoCriador && (ROLE_RANK[papelDoCriador] ?? 0) >= ROLE_RANK[papelDoToken]) return true;
+
+  const { data: plataforma, error: erroDePlataforma } = await supabase
+    .from("platform_admins")
+    .select("user_id")
+    .eq("user_id", criadorId)
+    .is("revoked_at", null)
+    .maybeSingle();
+  if (erroDePlataforma) {
+    throw new ApiTokenError("lookup_failed", `Token creator lookup failed: ${erroDePlataforma.message}`);
+  }
+  return !!plataforma;
+}
+
+/** `organizations(status)` volta como objeto (FK 1:1) ou, por segurança, lista. */
+function orgStatusDe(raw: unknown): string | null {
+  const org = Array.isArray(raw) ? raw[0] : raw;
+  const status = (org as { status?: unknown } | null | undefined)?.status;
+  return typeof status === "string" ? status : null;
 }
 
 export interface ResolvedApiToken {
@@ -130,7 +180,7 @@ export async function resolveApiToken(plaintext: string): Promise<ResolvedApiTok
   const supabase = createAdminClient();
   const { data, error } = await supabase
     .from("api_tokens")
-    .select("id, organization_id, scopes, revoked_at, expires_at, created_by")
+    .select("id, organization_id, scopes, revoked_at, expires_at, created_by, organizations(status)")
     .eq("token_hash", hashLiteral)
     .maybeSingle();
 
@@ -147,6 +197,26 @@ export async function resolveApiToken(plaintext: string): Promise<ResolvedApiTok
     throw new ApiTokenError("expired", "Token expired.");
   }
 
+  // Organização suspensa (D-091): a chave `dsk_` não opera enquanto durar a
+  // suspensão. 403 na casca (a conta existe), não 401.
+  const status = orgStatusDe(data.organizations);
+  if (status && status !== "active") {
+    throw new ApiTokenError("tenant_suspended", "Organization suspended.");
+  }
+
+  // A chave vale enquanto quem a criou ainda pode o que ela pode (D-101). Sem
+  // isto, o admin desligado ou rebaixado levava a chave `role:admin` consigo.
+  const scopes = parseScopes(data.scopes);
+  const criadorEmDia = await criadorAindaPodeOQueATokenPode(
+    supabase,
+    data.organization_id,
+    data.created_by,
+    scopesRole(scopes),
+  );
+  if (!criadorEmDia) {
+    throw new ApiTokenError("creator_inactive", "Token creator no longer has access.");
+  }
+
   supabase
     .from("api_tokens")
     .update({ last_used_at: new Date().toISOString() })
@@ -158,7 +228,7 @@ export async function resolveApiToken(plaintext: string): Promise<ResolvedApiTok
   return {
     id: data.id,
     organizationId: data.organization_id,
-    scopes: parseScopes(data.scopes),
+    scopes,
     createdBy: data.created_by,
   };
 }
@@ -194,7 +264,7 @@ export async function validateBearerToken(
     resolved = await resolveApiToken(plaintext);
   } catch (err) {
     if (err instanceof ApiTokenError) {
-      if (err.reason !== "lookup_failed") {
+      if (err.reason !== "lookup_failed" && err.reason !== "tenant_suspended") {
         // Chute (malformado/desconhecido) debita o balde por ORIGEM; token real
         // e morto (revogado/expirado) debita só o do valor apresentado — ver
         // `registrarFalhaDeToken`. `lookup_failed` é falha NOSSA: não debita.
@@ -203,8 +273,8 @@ export async function validateBearerToken(
         });
       }
       throw new McpAuthError(
-        err.reason === "lookup_failed" ? -32603 : -32001,
-        err.reason === "lookup_failed" ? 500 : 401,
+        err.reason === "lookup_failed" ? -32603 : err.reason === "tenant_suspended" ? -32002 : -32001,
+        err.reason === "lookup_failed" ? 500 : err.reason === "tenant_suspended" ? 403 : 401,
         err.message,
       );
     }

@@ -23,7 +23,11 @@ import type { AuthUser } from "@/lib/auth/types";
  * dublê, não do código.
  */
 
-vi.mock("@/lib/auth/server", () => ({ loadAuthUser: vi.fn(), resolveActiveOrg: vi.fn() }));
+vi.mock("@/lib/auth/server", () => ({
+  loadAuthUser: vi.fn(),
+  resolveActiveOrg: vi.fn(),
+  mfaEmDivida: vi.fn(async () => false),
+}));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 
 const ORG_ID = "33333333-3333-4333-8333-333333333333";
@@ -73,6 +77,8 @@ const CATALOGO: LinhaDeModelo[] = [
  */
 function stubDoBanco(linhas: LinhaDeModelo[]) {
   return {
+    // `requireRole` confere o papel efetivo pela mesma RPC que a RLS usa.
+    rpc: async () => ({ data: "admin", error: null }),
     from(tabela: string) {
       if (tabela !== "ai_models") throw new Error(`tabela inesperada: ${tabela}`);
       const cadeia: Record<string, unknown> = {};

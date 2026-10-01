@@ -22,6 +22,7 @@ import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusarEscritaEmModoLeitura } from "@/lib/billing/assinatura/recusa-de-escrita";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createClient } from "@/lib/supabase/server";
 
@@ -78,6 +79,9 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const authz = await requireRole("agent", { requestId, resource: "financeiro" });
   if (!authz.ok) return authz.response;
+  // D-154: conta em modo leitura não mexe no financeiro pela API.
+  const emLeitura = await recusarEscritaEmModoLeitura(authz.org.orgId, requestId, authz.user.idioma);
+  if (emLeitura) return emLeitura;
 
   const lido = criarSchema.safeParse(await req.json().catch(() => ({})));
   if (!lido.success) {

@@ -127,6 +127,8 @@ describe("loadAuthUser — falha de permissão não vira 'sem organização'", (
         role: "admin",
         locale: null,
         timezone: null,
+        // D-091: o status da organização viaja junto; sem a coluna, `null`.
+        organization_status: null,
         interface_settings: { preset: "completa" },
       },
     ]);

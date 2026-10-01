@@ -18,7 +18,7 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { ok, fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { allTools } from "@/lib/mcp/tools";
 import { TOOL_CATALOG, deModuloDesligado } from "@/lib/mcp/tools/catalog";
 import { modulosLigados } from "@/lib/instalacao/modulos";
@@ -29,10 +29,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
-  const authUser = await loadAuthUser();
-  if (!authUser) return fail("unauthenticated", "Auth required.", 401, { requestId });
-  const activeOrg = await resolveActiveOrg(authUser);
-  if (!activeOrg) return fail("forbidden_tenant", "Sem organização ativa.", 403, { requestId });
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
+  const authz = await requireRole("viewer", { requestId, resource: "mcp_tools" });
+  if (!authz.ok) return authz.response;
 
   let servidas;
   try {

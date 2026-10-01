@@ -10,7 +10,7 @@ import { loginSchema, type LoginInput } from "@/lib/auth/schemas";
 import { audit, hashEmail } from "@/lib/audit";
 import {
   authRateLimited,
-  contaBloqueadaPorFalhas,
+  motivoDoBloqueioDeLogin,
   registrarFalhaDeLogin,
   AUTH_LIMITS,
 } from "@/lib/auth/rate-limit";
@@ -54,18 +54,21 @@ export async function signInWithPassword(input: LoginInput, next?: string): Prom
   // Antes de falar com o GoTrue: sem isto, tentar senha era de graça e
   // ilimitado (issue #64). Conta por IP e por conta — o ataque distribuído
   // contra um e-mail só não aparece na contagem por IP.
-  if (
-    (await authRateLimited("login", null, AUTH_LIMITS.login)) ||
-    (await contaBloqueadaPorFalhas(parsed.data.email, AUTH_LIMITS.login))
-  ) {
+  // O bloqueio por conta é por conta+origem, com um teto mais alto para a conta
+  // inteira (D-102): errar a senha de outra pessoa tranca a si mesmo, não o dono.
+  // O motivo vai na resposta e no audit: bloqueio não pode ser silencioso.
+  const porIp = await authRateLimited("login", null, AUTH_LIMITS.login);
+  const porFalhas = porIp ? null : await motivoDoBloqueioDeLogin(parsed.data.email, AUTH_LIMITS.login);
+  if (porIp || porFalhas) {
+    const escopo = porIp ? "origem" : porFalhas;
     await audit({
       action: "auth.login_rate_limited",
-      metadata: { email_hash: hashEmail(parsed.data.email) },
+      metadata: { email_hash: hashEmail(parsed.data.email), scope: escopo },
       requestId,
       ip,
       userAgent,
     });
-    return { ok: false, error: "rate_limited" };
+    return { ok: false, error: "rate_limited", details: { scope: escopo } };
   }
 
   const { data, error } = await supabase.auth.signInWithPassword({

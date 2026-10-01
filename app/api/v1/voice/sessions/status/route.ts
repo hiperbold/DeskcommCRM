@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 
 import { ok } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -14,10 +14,10 @@ export const dynamic = "force-dynamic";
 export async function GET(): Promise<Response> {
   const requestId = randomUUID();
 
-  const user = await loadAuthUser();
-  if (!user) return new Response(null, { status: 401 });
-  const activeOrg = await resolveActiveOrg(user);
-  if (!activeOrg) return new Response(null, { status: 403 });
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
+  const authz = await requireRole("viewer", { requestId, resource: "channel_sessions" });
+  if (!authz.ok) return authz.response;
+  const activeOrg = authz.org;
 
   const supabase = await createClient();
   const { data } = await supabase

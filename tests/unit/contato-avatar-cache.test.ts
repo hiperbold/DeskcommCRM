@@ -65,6 +65,12 @@ vi.mock("@/lib/auth/server", () => ({
   resolveActiveOrg: async () => orgAtiva,
 }));
 
+// D-092: a leitura passa por `requireRole("viewer")`; o portão em si tem suíte
+// própria (lib/auth/require-role.test.ts e tests/unit/leitura-da-api-exige-mfa-da-sessao.test.ts).
+vi.mock("@/lib/auth/require-role", () => ({
+  requireRole: async () => ({ ok: true, user: { id: "user-1", idioma: "pt-BR" }, org: orgAtiva }),
+}));
+
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: () => ({ select: () => chain() }),

@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import {
   CHANNEL_SESSION_REF_COLUMNS,
@@ -36,19 +36,11 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const { id: messageId } = await ctx.params;
   const supabase = await createClient();
 
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
-  const authUser = await loadAuthUser();
-  const t = (texto: string) => traduzir(texto, authUser?.idioma ?? "pt-BR");
-  const activeOrg = authUser ? await resolveActiveOrg(authUser) : null;
-  if (!activeOrg) {
-    return fail("no_active_org", t("No active organization."), 403, { requestId });
-  }
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
+  const authz = await requireRole("viewer", { requestId, resource: "messages" });
+  if (!authz.ok) return authz.response;
+  const { org: activeOrg } = authz;
+  const t = (texto: string) => traduzir(texto, authz.user.idioma);
 
   // Client de sessão: RLS garante que a mensagem pertence a uma org do usuário.
   // Filtro explícito de organization_id por doutrina (defense-in-depth).

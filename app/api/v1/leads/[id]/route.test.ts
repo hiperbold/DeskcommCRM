@@ -47,7 +47,17 @@ const LEAD_ID = "33333333-3333-4333-8333-333333333333";
 
 const OUTRA_ORG = "99999999-9999-4999-8999-999999999999";
 const FAKE_SESSION_CLIENT = { session: true } as never;
-const FAKE_ADMIN_CLIENT = { admin: true } as never;
+// `from` serve a leitura do modo de visibilidade da empresa (D-148, `comDono`):
+// aqui a empresa está no modo padrão, que não restringe o token.
+const FAKE_ADMIN_CLIENT = {
+  admin: true,
+  from: () => {
+    const c: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) c[m] = () => c;
+    c.maybeSingle = async () => ({ data: { settings: {} }, error: null });
+    return c;
+  },
+} as never;
 
 const params = { params: Promise.resolve({ id: LEAD_ID }) };
 

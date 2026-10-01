@@ -23,6 +23,11 @@ import { createClient } from "@/lib/supabase/server";
  * `app/api/v1/ai/evolution/route.test.ts`, que assere sobre os pares de `.eq`.
  */
 
+// D-092: a leitura passa por `requireRole("viewer")`; o portão em si tem suíte
+// própria (lib/auth/require-role.test.ts e tests/unit/leitura-da-api-exige-mfa-da-sessao.test.ts).
+vi.mock("@/lib/auth/require-role", () => ({
+  requireRole: async () => ({ ok: true, user: { id: "u-1", idioma: "pt-BR" }, org: { orgId: "org-1", role: "agent" } }),
+}));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/users/nome-do-atendente", () => ({ nomesDosAtendentes: async () => new Map() }));
 

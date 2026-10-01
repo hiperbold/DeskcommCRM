@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
+import { requireRole } from "@/lib/auth/require-role";
 import { camposDoFunil, settingsDoEmbed } from "@/lib/leads/campos-do-funil";
 import { createClient } from "@/lib/supabase/server";
 import { nomesDosAtendentes } from "@/lib/users/nome-do-atendente";
@@ -82,13 +83,10 @@ export async function GET(
   const { id: contactId } = await ctx.params;
 
   const supabase = await createClient();
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
+  // D-092: a leitura passa pelo gate único (papel efetivo e MFA da sessão), não
+  // só pela RLS: ela não olha o nível da sessão.
+  const authz = await requireRole("viewer", { requestId, resource: "contacts" });
+  if (!authz.ok) return authz.response;
 
   const { data: contactScope, error: scopeError } = await supabase.from("contacts")
     .select("organization_id, is_anonymized").eq("id", contactId).maybeSingle();

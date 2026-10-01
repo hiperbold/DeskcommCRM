@@ -65,3 +65,42 @@ export function resolveOwnerPatch(input: OwnerPatchInput): OwnerPatchResult {
   // para impedir.
   return { ok: true, patch: { owner_user_id: null, owner_agent_id: null, owner_kind: null } };
 }
+
+/**
+ * Passar o negócio para OUTRA pessoa (ou agente) exige gerente (D-148).
+ *
+ * O `bulk` com `assign` já exigia gerente, mas o PATCH individual deixava um
+ * atendente (ou um token `role:agent`, que no caminho do token roda com o cliente
+ * admin e passa por cima da RLS) mandar o próprio `owner_user_id` e tomar o
+ * negócio de um colega. O que continua livre para o papel abaixo de gerente:
+ * pegar o negócio para si (`owner_user_id` = o próprio id) e soltar o que já é
+ * seu. Repetir o dono atual não é troca.
+ *
+ * Só avalia quem traz `role` no ator: sessão e token de servidor trazem (o
+ * `resolveAuthDual` e o MCP preenchem); agente de IA e regra de automação seguem
+ * governados pelo `requiresRole` da própria ferramenta e pelo orquestrador, e um
+ * chamador interno sem papel declarado já se autorizou na própria borda.
+ */
+export function trocaDeDonoExigeGerente(
+  actor: { type: string; id: string; role?: string },
+  existente: { owner_user_id?: string | null; owner_agent_id?: string | null },
+  patch: OwnerPatch | null,
+): boolean {
+  if (!patch) return false;
+  if (actor.type !== "user" && actor.type !== "api_token") return false;
+  if (!actor.role) return false;
+  if (actor.role === "manager" || actor.role === "admin") return false;
+
+  const donoAtualUsuario = existente.owner_user_id ?? null;
+  const donoAtualAgente = existente.owner_agent_id ?? null;
+  if (patch.owner_user_id === donoAtualUsuario && patch.owner_agent_id === donoAtualAgente) {
+    return false;
+  }
+  if (actor.type === "user") {
+    if (patch.owner_user_id === actor.id) return false;
+    const soltandoOProprio =
+      patch.owner_user_id === null && patch.owner_agent_id === null && donoAtualUsuario === actor.id;
+    if (soltandoOProprio) return false;
+  }
+  return true;
+}

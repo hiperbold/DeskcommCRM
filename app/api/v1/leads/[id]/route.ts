@@ -35,6 +35,7 @@ export async function PATCH(
   const authz = await resolveAuthDual(req, {
     requestId,
     resource: "crm_leads",
+    comDono: true,
     role: "agent",
     scope: "mcp:write",
   });

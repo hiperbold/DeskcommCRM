@@ -40,6 +40,7 @@ import {
   extractBearer,
   validateBearerToken,
 } from "@/lib/mcp/auth";
+import { exigirVisibilidadeDoToken } from "@/lib/mcp/visibilidade-do-token";
 import { JANELA_SEGUNDOS, TETO_DE_ESCRITA, TETO_POR_ORGANIZACAO } from "@/lib/mcp/rate-limit";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -83,6 +84,13 @@ export interface AuthDualOptions {
    * passa pela rota, porque as duas chamam o mesmo handler.
    */
   tokenRole?: Role;
+  /**
+   * A rota lê ou escreve dado com DONO por atendente (negócio, conversa,
+   * mensagem). No caminho do token, com a empresa em visibilidade `own`, a chave
+   * de papel abaixo de gerente é recusada (D-148): o cliente admin do token não
+   * passa pela RLS que aplicaria o "só os meus". Ver `lib/mcp/visibilidade-do-token.ts`.
+   */
+  comDono?: boolean;
 }
 
 /**
@@ -91,7 +99,7 @@ export interface AuthDualOptions {
  */
 export async function resolveAuthDual(
   req: NextRequest,
-  { requestId, resource, role, scope, tokenRole }: AuthDualOptions,
+  { requestId, resource, role, scope, tokenRole, comDono }: AuthDualOptions,
 ): Promise<AuthDual> {
   const authHeader = req.headers.get("authorization");
 
@@ -127,12 +135,27 @@ export async function resolveAuthDual(
       throw err;
     }
 
+    const supabaseDoToken = createAdminClient();
+    if (comDono) {
+      try {
+        await exigirVisibilidadeDoToken(supabaseDoToken, auth.organizationId, auth.role);
+      } catch (err) {
+        if (err instanceof McpAuthError) {
+          return {
+            ok: false,
+            response: fail("forbidden_role", err.message, err.httpStatus, { requestId }),
+          };
+        }
+        throw err;
+      }
+    }
+
     // organization_id vem do TOKEN (fonte confiável), nunca do cliente.
     return {
       ok: true,
       organizationId: auth.organizationId,
       actor: auth.actor,
-      supabase: createAdminClient(),
+      supabase: supabaseDoToken,
       via: "token",
       scopes: auth.scopes,
       apiTokenId: auth.apiTokenId,
@@ -144,7 +167,8 @@ export async function resolveAuthDual(
   return {
     ok: true,
     organizationId: authz.org.orgId,
-    actor: { type: "user", id: authz.user.id },
+    // O papel viaja no ator: o handler decide o que exige gerente (D-148).
+    actor: { type: "user", id: authz.user.id, role: authz.org.role },
     supabase: await createClient(),
     idioma: authz.user.idioma,
     via: "session",

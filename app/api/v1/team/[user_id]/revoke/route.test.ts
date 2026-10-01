@@ -31,8 +31,13 @@ interface MockBancoOpts {
   adminCount?: number;
 }
 
-function mockBanco(opts: MockBancoOpts) {
+let chavesUpdate: Record<string, unknown> | null = null;
+let chavesFiltros: Array<[string, unknown]> = [];
+
+function mockBanco(opts: MockBancoOpts & { chaves?: Array<{ id: string }> }) {
   ultimoUpdate = null;
+  chavesUpdate = null;
+  chavesFiltros = [];
   const update = vi.fn((valores: Record<string, unknown>) => {
     ultimoUpdate = valores;
     return { eq: vi.fn(async () => ({ error: null })) };
@@ -40,6 +45,23 @@ function mockBanco(opts: MockBancoOpts) {
 
   vi.mocked(createClient).mockResolvedValue({
     from: (table: string) => {
+      if (table === "api_tokens") {
+        const cadeia: Record<string, unknown> = {};
+        cadeia.update = (valores: Record<string, unknown>) => {
+          chavesUpdate = valores;
+          return cadeia;
+        };
+        cadeia.eq = (coluna: string, valor: unknown) => {
+          chavesFiltros.push([coluna, valor]);
+          return cadeia;
+        };
+        cadeia.is = (coluna: string, valor: unknown) => {
+          chavesFiltros.push([coluna, valor]);
+          return cadeia;
+        };
+        cadeia.select = async () => ({ data: opts.chaves ?? [], error: null });
+        return cadeia;
+      }
       if (table === "conversations") {
         return {
           select: () => ({
@@ -108,6 +130,37 @@ describe("revogar membro", () => {
         resourceId: "m1",
       }),
     );
+  });
+
+  it("revoga as chaves de API que o membro criou e audita cada uma (D-101)", async () => {
+    mockBanco({
+      membro: { id: "m1", user_id: ALVO, role: "admin", revoked_at: null },
+      chaves: [{ id: "k1" }, { id: "k2" }],
+    });
+    const { POST } = await import("./route");
+
+    const res = await POST(pedido(), ctx);
+    expect(res.status).toBe(200);
+
+    expect(chavesUpdate).toMatchObject({ revoked_by: ADMIN });
+    expect(chavesUpdate).toHaveProperty("revoked_at");
+    // Só as chaves DELE, só desta organização, só as que ainda valem.
+    expect(chavesFiltros).toEqual(
+      expect.arrayContaining([
+        ["organization_id", ORG],
+        ["created_by", ALVO],
+        ["revoked_at", null],
+      ]),
+    );
+    for (const id of ["k1", "k2"]) {
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "token.revoked",
+          resourceId: id,
+          metadata: { reason: "member_revoked", target_user_id: ALVO },
+        }),
+      );
+    }
   });
 
   it("libera e audita conversas abertas atribuídas a quem sai (#1562)", async () => {

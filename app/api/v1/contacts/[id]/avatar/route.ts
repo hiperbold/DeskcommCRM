@@ -16,8 +16,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -51,11 +50,10 @@ export async function GET(
   const requestId = randomUUID();
   const { id } = await ctx.params;
 
-  const authUser = await loadAuthUser();
-  const activeOrg = authUser ? await resolveActiveOrg(authUser) : null;
-  if (!activeOrg) {
-    return fail("no_active_org", "No active organization.", 403, { requestId });
-  }
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
+  const authz = await requireRole("viewer", { requestId, resource: "contacts" });
+  if (!authz.ok) return authz.response;
+  const activeOrg = authz.org;
 
   const admin = createAdminClient();
   // Service role bypassa RLS: o filtro por organization_id é obrigatório e vem

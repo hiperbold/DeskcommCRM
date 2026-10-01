@@ -11,6 +11,16 @@ const state = vi.hoisted(() => ({
   filters: [] as unknown[][],
   admin: vi.fn(),
 }));
+// D-092: a leitura passa por `requireRole("viewer")` (suíte própria do portão).
+vi.mock("@/lib/auth/require-role", () => ({
+  requireRole: async () =>
+    state.user
+      ? { ok: true, user: { id: "user-a", idioma: "pt-BR" }, org: { orgId: "org-a", role: "agent" } }
+      : {
+          ok: false,
+          response: Response.json({ error: { code: "unauthenticated" } }, { status: 401 }),
+        },
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({
     auth: {

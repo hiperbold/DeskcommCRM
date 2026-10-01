@@ -105,6 +105,7 @@ export async function requireRole(min: Role, opts: RequireRoleOpts = {}): Promis
           orgId: membership.organization_id,
           name: membership.organization_name,
           role: membership.role,
+          status: membership.organization_status ?? null,
         }
       : atalhoDePlataforma
         ? { orgId: organizationId, name: "—", role: "viewer" }
@@ -121,6 +122,25 @@ export async function requireRole(min: Role, opts: RequireRoleOpts = {}): Promis
 
   if (atalhoDePlataforma) {
     return { ok: true, user, org };
+  }
+
+  // Organização suspensa (ou arquivada/anonimizada) não opera pela API (D-091).
+  // O layout de `/app` já redirecionava a tela; a rota seguia respondendo com o
+  // cookie. O atalho de plataforma passa antes, para o admin reativar o cliente.
+  // `status` ausente (sessão de suporte, snapshot sem o campo) segue o caminho
+  // normal: quem lê só recusa o que veio e não é `active`.
+  if (org.status && org.status !== "active") {
+    return {
+      ok: false,
+      response: fail(
+        "tenant_suspended",
+        t(
+          "Sua conta está suspensa. Fale com quem administra este sistema para saber o motivo e como reativá-la.",
+        ),
+        403,
+        { requestId },
+      ),
+    };
   }
 
   // Role efetivo do banco (não do snapshot do cookie/membership em memória).

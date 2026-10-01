@@ -11,8 +11,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
-import { traduzir } from "@/lib/i18n/dicionario";
+import { requireRole } from "@/lib/auth/require-role";
 import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
 import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
 import { comandosDaFila } from "@/lib/inbox/comando-da-conversa";
@@ -71,24 +70,11 @@ export async function GET(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
   const supabase = await createClient();
 
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
-
-  const authUser = await loadAuthUser();
-  const activeOrg = authUser ? await resolveActiveOrg(authUser) : null;
-  if (!activeOrg) {
-    return fail(
-      "no_active_org",
-      traduzir("No active organization.", authUser?.idioma ?? "pt-BR"),
-      403,
-      { requestId },
-    );
-  }
+  // D-092: a leitura passa pelo gate único (papel efetivo, MFA da sessão e
+  // organização ativa), não só pela RLS: ela não olha o nível da sessão.
+  const authz = await requireRole("viewer", { requestId, resource: "conversations" });
+  if (!authz.ok) return authz.response;
+  const { user, org: activeOrg } = authz;
 
   const org = activeOrg.orgId;
   const sp = req.nextUrl.searchParams;

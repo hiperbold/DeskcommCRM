@@ -28,7 +28,7 @@ import { roteiaProximasAcoes, type EstadoDoContato } from "@/lib/leads/next-acti
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isServiceRoleConfigured } from "@/lib/audit";
-import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { nomeDoContato } from "@/lib/contacts/rotulo-do-contato";
 import { traduzir } from "@/lib/i18n/dicionario";
 
@@ -62,12 +62,11 @@ export async function GET(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
   void req;
 
-  const user = await requireAuth();
-  const activeOrg = await resolveActiveOrg(user);
-  if (!activeOrg) {
-    return fail("forbidden", traduzir("sem organização ativa", user.idioma), 403, { requestId });
-  }
-  const orgId = activeOrg.orgId;
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão).
+  const authz = await requireRole("viewer", { requestId, resource: "leads" });
+  if (!authz.ok) return authz.response;
+  const user = authz.user;
+  const orgId = authz.org.orgId;
   const supabase = await createClient();
 
   // ── PENDENTES ────────────────────────────────────────────────────────────

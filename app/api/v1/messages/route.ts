@@ -58,6 +58,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   const authz = await resolveAuthDual(req, {
     requestId,
     resource: "messages",
+    comDono: true,
     role: "agent",
     scope: "mcp:write",
   });

@@ -40,9 +40,30 @@ export const changeRoleSchema = z.object({
 });
 export type ChangeRoleInput = z.infer<typeof changeRoleSchema>;
 
+/**
+ * Escopos que uma pessoa pode conceder ao criar uma chave (D-101). Lista
+ * fechada: `actor:ai_agent` e `agent_run:<uuid>` marcam AUTORIA de agente de IA e
+ * só o runtime os grava (token efêmero); com texto livre, um admin forjava a
+ * autoria de um agente. É o mesmo catálogo da tela (`ApiTokensClient`) mais os
+ * papéis (`role:`), que o autenticador lê em `lib/mcp/auth.ts`.
+ */
+export const ESCOPOS_DE_CHAVE_DE_API = [
+  "mcp:read",
+  "mcp:write",
+  "contacts:read",
+  "contacts:write",
+  "leads:read",
+  "leads:write",
+  "messages:read",
+  "messages:write",
+  "messages:on_behalf",
+  "audit:read",
+  ...ROLES.map((r) => `role:${r}`),
+] as const;
+
 export const createApiTokenSchema = z.object({
   name: z.string().min(2).max(100),
-  scopes: z.array(z.string()).min(1),
+  scopes: z.array(z.enum(ESCOPOS_DE_CHAVE_DE_API)).min(1).max(30),
   expires_in_days: z.coerce.number().int().min(1).max(365).optional(),
 });
 export type CreateApiTokenInput = z.infer<typeof createApiTokenSchema>;

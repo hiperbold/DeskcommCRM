@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { ehProvedorSuportado } from "@/lib/ai/pontos/provedores";
 
@@ -33,12 +33,9 @@ export async function GET(
     return fail("not_found", "Provider desconhecido.", 404, { requestId });
   }
 
-  const authUser = await loadAuthUser();
-  if (!authUser) return fail("unauthenticated", "Auth required.", 401, { requestId });
-  const activeOrg = await resolveActiveOrg(authUser);
-  if (!activeOrg) {
-    return fail("forbidden_tenant", "Sem organização ativa.", 403, { requestId });
-  }
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
+  const authz = await requireRole("viewer", { requestId, resource: "ai_models" });
+  if (!authz.ok) return authz.response;
 
   const supabase = await createClient();
   const { data, error } = await supabase

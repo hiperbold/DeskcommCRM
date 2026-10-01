@@ -37,6 +37,7 @@ import {
 import { contactCreateSchemaDoPais } from "@/lib/schemas";
 import { perfilDaOrganizacao } from "@/lib/legal/perfil-do-pais";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
+import { recusarEscritaEmModoLeitura } from "@/lib/billing/assinatura/recusa-de-escrita";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -67,6 +68,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   const user = authz.user;
   const orgId = authz.org.orgId;
   const t = (texto: string) => traduzir(texto, user.idioma);
+  // D-154: conta em modo leitura não escreve em massa pela API.
+  const emLeitura = await recusarEscritaEmModoLeitura(orgId, requestId, user.idioma);
+  if (emLeitura) return emLeitura;
 
   // O documento do titular, na régua do PAÍS da organização (issue #1033): o
   // cabeçalho aceito, a normalização do valor e a validação saem daqui. O país

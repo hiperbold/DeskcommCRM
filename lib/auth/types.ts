@@ -70,6 +70,11 @@ export interface UserOrgMembership {
   organization_name: string;
   role: Role;
   /**
+   * `organizations.status` no momento da leitura (D-091). Ausente = não lido, e
+   * quem decide trata só `active` como liberado quando o valor veio.
+   */
+  organization_status?: string | null;
+  /**
    * Idioma padrão da organização (`organizations.locale`).
    *
    * Vem junto porque quem escolhe a organização ativa é a mesma função que
@@ -150,6 +155,8 @@ export interface AuthUser {
 export interface ActiveOrg {
   interface_settings?: InterfaceSettings;
   orgId: string;
+  /** `organizations.status` (D-091): `requireRole` recusa o que não for `active`. */
+  status?: string | null;
   /** Fuso IANA da organização — ver `UserOrgMembership.timezone`. */
   timezone?: string | null;
   name: string;

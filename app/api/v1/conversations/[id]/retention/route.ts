@@ -11,7 +11,7 @@ import { PACING_DEFAULTS } from "@/lib/agent-engine/pacing/defaults";
 import { janelaDeEnvioAberta } from "@/lib/agent-engine/pacing/engine";
 import { fusoDaJanela } from "@/lib/agent-engine/pacing/store";
 import { ok, fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { createClient } from "@/lib/supabase/server";
 
@@ -29,20 +29,13 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const { id } = await ctx.params;
   const supabase = await createClient();
 
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
-
-  const authUser = await loadAuthUser();
-  const t = (texto: string) => traduzir(texto, authUser?.idioma ?? "pt-BR");
-  const activeOrg = authUser ? await resolveActiveOrg(authUser) : null;
-  if (!activeOrg) {
-    return fail("no_active_org", t("No active organization."), 403, { requestId });
-  }
+  // D-092: a leitura passa pelo gate único (papel efetivo, MFA da sessão e
+  // organização ativa), não só pela RLS: ela não olha o nível da sessão.
+  const authz = await requireRole("viewer", { requestId, resource: "conversations" });
+  if (!authz.ok) return authz.response;
+  const { user, org: activeOrg } = authz;
+  const authUser = user;
+  const t = (texto: string) => traduzir(texto, authUser.idioma);
 
   const { data: conv, error: convErr } = await supabase
     .from("conversations")

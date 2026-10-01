@@ -13,6 +13,7 @@ import type { NextRequest } from "next/server";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
+import { logger } from "@/lib/logger";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
@@ -84,6 +85,37 @@ export async function POST(
     .update({ revoked_at: nowIso, updated_at: nowIso })
     .eq("id", target.id);
   if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+
+  // As chaves de API que ele criou saem junto (D-101): a chave carrega o papel de
+  // quem a emitiu, e sem isto o admin desligado seguia lendo e escrevendo pelo
+  // texto que guardou. O autenticador também confere o vínculo do criador a cada
+  // chamada; esta revogação impede a chave de voltar se a pessoa for readmitida.
+  // Falha aqui não desfaz a revogação do membro: o log avisa e o vínculo já barra.
+  const { data: chavesRevogadas, error: chavesErr } = await supabase
+    .from("api_tokens")
+    .update({ revoked_at: nowIso, revoked_by: authUser.id, updated_at: nowIso })
+    .eq("organization_id", activeOrg.orgId)
+    .eq("created_by", targetUserId)
+    .is("revoked_at", null)
+    .select("id");
+  if (chavesErr) {
+    logger.error("[team.revoke] revogar chaves do membro falhou", {
+      org_id: activeOrg.orgId,
+      target_user_id: targetUserId,
+      message: chavesErr.message,
+    });
+  }
+  for (const chave of chavesRevogadas ?? []) {
+    await audit({
+      action: "token.revoked",
+      actorUserId: authUser.id,
+      organizationId: activeOrg.orgId,
+      resourceType: "api_token",
+      resourceId: chave.id,
+      requestId,
+      metadata: { reason: "member_revoked", target_user_id: targetUserId },
+    });
+  }
 
   if (openConvs && openConvs.length > 0) {
     for (const conv of openConvs) {

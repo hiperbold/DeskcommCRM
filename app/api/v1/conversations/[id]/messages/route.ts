@@ -7,7 +7,7 @@ import { type NextRequest } from "next/server";
 
 import { ApiError } from "@/lib/api/types";
 import { fail, ok } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { listMessagesQuerySchema } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -25,20 +25,13 @@ export async function GET(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const { id: conversationId } = await ctx.params;
   const supabase = await createClient();
 
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
-
-  const authUser = await loadAuthUser();
-  const t = (texto: string) => traduzir(texto, authUser?.idioma ?? "pt-BR");
-  const activeOrg = authUser ? await resolveActiveOrg(authUser) : null;
-  if (!activeOrg) {
-    return fail("no_active_org", t("No active organization."), 403, { requestId });
-  }
+  // D-092: a leitura passa pelo gate único (papel efetivo, MFA da sessão e
+  // organização ativa), não só pela RLS: ela não olha o nível da sessão.
+  const authz = await requireRole("viewer", { requestId, resource: "messages" });
+  if (!authz.ok) return authz.response;
+  const { user, org: activeOrg } = authz;
+  const authUser = user;
+  const t = (texto: string) => traduzir(texto, authUser.idioma);
 
   const url = new URL(req.url);
   const qsParsed = listMessagesQuerySchema.safeParse({

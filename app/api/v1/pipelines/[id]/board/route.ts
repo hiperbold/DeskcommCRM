@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
-import { loadAuthUser } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import {
   roteiaProximasAcoes,
@@ -439,14 +439,11 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const { id: pipelineId } = await ctx.params;
 
   const supabase = await createClient();
-  const {
-    data: { user },
-    error: authErr,
-  } = await supabase.auth.getUser();
-  if (authErr || !user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
-  const authUser = await loadAuthUser();
+  // D-092: a leitura passa pelo gate único (papel efetivo e MFA da sessão), não
+  // só pela RLS: ela não olha o nível da sessão.
+  const authz = await requireRole("viewer", { requestId, resource: "pipelines" });
+  if (!authz.ok) return authz.response;
+  const authUser = authz.user;
   const t = (texto: string) => traduzir(texto, authUser?.idioma ?? "pt-BR");
 
   const [

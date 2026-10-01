@@ -15,7 +15,12 @@ import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale"
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { traduzir } from "@/lib/i18n/dicionario";
-import { resolveOwnerPatch, type OwnerPatch, type OwnerPatchInput } from "@/lib/leads/owner-patch";
+import {
+  resolveOwnerPatch,
+  trocaDeDonoExigeGerente,
+  type OwnerPatch,
+  type OwnerPatchInput,
+} from "@/lib/leads/owner-patch";
 import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
 import { listaLegivel } from "@/lib/leads/activity-vocabulary";
 import { camposAlterados } from "@/lib/leads/campos-alterados";
@@ -675,6 +680,21 @@ export async function updateLeadHandler(
   if (input.contact_id !== undefined) patch.contact_id = input.contact_id;
   if (input.value_cents !== undefined) patch.value_cents = input.value_cents;
   if (input.currency !== undefined) patch.currency = input.currency;
+  // Passar o negócio para outra pessoa exige gerente (D-148), como o `assign` do
+  // bulk. Antes de qualquer consulta: a recusa não depende do banco.
+  const donoPretendido = resolveOwnerPatch(input);
+  if (
+    donoPretendido.ok &&
+    trocaDeDonoExigeGerente(ctx.actor, existing as Record<string, string | null>, donoPretendido.patch)
+  ) {
+    throw new ApiError(
+      403,
+      "forbidden_role",
+      undefined,
+      ctx.requestId,
+      traduzir("Passar o negócio para outra pessoa exige papel de gerente.", ctx.idioma ?? "pt-BR"),
+    );
+  }
   // Dono do negócio (0070): regra em lib/leads/owner-patch.ts, compartilhada
   // com create, bulk e MCP. owner_kind é DERIVADO — nunca lido do body.
   const ownerPatch = await ownerPatchOrThrow(

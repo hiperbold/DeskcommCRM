@@ -33,6 +33,7 @@ import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
 import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
+import { recusarEscritaEmModoLeitura } from "@/lib/billing/assinatura/recusa-de-escrita";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import { CSV_MAX_BYTES, CSV_MAX_DATA_ROWS, decodificarCsv } from "@/lib/contacts/csv";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -61,6 +62,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   if (!authz.ok) return authz.response;
   const orgId = authz.org.orgId;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
+  // D-154: conta em modo leitura não escreve em massa pela API.
+  const emLeitura = await recusarEscritaEmModoLeitura(orgId, requestId, authz.user.idioma);
+  if (emLeitura) return emLeitura;
 
   let form: FormData;
   try {

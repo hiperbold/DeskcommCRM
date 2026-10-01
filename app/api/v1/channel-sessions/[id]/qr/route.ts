@@ -23,7 +23,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
  */
 import { NextResponse } from "next/server";
 
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { createClient } from "@/lib/supabase/server";
 
@@ -37,10 +37,10 @@ export async function GET(
   if (supportDenied) return supportDenied;
   const { id } = await params;
 
-  const user = await loadAuthUser();
-  if (!user) return new NextResponse(null, { status: 401 });
-  const activeOrg = await resolveActiveOrg(user);
-  if (!activeOrg) return new NextResponse(null, { status: 403 });
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
+  const authz = await requireRole("viewer", { resource: "channel_sessions" });
+  if (!authz.ok) return authz.response;
+  const activeOrg = authz.org;
 
   const supabase = await createClient();
   const buscar = (colunas: string) =>

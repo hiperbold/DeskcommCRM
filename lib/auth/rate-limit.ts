@@ -31,6 +31,14 @@ export interface AuthRateLimits {
   /** Tentativas por identificador na janela (omita para não contar por ele). */
   id?: number;
   windowSec: number;
+  /**
+   * Teto de falhas da CONTA somando todas as origens, na janela `contaWindowSec`
+   * (só o login usa). Existe porque o teto `id` do login passou a ser por conta
+   * E origem (D-102): sem um teto da conta inteira, quem distribui as tentativas
+   * por muitos IPs voltaria a ter um orçamento ilimitado contra uma conta só.
+   */
+  conta?: number;
+  contaWindowSec?: number;
 }
 
 /**
@@ -134,7 +142,10 @@ function loginIpLimit(): number {
 }
 
 export const AUTH_LIMITS = {
-  login: { ip: loginIpLimit(), id: 5, windowSec: 300 },
+  // `id` = falhas na MESMA conta vindas da MESMA origem; `conta` = falhas da conta
+  // inteira, de qualquer origem. Dois números porque um lockout só por conta deixa
+  // qualquer pessoa trancar a conta de outra errando a senha de propósito (D-102).
+  login: { ip: loginIpLimit(), id: 5, windowSec: 300, conta: 30, contaWindowSec: 900 },
   signup: { ip: 20, windowSec: 3600 },
   reset: { ip: 30, id: 3, windowSec: 3600 },
   invite_accept: { ip: 60, windowSec: 3600 },
@@ -150,24 +161,100 @@ export const __LOGIN_IP_DEFAULT_PARA_TESTE = LOGIN_IP_DEFAULT;
 /**
  * Bloqueio por FALHA, para o login.
  *
- * `authRateLimited` conta toda tentativa — certo para IP, errado para conta:
+ * `authRateLimited` conta toda tentativa: certo para IP, errado para conta:
  * quem digita a senha certa não pode gastar o próprio orçamento de bloqueio.
  * Aqui a consulta vem antes do provedor (só assim o ataque é barrado *antes*
  * de acontecer) e o incremento vem depois, apenas quando a senha errou.
  *
- * Efeito: N senhas erradas trancam a conta pela janela, inclusive contra quem
- * distribui as tentativas por muitos IPs. Acertar na 3ª não custa nada.
+ * ⚠️ DOIS contadores, e o primeiro NÃO é só por conta (D-102):
+ *
+ *  - CONTA + ORIGEM (`limits.id` falhas em `windowSec`): trava só a origem que
+ *    errou. Era por conta apenas, e isso deixava qualquer pessoa trancar a conta
+ *    de outra errando a senha 5 vezes a cada 5 minutos, de qualquer lugar: DoS de
+ *    custo zero contra o dono. Agora quem erra tranca a si mesmo; o dono, em outra
+ *    origem, entra normalmente.
+ *  - CONTA INTEIRA (`limits.conta` falhas em `contaWindowSec`): o teto de quem
+ *    distribui as tentativas por muitas origens, que o contador acima não vê. É
+ *    bem mais alto de propósito (30 contra 5): trancar a conta por ele custa
+ *    trinta falhas a cada 15 minutos, e o aviso sai na tela e no audit.
+ *
+ * Sem IP identificável a origem vira um único balde POR CONTA (nunca global, ver
+ * `authRateLimited`): nessas instalações (sem proxy na frente) o comportamento é o
+ * de antes, por conta.
  */
-export async function contaBloqueadaPorFalhas(email: string, limits: AuthRateLimits): Promise<boolean> {
-  if (limits.id === undefined) return false;
-  const atual = await peekRateLimit(`auth:login_fail:id:${opaque(email)}`, limits.windowSec);
-  return atual >= limits.id;
+export type MotivoDoBloqueioDeLogin = "origem" | "conta";
+
+function origemKey(ip: string | null): string {
+  return ip === null ? "sem-ip" : opaque(ip);
 }
 
-/** Registra uma senha errada no contador da conta. */
+export async function motivoDoBloqueioDeLogin(
+  email: string,
+  limits: AuthRateLimits,
+): Promise<MotivoDoBloqueioDeLogin | null> {
+  if (limits.id === undefined) return null;
+  const ip = await clientIp();
+  const daOrigem = await peekRateLimit(
+    `auth:login_fail:id:${opaque(email)}:ip:${origemKey(ip)}`,
+    limits.windowSec,
+  );
+  if (daOrigem >= limits.id) return "origem";
+  if (limits.conta !== undefined && limits.contaWindowSec !== undefined) {
+    const daConta = await peekRateLimit(`auth:login_fail:conta:${opaque(email)}`, limits.contaWindowSec);
+    if (daConta >= limits.conta) return "conta";
+  }
+  return null;
+}
+
+export async function contaBloqueadaPorFalhas(email: string, limits: AuthRateLimits): Promise<boolean> {
+  return (await motivoDoBloqueioDeLogin(email, limits)) !== null;
+}
+
+/** Registra uma senha errada nos dois contadores. */
 export async function registrarFalhaDeLogin(email: string, limits: AuthRateLimits): Promise<void> {
   if (limits.id === undefined) return;
-  await checkRateLimit(`auth:login_fail:id:${opaque(email)}`, limits.id, limits.windowSec);
+  const ip = await clientIp();
+  await checkRateLimit(
+    `auth:login_fail:id:${opaque(email)}:ip:${origemKey(ip)}`,
+    limits.id,
+    limits.windowSec,
+  );
+  if (limits.conta !== undefined && limits.contaWindowSec !== undefined) {
+    await checkRateLimit(`auth:login_fail:conta:${opaque(email)}`, limits.conta, limits.contaWindowSec);
+  }
+}
+
+/**
+ * Bloqueio por falha de CÓDIGO TOTP, por `user_id` (D-102).
+ *
+ * O contador morava num cookie do navegador: apagar o cookie zerava o limite, e
+ * sobrava só o do GoTrue. Agora é do servidor, no mesmo limitador do resto. Quem
+ * chega aqui já tem a senha (sessão aal1), então a chave é o usuário, não a
+ * origem: trancar o usuário só atrapalha quem já passou da senha.
+ *
+ * 5 falhas em 15 minutos: o espaço de um código é 10^6 e cada falha também gasta
+ * o limite do GoTrue; 480 chutes por dia por conta não chegam perto.
+ */
+export const MFA_FAILURE_LIMITS = { max: 5, windowSec: 900 } as const;
+
+function mfaKey(userId: string): string {
+  return `auth:mfa_fail:user:${opaque(userId)}`;
+}
+
+/** Segundos até a janela fixa atual virar (é quando o contador zera). */
+export function segundosAteFimDaJanela(windowSec: number, agora: number = Date.now()): number {
+  return windowSec - (Math.floor(agora / 1000) % windowSec);
+}
+
+export async function mfaBloqueadoPorFalhas(userId: string): Promise<boolean> {
+  const atual = await peekRateLimit(mfaKey(userId), MFA_FAILURE_LIMITS.windowSec);
+  return atual >= MFA_FAILURE_LIMITS.max;
+}
+
+/** Registra um código errado e devolve quantos já foram na janela. */
+export async function registrarFalhaDeMfa(userId: string): Promise<number> {
+  const r = await checkRateLimit(mfaKey(userId), MFA_FAILURE_LIMITS.max, MFA_FAILURE_LIMITS.windowSec);
+  return r.count;
 }
 
 /**

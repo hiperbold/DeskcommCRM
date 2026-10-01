@@ -41,6 +41,7 @@ interface OrgJoin {
   display_name: string;
   locale: string | null;
   timezone: string | null;
+  status?: string | null;
 }
 
 /** O mesmo `organizations`, alcançado por outro embed: só as portas da EMPRESA. */
@@ -187,7 +188,7 @@ export const loadAuthUser = cache(async (): Promise<AuthUser | null> => {
           // issue #1341 acabou de engordar), e o alias traz só as portas da EMPRESA.
           // `timezone` veio do main (fuso da organização nas listas, #1290) e convive
           // com o alias: um embed por relação, sem renomear o que já existia.
-          "organization_id, role, interface_settings, accepted_at, organizations(display_name, locale, timezone), interface_da_empresa:organizations(interface_settings)",
+          "organization_id, role, interface_settings, accepted_at, organizations(display_name, locale, timezone, status), interface_da_empresa:organizations(interface_settings)",
         )
         .eq("user_id", user.id)
         .is("revoked_at", null)
@@ -243,6 +244,7 @@ export const loadAuthUser = cache(async (): Promise<AuthUser | null> => {
       interface_settings: combinarInterfaces(empresa?.interface_settings, row.interface_settings),
       locale: org?.locale ?? null,
       timezone: org?.timezone ?? null,
+      organization_status: org?.status ?? null,
     };
   });
 
@@ -297,6 +299,7 @@ export const resolveActiveOrg = cache(async (authUser: AuthUser): Promise<Active
     orgId: ativo.organization_id,
     name: ativo.organization_name,
     role: ativo.role,
+    status: ativo.organization_status ?? null,
     interface_settings: ativo.interface_settings,
     timezone: ativo.timezone ?? null,
   };

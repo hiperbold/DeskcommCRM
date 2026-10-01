@@ -76,6 +76,11 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: async () => ({ data: { user: { id: "user-1" } }, error: null }) },
   }),
 }));
+// D-092: a leitura passa por `requireRole("viewer")`; o portão em si tem suíte
+// própria (lib/auth/require-role.test.ts e tests/unit/leitura-da-api-exige-mfa-da-sessao.test.ts).
+vi.mock("@/lib/auth/require-role", () => ({
+  requireRole: async () => ({ ok: true, user: { id: "user-1", idioma: "pt-BR" }, org: { orgId: "org-1", role: "agent" } }),
+}));
 vi.mock("@/lib/auth/server", () => ({
   mfaEmDivida: vi.fn(async () => false),
   loadAuthUser: async () => ({ id: "user-1" }),

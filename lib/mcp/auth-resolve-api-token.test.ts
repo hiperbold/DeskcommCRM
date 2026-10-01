@@ -91,6 +91,15 @@ type Resposta = { data: LinhaDoToken | null; error: { message: string } | null }
 function adminDeTokens(resposta: Resposta, reg: Registro) {
   return {
     from: (tabela: string) => {
+      // D-101: o autenticador também confere o vínculo de quem criou o token. Aqui
+      // o criador está em dia (admin ativo); os casos de vínculo perdido moram em
+      // tests/unit/chave-de-api-segue-o-vinculo-de-quem-criou.test.ts.
+      if (tabela === "user_organizations") {
+        const v: Record<string, unknown> = {};
+        for (const m of ["select", "eq", "is"]) v[m] = () => v;
+        v.maybeSingle = async () => ({ data: { role: "admin" }, error: null });
+        return v;
+      }
       if (tabela !== "api_tokens") throw new Error(`tabela inesperada: ${tabela}`);
       return {
         select: (colunas: string) => {

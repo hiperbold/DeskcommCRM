@@ -17,6 +17,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { auditMcpToolCall } from "./audit";
 import { ensureRole, ensureScope, type McpAuthResult } from "./auth";
 import { verificarTetoMcp } from "./rate-limit";
+import { FERRAMENTAS_COM_DONO, exigirVisibilidadeDoToken } from "./visibilidade-do-token";
 import { allTools } from "./tools";
 import { deModuloDesligado } from "./tools/catalog";
 import { higienizarUuidsDeAterro } from "./uuid-de-aterro";
@@ -93,6 +94,11 @@ export function createMcpServer(
           await verificarTetoMcp(auth, tool.category);
           ensureScope(auth.scopes, tool.requiresScope);
           ensureRole(auth.role, tool.requiresRole);
+          // "Só os meus" vale também para a chave (D-148): o cliente desta tool é
+          // o admin e não passa pela RLS que aplicaria a visibilidade.
+          if (FERRAMENTAS_COM_DONO.has(tool.name)) {
+            await exigirVisibilidadeDoToken(supabase, auth.organizationId, auth.role);
+          }
 
           const result = await tool.handler(args as never, ctx);
           const durationMs = Date.now() - startedAt;

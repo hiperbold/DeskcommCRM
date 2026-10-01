@@ -16,13 +16,12 @@
 import { randomUUID } from "node:crypto";
 
 import { ok, fail } from "@/lib/api/wrappers";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { requireRole } from "@/lib/auth/require-role";
 import {
   encontrarContatosDuplicados,
   principalSugerido,
   type ContatoParaDeduplicar,
 } from "@/lib/contacts/duplicados";
-import { traduzir } from "@/lib/i18n/dicionario";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -41,15 +40,10 @@ const TETO_DE_VARREDURA = 2000;
 export async function GET(): Promise<Response> {
   const requestId = randomUUID();
 
-  const user = await loadAuthUser();
-  if (!user) {
-    return fail("unauthenticated", "Auth required.", 401, { requestId });
-  }
-  const org = await resolveActiveOrg(user);
-  if (!org) {
-    const t = (texto: string) => traduzir(texto, user.idioma);
-    return fail("forbidden_tenant", t("Organização ativa não resolvida."), 403, { requestId });
-  }
+  // D-092: gate único de leitura (papel efetivo e MFA da sessão).
+  const authz = await requireRole("viewer", { requestId, resource: "contacts" });
+  if (!authz.ok) return authz.response;
+  const org = authz.org;
 
   const supabase = await createClient();
   const { data, error } = await supabase
