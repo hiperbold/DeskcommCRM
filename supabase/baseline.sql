@@ -4151,11 +4151,6 @@ ALTER TABLE "public"."messages" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."nuvemshop_products" ENABLE ROW LEVEL SECURITY;
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'nuvemshop_products_tenant' AND polrelid = '"public"."nuvemshop_products"'::regclass) THEN
-CREATE POLICY "nuvemshop_products_tenant" ON "public"."nuvemshop_products" USING ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"())) WITH CHECK ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"()));
-END IF; END $baseline_guard$;
 
 
 
@@ -4170,11 +4165,6 @@ END IF; END $baseline_guard$;
 
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'orders_tenant_write' AND polrelid = '"public"."orders"'::regclass) THEN
-CREATE POLICY "orders_tenant_write" ON "public"."orders" USING ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"())) WITH CHECK ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"()));
-END IF; END $baseline_guard$;
 
 
 
@@ -4246,21 +4236,9 @@ END IF; END $baseline_guard$;
 
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'tenant_isolation_ai_agent_runs_all' AND polrelid = '"public"."ai_agent_runs"'::regclass) THEN
-CREATE POLICY "tenant_isolation_ai_agent_runs_all" ON "public"."ai_agent_runs" USING (("organization_id" IN ( SELECT "fn_user_org_ids"."fn_user_org_ids"
-   FROM "public"."fn_user_org_ids"() "fn_user_org_ids"("fn_user_org_ids")))) WITH CHECK (("organization_id" IN ( SELECT "fn_user_org_ids"."fn_user_org_ids"
-   FROM "public"."fn_user_org_ids"() "fn_user_org_ids"("fn_user_org_ids"))));
-END IF; END $baseline_guard$;
 
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'tenant_isolation_ai_invocations_all' AND polrelid = '"public"."ai_invocations"'::regclass) THEN
-CREATE POLICY "tenant_isolation_ai_invocations_all" ON "public"."ai_invocations" USING ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"())) WITH CHECK ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"()));
-END IF; END $baseline_guard$;
 
 
 
@@ -4329,11 +4307,6 @@ END IF; END $baseline_guard$;
 ALTER TABLE "public"."user_recovery_codes" ENABLE ROW LEVEL SECURITY;
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'warmup_tenant_isolation_all' AND polrelid = '"public"."channel_session_warmup"'::regclass) THEN
-CREATE POLICY "warmup_tenant_isolation_all" ON "public"."channel_session_warmup" USING ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"())) WITH CHECK ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"()));
-END IF; END $baseline_guard$;
 
 
 
@@ -7270,26 +7243,6 @@ alter table followup_flow_pointers enable row level security;
 alter table followup_enrollments enable row level security;
 alter table followup_enrollment_events enable row level security;
 
-do $$ begin
-  create policy tenant_isolation_followup_flow_versions_all on followup_flow_versions
-    for all using (organization_id in (select fn_user_org_ids()))
-    with check (organization_id in (select fn_user_org_ids()));
-exception when duplicate_object then null; end $$;
-do $$ begin
-  create policy tenant_isolation_followup_flow_pointers_all on followup_flow_pointers
-    for all using (organization_id in (select fn_user_org_ids()))
-    with check (organization_id in (select fn_user_org_ids()));
-exception when duplicate_object then null; end $$;
-do $$ begin
-  create policy tenant_isolation_followup_enrollments_all on followup_enrollments
-    for all using (organization_id in (select fn_user_org_ids()))
-    with check (organization_id in (select fn_user_org_ids()));
-exception when duplicate_object then null; end $$;
-do $$ begin
-  create policy tenant_isolation_followup_enrollment_events_all on followup_enrollment_events
-    for all using (organization_id in (select fn_user_org_ids()))
-    with check (organization_id in (select fn_user_org_ids()));
-exception when duplicate_object then null; end $$;
 
 -- Claim atômico do worker (SKIP LOCKED) — service role only
 create or replace function fn_claim_due_followup_enrollments(p_limit int, p_lease_seconds int)
@@ -8441,11 +8394,6 @@ comment on column public.crm_lead_scores.ai_probability_band is
 -- ---- tenancy ----
 alter table public.crm_lead_scores enable row level security;
 
-drop policy if exists tenant_isolation_crm_lead_scores_all on public.crm_lead_scores;
-create policy tenant_isolation_crm_lead_scores_all on public.crm_lead_scores
-  for all
-  using (organization_id in (select fn_user_org_ids()))
-  with check (organization_id in (select fn_user_org_ids()));
 
 create index if not exists idx_crm_lead_scores_org_band
   on public.crm_lead_scores (organization_id, ai_probability_band);
@@ -8544,11 +8492,6 @@ alter table public.crm_lead_risk_states
 
 alter table public.crm_lead_risk_states enable row level security;
 
-drop policy if exists tenant_isolation_crm_lead_risk_states_all on public.crm_lead_risk_states;
-create policy tenant_isolation_crm_lead_risk_states_all on public.crm_lead_risk_states
-  for all
-  using (organization_id in (select fn_user_org_ids()))
-  with check (organization_id in (select fn_user_org_ids()));
 
 -- O radar lê "quem está em risco nesta org", nesta ordem.
 create index if not exists idx_crm_lead_risk_states_org_bucket
@@ -9073,10 +9016,6 @@ end $$;
 -- ai_routers e ai_router_members têm policies por papel desde a 0150, que
 -- derruba a ampla delas; recriá-la aqui fazia cada update.sh (em autocommit)
 -- reabrir escrita a qualquer membro da organização até aquele drop.
-drop policy if exists tenant_isolation_ai_router_decisions_all on public.ai_router_decisions;
-create policy tenant_isolation_ai_router_decisions_all on public.ai_router_decisions for all
-  using (organization_id in (select * from public.fn_user_org_ids()))
-  with check (organization_id in (select * from public.fn_user_org_ids()));
 
 -- ---- knowledge_searches: telemetria de busca de conhecimento (migration 0086) ----
 
@@ -9114,11 +9053,6 @@ create index if not exists idx_knowledge_searches_org_created
 
 alter table knowledge_searches enable row level security;
 
-drop policy if exists tenant_isolation_knowledge_searches_all on knowledge_searches;
-create policy tenant_isolation_knowledge_searches_all on knowledge_searches
-  for all
-  using (organization_id in (select fn_user_org_ids()))
-  with check (organization_id in (select fn_user_org_ids()));
 
 -- Defesa em profundidade, mesmo contrato da 0085: a policy já devolve zero linha
 -- para JWT anônimo (auth.uid() null => fn_user_org_ids() vazio), mas o grant que
@@ -9446,11 +9380,6 @@ create index if not exists meta_templates_org_status_idx
 
 alter table public.meta_templates enable row level security;
 
-drop policy if exists tenant_isolation_meta_templates_all on public.meta_templates;
-create policy tenant_isolation_meta_templates_all on public.meta_templates
-  for all
-  using (organization_id in (select public.fn_user_org_ids()))
-  with check (organization_id in (select public.fn_user_org_ids()));
 
 -- ---- message type: template (migration 0091) ----
 -- Espelho idempotente. Racional completo no arquivo da migration: `template` NAO
@@ -10377,17 +10306,7 @@ create index if not exists idx_demanda_conversas_conv
 alter table public.demandas enable row level security;
 alter table public.demanda_conversas enable row level security;
 
-drop policy if exists tenant_isolation_demandas_all on public.demandas;
-create policy tenant_isolation_demandas_all on public.demandas
-  for all
-  using (organization_id in (select * from public.fn_user_org_ids()))
-  with check (organization_id in (select * from public.fn_user_org_ids()));
 
-drop policy if exists tenant_isolation_demanda_conversas_all on public.demanda_conversas;
-create policy tenant_isolation_demanda_conversas_all on public.demanda_conversas
-  for all
-  using (organization_id in (select * from public.fn_user_org_ids()))
-  with check (organization_id in (select * from public.fn_user_org_ids()));
 
 -- ---------------------------------------------------------------------------
 -- Passo 2 de 4: derivar o passado por REGRA EXPLÍCITA, nunca por adivinhação.
@@ -32377,10 +32296,6 @@ create index if not exists idx_phone_numbers_active on public.phone_numbers(numb
 
 alter table public.phone_numbers enable row level security;
 
-drop policy if exists phone_numbers_isolation on public.phone_numbers;
-create policy phone_numbers_isolation on public.phone_numbers
-  using (organization_id in (select fn_user_org_ids()))
-  with check (organization_id in (select fn_user_org_ids()));
 
 drop trigger if exists trg_phone_numbers_updated_at on public.phone_numbers;
 create trigger trg_phone_numbers_updated_at
@@ -55376,6 +55291,854 @@ $function$;
 revoke execute on function public.fn_mesclar_contatos(uuid, uuid, uuid[]) from public, anon;
 grant execute on function public.fn_mesclar_contatos(uuid, uuid, uuid[]) to authenticated, service_role;
 notify pgrst, 'reload schema';
+
+-- ---- financeiro: escrita e exclusão no papel da rota (D-138, parte de D-127) (migration 0923, fork Hiperbold, D-138, D-127) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- A policy `for all` das tabelas do financeiro conferia o papel só no `with check` (e
+-- só `agent` onde a rota exige `manager`), e o DELETE só aplicava o `using` (ser membro):
+-- qualquer membro, inclusive viewer, apagava lançamento pago, conta, forma de pagamento
+-- e comanda direto pelo PostgREST. Cada tabela vira SELECT para membro mais escrita
+-- por papel igual ao da rota:
+--   sales: insert e update de agent; update só em comanda aberta; nenhum delete.
+--   sale_items: agent, só enquanto a comanda é aberta e da mesma organização (D-127,
+--     `fn_finalizar_comanda` soma por `sale_id` sem conferir organização).
+--   financial_entries: insert de agent só `origin = 'manual'`; update e delete só em
+--     lançamento ainda não pago (a rota já recusa o resto); delete só manual.
+--   loyalty_ledger: só insert de agent (livro-razão, o estorno é função definer).
+--   commission_rules, financial_accounts, payment_methods, account_plans: manager.
+--   commissions: só leitura (quem grava é `fn_finalizar_comanda`, definer).
+-- O ramo de admin de plataforma fica como estava. Reaplicável com o app no ar: um DO
+-- por tabela (troca atômica das policies), lock_timeout curto. Sem função.
+
+do $t_sales$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_sales_all on public.sales;
+ drop policy if exists tenant_isolation_sales_select on public.sales;
+ create policy tenant_isolation_sales_select on public.sales for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_sales_insert on public.sales;
+ create policy tenant_isolation_sales_insert on public.sales for insert with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))));
+ drop policy if exists tenant_isolation_sales_update on public.sales;
+ create policy tenant_isolation_sales_update on public.sales for update using (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and status = 'open')) with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))));
+end
+$t_sales$;
+do $t_sale_items$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_sale_items_all on public.sale_items;
+ drop policy if exists tenant_isolation_sale_items_select on public.sale_items;
+ create policy tenant_isolation_sale_items_select on public.sale_items for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_sale_items_insert on public.sale_items;
+ create policy tenant_isolation_sale_items_insert on public.sale_items for insert with check (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and exists (select 1 from public.sales s where s.id = sale_items.sale_id and s.organization_id = sale_items.organization_id and s.status = 'open')));
+ drop policy if exists tenant_isolation_sale_items_update on public.sale_items;
+ create policy tenant_isolation_sale_items_update on public.sale_items for update using (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and exists (select 1 from public.sales s where s.id = sale_items.sale_id and s.organization_id = sale_items.organization_id and s.status = 'open'))) with check (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and exists (select 1 from public.sales s where s.id = sale_items.sale_id and s.organization_id = sale_items.organization_id and s.status = 'open')));
+ drop policy if exists tenant_isolation_sale_items_delete on public.sale_items;
+ create policy tenant_isolation_sale_items_delete on public.sale_items for delete using (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and exists (select 1 from public.sales s where s.id = sale_items.sale_id and s.organization_id = sale_items.organization_id and s.status = 'open')));
+end
+$t_sale_items$;
+do $t_commission_rules$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_commission_rules_all on public.commission_rules;
+ drop policy if exists tenant_isolation_commission_rules_select on public.commission_rules;
+ create policy tenant_isolation_commission_rules_select on public.commission_rules for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_commission_rules_insert on public.commission_rules;
+ create policy tenant_isolation_commission_rules_insert on public.commission_rules for insert with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+ drop policy if exists tenant_isolation_commission_rules_update on public.commission_rules;
+ create policy tenant_isolation_commission_rules_update on public.commission_rules for update using ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')))) with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+end
+$t_commission_rules$;
+do $t_financial_accounts$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_financial_accounts_all on public.financial_accounts;
+ drop policy if exists tenant_isolation_financial_accounts_select on public.financial_accounts;
+ create policy tenant_isolation_financial_accounts_select on public.financial_accounts for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_financial_accounts_insert on public.financial_accounts;
+ create policy tenant_isolation_financial_accounts_insert on public.financial_accounts for insert with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+ drop policy if exists tenant_isolation_financial_accounts_update on public.financial_accounts;
+ create policy tenant_isolation_financial_accounts_update on public.financial_accounts for update using ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')))) with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+end
+$t_financial_accounts$;
+do $t_payment_methods$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_payment_methods_all on public.payment_methods;
+ drop policy if exists tenant_isolation_payment_methods_select on public.payment_methods;
+ create policy tenant_isolation_payment_methods_select on public.payment_methods for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_payment_methods_insert on public.payment_methods;
+ create policy tenant_isolation_payment_methods_insert on public.payment_methods for insert with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+ drop policy if exists tenant_isolation_payment_methods_update on public.payment_methods;
+ create policy tenant_isolation_payment_methods_update on public.payment_methods for update using ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')))) with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+end
+$t_payment_methods$;
+do $t_account_plans$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_account_plans_all on public.account_plans;
+ drop policy if exists tenant_isolation_account_plans_select on public.account_plans;
+ create policy tenant_isolation_account_plans_select on public.account_plans for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_account_plans_insert on public.account_plans;
+ create policy tenant_isolation_account_plans_insert on public.account_plans for insert with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+ drop policy if exists tenant_isolation_account_plans_update on public.account_plans;
+ create policy tenant_isolation_account_plans_update on public.account_plans for update using ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')))) with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))));
+end
+$t_account_plans$;
+do $t_commissions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_commissions_all on public.commissions;
+ drop policy if exists tenant_isolation_commissions_select on public.commissions;
+ create policy tenant_isolation_commissions_select on public.commissions for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+end
+$t_commissions$;
+do $t_financial_entries$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_financial_entries_all on public.financial_entries;
+ drop policy if exists tenant_isolation_financial_entries_select on public.financial_entries;
+ create policy tenant_isolation_financial_entries_select on public.financial_entries for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_financial_entries_insert on public.financial_entries;
+ create policy tenant_isolation_financial_entries_insert on public.financial_entries for insert with check (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and origin = 'manual'));
+ drop policy if exists tenant_isolation_financial_entries_update on public.financial_entries;
+ create policy tenant_isolation_financial_entries_update on public.financial_entries for update using (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and paid_at is null and status <> 'paid')) with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))));
+ drop policy if exists tenant_isolation_financial_entries_delete on public.financial_entries;
+ create policy tenant_isolation_financial_entries_delete on public.financial_entries for delete using (public.fn_is_platform_admin() or ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and paid_at is null and status <> 'paid' and origin = 'manual'));
+end
+$t_financial_entries$;
+do $t_loyalty_ledger$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_loyalty_ledger_all on public.loyalty_ledger;
+ drop policy if exists tenant_isolation_loyalty_ledger_select on public.loyalty_ledger;
+ create policy tenant_isolation_loyalty_ledger_select on public.loyalty_ledger for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_loyalty_ledger_insert on public.loyalty_ledger;
+ create policy tenant_isolation_loyalty_ledger_insert on public.loyalty_ledger for insert with check ((public.fn_is_platform_admin() or (organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))));
+end
+$t_loyalty_ledger$;
+
+-- ---- roteiros de follow-up: só manager grava (D-139, parte de D-113 e D-127) (migration 0924, fork Hiperbold, D-139, D-113, D-127) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- As tabelas dos roteiros de follow-up tinham policy `for all` só por pertencer à
+-- organização: o viewer reescrevia o `graph` da versão ativa (o worker mandava o
+-- texto dele a todos os inscritos) ou ativava um roteiro com `trigger_config` próprio.
+-- Todas as rotas que gravam exigem manager e o motor grava por serviço (admin, pool),
+-- então: SELECT para membro; escrita só de manager em pointers, enrollments e events;
+-- versions só ganha delete de manager (a publicação e o rollback usam serviço).
+-- `active_version_id` passa a conferir no gatilho que a versão é da mesma organização
+-- (só quando a coluna é gravada ou muda; ponteiro antigo não é varrido).
+-- Reaplicável com o app no ar: um DO por tabela, create or replace, lock_timeout curto.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+do $t_followup_flow_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_followup_flow_pointers_all on public.followup_flow_pointers;
+ drop policy if exists tenant_isolation_followup_flow_pointers_select on public.followup_flow_pointers;
+ create policy tenant_isolation_followup_flow_pointers_select on public.followup_flow_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_followup_flow_pointers_insert on public.followup_flow_pointers;
+ create policy tenant_isolation_followup_flow_pointers_insert on public.followup_flow_pointers for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_followup_flow_pointers_update on public.followup_flow_pointers;
+ create policy tenant_isolation_followup_flow_pointers_update on public.followup_flow_pointers for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_followup_flow_pointers_delete on public.followup_flow_pointers;
+ create policy tenant_isolation_followup_flow_pointers_delete on public.followup_flow_pointers for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_followup_flow_pointers$;
+do $t_followup_flow_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_followup_flow_versions_all on public.followup_flow_versions;
+ drop policy if exists tenant_isolation_followup_flow_versions_select on public.followup_flow_versions;
+ create policy tenant_isolation_followup_flow_versions_select on public.followup_flow_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_followup_flow_versions_delete on public.followup_flow_versions;
+ create policy tenant_isolation_followup_flow_versions_delete on public.followup_flow_versions for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_followup_flow_versions$;
+do $t_followup_enrollments$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_followup_enrollments_all on public.followup_enrollments;
+ drop policy if exists tenant_isolation_followup_enrollments_select on public.followup_enrollments;
+ create policy tenant_isolation_followup_enrollments_select on public.followup_enrollments for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_followup_enrollments_insert on public.followup_enrollments;
+ create policy tenant_isolation_followup_enrollments_insert on public.followup_enrollments for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_followup_enrollments_update on public.followup_enrollments;
+ create policy tenant_isolation_followup_enrollments_update on public.followup_enrollments for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_followup_enrollments_delete on public.followup_enrollments;
+ create policy tenant_isolation_followup_enrollments_delete on public.followup_enrollments for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_followup_enrollments$;
+do $t_followup_enrollment_events$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_followup_enrollment_events_all on public.followup_enrollment_events;
+ drop policy if exists tenant_isolation_followup_enrollment_events_select on public.followup_enrollment_events;
+ create policy tenant_isolation_followup_enrollment_events_select on public.followup_enrollment_events for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_followup_enrollment_events_insert on public.followup_enrollment_events;
+ create policy tenant_isolation_followup_enrollment_events_insert on public.followup_enrollment_events for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ revoke update, delete, truncate on public.followup_enrollment_events from authenticated, anon;
+end
+$t_followup_enrollment_events$;
+
+create or replace function public.fn_followup_pointer_versao_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+ if new.active_version_id is not null
+    and (tg_op = 'INSERT'
+         or new.active_version_id is distinct from old.active_version_id
+         or new.organization_id is distinct from old.organization_id)
+    and not exists (
+      select 1 from public.followup_flow_versions v
+       where v.id = new.active_version_id
+         and v.organization_id = new.organization_id)
+ then
+  raise exception 'Versão não encontrada.' using errcode = 'PT422';
+ end if;
+ return new;
+end
+$$;
+revoke execute on function public.fn_followup_pointer_versao_da_organizacao() from public, anon, authenticated;
+
+do $followup_ponteiro$
+begin
+ perform set_config('lock_timeout','3s',true);
+ create or replace trigger trg_followup_pointer_versao_da_organizacao
+  before insert or update of active_version_id, organization_id on public.followup_flow_pointers
+  for each row
+  execute function public.fn_followup_pointer_versao_da_organizacao();
+end
+$followup_ponteiro$;
+
+-- ---- voz: números só de manager e resolução só do serviço (D-111, D-112, parte de D-127) (migration 0925, fork Hiperbold, D-111, D-112, D-127) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- D-111. `fn_resolve_inbound_number` (security definer, sem search_path) era executável
+-- por qualquer conta logada, inclusive sem organização, e devolvia organização, modo de
+-- roteamento, agente e atendente do dono de um número. Só o worker de voz a usa, com
+-- service_role: passa a ter search_path fixo e EXECUTE só do serviço.
+-- Vizinho: `fn_colegas_podem_mexer_na_agenda` devolve false para quem não é da organização
+-- perguntada (sem JWT, caminho de serviço, o comportamento é o de antes).
+-- D-112. `phone_numbers` tinha policy `for all` só por tenant: o viewer cadastrava o DID
+-- de outra empresa, mudava `trunk_endpoint`, `routing_mode` ou o agente. SELECT para
+-- membro e escrita de manager (a API já exige manager). O agente padrão e o atendente
+-- reserva passam a ser conferidos como da mesma organização por gatilho (D-127).
+-- Fica de fora, por ser decisão de produto: o `number` segue único na instalação inteira e
+-- um manager ainda pode ocupar um número de outra empresa (falta prova de posse do DID).
+-- Reaplicável com o app no ar. Cria função: entra ANTES da VARREDURA anon.
+
+do $t_phone_numbers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists phone_numbers_isolation on public.phone_numbers;
+ drop policy if exists tenant_isolation_phone_numbers_select on public.phone_numbers;
+ create policy tenant_isolation_phone_numbers_select on public.phone_numbers for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_phone_numbers_insert on public.phone_numbers;
+ create policy tenant_isolation_phone_numbers_insert on public.phone_numbers for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_phone_numbers_update on public.phone_numbers;
+ create policy tenant_isolation_phone_numbers_update on public.phone_numbers for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_phone_numbers_delete on public.phone_numbers;
+ create policy tenant_isolation_phone_numbers_delete on public.phone_numbers for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_phone_numbers$;
+
+create or replace function public.fn_resolve_inbound_number(p_number text)
+returns table (
+ organization_id uuid,
+ routing_mode text,
+ default_ai_agent_id uuid,
+ fallback_user_id uuid
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+ select organization_id, routing_mode, default_ai_agent_id, fallback_user_id
+ from public.phone_numbers
+ where number = p_number and is_active
+ limit 1;
+$$;
+revoke execute on function public.fn_resolve_inbound_number(text) from public, anon, authenticated;
+grant execute on function public.fn_resolve_inbound_number(text) to service_role;
+
+create or replace function public.fn_colegas_podem_mexer_na_agenda(p_org uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+ select case
+  when auth.uid() is not null and p_org not in (select public.fn_user_org_ids()) then false
+  else coalesce(
+   (select (o.settings->'colegas_podem_mexer_na_agenda') is distinct from 'false'::jsonb
+      from public.organizations o where o.id = p_org),
+   true)
+ end;
+$$;
+revoke execute on function public.fn_colegas_podem_mexer_na_agenda(uuid) from public, anon;
+grant execute on function public.fn_colegas_podem_mexer_na_agenda(uuid) to authenticated, service_role;
+
+create or replace function public.fn_phone_numbers_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+ if new.default_ai_agent_id is not null
+    and (tg_op = 'INSERT'
+         or new.default_ai_agent_id is distinct from old.default_ai_agent_id
+         or new.organization_id is distinct from old.organization_id)
+    and not exists (
+      select 1 from public.ai_agents a
+       where a.id = new.default_ai_agent_id and a.organization_id = new.organization_id)
+ then
+  raise exception 'Agente não encontrado.' using errcode = 'PT422';
+ end if;
+ if new.fallback_user_id is not null
+    and (tg_op = 'INSERT'
+         or new.fallback_user_id is distinct from old.fallback_user_id
+         or new.organization_id is distinct from old.organization_id)
+    and not exists (
+      select 1 from public.user_organizations uo
+       where uo.user_id = new.fallback_user_id
+         and uo.organization_id = new.organization_id
+         and uo.revoked_at is null)
+ then
+  raise exception 'Responsável não é membro ativo desta organização.' using errcode = 'PT422';
+ end if;
+ return new;
+end
+$$;
+revoke execute on function public.fn_phone_numbers_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $phone_gatilho$
+begin
+ perform set_config('lock_timeout','3s',true);
+ create or replace trigger trg_phone_numbers_vinculos_da_organizacao
+  before insert or update of default_ai_agent_id, fallback_user_id, organization_id on public.phone_numbers
+  for each row
+  execute function public.fn_phone_numbers_vinculos_da_organizacao();
+end
+$phone_gatilho$;
+
+-- ---- tabelas do servidor sem escrita de membro (D-113, D-163) (migration 0926, fork Hiperbold, D-113, D-163) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- A varredura genérica criou `for all` só por tenant em dezenas de tabelas que são do
+-- motor: um viewer apagava `job_queue` (parava a IA), trocava `playbook_pointers` e
+-- `skill_pointers`, reescrevia `lead_state_transitions` e, pelo INSERT em
+-- `ai_invocations`, o gatilho definer somava em `ai_budgets` (D-163).
+-- Medido no código: nenhuma dessas tabelas é gravada pelo navegador nem por rota com
+-- sessão de usuário; quem grava é o servidor (service_role, pool direto, funções
+-- definer). O authenticated perde insert, update, delete, truncate, references e
+-- trigger, e a policy `for all` vira só SELECT para o membro da organização (o ramo de
+-- admin de plataforma fica onde existia). Os gatilhos definer seguem gravando.
+-- `fn_proteger_tabelas_de_organizacao` passa a criar só SELECT (a policy mantém o nome
+-- `tenant_isolation_<tabela>_all` porque a provisionadora e seus gates procuram esse nome).
+-- `meta_templates` não é revogada (o espelho dos modelos da Meta tem escrita de manager
+-- em vez de membro qualquer; a rota grava por serviço).
+-- Ficam de fora as tabelas que a sessão do usuário grava de fato (messages, contacts,
+-- cron_jobs, idempotency_keys, lead_state, lead_checkpoints, agent_inbox_items e afins):
+-- exigem papel e não revogação, e não entram neste lote.
+-- Reaplicável com o app no ar: um DO por tabela, lock_timeout curto.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+do $t_ai_agent_runs$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_ai_agent_runs_all on public.ai_agent_runs;
+ drop policy if exists tenant_isolation_ai_agent_runs_select on public.ai_agent_runs;
+ create policy tenant_isolation_ai_agent_runs_select on public.ai_agent_runs for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.ai_agent_runs from authenticated, anon;
+end
+$t_ai_agent_runs$;
+do $t_ai_router_decisions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_ai_router_decisions_all on public.ai_router_decisions;
+ drop policy if exists tenant_isolation_ai_router_decisions_select on public.ai_router_decisions;
+ create policy tenant_isolation_ai_router_decisions_select on public.ai_router_decisions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.ai_router_decisions from authenticated, anon;
+end
+$t_ai_router_decisions$;
+do $t_before_send_traces$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_before_send_traces_all on public.before_send_traces;
+ drop policy if exists tenant_isolation_before_send_traces_select on public.before_send_traces;
+ create policy tenant_isolation_before_send_traces_select on public.before_send_traces for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.before_send_traces from authenticated, anon;
+end
+$t_before_send_traces$;
+do $t_judge_alignment_pool$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_judge_alignment_pool_all on public.judge_alignment_pool;
+ drop policy if exists tenant_isolation_judge_alignment_pool_select on public.judge_alignment_pool;
+ create policy tenant_isolation_judge_alignment_pool_select on public.judge_alignment_pool for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.judge_alignment_pool from authenticated, anon;
+end
+$t_judge_alignment_pool$;
+do $t_flywheel_judge_verdicts$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_flywheel_judge_verdicts_all on public.flywheel_judge_verdicts;
+ drop policy if exists tenant_isolation_flywheel_judge_verdicts_select on public.flywheel_judge_verdicts;
+ create policy tenant_isolation_flywheel_judge_verdicts_select on public.flywheel_judge_verdicts for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.flywheel_judge_verdicts from authenticated, anon;
+end
+$t_flywheel_judge_verdicts$;
+do $t_flywheel_distiller_proposals$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_flywheel_distiller_proposals_all on public.flywheel_distiller_proposals;
+ drop policy if exists tenant_isolation_flywheel_distiller_proposals_select on public.flywheel_distiller_proposals;
+ create policy tenant_isolation_flywheel_distiller_proposals_select on public.flywheel_distiller_proposals for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.flywheel_distiller_proposals from authenticated, anon;
+end
+$t_flywheel_distiller_proposals$;
+do $t_knowledge_searches$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_knowledge_searches_all on public.knowledge_searches;
+ drop policy if exists tenant_isolation_knowledge_searches_select on public.knowledge_searches;
+ create policy tenant_isolation_knowledge_searches_select on public.knowledge_searches for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.knowledge_searches from authenticated, anon;
+end
+$t_knowledge_searches$;
+do $t_outbound_copies$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_outbound_copies_all on public.outbound_copies;
+ drop policy if exists tenant_isolation_outbound_copies_select on public.outbound_copies;
+ create policy tenant_isolation_outbound_copies_select on public.outbound_copies for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.outbound_copies from authenticated, anon;
+end
+$t_outbound_copies$;
+do $t_metrics$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_metrics_all on public.metrics;
+ drop policy if exists tenant_isolation_metrics_select on public.metrics;
+ create policy tenant_isolation_metrics_select on public.metrics for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.metrics from authenticated, anon;
+end
+$t_metrics$;
+do $t_lead_state_transitions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_lead_state_transitions_all on public.lead_state_transitions;
+ drop policy if exists tenant_isolation_lead_state_transitions_select on public.lead_state_transitions;
+ create policy tenant_isolation_lead_state_transitions_select on public.lead_state_transitions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.lead_state_transitions from authenticated, anon;
+end
+$t_lead_state_transitions$;
+do $t_send_ledger$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_send_ledger_all on public.send_ledger;
+ drop policy if exists tenant_isolation_send_ledger_select on public.send_ledger;
+ create policy tenant_isolation_send_ledger_select on public.send_ledger for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.send_ledger from authenticated, anon;
+end
+$t_send_ledger$;
+do $t_pacing_ledger$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_pacing_ledger_all on public.pacing_ledger;
+ drop policy if exists tenant_isolation_pacing_ledger_select on public.pacing_ledger;
+ create policy tenant_isolation_pacing_ledger_select on public.pacing_ledger for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.pacing_ledger from authenticated, anon;
+end
+$t_pacing_ledger$;
+do $t_job_queue$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_job_queue_all on public.job_queue;
+ drop policy if exists tenant_isolation_job_queue_select on public.job_queue;
+ create policy tenant_isolation_job_queue_select on public.job_queue for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.job_queue from authenticated, anon;
+end
+$t_job_queue$;
+do $t_org_memory_entries$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_org_memory_entries_all on public.org_memory_entries;
+ drop policy if exists tenant_isolation_org_memory_entries_select on public.org_memory_entries;
+ create policy tenant_isolation_org_memory_entries_select on public.org_memory_entries for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.org_memory_entries from authenticated, anon;
+end
+$t_org_memory_entries$;
+do $t_org_memory_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_org_memory_pointers_all on public.org_memory_pointers;
+ drop policy if exists tenant_isolation_org_memory_pointers_select on public.org_memory_pointers;
+ create policy tenant_isolation_org_memory_pointers_select on public.org_memory_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.org_memory_pointers from authenticated, anon;
+end
+$t_org_memory_pointers$;
+do $t_org_memory_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_org_memory_versions_all on public.org_memory_versions;
+ drop policy if exists tenant_isolation_org_memory_versions_select on public.org_memory_versions;
+ create policy tenant_isolation_org_memory_versions_select on public.org_memory_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.org_memory_versions from authenticated, anon;
+end
+$t_org_memory_versions$;
+do $t_playbook_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_playbook_pointers_all on public.playbook_pointers;
+ drop policy if exists tenant_isolation_playbook_pointers_select on public.playbook_pointers;
+ create policy tenant_isolation_playbook_pointers_select on public.playbook_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.playbook_pointers from authenticated, anon;
+end
+$t_playbook_pointers$;
+do $t_playbook_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_playbook_versions_all on public.playbook_versions;
+ drop policy if exists tenant_isolation_playbook_versions_select on public.playbook_versions;
+ create policy tenant_isolation_playbook_versions_select on public.playbook_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.playbook_versions from authenticated, anon;
+end
+$t_playbook_versions$;
+do $t_skill_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_skill_pointers_all on public.skill_pointers;
+ drop policy if exists tenant_isolation_skill_pointers_select on public.skill_pointers;
+ create policy tenant_isolation_skill_pointers_select on public.skill_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.skill_pointers from authenticated, anon;
+end
+$t_skill_pointers$;
+do $t_skill_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_skill_versions_all on public.skill_versions;
+ drop policy if exists tenant_isolation_skill_versions_select on public.skill_versions;
+ create policy tenant_isolation_skill_versions_select on public.skill_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.skill_versions from authenticated, anon;
+end
+$t_skill_versions$;
+do $t_skill_activations$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_skill_activations_all on public.skill_activations;
+ drop policy if exists tenant_isolation_skill_activations_select on public.skill_activations;
+ create policy tenant_isolation_skill_activations_select on public.skill_activations for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.skill_activations from authenticated, anon;
+end
+$t_skill_activations$;
+do $t_disclosure_template_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_disclosure_template_pointers_all on public.disclosure_template_pointers;
+ drop policy if exists tenant_isolation_disclosure_template_pointers_select on public.disclosure_template_pointers;
+ create policy tenant_isolation_disclosure_template_pointers_select on public.disclosure_template_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.disclosure_template_pointers from authenticated, anon;
+end
+$t_disclosure_template_pointers$;
+do $t_disclosure_template_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_disclosure_template_versions_all on public.disclosure_template_versions;
+ drop policy if exists tenant_isolation_disclosure_template_versions_select on public.disclosure_template_versions;
+ create policy tenant_isolation_disclosure_template_versions_select on public.disclosure_template_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.disclosure_template_versions from authenticated, anon;
+end
+$t_disclosure_template_versions$;
+do $t_reentry_knob_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_reentry_knob_pointers_all on public.reentry_knob_pointers;
+ drop policy if exists tenant_isolation_reentry_knob_pointers_select on public.reentry_knob_pointers;
+ create policy tenant_isolation_reentry_knob_pointers_select on public.reentry_knob_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.reentry_knob_pointers from authenticated, anon;
+end
+$t_reentry_knob_pointers$;
+do $t_reentry_knob_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_reentry_knob_versions_all on public.reentry_knob_versions;
+ drop policy if exists tenant_isolation_reentry_knob_versions_select on public.reentry_knob_versions;
+ create policy tenant_isolation_reentry_knob_versions_select on public.reentry_knob_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.reentry_knob_versions from authenticated, anon;
+end
+$t_reentry_knob_versions$;
+do $t_reentry_template_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_reentry_template_pointers_all on public.reentry_template_pointers;
+ drop policy if exists tenant_isolation_reentry_template_pointers_select on public.reentry_template_pointers;
+ create policy tenant_isolation_reentry_template_pointers_select on public.reentry_template_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.reentry_template_pointers from authenticated, anon;
+end
+$t_reentry_template_pointers$;
+do $t_reentry_template_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_reentry_template_versions_all on public.reentry_template_versions;
+ drop policy if exists tenant_isolation_reentry_template_versions_select on public.reentry_template_versions;
+ create policy tenant_isolation_reentry_template_versions_select on public.reentry_template_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.reentry_template_versions from authenticated, anon;
+end
+$t_reentry_template_versions$;
+do $t_promise_table_pointers$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_promise_table_pointers_all on public.promise_table_pointers;
+ drop policy if exists tenant_isolation_promise_table_pointers_select on public.promise_table_pointers;
+ create policy tenant_isolation_promise_table_pointers_select on public.promise_table_pointers for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.promise_table_pointers from authenticated, anon;
+end
+$t_promise_table_pointers$;
+do $t_promise_table_versions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_promise_table_versions_all on public.promise_table_versions;
+ drop policy if exists tenant_isolation_promise_table_versions_select on public.promise_table_versions;
+ create policy tenant_isolation_promise_table_versions_select on public.promise_table_versions for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.promise_table_versions from authenticated, anon;
+end
+$t_promise_table_versions$;
+do $t_channel_knobs$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_channel_knobs_all on public.channel_knobs;
+ drop policy if exists tenant_isolation_channel_knobs_select on public.channel_knobs;
+ create policy tenant_isolation_channel_knobs_select on public.channel_knobs for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.channel_knobs from authenticated, anon;
+end
+$t_channel_knobs$;
+do $t_channel_session_health$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_channel_session_health_all on public.channel_session_health;
+ drop policy if exists tenant_isolation_channel_session_health_select on public.channel_session_health;
+ create policy tenant_isolation_channel_session_health_select on public.channel_session_health for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.channel_session_health from authenticated, anon;
+end
+$t_channel_session_health$;
+do $t_crm_lead_risk_states$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_crm_lead_risk_states_all on public.crm_lead_risk_states;
+ drop policy if exists tenant_isolation_crm_lead_risk_states_select on public.crm_lead_risk_states;
+ create policy tenant_isolation_crm_lead_risk_states_select on public.crm_lead_risk_states for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.crm_lead_risk_states from authenticated, anon;
+end
+$t_crm_lead_risk_states$;
+do $t_crm_lead_scores$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_crm_lead_scores_all on public.crm_lead_scores;
+ drop policy if exists tenant_isolation_crm_lead_scores_select on public.crm_lead_scores;
+ create policy tenant_isolation_crm_lead_scores_select on public.crm_lead_scores for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.crm_lead_scores from authenticated, anon;
+end
+$t_crm_lead_scores$;
+do $t_demanda_conversas$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_demanda_conversas_all on public.demanda_conversas;
+ drop policy if exists tenant_isolation_demanda_conversas_select on public.demanda_conversas;
+ create policy tenant_isolation_demanda_conversas_select on public.demanda_conversas for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.demanda_conversas from authenticated, anon;
+end
+$t_demanda_conversas$;
+do $t_demandas$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_demandas_all on public.demandas;
+ drop policy if exists tenant_isolation_demandas_select on public.demandas;
+ create policy tenant_isolation_demandas_select on public.demandas for select using (organization_id in (select public.fn_user_org_ids()));
+ revoke insert, update, delete, truncate, references, trigger on public.demandas from authenticated, anon;
+end
+$t_demandas$;
+do $t_ai_invocations$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_ai_invocations_all on public.ai_invocations;
+ drop policy if exists tenant_isolation_ai_invocations_select on public.ai_invocations;
+ create policy tenant_isolation_ai_invocations_select on public.ai_invocations for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ revoke insert, update, delete, truncate, references, trigger on public.ai_invocations from authenticated, anon;
+end
+$t_ai_invocations$;
+do $t_channel_session_warmup$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists warmup_tenant_isolation_all on public.channel_session_warmup;
+ drop policy if exists tenant_isolation_channel_session_warmup_select on public.channel_session_warmup;
+ create policy tenant_isolation_channel_session_warmup_select on public.channel_session_warmup for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ revoke insert, update, delete, truncate, references, trigger on public.channel_session_warmup from authenticated, anon;
+end
+$t_channel_session_warmup$;
+do $t_nuvemshop_products$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists nuvemshop_products_tenant on public.nuvemshop_products;
+ drop policy if exists tenant_isolation_nuvemshop_products_select on public.nuvemshop_products;
+ create policy tenant_isolation_nuvemshop_products_select on public.nuvemshop_products for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ revoke insert, update, delete, truncate, references, trigger on public.nuvemshop_products from authenticated, anon;
+end
+$t_nuvemshop_products$;
+do $t_orders$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists orders_tenant_write on public.orders;
+ revoke insert, update, delete, truncate, references, trigger on public.orders from authenticated, anon;
+end
+$t_orders$;
+do $t_meta_templates$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_meta_templates_all on public.meta_templates;
+ drop policy if exists tenant_isolation_meta_templates_select on public.meta_templates;
+ create policy tenant_isolation_meta_templates_select on public.meta_templates for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_meta_templates_insert on public.meta_templates;
+ create policy tenant_isolation_meta_templates_insert on public.meta_templates for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_meta_templates_update on public.meta_templates;
+ create policy tenant_isolation_meta_templates_update on public.meta_templates for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_meta_templates_delete on public.meta_templates;
+ create policy tenant_isolation_meta_templates_delete on public.meta_templates for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_meta_templates$;
+
+create or replace function public.fn_proteger_tabelas_de_organizacao()
+returns void
+language plpgsql
+set search_path = public
+as $f$
+declare r record;
+begin
+ for r in
+   select c.relname
+     from pg_class c
+     join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and not c.relrowsecurity
+      and exists (
+        select 1 from pg_attribute a
+         where a.attrelid = c.oid
+           and a.attname = 'organization_id'
+           and a.attnum > 0
+           and not a.attisdropped)
+    order by c.relname
+ loop
+   execute format('alter table public.%I enable row level security', r.relname);
+   execute format('revoke all on public.%I from anon', r.relname);
+   execute format('drop policy if exists tenant_isolation_%s_all on public.%I', r.relname, r.relname);
+   execute format(
+     'create policy tenant_isolation_%s_all on public.%I for select
+        using (organization_id in (select * from public.fn_user_org_ids()))',
+     r.relname, r.relname);
+ end loop;
+end $f$;
+revoke execute on function public.fn_proteger_tabelas_de_organizacao() from public, anon, authenticated, service_role;
+
+-- ---- emit_event pede agent e organização explícita (D-129) (migration 0927, fork Hiperbold, D-129) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- O viewer emitia `lead.stage_changed` ou `lead.created` e disparava automações e
+-- follow-ups, e com `p_organization_id` nulo a função escolhia uma organização do usuário
+-- com `limit 1` sem ordem. Para chamador autenticado agora: papel agent ou acima e
+-- organização obrigatória (a do suporte em sessão continua valendo). Única exceção: o
+-- evento `user.profile_updated` do próprio usuário (a tela de perfil o emite com qualquer
+-- papel). Corpo igual ao anterior fora isso; o caminho de serviço (sem JWT) não muda.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+
+create or replace function public.emit_event(p_event_type text, p_entity_kind text, p_entity_id uuid, p_payload jsonb default '{}'::jsonb, p_metadata jsonb default '{}'::jsonb, p_organization_id uuid default null::uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path to 'public'
+as $function$
+declare
+  v_org_id uuid;
+  v_event_id uuid;
+  v_contact uuid;
+  v_origin jsonb;
+begin
+  if auth.uid() is not null and p_event_type in (
+    'message.received','appointment.outcome_confirmed',
+    'ai.case_opened','ai.case_closed'
+  ) then
+    raise exception 'reserved_message_received' using errcode='42501';
+  end if;
+  if auth.uid() is not null and (
+    coalesce(p_payload,'{}'::jsonb) ?| array['service_origin','service_boundary']
+    or coalesce(p_metadata,'{}'::jsonb) ?| array['service_origin','service_boundary']
+  ) then raise exception 'reserved_service_origin' using errcode='42501'; end if;
+  v_org_id := coalesce(p_organization_id, (public.fn_support_context()->>'organization_id')::uuid);
+  if v_org_id is null then
+    raise exception 'emit_event: organization_id obrigatorio';
+  end if;
+
+  if auth.uid() is not null
+     and not public.fn_role_at_least(v_org_id, 'viewer') then
+    raise exception 'caller_not_authorized_for_org'
+      using hint = 'emit_event: caller must be an active member of the organization';
+  end if;
+
+  if not public.fn_support_write_allowed(v_org_id) then raise exception 'support_readonly' using errcode='42501'; end if;
+
+  if auth.uid() is not null
+     and not (
+       public.fn_role_at_least(v_org_id, 'agent')
+       or (p_event_type = 'user.profile_updated' and p_entity_id = auth.uid())
+     ) then
+    raise exception 'caller_not_authorized_for_org'
+      using hint = 'emit_event: caller must be an active agent or above in the organization';
+  end if;
+
+  if not (coalesce(p_payload,'{}'::jsonb) ? 'service_origin')
+     and not (coalesce(p_metadata,'{}'::jsonb) ? 'service_origin') then
+    if p_event_type in ('lead.created','lead.stage_changed','lead.tag_added') and p_entity_kind='crm_lead' then
+      select contact_id into v_contact from public.crm_leads where organization_id=v_org_id and id=p_entity_id;
+    elsif p_event_type='contact.tag_added' and p_entity_kind='contact' then
+      select id into v_contact from public.contacts where organization_id=v_org_id and id=p_entity_id;
+    end if;
+    if v_contact is not null
+       and exists(select 1 from public.contacts
+                   where organization_id=v_org_id and id=v_contact
+                     and not is_anonymized and is_merged_into is null) then
+      v_origin := jsonb_build_object('kind','command',
+        'observed', public.fn_service_observe_command(v_org_id, v_contact));
+    end if;
+  end if;
+
+  insert into public.event_log
+    (organization_id, event_type, entity_kind, entity_id, payload, metadata)
+  values
+    (v_org_id, p_event_type, p_entity_kind, p_entity_id,
+     coalesce(p_payload, '{}'::jsonb)
+       || case when v_origin is null then '{}'::jsonb else jsonb_build_object('service_origin', v_origin) end,
+     coalesce(p_metadata, '{}'::jsonb)
+       || jsonb_build_object('emitted_at', extract(epoch from now())))
+  returning id into v_event_id;
+
+  return v_event_id;
+end $function$;
+revoke execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uuid) from public, anon;
+grant execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uuid) to authenticated, service_role;
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

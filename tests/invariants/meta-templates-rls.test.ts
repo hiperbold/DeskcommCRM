@@ -87,7 +87,14 @@ describe("0088 · o espelho de templates da Meta chega ao clone", () => {
     expect(
       sql(`select policyname from pg_policies
             where schemaname = 'public' and tablename = 'meta_templates' and permissive = 'PERMISSIVE' order by 1`),
-    ).toBe("tenant_isolation_meta_templates_all");
+    ).toBe(
+      [
+        "tenant_isolation_meta_templates_delete",
+        "tenant_isolation_meta_templates_insert",
+        "tenant_isolation_meta_templates_select",
+        "tenant_isolation_meta_templates_update",
+      ].join("\n"),
+    );
   });
 
   it("membro da org A escreve na própria org e lê de volta", () => {

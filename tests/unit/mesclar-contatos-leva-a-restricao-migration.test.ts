@@ -75,6 +75,7 @@ describe("0922: a função leva a restrição e não perde o que a 0407 fazia", 
   });
 
   it("todo o corpo da 0407 continua: cada trecho dela está na nova", () => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da 0407, que tem uma única função, não o baseline.
     const antigo = codigoDe(M0407.slice(M0407.indexOf("CREATE OR REPLACE FUNCTION")));
     // Cada linha da 0407 tem de existir na 0922 (a nova só ACRESCENTA).
     const novas = new Set(codigo.split("\n"));

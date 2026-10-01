@@ -1,6 +1,21 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { countAs, sql, writeCountAs } from "./gov-helpers";
+import { countAs, sql, writeCountAs as writeCountAsDoHelper } from "./gov-helpers";
+
+/**
+ * `demandas` e `demanda_conversas` são tabelas do servidor desde a migration 0926 (D-113):
+ * o `authenticated` perdeu o privilégio de escrita, então a barreira é `permission denied`
+ * em vez de zero linhas pela RLS. As duas contam como "não escreveu".
+ */
+function writeCountAs(userId: string, dml: string): number {
+  try {
+    return writeCountAsDoHelper(userId, dml);
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr ?? "";
+    if (stderr.includes("permission denied")) return 0;
+    throw err;
+  }
+}
 
 /**
  * ISOLAMENTO DE `demandas` E `demanda_conversas` ENTRE ORGANIZAÇÕES, por JWT.

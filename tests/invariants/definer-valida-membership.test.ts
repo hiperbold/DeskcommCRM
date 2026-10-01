@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { GOV_ORG, GOV_VIEWER, seedGov, sql } from "./gov-helpers";
+import { GOV_AGENT_A, GOV_ORG, GOV_VIEWER, seedGov, sql } from "./gov-helpers";
 
 /**
  * Migration 0149 — SECURITY DEFINER valida a ORGANIZAÇÃO de quem chamou.
@@ -121,9 +121,9 @@ describe("0149 — definer confere a organização de quem chamou", () => {
     expect(r.stderr).not.toContain(SEGREDO_VIZINHO);
   });
 
-  it("CONTROLE POSITIVO: viewer EMITE evento na PRÓPRIA organização", () => {
+  it("CONTROLE POSITIVO: agent EMITE evento na PRÓPRIA organização (D-129: o viewer não emite mais)", () => {
     const r = callAs(
-      GOV_VIEWER,
+      GOV_AGENT_A,
       `select public.emit_event('lead.moved', 'lead', null, '{}'::jsonb, '{}'::jsonb, '${GOV_ORG}');`,
     );
     expect(r.ok).toBe(true);

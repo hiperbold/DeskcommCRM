@@ -50,7 +50,7 @@ describe("0078 · estado de risco chega ao clone", () => {
     expect(
       sql(`select count(*) from pg_policies
             where tablename = 'crm_lead_risk_states'
-              and policyname = 'tenant_isolation_crm_lead_risk_states_all'`),
+              and policyname = 'tenant_isolation_crm_lead_risk_states_select'`),
     ).toBe("1");
   });
 

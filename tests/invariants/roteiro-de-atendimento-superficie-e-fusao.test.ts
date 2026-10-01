@@ -113,16 +113,20 @@ beforeAll(() => {
 });
 
 describe("superfície imutável e roteiro só com gatilho manual", () => {
-  it("controle positivo: o viewer ALCANÇA a linha (a policy é só de tenant) — muda o nome", () => {
+  it("controle positivo: o admin ALCANÇA a linha (policy de escrita é de manager, migration 0924) e o viewer não", () => {
+    // O viewer não escreve mais no roteiro (D-139): a RLS filtra a linha, o comando
+    // roda sem erro e sem afetar nada.
+    tentaComo(VIEWER, `update public.followup_flow_pointers set name = 'Retomada Viewer' where id = '${FOLLOWUP}'`);
+    expect(sql(`select name from public.followup_flow_pointers where id = '${FOLLOWUP}';`)).toBe("Retomada");
     expect(
-      tentaComo(VIEWER, `update public.followup_flow_pointers set name = 'Retomada 2' where id = '${FOLLOWUP}'`),
+      tentaComo(ADMIN, `update public.followup_flow_pointers set name = 'Retomada 2' where id = '${FOLLOWUP}'`),
     ).toBe("ok");
     expect(sql(`select name from public.followup_flow_pointers where id = '${FOLLOWUP}';`)).toBe("Retomada 2");
   });
 
-  it("⭐ o viewer NÃO leva um fluxo de follow-up a 'atendimento' (23514)", () => {
+  it("⭐ nem quem pode escrever (admin) leva um fluxo de follow-up a 'atendimento' (23514)", () => {
     expect(
-      tentaComo(VIEWER, `update public.followup_flow_pointers set surface = 'atendimento' where id = '${FOLLOWUP}'`),
+      tentaComo(ADMIN, `update public.followup_flow_pointers set surface = 'atendimento' where id = '${FOLLOWUP}'`),
     ).toBe("23514");
     expect(sql(`select surface from public.followup_flow_pointers where id = '${FOLLOWUP}';`)).toBe("followup");
   });

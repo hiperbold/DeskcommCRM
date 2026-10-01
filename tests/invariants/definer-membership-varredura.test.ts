@@ -104,18 +104,8 @@ const SEM_CONFERENCIA_PERMITIDO: readonly Excecao[] = [
       "difere da org da sessão é deliberado — fora da org sob suporte, esta restrição não " +
       "tem o que dizer.",
   },
-  {
-    fn: "fn_colegas_podem_mexer_na_agenda(p_org uuid)",
-    razao:
-      "Leitor `stable` de UM booleano de configuração da própria organização — " +
-      "não escreve e não devolve dado de negócio. É a fonte única do 'ausente = " +
-      "ligada' para os dois lados: o núcleo (`fn_appointment_change_core`) a " +
-      "consulta DEPOIS de conferir o pertencimento, e a rota " +
-      "`app/api/v1/agenda/agendamentos/_handler.ts` já resolveu a organização " +
-      "pelo guard da sessão (requireRole) antes de perguntar. Repetir a " +
-      "conferência aqui não fecharia porta: o que ela revela a mais é um bit — " +
-      "se aquela organização desligou a opção.",
-  },
+  // `fn_colegas_podem_mexer_na_agenda` saiu da lista na migration 0925 (D-111): passou a
+  // conferir `fn_user_org_ids()` quando há JWT, e a varredura a reconhece como protegida.
 ];
 
 interface Fn {
