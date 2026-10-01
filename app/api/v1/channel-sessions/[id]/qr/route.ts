@@ -37,8 +37,10 @@ export async function GET(
   if (supportDenied) return supportDenied;
   const { id } = await params;
 
-  // D-092: gate único de leitura (papel efetivo e MFA da sessão), não só a RLS.
-  const authz = await requireRole("viewer", { resource: "channel_sessions" });
+  // D-092: gate único (papel efetivo e MFA da sessão), não só a RLS. D-120: o QR religa o
+  // número da empresa em outro aparelho, então só admin (como `pairing-code`): um viewer
+  // lia o código com o próprio celular e virava dispositivo vinculado.
+  const authz = await requireRole("admin", { resource: "channel_sessions", allowPlatformAdmin: true });
   if (!authz.ok) return authz.response;
   const activeOrg = authz.org;
 

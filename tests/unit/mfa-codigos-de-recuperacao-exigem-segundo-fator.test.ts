@@ -67,6 +67,8 @@ function tabela(nome: string) {
     if (nome === "user_recovery_codes" && c.op === "select") {
       return { data: h.codigoValido ? { id: "c1", used_at: null } : null, error: null };
     }
+    // `update(...).select("id")` devolve as linhas que o update de fato marcou (D-126).
+    if (nome === "user_recovery_codes" && c.op === "update") return { data: [{ id: "c1" }], error: null };
     if (nome === "platform_admins") return { data: null, error: null };
     if (nome === "organizations") return { data: { settings: {} }, error: null };
     return { data: null, error: null };

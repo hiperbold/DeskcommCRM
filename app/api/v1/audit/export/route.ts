@@ -11,6 +11,7 @@ import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { auditQuerySchema } from "@/lib/schemas/audit";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { csvEscape } from "@/lib/audit/csv";
 
 export const dynamic = "force-dynamic";
 
@@ -25,13 +26,6 @@ const HEADER = [
   "actor_ip",
   "metadata",
 ];
-
-function csvEscape(v: unknown): string {
-  if (v === null || v === undefined) return "";
-  const s = typeof v === "string" ? v : JSON.stringify(v);
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
 
 export async function GET(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
@@ -98,6 +92,8 @@ export async function GET(req: NextRequest): Promise<Response> {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
+      // Trilha de auditoria de uma organização: nunca em cache de navegador ou de proxy (D-107).
+      "Cache-Control": "no-store, private",
       "Content-Disposition": `attachment; filename="audit-${new Date().toISOString().slice(0, 10)}.csv"`,
       "X-Request-Id": requestId,
     },

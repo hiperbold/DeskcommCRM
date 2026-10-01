@@ -461,7 +461,22 @@ export async function sendMessageHandler(
   };
   const c = conv as unknown as Joined;
 
-  if (c.contacts?.is_blocked) {
+  // Contato bloqueado: nenhum envio automático (agente, automação, token). A pessoa do
+  // atendimento ainda responde enquanto a conversa está aberta (janela de 24h, ou canal sem
+  // restrição de janela), para o "ok, cancelado" depois de um pedido que ela mesma fez (D-116).
+  // Fora da janela o bloqueio vale para todos, como antes.
+  const janelaDoBloqueado = estadoDaJanela(
+    c.channel_sessions?.provider ?? DEFAULT_CHANNEL_PROVIDER,
+    c.last_inbound_at,
+    new Date(),
+  );
+  const respostaHumanaEmJanela =
+    ctx.actor.type === "user" &&
+    (janelaDoBloqueado.tipo === "aberta" ||
+      (janelaDoBloqueado.tipo === "sem_restricao" &&
+        c.last_inbound_at !== null &&
+        Date.now() - Date.parse(c.last_inbound_at) < 24 * 60 * 60 * 1000));
+  if (c.contacts?.is_blocked && !respostaHumanaEmJanela) {
     throw new ApiError(
       403,
       "forbidden",

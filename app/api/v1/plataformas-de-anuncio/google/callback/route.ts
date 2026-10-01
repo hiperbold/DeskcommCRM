@@ -19,16 +19,31 @@
  *    (uso único) antes de saber que o retorno é legítimo.
  * 4. cifra ANTES do upsert: gravar o refresh token em claro por um instante
  *    é gravá-lo em claro.
+ *
+ * ─── QUEM VOLTOU É QUEM SAIU (D-119) ──────────────────────────────────────
+ * O `state` é assinado, mas quem o apresenta pode ser outra pessoa que recebeu a URL de
+ * consentimento de um admin: o refresh token dela iria para a organização dele. Por isso,
+ * depois de o `state` valer e ANTES de trocar o código, o cookie de vínculo posto pelo
+ * `connect` precisa casar com o nonce do `state` (o navegador de quem recebeu o link não o
+ * tem), e o nonce é queimado em `calendar_oauth_nonces` (uso único; o replay dentro dos dez
+ * minutos é recusado). A sessão do produto é `strict` e não viaja nesta volta, então o que se
+ * prova é o NAVEGADOR, não a pessoa (ver `lib/agenda/google/vinculo.ts`). A limpeza do
+ * cookie mora em `voltar`, que toda saída atravessa.
  */
 import { NextResponse, type NextRequest } from "next/server";
 
+import { NOME_DO_VINCULO, vinculoConfere } from "@/lib/agenda/google/vinculo";
 import { audit } from "@/lib/audit";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { configuracaoDoGoogleAds } from "@/lib/plataformas-de-anuncio/google/config";
-import { verificarEstado } from "@/lib/plataformas-de-anuncio/google/estado";
+import {
+  CAMINHO_DO_CALLBACK_DE_ADS,
+  verificarEstado,
+} from "@/lib/plataformas-de-anuncio/google/estado";
 import { trocarCodigoPorToken } from "@/lib/plataformas-de-anuncio/google/token";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cookieSecure } from "@/lib/supabase/cookie-secure";
 import { encryptWebhookSecret } from "@/lib/webhooks/secrets";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +51,16 @@ export const dynamic = "force-dynamic";
 function voltar(base: string, params: Record<string, string>): NextResponse {
   const url = new URL("/app/settings/conversoes", base || "http://localhost:3000");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  return NextResponse.redirect(url);
+  const resposta = NextResponse.redirect(url);
+  // O vínculo morre com o fluxo, sucesso ou erro: não sobra cookie vivo até o prazo.
+  resposta.cookies.set(NOME_DO_VINCULO, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: cookieSecure(),
+    path: CAMINHO_DO_CALLBACK_DE_ADS,
+    maxAge: 0,
+  });
+  return resposta;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -55,11 +79,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   });
   if (!estado) return voltar(base, { erro: "estado_invalido" });
 
+  // Quem voltou é o navegador que saiu: sem o cookie de vínculo, ou com o de outro fluxo,
+  // nada é gasto (nem o nonce, nem o código do Google).
+  if (!vinculoConfere(req.cookies.get(NOME_DO_VINCULO)?.value, estado.nonce, env.INTERNAL_SECRET)) {
+    return voltar(base, { erro: "estado_invalido" });
+  }
+
   const code = url.searchParams.get("code");
   if (!code) return voltar(base, { erro: "sem_codigo" });
 
   const app = configuracaoDoGoogleAds(estado.api);
   if (!app) return voltar(base, { erro: "google_ads_nao_configurado" });
+
+  // Queima do nonce ANTES de gastar o código (uso único do `code`): replay do mesmo `state`
+  // viola a chave primária. Falha de gravação também recusa, porque sem o guarda não há
+  // como garantir uso único.
+  const admin = createAdminClient();
+  const { error: erroDoNonce } = await admin.from("calendar_oauth_nonces").insert({
+    nonce: estado.nonce,
+    organization_id: estado.organizationId,
+    user_id: estado.userId,
+    expira_em: new Date(estado.expiraEmMs).toISOString(),
+  });
+  if (erroDoNonce) return voltar(base, { erro: "estado_invalido" });
 
   // 3. Troca — só depois do state confirmado.
   const leitura = await trocarCodigoPorToken(app, code, { agora: new Date() });
@@ -77,8 +119,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // funcionaria por uma hora e morreria calada.
     return voltar(base, { erro: "sem_refresh_token" });
   }
-
-  const admin = createAdminClient();
 
   // 4. Cifra antes do upsert.
   const cifrado = await encryptWebhookSecret(admin, leitura.token.refresh_token);

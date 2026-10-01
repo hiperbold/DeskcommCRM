@@ -35,7 +35,10 @@ export async function requestPasswordReset(
   }
 
   const hdrs = await headers();
-  const origin = hdrs.get("origin") ?? env.NEXT_PUBLIC_APP_URL;
+  // A base do link é a URL configurada da aplicação, nunca o `Origin` da requisição: a
+  // action é chamável de qualquer página, e com o cabeçalho do cliente o e-mail legítimo da
+  // vítima carregava um link para um domínio do atacante (D-126).
+  const origin = env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
   const requestId = hdrs.get("x-request-id");
   // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
   // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).

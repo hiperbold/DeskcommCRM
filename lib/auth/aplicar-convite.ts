@@ -58,11 +58,18 @@ export async function aplicarConvite(params: {
   // Convite REVOGADO na tela de Equipe. Sem linha, segue — ver o cabeçalho.
   const { data: linhaDoConvite } = await admin
     .from("team_invites")
-    .select("revoked_at")
+    .select("revoked_at, role")
     .eq("id", payload.invite_id)
     .eq("organization_id", payload.organization_id)
     .maybeSingle();
   if (linhaDoConvite?.revoked_at) return { ok: false, motivo: "invalid_or_expired" };
+  // Reenviar o convite com OUTRO papel renova a mesma linha (mesmo `invite_id`), mas o
+  // link antigo continua assinado e dentro da validade: sem esta conferência o link
+  // emitido como admin entraria como admin depois de a linha virar viewer (D-100). Vale
+  // o papel da linha, que é o do último envio; o token com papel diferente morre.
+  if (linhaDoConvite && linhaDoConvite.role !== payload.role) {
+    return { ok: false, motivo: "invalid_or_expired" };
+  }
   // Sem linha E sem `invited_by`: token que nenhum emissor atual produz (todos
   // gravam quem convidou). Era o formato do convite assinado pela action do
   // onboarding, que não conferia papel (D-089): um viewer emitia admin para uma

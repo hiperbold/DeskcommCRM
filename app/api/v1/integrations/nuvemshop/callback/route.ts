@@ -37,7 +37,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const state = verifyState(stateParam);
-  if (!state) {
+  // State sem ator (formato de 3 segmentos) nenhum emissor atual produz, e sem ator não há
+  // como queimar o nonce nem saber quem autorizou: recusado como inválido (D-119).
+  if (!state || !state.userId || !state.authSessionId) {
     await audit({
       action: "nuvemshop.oauth_failed",
       metadata: { reason: "invalid_state" },
@@ -56,6 +58,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (!(await supportCallbackWriteAllowed(state.orgId, state.userId, state.authSessionId))) return redirectTo("/app/integrations/nuvemshop?error=invalid_state");
 
+  // Uso único do state (D-119): o nonce é gravado em `calendar_oauth_nonces` ANTES de
+  // gastar o código, e o replay do mesmo state dentro dos dez minutos viola a chave
+  // primária. Falha de gravação também recusa: sem o guarda não há uso único.
+  const admin = createAdminClient();
+  const { error: erroDoNonce } = await admin.from("calendar_oauth_nonces").insert({
+    nonce: state.nonce,
+    organization_id: state.orgId,
+    user_id: state.userId,
+    expira_em: new Date(state.expMs).toISOString(),
+  });
+  if (erroDoNonce) {
+    await audit({
+      action: "nuvemshop.oauth_failed",
+      organizationId: state.orgId,
+      metadata: { reason: erroDoNonce.code === "23505" ? "state_reused" : "nonce_unavailable" },
+    });
+    return redirectTo(`/app/integrations/nuvemshop?error=invalid_state`);
+  }
+
   // Exchange code for access token.
   const tokenRes = await exchangeCodeForToken(code, cfg);
   if (!tokenRes.ok) {
@@ -68,7 +89,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const { accessToken, scope, storeId } = tokenRes;
-  const admin = createAdminClient();
 
   // Encrypt access token + webhook secret (we keep the client_secret in env, but
   // tenant_integrations.webhook_secret_encrypted is NOT NULL — we store the

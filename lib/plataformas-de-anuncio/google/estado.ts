@@ -22,6 +22,9 @@ import type { ApiDeConversaoGoogle } from "../types";
 
 export const VALIDADE_DO_ESTADO_MS = 10 * 60 * 1000;
 
+/** O cookie de vínculo só viaja para o callback: o caminho é parte do vínculo, não enfeite. */
+export const CAMINHO_DO_CALLBACK_DE_ADS = "/api/v1/plataformas-de-anuncio/google/callback";
+
 const TAMANHO_MINIMO_DO_SEGREDO = 16;
 
 export interface EstadoDaConexaoDeAds {

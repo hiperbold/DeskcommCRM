@@ -93,7 +93,8 @@ export async function signUp(
   }
 
   const hdrs = await headers();
-  const origin = hdrs.get("origin") ?? env.NEXT_PUBLIC_APP_URL;
+  // Sempre a URL configurada, nunca o `Origin` da requisição (D-126): ver requestPasswordReset.
+  const origin = env.NEXT_PUBLIC_APP_URL.replace(/\/$/, "");
   const requestId = hdrs.get("x-request-id");
   // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
   // `ipDoCliente` lê o salto confiável (ver `lib/http/ip-do-cliente.ts`).

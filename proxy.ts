@@ -10,11 +10,18 @@ import {
 
 const COOKIE_NAME = "sb-deskcomm-auth";
 
-export async function proxy(request: NextRequest) {
-  const response = NextResponse.next({ request: { headers: request.headers } });
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  // Inject X-Request-Id for downstream correlation (audit log, error wrappers).
-  const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID();
+export async function proxy(request: NextRequest) {
+  // Inject X-Request-Id for downstream correlation (audit log, error wrappers). O que o
+  // cliente manda só vale em formato UUID: o valor é gravado no audit de ~25 rotas e vai
+  // para o CSV da auditoria, e um texto livre ali era injeção de fórmula na planilha (D-107).
+  // O id sanitizado entra nos cabeçalhos da REQUISIÇÃO antes de o `next()` copiá-los: o que
+  // as rotas leem com `headers().get("x-request-id")` é este, nunca o do cliente.
+  const recebido = request.headers.get("x-request-id");
+  const requestId = recebido && UUID_RE.test(recebido) ? recebido : crypto.randomUUID();
+  request.headers.set("x-request-id", requestId);
+  const response = NextResponse.next({ request: { headers: request.headers } });
   response.headers.set("x-request-id", requestId);
 
   const { pathname, search } = request.nextUrl;

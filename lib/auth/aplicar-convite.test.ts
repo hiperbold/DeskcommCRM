@@ -54,7 +54,7 @@ const rpcDoAceite = vi.fn(async () => ({ data: { id: "m1", changed: true }, erro
  * Dublê do admin client. `select` devolve a linha de `team_invites` pedida;
  * `update` (o fechamento do convite) aceita e não diz nada.
  */
-function adminComConvite(linha: { revoked_at: string | null } | null) {
+function adminComConvite(linha: { revoked_at: string | null; role: string } | null) {
   const cadeiaDeUpdate = () => {
     const c: Record<string, unknown> = {};
     for (const m of ["eq", "is"]) c[m] = () => c;
@@ -76,7 +76,7 @@ function adminComConvite(linha: { revoked_at: string | null } | null) {
 }
 
 async function aplicar(
-  linha: { revoked_at: string | null } | null,
+  linha: { revoked_at: string | null; role: string } | null,
   payload: typeof PAYLOAD & { invited_by?: string } = PAYLOAD,
 ) {
   const { createAdminClient } = await import("@/lib/supabase/admin");
@@ -89,7 +89,7 @@ describe("aplicarConvite consulta a LINHA, não só o token", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("⭐ convite REVOGADO é recusado, e o vínculo nunca chega a ser tentado", async () => {
-    const r = await aplicar({ revoked_at: "2026-09-13T10:00:00Z" });
+    const r = await aplicar({ revoked_at: "2026-09-13T10:00:00Z", role: "manager" });
 
     expect(
       r,
@@ -102,7 +102,7 @@ describe("aplicarConvite consulta a LINHA, não só o token", () => {
   });
 
   it("convite VIVO passa — o par de vacuidade, senão o caso acima não prova nada", async () => {
-    const r = await aplicar({ revoked_at: null });
+    const r = await aplicar({ revoked_at: null, role: "manager" });
 
     expect(
       r.ok,
@@ -133,7 +133,7 @@ describe("aplicarConvite consulta a LINHA, não só o token", () => {
     // `fn_accept_team_invite` recusa quem foi revogado DEPOIS da emissão. O
     // código 42501 é recusa de política, e não pode virar 500.
     const { createAdminClient } = await import("@/lib/supabase/admin");
-    const admin = adminComConvite({ revoked_at: null });
+    const admin = adminComConvite({ revoked_at: null, role: "manager" });
     admin.rpc = vi.fn(async () => ({ data: null, error: { code: "42501" } })) as never;
     vi.mocked(createAdminClient).mockReturnValue(admin as never);
 
@@ -144,3 +144,23 @@ describe("aplicarConvite consulta a LINHA, não só o token", () => {
     });
   });
 });
+
+describe("D-100: reenviar o convite com outro papel mata o link do papel antigo", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("link assinado como admin com a linha já em viewer é recusado, e o vínculo nunca é tentado", async () => {
+    const r = await aplicar(
+      { revoked_at: null, role: "viewer" },
+      { ...PAYLOAD, role: "admin" as never },
+    );
+    expect(r).toEqual({ ok: false, motivo: "invalid_or_expired" });
+    expect(rpcDoAceite).not.toHaveBeenCalled();
+  });
+
+  it("o link do papel atual da linha segue valendo (par de vacuidade)", async () => {
+    const r = await aplicar({ revoked_at: null, role: "viewer" }, { ...PAYLOAD, role: "viewer" as never });
+    expect(r.ok).toBe(true);
+    expect(rpcDoAceite).toHaveBeenCalledTimes(1);
+  });
+});
+

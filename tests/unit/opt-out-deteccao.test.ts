@@ -382,8 +382,12 @@ describe("ehPedidoDeOptOut — pedido INEQUÍVOCO, o que autoriza bloquear", () 
     expect(ehPedidoDeOptOut("tem como parar a dor?")).toBe(false);
   });
 
-  it("cancelar sozinho sai; cancelar UMA COISA fica", () => {
-    expect(ehPedidoDeOptOut("cancelar")).toBe(true);
+  it("cancelar sozinho não bloqueia (é ambíguo, D-116); cancelar UMA COISA fica de fora", () => {
+    expect(ehPedidoDeOptOut("cancelar")).toBe(false);
+    expect(ehOptOutProvavel("Cancelar")).toBe(true);
+    expect(ehPedidoDeOptOut("remover")).toBe(false);
+    expect(ehOptOutProvavel("remover!")).toBe(true);
+    expect(ehPedidoDeOptOut("parar")).toBe(true);
     expect(ehPedidoDeOptOut("quero cancelar o pedido")).toBe(false);
   });
 });

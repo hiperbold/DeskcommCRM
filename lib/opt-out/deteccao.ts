@@ -60,9 +60,7 @@ export const PALAVRAS_DE_OPT_OUT: ReadonlySet<string> = new Set([
   "parar",
   "pare",
   "sair",
-  "cancelar",
   "descadastrar",
-  "remover",
   "unsubscribe",
   // ── espanhol ──────────────────────────────────────────────────────────────
   //
@@ -362,10 +360,21 @@ const FRASES_AMBIGUAS_DE_OPT_OUT: readonly RegExp[] = [
   /\bno\s+me\s+molest(?:e|en|es)\b/u,
 ];
 
+/**
+ * Palavra sozinha que PODE ser descadastro, mas costuma ser resposta a outra pergunta
+ * ("Cancelar" a uma pergunta sobre a consulta). Não bloqueia o contato (D-116): conta só como
+ * sinal ambíguo, que faz o agente parar e escalar ao humano, que confirma o bloqueio de verdade.
+ */
+export const PALAVRAS_AMBIGUAS_DE_OPT_OUT: ReadonlySet<string> = new Set(["cancelar", "remover"]);
+
 /** A mensagem inteira é a palavra-chave (ignorando pontuação e emoji de borda). */
 function ehPalavraIsolada(normalizado: string): boolean {
   const somenteLetras = normalizado.replace(/[^a-z]/gu, "");
   return PALAVRAS_DE_OPT_OUT.has(somenteLetras);
+}
+
+function ehPalavraAmbiguaIsolada(normalizado: string): boolean {
+  return PALAVRAS_AMBIGUAS_DE_OPT_OUT.has(normalizado.replace(/[^a-z]/gu, ""));
 }
 
 /**
@@ -389,5 +398,6 @@ export function ehOptOutProvavel(texto: string | null | undefined): boolean {
   if (!texto) return false;
   if (ehPedidoDeOptOut(texto)) return true;
   const normalizado = normalizarTexto(texto.trim());
+  if (ehPalavraAmbiguaIsolada(normalizado)) return true;
   return FRASES_AMBIGUAS_DE_OPT_OUT.some((re) => re.test(normalizado));
 }

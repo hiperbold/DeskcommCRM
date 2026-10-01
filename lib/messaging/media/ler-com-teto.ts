@@ -7,7 +7,7 @@
  * leitura para (e o fluxo é cancelado) no primeiro byte acima do teto.
  *
  * Vale para todo download cujo endereço vem de fora: foto de perfil
- * (`lib/channels/avatar-download.ts`) e mídia recebida (UAZAPI, Zernio).
+ * (`lib/channels/avatar-download.ts`) e mídia recebida (dos canais de mensagens).
  */
 
 /** Lê o corpo até `teto` bytes; `null` quando passa dele (e para de ler). */

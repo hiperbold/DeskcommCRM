@@ -154,6 +154,9 @@ export const AUTH_LIMITS = {
   // usado UMA vez na vida de uma conta — 3 por hora por identidade já é
   // folga para quem errou o nome duas vezes.
   org_recovery: { ip: 5, id: 3, windowSec: 3600 },
+  // Código de recuperação do segundo fator (D-126): ação anônima. O código tem 36^8
+  // combinações, mas sem teto o chute é grátis e cada tentativa varre o diretório de contas.
+  recovery_code: { ip: 10, id: 5, windowSec: 3600 },
 } satisfies Record<string, AuthRateLimits>;
 
 export const __LOGIN_IP_DEFAULT_PARA_TESTE = LOGIN_IP_DEFAULT;

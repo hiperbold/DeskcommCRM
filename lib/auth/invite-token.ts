@@ -7,15 +7,32 @@
  *   - sig  = base64url(HMAC_SHA256(secret, body))
  *
  * Secret resolution: INVITE_TOKEN_SECRET → INTERNAL_SECRET → "dev-fallback".
- * Production deployments MUST set one of the first two. Verification uses
- * `timingSafeEqual` to avoid timing oracles.
+ * Production deployments MUST set one of the first two, with 32+ characters:
+ * em produção um segredo ausente, vazio ou curto NÃO assina nem verifica (D-126).
+ * Verification uses `timingSafeEqual` to avoid timing oracles.
  */
 import { z } from "zod";
 import { interfaceSettingsSchema, type InterfaceSettings } from "@/lib/navigation/interface";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const SECRET = (): string =>
-  process.env.INVITE_TOKEN_SECRET ?? process.env.INTERNAL_SECRET ?? "dev-fallback";
+/** Tamanho mínimo do segredo de assinatura (hex de 16 bytes). */
+export const INVITE_SECRET_MIN_LENGTH = 32;
+
+/**
+ * `||` e não `??`: a variável presente e VAZIA (o `.env.example` entrega chaves vazias)
+ * cairia como chave vazia no HMAC, e qualquer um forjaria o convite (D-126). Fora de
+ * produção o fallback de desenvolvimento continua valendo.
+ */
+const SECRET = (): string => {
+  const segredo = process.env.INVITE_TOKEN_SECRET || process.env.INTERNAL_SECRET;
+  if (segredo && segredo.length >= INVITE_SECRET_MIN_LENGTH) return segredo;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      `invite_token_secret_ausente_ou_curto: INVITE_TOKEN_SECRET ou INTERNAL_SECRET precisa ter ${INVITE_SECRET_MIN_LENGTH}+ caracteres`,
+    );
+  }
+  return "dev-fallback";
+};
 
 export interface InvitePayload {
   interface_settings?: InterfaceSettings;
@@ -40,12 +57,20 @@ export function signInviteToken(payload: InvitePayload): string {
 }
 
 export function verifyInviteToken(token: string): InvitePayload | null {
+  // Sem segredo utilizável (produção mal configurada) nenhum token é válido, e a página de
+  // aceite mostra "convite inválido" em vez de quebrar.
+  let segredo: string;
+  try {
+    segredo = SECRET();
+  } catch {
+    return null;
+  }
   const parts = token.split(".");
   if (parts.length !== 2) return null;
   const [body, sig] = parts;
   if (!body || !sig) return null;
 
-  const expected = b64url(createHmac("sha256", SECRET()).update(body).digest());
+  const expected = b64url(createHmac("sha256", segredo).update(body).digest());
   if (sig.length !== expected.length) return null;
 
   try {
