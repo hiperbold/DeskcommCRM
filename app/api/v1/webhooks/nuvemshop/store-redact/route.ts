@@ -186,7 +186,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const webhookLogId: string | null = logInserted?.id ?? null;
 
-  // 6. Count active (non-anonymized) contacts da loja (source='nuvemshop') — stored
+  // 6. Count active (non-anonymized) contacts da loja (source='nuvemshop'): stored
   //    for audit and forwarded to the worker so it can validate cascade completeness.
   const { count: activeContactsCount, error: countErr } = await admin
     .from("contacts")

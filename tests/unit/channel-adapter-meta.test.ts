@@ -316,7 +316,7 @@ describe("adapter meta_cloud — mídia recebida", () => {
   });
 });
 
-describe("adapter meta_cloud — teto na mídia recebida (D-130)", () => {
+describe("adapter meta_cloud: teto na mídia recebida (D-130)", () => {
   function lookupOk() {
     return {
       ok: true,
