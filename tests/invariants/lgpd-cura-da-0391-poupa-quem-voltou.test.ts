@@ -49,7 +49,7 @@ beforeAll(() => {
       values ('${CONVERSA}', '${ORG}', '${CONTATO}', '${SESSAO}', 'open', 'sou a Carla');
     insert into public.messages
       (organization_id, conversation_id, channel_session_id, contact_id, type, direction, status, sent_via, body, media_storage_path)
-    values ('${ORG}', '${CONVERSA}', '${SESSAO}', '${CONTATO}', 'image', 'inbound', 'received', 'crm', 'sou a Carla', '${ORG}/antiga.jpg');
+    values ('${ORG}', '${CONVERSA}', '${SESSAO}', '${CONTATO}', 'image', 'inbound', 'received', 'crm', 'sou a Carla', '${ORG}/${CONVERSA}/antiga.jpg');
     update public.contacts set name = null, display_name = 'Contato Anonimizado #03911000',
            is_anonymized = true, anonymized_at = now(), updated_at = now()
      where id = '${CONTATO}';
@@ -59,7 +59,7 @@ beforeAll(() => {
     insert into public.messages
       (organization_id, conversation_id, channel_session_id, contact_id, type, direction, status, sent_via, body, media_storage_path, created_at)
     values ('${ORG}', '${CONVERSA}', '${SESSAO}', '${CONTATO}', 'image', 'inbound', 'received', 'crm',
-            'voltei, quero orçamento', '${ORG}/nova.jpg', now() + interval '1 minute');
+            'voltei, quero orçamento', '${ORG}/${CONVERSA}/nova.jpg', now() + interval '1 minute');
     update public.conversations set last_message_preview = 'voltei, quero orçamento',
            last_message_at = now() + interval '1 minute'
      where id = '${CONVERSA}';
@@ -75,9 +75,9 @@ describe("a cura da 0391 para em anonymized_at", () => {
     cura();
     cura();
     expect(
-      sql(`select count(*) from public.messages where conversation_id = '${CONVERSA}' and body = 'voltei, quero orçamento' and media_storage_path = '${ORG}/nova.jpg';`),
+      sql(`select count(*) from public.messages where conversation_id = '${CONVERSA}' and body = 'voltei, quero orçamento' and media_storage_path = '${ORG}/${CONVERSA}/nova.jpg';`),
     ).toBe("1");
     expect(sql(`select last_message_preview from public.conversations where id = '${CONVERSA}';`)).toBe("voltei, quero orçamento");
-    expect(sql(`select count(*) from public.storage_redaction_queue where object_path = '${ORG}/nova.jpg';`)).toBe("0");
+    expect(sql(`select count(*) from public.storage_redaction_queue where object_path = '${ORG}/${CONVERSA}/nova.jpg';`)).toBe("0");
   });
 });

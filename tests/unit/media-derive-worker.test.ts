@@ -191,6 +191,22 @@ describe("deriveMessageMedia", () => {
     expect(deriveMediaText).not.toHaveBeenCalled();
   });
 
+  it("⭐ caminho de outra organização gravado na linha NÃO é baixado (D-149), e a linha vira skipped", async () => {
+    messageRow.media_storage_path = "org2/conv9/msg9.ogg";
+    const r = await deriveMessageMedia(eventRow());
+    expect(r.status).toBe("skipped");
+    expect(downloadMock).not.toHaveBeenCalled();
+    expect(deriveMediaText).not.toHaveBeenCalled();
+    expect(updateEqMock).toHaveBeenCalledWith({ media_derived_status: "skipped" });
+  });
+
+  it("⭐ traversal que sai do prefixo da organização também não é baixado (D-149)", async () => {
+    messageRow.media_storage_path = "org1/conv1/../../org2/conv9/msg9.ogg";
+    const r = await deriveMessageMedia(eventRow());
+    expect(r.status).toBe("skipped");
+    expect(downloadMock).not.toHaveBeenCalled();
+  });
+
   it("tipo sem derivado (sticker) → skipped sem baixar", async () => {
     messageRow.type = "sticker";
     const r = await deriveMessageMedia(eventRow());

@@ -4597,6 +4597,7 @@ async function executarTurnoDoAgente(
         ? []
         : await buildNativeMediaParts({
             messages: effectiveContext.messages,
+            organizationId: tenantId,
             provider: agentConfig?.provider ?? 'anthropic',
             model: agentConfig?.model ?? '',
             multimodalInput: agentConfig?.multimodalInput ?? false,

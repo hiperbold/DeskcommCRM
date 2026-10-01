@@ -4934,6 +4934,10 @@ export const DICIONARIO: Traducoes = {
   "A conta está suspensa por falta de pagamento: importações e lançamentos financeiros ficam parados até a assinatura ser regularizada. Fale com o suporte.": {
     es: "La cuenta está suspendida por falta de pago: las importaciones y los asientos financieros quedan detenidos hasta que se regularice la suscripción. Habla con soporte.",
   },
+  // D-155: o 500 da abertura de conversa não devolve mais a mensagem crua do banco.
+  "Erro ao abrir a conversa.": {
+    es: "Error al abrir la conversación.",
+  },
   "Falta preencher alguma configuração desta ação — abra a automação e revise.": {
     es: "Falta completar algún ajuste de esta acción. Abre la automatización y revísala.",
   },

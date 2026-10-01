@@ -40,6 +40,7 @@ describe("buildNativeMediaParts — regressão da visão nativa", () => {
   it("imagem inbound + provider capaz + multimodal on → 1 file part com mediaType MIME e bytes Buffer", async () => {
     const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0]); // header JPEG
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openai",
       model: "gpt-4o",
@@ -55,6 +56,7 @@ describe("buildNativeMediaParts — regressão da visão nativa", () => {
 
   it("multimodalInput=false → [] (feature desligada no agente)", async () => {
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openai",
       model: "gpt-4o",
@@ -66,6 +68,7 @@ describe("buildNativeMediaParts — regressão da visão nativa", () => {
 
   it("provider sem capacidade de visão → [] (derivado textual cobre)", async () => {
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "desconhecido",
       model: "modelo-x",
@@ -77,6 +80,7 @@ describe("buildNativeMediaParts — regressão da visão nativa", () => {
 
   it("última inbound sem mídia → [] (não re-anexa mídia antiga do histórico)", async () => {
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound, { direction: "inbound", body: "e aí?", sent_at: "2026-07-23T10:05:00Z" }],
       provider: "openai",
       model: "gpt-4o",
@@ -88,6 +92,7 @@ describe("buildNativeMediaParts — regressão da visão nativa", () => {
 
   it("download do storage falha → [] sem lançar (turno nunca aborta pela mídia)", async () => {
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openai",
       model: "gpt-4o",
@@ -148,6 +153,7 @@ describe("buildNativeMediaParts — no roteador quem decide é o catálogo", () 
     // recusa — derrubando a resposta daquela mensagem para o cliente.
     const db = fakeAdminComCatalogo(bytes, false);
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openrouter",
       model: "openai/gpt-3.5-turbo",
@@ -163,6 +169,7 @@ describe("buildNativeMediaParts — no roteador quem decide é o catálogo", () 
     // visão morreria para quem usa OpenRouter com um modelo que enxerga.
     const db = fakeAdminComCatalogo(bytes, true);
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openrouter",
       model: "openai/gpt-4o",
@@ -175,6 +182,7 @@ describe("buildNativeMediaParts — no roteador quem decide é o catálogo", () 
   it("openrouter SEM linha no catálogo → cai no prefixo, que é melhor que nada", async () => {
     const db = fakeAdminComCatalogo(bytes, null);
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openrouter",
       model: "openai/gpt-4o",
@@ -193,6 +201,7 @@ describe("buildNativeMediaParts — no roteador quem decide é o catálogo", () 
       throw new Error("provedor direto NÃO pode consultar o catálogo");
     };
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openai",
       model: "gpt-4o",
@@ -208,6 +217,7 @@ describe("buildNativeMediaParts — no roteador quem decide é o catálogo", () 
       throw new Error("banco fora");
     };
     const parts = await buildNativeMediaParts({
+      organizationId: "org",
       messages: [imageInbound],
       provider: "openrouter",
       model: "openai/gpt-4o",

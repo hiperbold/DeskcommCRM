@@ -60,11 +60,20 @@ describe("sendMessageSchema", () => {
     expect(r.success).toBe(false);
   });
 
-  it("rejeita payload só com media_url", () => {
+  it("rejeita payload só com media_url (D-095: a URL livre não entra mais no envio)", () => {
     const r = sendMessageSchema.safeParse({
       conversation_id: "11111111-1111-4111-8111-111111111111",
       type: "image",
       media_url: "https://cdn.example.com/foo.jpg",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("aceita mídia pelo media_storage_path do upload", () => {
+    const r = sendMessageSchema.safeParse({
+      conversation_id: "11111111-1111-4111-8111-111111111111",
+      type: "image",
+      media_storage_path: "org/conv/out-1.jpg",
     });
     expect(r.success).toBe(true);
   });

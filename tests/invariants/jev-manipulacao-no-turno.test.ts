@@ -237,7 +237,7 @@ async function cenario(settings: unknown, camadaLigada = true, derivado?: string
       contato,
       ATAQUE,
       derivado === undefined ? "text" : "document",
-      derivado === undefined ? null : `${org}/laudo.pdf`,
+      derivado === undefined ? null : `${org}/${conversa}/laudo.pdf`,
       derivado ?? null,
       derivado === undefined ? null : "ready",
     ],

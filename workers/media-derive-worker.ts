@@ -16,6 +16,7 @@ import { createPool } from "@/lib/agent-engine/db/pool";
 import { env } from "@/lib/env";
 import type { EventRow, HandlerResult } from "@/lib/event-log/dispatcher";
 import { deriveMediaText, type DeriveDeps } from "@/lib/messaging/media/derive";
+import { isMediaPathOfOrg } from "@/lib/messaging/media/upload-validation";
 import { TIPOS_DERIVAVEIS } from "@/lib/messaging/media/derivable";
 import { deriveVideoText } from "@/lib/messaging/media/video-derive";
 import {
@@ -84,6 +85,10 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
   };
 
   if (!msg.media_storage_path) return markSkipped("no media");
+  // D-149: o caminho gravado na linha precisa ser da PRÓPRIA organização. Um membro
+  // grava `media_storage_path` pelo PostgREST; sem isto o worker baixaria o arquivo
+  // de outra organização e gravaria a transcrição nesta.
+  if (!isMediaPathOfOrg(msg.media_storage_path, msg.organization_id)) return markSkipped("storage path fora da organização");
   if (msg.media_derived_status === "ready") return { consumer_key, status: "skipped", detail: "already derived" };
   if (!TIPOS_DERIVAVEIS.has(msg.type)) return { consumer_key, status: "skipped", detail: `type ${msg.type}` };
   // Vídeo é opt-in (custo: ffmpeg + N chamadas de visão): só deriva se algum agente

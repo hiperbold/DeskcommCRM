@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
+import { lerMultipartComTeto } from "@/lib/api/multipart-com-teto";
 import { requireRole } from "@/lib/auth/require-role";
 import { extensaoDe, farejarTipo, pareceSvg } from "@/lib/branding/logo-arquivo";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -65,7 +66,12 @@ export async function POST(req: NextRequest): Promise<Response> {
   const { user, org } = authz;
   const t = (texto: string) => traduzir(texto, user.idioma);
 
-  const form = await req.formData().catch(() => null);
+  // Teto lido ANTES de o corpo entrar na memória (D-105).
+  const leitura = await lerMultipartComTeto(req, TAMANHO_MAX);
+  if (!leitura.ok && leitura.motivo === "grande") {
+    return fail("payload_too_large", t("A imagem precisa ter até 5 MB."), 413, { requestId });
+  }
+  const form = leitura.ok ? leitura.form : null;
   const file = form?.get("file");
   if (!(file instanceof File)) {
     return fail("validation_failed", t("Campo 'file' (multipart) obrigatório."), 422, { requestId });

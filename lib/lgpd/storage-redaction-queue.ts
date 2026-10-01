@@ -9,6 +9,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logger } from "@/lib/logger";
+import { isMediaPathOfOrg } from "@/lib/messaging/media/upload-validation";
 
 export interface DrainStats {
   attempted: number;
@@ -24,6 +25,14 @@ interface QueueRow {
   object_path: string;
   attempts: number;
 }
+
+/**
+ * Buckets que a fila pode esvaziar. Fechada de propósito (D-099): a linha tem
+ * `bucket` e `object_path` livres, e o cron apaga com a chave de serviço. Todo
+ * enfileirador legítimo (cascata de LGPD, poda de mídia, foto de perfil) mexe só em
+ * `whatsapp-media`, sob `{organization_id}/`.
+ */
+const BUCKETS_PERMITIDOS = new Set(["whatsapp-media"]);
 
 const MAX_ATTEMPTS = 3;
 const DEFAULT_BATCH = 50;
@@ -61,6 +70,29 @@ export async function drainStorageRedactionQueue(
   for (const row of queueRows) {
     stats.attempted++;
     const nextAttempts = row.attempts + 1;
+
+    // D-099: só apaga o que é da organização que pediu, num bucket da lista.
+    // A linha pode ter sido escrita por um membro (a tabela já foi gravável pelo
+    // PostgREST) apontando para a logo da instalação ou o arquivo de outra empresa.
+    // Terminal: não adianta tentar de novo.
+    if (!BUCKETS_PERMITIDOS.has(row.bucket) || !isMediaPathOfOrg(row.object_path, row.organization_id)) {
+      await admin
+        .from("storage_redaction_queue")
+        .update({
+          status: "skipped",
+          attempts: nextAttempts,
+          processed_at: new Date().toISOString(),
+          error_message: "fora_do_escopo_da_organizacao",
+        })
+        .eq("id", row.id);
+      stats.skipped++;
+      logger.warn("[lgpd-redact-worker] linha fora do escopo da organização, não apagada", {
+        queue_id: row.id,
+        organization_id: row.organization_id,
+        bucket: row.bucket,
+      });
+      continue;
+    }
 
     try {
       const { error: removeErr } = await admin.storage

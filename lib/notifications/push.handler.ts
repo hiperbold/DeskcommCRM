@@ -10,6 +10,37 @@ import { rotuloDoContato, SEM_NOME } from "@/lib/contacts/rotulo-do-contato";
 
 export const WEB_PUSH_INBOUND_KEY = "web-push-inbound.v1";
 
+/**
+ * Quem enxerga a conversa do push (D-097): o dono atual e o modo de visibilidade
+ * da organização, que são o que `fn_can_view_conversation` usa na RLS. O envio
+ * roda com a chave de serviço e a RLS não vale, então a regra é repetida em
+ * `papelPodeVerConversa`. Conversa que não se acha entra como "de ninguém" no
+ * modo mais fechado: só quem vê a empresa inteira recebe.
+ */
+async function visaoDaConversa(
+  organizationId: string,
+  conversationId: string | null,
+): Promise<{ assignedToUserId: string | null; modoDeVisibilidade: string | null }> {
+  const admin = createAdminClient();
+  const [conversa, org] = await Promise.all([
+    conversationId
+      ? admin
+          .from("conversations")
+          .select("assigned_to_user_id")
+          .eq("id", conversationId)
+          .eq("organization_id", organizationId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    admin.from("organizations").select("settings").eq("id", organizationId).maybeSingle(),
+  ]);
+  const achou = conversa.data !== null;
+  const settings = (org.data as { settings?: { visibility_mode?: string } | null } | null)?.settings;
+  return {
+    assignedToUserId: (conversa.data as { assigned_to_user_id?: string | null } | null)?.assigned_to_user_id ?? null,
+    modoDeVisibilidade: achou ? settings?.visibility_mode ?? null : "own",
+  };
+}
+
 async function handleInbound(row: EventRow): Promise<HandlerResult> {
   const conversationId =
     (typeof row.payload.conversation_id === "string" ? row.payload.conversation_id : null) ?? null;
@@ -64,7 +95,9 @@ async function handleInbound(row: EventRow): Promise<HandlerResult> {
     contactName,
     icon,
   });
-  const { sent } = await enviarPushDaOrg(row.organization_id, payload);
+  const { sent } = await enviarPushDaOrg(row.organization_id, payload, undefined, {
+    conversa: await visaoDaConversa(row.organization_id, conversationId),
+  });
   return { consumer_key: WEB_PUSH_INBOUND_KEY, status: "ok", detail: `sent:${sent}` };
 }
 

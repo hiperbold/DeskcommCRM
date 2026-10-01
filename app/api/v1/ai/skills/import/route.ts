@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
+import { lerMultipartComTeto } from "@/lib/api/multipart-com-teto";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -36,17 +37,18 @@ export async function POST(req: NextRequest): Promise<Response> {
   const { user: authUser, org } = authz;
 
   // Guard against large uploads before buffering into memory. `parseSkillPackage`'s
-  // ≤5MB check is authoritative (defense in depth); this header check cheaply rejects
-  // the obvious large-body case before `req.formData()` materializes it in RAM.
-  const MAX_UPLOAD_BYTES = 6 * 1024 * 1024; // 6MB: teto do envelope multipart (5MB skill + overhead)
-  const contentLength = Number(req.headers.get("content-length") ?? "0");
-  if (contentLength > MAX_UPLOAD_BYTES) {
+  // ≤5MB check is authoritative (defense in depth). O corpo é lido pelo fluxo com
+  // contador e abortado ao passar de 5MB mais o envelope multipart (D-105): o
+  // `content-length` sozinho some no envio em pedaços.
+  const leitura = await lerMultipartComTeto(req, 5 * 1024 * 1024);
+  if (!leitura.ok && leitura.motivo === "grande") {
     return fail("skill_upload_too_large", t("O arquivo enviado é grande demais (máx. 5 MB por skill)."), 413, { requestId });
   }
 
   let formData: FormData;
   try {
-    formData = await req.formData();
+    if (!leitura.ok) throw new Error("multipart inválido");
+    formData = leitura.form;
   } catch {
     return fail("invalid_request", t("Falha ao processar multipart/form-data."), 400, { requestId });
   }

@@ -22,6 +22,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { ok, fail } from "@/lib/api/wrappers";
+import { lerMultipartComTeto } from "@/lib/api/multipart-com-teto";
 import { requireRole } from "@/lib/auth/require-role";
 import { audit } from "@/lib/audit";
 import { encryptCpfSql, hashCpf } from "@/lib/contacts/cpf";
@@ -79,9 +80,21 @@ export async function POST(req: NextRequest): Promise<Response> {
   const doc = perfil.documento;
   const schemaDoPais = contactCreateSchemaDoPais(perfil);
 
+  // Teto lido ANTES de o corpo entrar na memória (D-105).
+  const leitura = await lerMultipartComTeto(req, CSV_MAX_BYTES);
+  if (!leitura.ok && leitura.motivo === "grande") {
+    return fail(
+      "validation_failed",
+      t("Arquivo maior que ") + `${Math.floor(CSV_MAX_BYTES / 1024 / 1024)}MB.`,
+      413,
+      { requestId },
+    );
+  }
+
   let file: File;
   try {
-    const form = await req.formData();
+    if (!leitura.ok) throw new Error("multipart inválido");
+    const form = leitura.form;
     const f = form.get("file");
     if (!(f instanceof File)) throw new Error("sem arquivo");
     file = f;

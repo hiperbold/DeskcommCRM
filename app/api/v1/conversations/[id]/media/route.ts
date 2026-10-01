@@ -8,7 +8,8 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
-import { resolveAuthDual } from "@/lib/api/auth-dual";
+import { lerMultipartComTeto } from "@/lib/api/multipart-com-teto";
+import { resolveAuthDual, tetoDeEscritaDoToken } from "@/lib/api/auth-dual";
 import { IDIOMA_PADRAO } from "@/lib/i18n/idiomas";
 import { extFromMime, MAX_MEDIA_BYTES } from "@/lib/messaging/media/types";
 import { validateOutboundMedia } from "@/lib/messaging/media/upload-validation";
@@ -46,6 +47,11 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   if (!authz.ok) return authz.response;
   // O ramo do token não carrega idioma de usuário: cai no padrão do produto.
   const t = (texto: string) => traduzir(texto, authz.idioma ?? IDIOMA_PADRAO);
+
+  // D-155: o que não é contado na rota não é contado em lugar nenhum. Sem o teto,
+  // uma chave em laço subia 50 MB por chamada no bucket, sem limite (órfãos e custo).
+  const tetoEstourado = await tetoDeEscritaDoToken(authz, "media", requestId);
+  if (tetoEstourado) return tetoEstourado;
   const activeOrg = { orgId: authz.organizationId };
   // O client vem de `authz`, não de `createClient()`: no ramo do token NÃO HÁ
   // cookie de sessão, então um client de sessão seria anônimo e a RLS devolveria
@@ -64,15 +70,15 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   if (convErr) return fail("internal_error", t("Erro ao validar conversa."), 500, { requestId });
   if (!conv) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
 
-  // Guard de DoS: rejeita pelo Content-Length declarado ANTES de bufferizar
-  // o corpo inteiro. 1MB de slack pro overhead de multipart; o check
-  // autoritativo continua o file.size pós-parse (Content-Length pode mentir).
-  const declared = Number(req.headers.get("content-length") ?? 0);
-  if (declared > MAX_MEDIA_BYTES + 1_048_576) {
+  // Guard de DoS (D-105): o corpo é lido pelo fluxo com contador e abortado ao
+  // passar do teto (50MB mais 1MB de envelope multipart), sem depender do
+  // Content-Length, que o envio em pedaços não traz. O check autoritativo
+  // continua o file.size pós-parse.
+  const leitura = await lerMultipartComTeto(req, MAX_MEDIA_BYTES);
+  if (!leitura.ok && leitura.motivo === "grande") {
     return fail("payload_too_large", t("Arquivo acima de 50MB."), 413, { requestId });
   }
-
-  const form = await req.formData().catch(() => null);
+  const form = leitura.ok ? leitura.form : null;
   const file = form?.get("file");
   if (!(file instanceof File)) {
     return fail("validation_failed", t("Campo 'file' (multipart) obrigatório."), 422, { requestId });

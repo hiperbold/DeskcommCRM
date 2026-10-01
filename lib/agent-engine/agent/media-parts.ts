@@ -9,6 +9,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LeadContextMessage } from "@/lib/agent-engine/edge/crm/get-lead-context";
 import { modelCapabilities } from "@/lib/agent-engine/edge/llm/capabilities";
 import { visaoEmVigor } from "@/lib/ai/pontos/capacidade-em-vigor";
+import { isMediaPathOfOrg } from "@/lib/messaging/media/upload-validation";
 
 
 /**
@@ -23,6 +24,12 @@ export type NativeMediaPart = { type: "file"; data: Buffer; mediaType: string };
 
 export interface BuildNativeMediaPartsArgs {
   messages: LeadContextMessage[];
+  /**
+   * A organização do turno. O arquivo só é baixado se o caminho gravado na linha
+   * for dela (D-149): um membro grava `media_storage_path` pelo PostgREST e, sem
+   * esta conferência, o agente leria o arquivo de outra organização.
+   */
+  organizationId: string;
   provider: string;
   model: string;
   multimodalInput: boolean;
@@ -84,6 +91,7 @@ export async function buildNativeMediaParts(args: BuildNativeMediaPartsArgs): Pr
   try {
     for (const m of candidates) {
       try {
+        if (!isMediaPathOfOrg(m.media_storage_path!, args.organizationId)) continue;
         const mime = (m.media_mime ?? "").split(";")[0]!.trim().toLowerCase();
         const isImage = m.type === "image" && mime.startsWith("image/") && caps.image;
         const isPdf = m.type === "document" && mime === "application/pdf" && caps.pdf;

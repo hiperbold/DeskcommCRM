@@ -19,7 +19,6 @@ const ENDPOINT_TAG = "mcp:crm_send_whatsapp_message";
 const inputShape = {
   conversation_id: z.string().uuid(),
   body: z.string().min(1).max(4096).optional(),
-  media_url: z.string().url().optional(),
   media_mime: z.string().optional(),
   type: z
     .enum(["text", "image", "audio", "document", "sticker", "video", "location", "contact"])
@@ -50,14 +49,12 @@ export const crmSendWhatsappMessage: McpToolDefinition<typeof inputShape> = {
       conversation_id: input.conversation_id,
       type: input.type,
       body: input.body,
-      media_url: input.media_url,
       media_mime: input.media_mime,
     });
 
     const requestHash = hashRequest({
       conversation_id: parsed.conversation_id,
       body: parsed.body,
-      media_url: parsed.media_url,
       type: parsed.type,
     });
 

@@ -76,6 +76,14 @@ const VAZIA: ResultadoDaRodada = {
 /** Teto de números atendidos por rodada — a rodada é de um minuto, não de um dia. */
 const NUMEROS_POR_RODADA = 10;
 
+/**
+ * Quanto tempo um destinatário pode ficar em `sending` antes de a rodada ir
+ * olhar o que aconteceu com a mensagem. O envio dura segundos; dez minutos só é
+ * alcançado por processo que caiu no meio.
+ */
+const ENVIANDO_PRESO_MINUTOS = 10;
+const RECONCILIADOS_POR_CAMPANHA = 50;
+
 interface CampanhaRow {
   id: string;
   organization_id: string;
@@ -111,6 +119,12 @@ export async function rodarUmaRodadaDeCampanha(
     .from("campaigns")
     .select(COLUNAS_DA_CAMPANHA)
     .eq("status", "running")
+    // Rodízio (D-098): quem esperou mais vai primeiro. Ordenar só por `started_at`
+    // deixava as 30 campanhas mais antigas, de qualquer organização, ocuparem a
+    // janela para sempre quando ficavam esperando (ritmo, teto, número sem vaga):
+    // da 31ª em diante ninguém era avaliado. `last_tick_at` é gravado ao fim da
+    // rodada em toda campanha da janela, então a janela anda.
+    .order("last_tick_at", { ascending: true, nullsFirst: true })
     .order("started_at", { ascending: true })
     .limit(NUMEROS_POR_RODADA * 3);
   if (idsSuspensas.length > 0) {
@@ -128,12 +142,21 @@ export async function rodarUmaRodadaDeCampanha(
   const numerosAtendidos = new Set<string>();
   const total: ResultadoDaRodada = { ...VAZIA, promovidas, detalhe: "" };
   const detalhes: string[] = [];
+  // Quem foi de fato avaliado nesta rodada, e quem foi pulado por dividir o número
+  // com uma campanha que já tinha a vez. Quem sobrou além do teto de números não é
+  // gravado: continua à frente da fila e é o primeiro da rodada seguinte.
+  const avaliadas: string[] = [];
+  const mesmoNumero: string[] = [];
 
   for (const campanha of emExecucao) {
-    // Um número, uma mensagem por rodada. A campanha mais antiga do número ganha
-    // a vez: sem isso, a última criada poderia monopolizar a fila para sempre.
-    if (numerosAtendidos.has(campanha.channel_session_id)) continue;
+    // Um número, uma mensagem por rodada. A campanha que esperou mais do número
+    // ganha a vez (o rodízio acima), e a seguinte do mesmo número vai na próxima.
+    if (numerosAtendidos.has(campanha.channel_session_id)) {
+      mesmoNumero.push(campanha.id);
+      continue;
+    }
     if (numerosAtendidos.size >= NUMEROS_POR_RODADA) break;
+    avaliadas.push(campanha.id);
 
     // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
     // dispara campanha. Achado 4 da revisão: em vez de só represar (a
@@ -195,8 +218,111 @@ export async function rodarUmaRodadaDeCampanha(
     }
   }
 
+  await marcarVezDaRodada(admin, avaliadas, mesmoNumero, agora);
+
   total.detalhe = detalhes.join(" ") || "nada_a_fazer";
   return total;
+}
+
+/**
+ * Grava o rodízio da janela que a rodada leu.
+ *
+ * Quem foi avaliado leva `agora` e vai para o fim da fila. Quem só foi pulado por
+ * dividir o número com uma campanha que já tinha a vez, e nunca tinha sido
+ * avaliado, leva um segundo a menos: sai do começo da fila, para uma campanha nova
+ * de outra organização entrar, sem passar à frente de quem foi atendido há mais
+ * tempo. Quem já tinha marca fica com a que tem, para a ordem de espera das
+ * campanhas de um mesmo número se manter (senão um empate decidido por
+ * `started_at` deixaria a mais nova sem vez para sempre). Quem ficou de fora do
+ * teto de números não é gravado: segue à frente da fila e é o primeiro da próxima
+ * rodada. Falha aqui nunca derruba a rodada: o pior efeito é a janela não andar
+ * neste tique.
+ */
+async function marcarVezDaRodada(
+  admin: SupabaseClient,
+  avaliadas: string[],
+  mesmoNumero: string[],
+  agora: Date,
+): Promise<void> {
+  if (mesmoNumero.length > 0) {
+    const { error } = await admin
+      .from("campaigns")
+      .update({ last_tick_at: new Date(agora.getTime() - 1000).toISOString() })
+      .in("id", mesmoNumero)
+      .is("last_tick_at", null);
+    if (error) logger.warn("[campanha] rodízio da janela não gravado", { motivo: error.message });
+  }
+  if (avaliadas.length > 0) {
+    const { error } = await admin
+      .from("campaigns")
+      .update({ last_tick_at: agora.toISOString() })
+      .in("id", avaliadas);
+    if (error) logger.warn("[campanha] rodízio da janela não gravado", { motivo: error.message });
+  }
+}
+
+/**
+ * Destinatário preso em `sending` (processo caiu entre a reserva e o desfecho):
+ * olha a mensagem que ele deixou e fecha o destinatário (D-098).
+ *
+ * Sem isto a campanha fica `running` para sempre, porque só conclui quem não tem
+ * mais ninguém `pending`, `queued` ou `sending`, e o destinatário preso ocupa o
+ * número e a janela do rodízio. O desfecho nunca reenvia: mensagem entregue ou
+ * enviada vira `sent`, `failed` vira `failed`, e a que ficou na fila sem desfecho
+ * ou nem chegou a existir vira `failed` com o código, para o operador decidir.
+ * Número queimado por mensagem duplicada não volta em dias.
+ */
+export async function reconciliarEnviando(
+  admin: SupabaseClient,
+  campanha: { id: string; organization_id: string },
+  agora: Date,
+): Promise<number> {
+  const limite = new Date(agora.getTime() - ENVIANDO_PRESO_MINUTOS * 60_000).toISOString();
+  const { data: presos } = await admin
+    .from("campaign_recipients")
+    .select("id")
+    .eq("campaign_id", campanha.id)
+    .eq("organization_id", campanha.organization_id)
+    .eq("status", "sending")
+    .lt("sending_at", limite)
+    .order("sending_at", { ascending: true })
+    .limit(RECONCILIADOS_POR_CAMPANHA);
+
+  let fechados = 0;
+  for (const preso of (presos ?? []) as { id: string }[]) {
+    const { data: mensagens } = await admin
+      .from("messages")
+      .select("id, status, sent_at")
+      .eq("organization_id", campanha.organization_id)
+      .eq("metadata->>campaign_recipient_id", preso.id)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const mensagem = ((mensagens ?? []) as { id: string; status: string; sent_at: string | null }[])[0];
+
+    const saiu = !!mensagem && ["sent", "delivered", "read"].includes(mensagem.status);
+    const desfecho = saiu
+      ? { status: "sent", sent_at: mensagem!.sent_at ?? agora.toISOString(), message_id: mensagem!.id }
+      : {
+          status: "failed",
+          last_error_code:
+            mensagem?.status === "failed" ? "send_failed" : mensagem ? "send_indeterminado" : "send_perdido",
+          ...(mensagem ? { message_id: mensagem.id } : {}),
+        };
+    const { data: fechado } = await admin
+      .from("campaign_recipients")
+      .update(desfecho)
+      .eq("id", preso.id)
+      .eq("status", "sending")
+      .select("id");
+    fechados += (fechado ?? []).length;
+  }
+  if (fechados > 0) {
+    logger.info("[campanha] destinatários presos em sending reconciliados", {
+      campanha: campanha.id,
+      fechados,
+    });
+  }
+  return fechados;
 }
 
 /** `scheduled` cuja hora chegou vira `running`. */
@@ -256,6 +382,10 @@ async function rodarUmaCampanha(
   const alvo = (fila ?? [])[0] as DestinatarioRow | undefined;
 
   if (!alvo) {
+    // Antes de contar quem está em voo, fecha quem ficou preso em `sending` há
+    // tempo demais: senão a campanha nunca conclui (D-098).
+    await reconciliarEnviando(admin, campanha, agora);
+
     // Nada pendente AGORA não é o mesmo que nada pendente: pode haver gente
     // esperando `next_attempt_at`. Só conclui quem não tem mais nenhum em voo.
     const { count } = await admin

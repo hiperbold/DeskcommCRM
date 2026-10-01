@@ -14,6 +14,7 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { logger } from "@/lib/logger";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
@@ -103,6 +104,24 @@ export async function POST(
       org_id: activeOrg.orgId,
       target_user_id: targetUserId,
       message: chavesErr.message,
+    });
+  }
+  // As inscrições de push dele nesta organização também saem (D-097): a inscrição
+  // é só um endereço de entrega, e sem apagá-la o aparelho dele seguia recebendo
+  // nome e prévia das mensagens da empresa na tela de bloqueio. O envio também
+  // confere o vínculo ativo; esta limpeza evita deixar o endereço guardado. A
+  // sessão do admin não alcança a linha de outro usuário (RLS "só a própria"),
+  // por isso o cliente de serviço. Falha não desfaz a revogação.
+  const { error: pushErr } = await createAdminClient()
+    .from("push_subscriptions")
+    .delete()
+    .eq("organization_id", activeOrg.orgId)
+    .eq("user_id", targetUserId);
+  if (pushErr) {
+    logger.error("[team.revoke] apagar inscrições de push do membro falhou", {
+      org_id: activeOrg.orgId,
+      target_user_id: targetUserId,
+      message: pushErr.message,
     });
   }
   for (const chave of chavesRevogadas ?? []) {

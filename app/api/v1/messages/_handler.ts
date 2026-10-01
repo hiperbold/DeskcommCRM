@@ -332,12 +332,11 @@ export async function listMessagesHandler(
 
 function previewFrom(input: {
   body?: string;
-  media_url?: string;
   media_storage_path?: string;
   type?: string;
 }): string {
   if (input.body) return input.body.slice(0, 280);
-  if (input.media_url || input.media_storage_path) return `[${input.type ?? "media"}]`;
+  if (input.media_storage_path) return `[${input.type ?? "media"}]`;
   return "";
 }
 
@@ -695,7 +694,6 @@ export async function sendMessageHandler(
     direction: "outbound" as const,
     status: "queued",
     body: input.body ?? null,
-    media_url: input.media_url ?? null,
     media_mime: input.media_mime ?? null,
     media_storage_path: input.media_storage_path ?? null,
     media_size_bytes: input.media_size_bytes ?? null,
@@ -1115,7 +1113,6 @@ export async function sendMessageHandler(
     last_message_at: now,
     last_message_preview: previewFrom({
       body: input.body,
-      media_url: input.media_url,
       media_storage_path: input.media_storage_path,
       type: input.type,
     }),

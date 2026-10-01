@@ -56,7 +56,6 @@ const inputShape = {
     .describe("Usado para achar um contato existente pelas grafias do número, ou criar um novo se nenhum bater."),
   name: z.string().trim().min(1).max(200).optional().describe("Nome do contato, usado só se um novo cadastro for criado."),
   body: z.string().min(1).max(4096).optional(),
-  media_url: z.string().url().optional(),
   media_mime: z.string().optional(),
   type: z
     .enum(["text", "image", "audio", "document", "sticker", "video", "location", "contact"])
@@ -97,7 +96,6 @@ export const crmStartConversationAndSend: McpToolDefinition<typeof inputShape> =
       contact_id: input.contact_id,
       phone_number: input.phone_number,
       body: input.body,
-      media_url: input.media_url,
       type: input.type,
     });
 
@@ -140,7 +138,6 @@ export const crmStartConversationAndSend: McpToolDefinition<typeof inputShape> =
       conversation_id: opened.conversation_id,
       type: input.type,
       body: input.body,
-      media_url: input.media_url,
       media_mime: input.media_mime,
     });
 

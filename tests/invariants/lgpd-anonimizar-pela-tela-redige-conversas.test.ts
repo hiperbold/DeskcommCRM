@@ -62,7 +62,7 @@ beforeAll(() => {
       (organization_id, conversation_id, channel_session_id, contact_id, type, direction, status, sent_via, body, media_storage_path)
     values
       ('${ORG}', '${CONVERSA[c]}', '${SESSAO}', '${c}', 'text', 'inbound', 'received', 'crm', 'sou ${NOME}, cpf ${CPF}', null),
-      ('${ORG}', '${CONVERSA[c]}', '${SESSAO}', '${c}', 'image', 'inbound', 'received', 'crm', 'foto do documento', '${ORG}/doc-${i}.jpg');
+      ('${ORG}', '${CONVERSA[c]}', '${SESSAO}', '${c}', 'image', 'inbound', 'received', 'crm', 'foto do documento', '${ORG}/${CONVERSA[c]}/doc-${i}.jpg');
     insert into public.lead_checkpoints (organization_id, contact_id, rolling_summary, commitments, next_action)
       values ('${ORG}', '${c}', '${NOME} informou o CPF ${CPF}', '["ligar para ${NOME}"]'::jsonb, 'confirmar com ${NOME}');`,
     )
@@ -99,7 +99,7 @@ function fila(contato: string): string {
   const i = [VIA_TELA, VIA_PEDIDO, VIZINHO].indexOf(contato);
   return sql(`
     select count(*) from public.storage_redaction_queue
-     where bucket = 'whatsapp-media' and object_path = '${ORG}/doc-${i}.jpg' and status = 'pending';
+     where bucket = 'whatsapp-media' and object_path = '${ORG}/${CONVERSA[contato]}/doc-${i}.jpg' and status = 'pending';
   `);
 }
 

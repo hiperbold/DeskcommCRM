@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { ok, fail } from "@/lib/api/wrappers";
+import { lerMultipartComTeto } from "@/lib/api/multipart-com-teto";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -58,9 +59,17 @@ export async function POST(req: NextRequest): Promise<Response> {
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
   const { user: authUser, org: activeOrg } = authz;
 
+  // Teto lido ANTES de o corpo entrar na memória (D-105): a extração do PDF e o
+  // parse do multipart rodam na requisição, e o app atende todas as organizações.
+  const leitura = await lerMultipartComTeto(req, TAMANHO_MAXIMO);
+  if (!leitura.ok && leitura.motivo === "grande") {
+    return fail("payload_too_large", "O arquivo passa de 20 MB.", 413, { requestId });
+  }
+
   let formData: FormData;
   try {
-    formData = await req.formData();
+    if (!leitura.ok) throw new Error("multipart inválido");
+    formData = leitura.form;
   } catch {
     return fail("invalid_request", t("Falha ao processar o envio do arquivo."), 400, { requestId });
   }

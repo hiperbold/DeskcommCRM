@@ -13,12 +13,20 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { vapidPronto, vapidPublica } from "@/lib/notifications/vapid";
+import { endpointDePushPermitido } from "@/lib/notifications/endpoint-de-push";
 import { traduzir } from "@/lib/i18n/dicionario";
 
 export const dynamic = "force-dynamic";
 
+// O servidor faz POST para este endereço a cada mensagem (D-097): só https nos
+// serviços de push dos navegadores, não qualquer URL.
+const endpointSchema = z
+  .string()
+  .url()
+  .refine(endpointDePushPermitido, "endpoint fora dos serviços de push conhecidos");
+
 const subSchema = z.object({
-  endpoint: z.string().url(),
+  endpoint: endpointSchema,
   keys: z.object({
     p256dh: z.string().min(1),
     auth: z.string().min(1),

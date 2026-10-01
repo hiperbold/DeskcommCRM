@@ -804,6 +804,19 @@ type CategoriaDeHost =
 type EntradaDeHost = { categoria: CategoriaDeHost; motivo: string };
 
 const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
+  // ── Web Push (D-097): a lista fechada de serviços de push que o servidor aceita chamar ──
+  "fcm.googleapis.com": {
+    categoria: "FORNECEDOR",
+    motivo: "serviço de push do Chrome, Edge e derivados (FCM). A inscrição guarda o endereço que o NAVEGADOR recebeu dele e o envio faz POST para ele. `lib/notifications/endpoint-de-push.ts` só aceita estes serviços (a regra existe para recusar endereço interno, SSRF).",
+  },
+  "updates.push.services.mozilla.com": {
+    categoria: "FORNECEDOR",
+    motivo: "serviço de push do Firefox (Mozilla autopush). Mesma razão de `fcm.googleapis.com`: destino do envio de Web Push, na lista fechada de `lib/notifications/endpoint-de-push.ts`.",
+  },
+  "web.push.apple.com": {
+    categoria: "FORNECEDOR",
+    motivo: "serviço de push do Safari (APNs web). Mesma razão de `fcm.googleapis.com`: destino do envio de Web Push, na lista fechada de `lib/notifications/endpoint-de-push.ts`.",
+  },
   "datamanager.googleapis.com": {
     categoria: "FORNECEDOR",
     motivo: "endpoint oficial da Google Data Manager API: recebe conversões e consulta o processamento na conta autorizada pela própria organização. O destino pertence ao fornecedor e não à instalação do CRM.",

@@ -72,7 +72,9 @@ export const sendMessageSchema = z
     conversation_id: z.string().uuid(),
     type: messageTypeSchema.default("text"),
     body: z.string().min(1).max(4096).optional(),
-    media_url: z.string().url().optional(),
+    // Sem `media_url`: o envio de mídia é só por `media_storage_path` (arquivo que
+    // subiu pelo NOSSO upload). A URL livre ia para a linha e a rota de mídia a
+    // baixava e servia com o tipo de origem, na origem do CRM (D-095).
     media_storage_path: z.string().min(1).max(500).optional(),
     media_mime: z.string().optional(),
     media_size_bytes: z.number().int().positive().optional(),
@@ -120,11 +122,11 @@ export const sendMessageSchema = z
         }
         return false;
       }
-      return !!d.body || !!d.media_url || !!d.media_storage_path;
+      return !!d.body || !!d.media_storage_path;
     },
     {
       message:
-        "body, media_url, media_storage_path, metadata.shared_contact_id or metadata.shared_contact.phone_number required",
+        "body, media_storage_path, metadata.shared_contact_id or metadata.shared_contact.phone_number required",
       path: ["body"],
     },
   );

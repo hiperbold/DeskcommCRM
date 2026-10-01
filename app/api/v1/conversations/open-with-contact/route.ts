@@ -8,7 +8,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
-import { resolveAuthDual } from "@/lib/api/auth-dual";
+import { resolveAuthDual, tetoDeEscritaDoToken } from "@/lib/api/auth-dual";
 import { ApiError } from "@/lib/api/types";
 import { ok, fail } from "@/lib/api/wrappers";
 import { openSharedContactConversation } from "@/lib/messaging/open-shared-contact-conversation";
@@ -38,6 +38,11 @@ export async function POST(req: NextRequest): Promise<Response> {
   // O ramo do token não carrega idioma de usuário: cai no padrão do produto.
   const t = (texto: string) => traduzir(texto, authz.idioma ?? IDIOMA_PADRAO);
 
+  // D-155: a abertura cria contato e conversa por telefone; sem teto, uma chave em
+  // laço cria contatos sem limite. A sessão não passa por aqui (devolve null).
+  const tetoEstourado = await tetoDeEscritaDoToken(authz, "open", requestId);
+  if (tetoEstourado) return tetoEstourado;
+
   let input;
   try {
     input = await validateRequest(openConversationWithContactSchema, req);
@@ -66,6 +71,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (msg === "invalid_phone") {
       return fail("validation_error", t("Telefone inválido."), 422, { requestId });
     }
-    return fail("internal_error", msg, 500, { requestId });
+    // O detalhe do banco não volta para quem chamou (D-155, vizinho): fica no log.
+    console.error("[conversations.open-with-contact] falhou", { requestId, detalhe: msg });
+    return fail("internal_error", t("Erro ao abrir a conversa."), 500, { requestId });
   }
 }

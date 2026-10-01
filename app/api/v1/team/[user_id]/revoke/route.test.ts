@@ -8,6 +8,26 @@ import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+// D-097: as inscrições de push do membro saem pelo cliente de serviço (a RLS só
+// deixa cada um mexer na própria linha).
+const pushApagado: Array<[string, unknown]> = [];
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({
+    from: (tabela: string) => {
+      const cadeia: Record<string, unknown> = {};
+      cadeia.delete = () => {
+        pushApagado.push(["tabela", tabela]);
+        return cadeia;
+      };
+      cadeia.eq = (coluna: string, valor: unknown) => {
+        pushApagado.push([coluna, valor]);
+        return cadeia;
+      };
+      cadeia.then = (ok: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(ok);
+      return cadeia;
+    },
+  }),
+}));
 vi.mock("@/lib/impersonate/support", () => ({
   requireSupportWrite: vi.fn(async () => null),
 }));
@@ -105,6 +125,7 @@ const ctx = { params: Promise.resolve({ user_id: ALVO }) };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pushApagado.length = 0;
   vi.mocked(requireRole).mockResolvedValue({
     ok: true,
     user: { id: ADMIN, idioma: "pt-BR" },
@@ -129,6 +150,21 @@ describe("revogar membro", () => {
         actorUserId: ADMIN,
         resourceId: "m1",
       }),
+    );
+  });
+
+  it("apaga as inscrições de push do membro nesta organização (D-097)", async () => {
+    mockBanco({ membro: { id: "m1", user_id: ALVO, role: "agent", revoked_at: null } });
+    const { POST } = await import("./route");
+
+    const res = await POST(pedido(), ctx);
+    expect(res.status).toBe(200);
+    expect(pushApagado).toEqual(
+      expect.arrayContaining([
+        ["tabela", "push_subscriptions"],
+        ["organization_id", ORG],
+        ["user_id", ALVO],
+      ]),
     );
   });
 

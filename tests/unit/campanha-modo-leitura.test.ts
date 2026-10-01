@@ -53,6 +53,7 @@ function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
       or: () => b,
       order: () => b,
       limit: () => b,
+      in: () => b,
       not: () => b,
       maybeSingle: async () => {
         if (tabela === "billing_settings") return { data: { modo: opts.modo }, error: null };

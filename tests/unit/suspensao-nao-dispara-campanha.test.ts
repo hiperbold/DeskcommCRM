@@ -43,6 +43,7 @@ function fakeAdmin(opts: { suspensas: string[]; campanhas: unknown[] }) {
       or: () => b,
       order: () => b,
       limit: () => b,
+      in: () => b,
       not: (coluna: string, op: string, valor: string) => {
         estado.not = [coluna, op, valor];
         return b;

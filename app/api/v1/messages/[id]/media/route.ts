@@ -12,6 +12,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { fail } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { cabecalhosDeEntregaSegura, mimeInlineSeguro } from "@/lib/messaging/media/entrega-segura";
+import { isMediaPathOfOrg } from "@/lib/messaging/media/upload-validation";
 import {
   CHANNEL_SESSION_REF_COLUMNS,
   DEFAULT_CHANNEL_PROVIDER,
@@ -57,11 +59,28 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     return fail("not_found", t("Mensagem sem mídia."), 404, { requestId });
   }
 
-  if (msg.media_storage_path) {
+  // D-149: o caminho gravado na linha só é assinado se for da PRÓPRIA organização
+  // e normalizado. Um membro grava `media_storage_path` pelo PostgREST, e sem esta
+  // conferência a rota assinava o arquivo de outra organização. Conferência pela
+  // organização e não pela conversa: o merge de conversas de 0027 moveu mensagens
+  // cujo arquivo ficou no prefixo da conversa antiga. Fora do prefixo = ausente.
+  const caminhoProprio =
+    !!msg.media_storage_path && isMediaPathOfOrg(msg.media_storage_path, activeOrg.orgId);
+  if (msg.media_storage_path && !caminhoProprio) {
+    console.error("[messages.media] media_storage_path fora do prefixo da organização", messageId);
+  }
+
+  if (msg.media_storage_path && caminhoProprio) {
     const admin = createAdminClient();
+    // D-095: fora dos tipos que o navegador não executa, a URL assinada força o
+    // download (Content-Disposition: attachment), em vez de abrir inline.
     const { data: signed, error: signErr } = await admin.storage
       .from("whatsapp-media")
-      .createSignedUrl(msg.media_storage_path, SIGNED_URL_TTL_S);
+      .createSignedUrl(
+        msg.media_storage_path,
+        SIGNED_URL_TTL_S,
+        mimeInlineSeguro(msg.media_mime) ? undefined : { download: true },
+      );
     if (!signErr && signed?.signedUrl) {
       const response = NextResponse.redirect(signed.signedUrl, 302);
       response.headers.set("X-Request-Id", requestId);
@@ -111,7 +130,9 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
       return new Response(new Uint8Array(media.buffer), {
         status: 200,
         headers: {
-          "Content-Type": media.mime,
+          // D-095: o tipo vem de fora (a origem do arquivo); só o que o navegador
+          // não executa vai inline, o resto sai como download dentro de sandbox.
+          ...cabecalhosDeEntregaSegura(media.mime),
           "Cache-Control": "private, max-age=60",
           "X-Request-Id": requestId,
         },
