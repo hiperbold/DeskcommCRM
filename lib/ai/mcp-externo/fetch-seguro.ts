@@ -90,7 +90,7 @@ type RequisicaoHttps = typeof requisicaoHttps;
 /**
  * `lookup` que só devolve os endereços JÁ validados: o `https.request` nunca
  * chega a resolver o nome. Responde nos dois formatos que o Node pede (um
- * endereço, ou a lista, quando `all` está ligado — o caso do auto-select de
+ * endereço, ou a lista, quando `all` está ligado: o caso do auto-select de
  * família).
  */
 export function lookupFixo(enderecos: readonly string[]) {
