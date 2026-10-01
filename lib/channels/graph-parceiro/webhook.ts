@@ -23,14 +23,29 @@ export const PREFIXO_DO_SEGREDO = "whsec_";
 export const HEADER_ASSINATURA = "x-datafy-signature-256";
 export const HEADER_TIMESTAMP = "x-datafy-timestamp";
 
+/**
+ * Quanto o carimbo assinado pode estar longe do relógio daqui. Sem janela, o corpo
+ * assinado de uma entrega valia para sempre: quem o capturasse (log de proxy, print)
+ * o reenviava depois (D-130). Cinco minutos cobrem reentrega e deriva de relógio.
+ */
+export const JANELA_DO_CARIMBO_MS = 5 * 60 * 1000;
+
 /** A assinatura confere? `false` para qualquer peça ausente ou malformada. */
 export function verifyGraphPartnerSignature(
   rawBody: string,
   signatureHeader: string | null,
   timestampHeader: string | null,
   secret: string | null,
+  agoraMs: number = Date.now(),
 ): boolean {
   if (!signatureHeader || !timestampHeader || !secret?.startsWith(PREFIXO_DO_SEGREDO)) return false;
+
+  // O carimbo é época em segundos (aceita milissegundos). Não numérico ou fora da
+  // janela recusa antes de gastar o HMAC.
+  const carimbo = Number(timestampHeader);
+  if (!Number.isFinite(carimbo) || carimbo <= 0) return false;
+  const carimboMs = carimbo > 1e12 ? carimbo : carimbo * 1000;
+  if (Math.abs(agoraMs - carimboMs) > JANELA_DO_CARIMBO_MS) return false;
 
   const [algo, hex] = signatureHeader.split("=");
   if (algo !== "sha256" || !hex) return false;

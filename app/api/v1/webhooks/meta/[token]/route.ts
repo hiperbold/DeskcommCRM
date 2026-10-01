@@ -232,11 +232,36 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
       // O evento inteiro vira colunas, não só `status`: quando a Meta ACEITA o
       // template e reprova a entrega depois, o motivo só existe aqui. Ver
       // `lib/channels/meta/status-update.ts`.
+      //
+      // `failed` é final (D-130): um `sent`/`delivered` atrasado não pode devolver a
+      // linha a `sent` e esconder a falha. E o carimbo de entrega e de leitura vale
+      // o PRIMEIRO: a Meta reentrega o mesmo status, e reescrever `delivered_at`
+      // andava a hora para frente a cada reentrega.
+      const { delivered_at, read_at, ...atualizacao } = statusUpdate(e, now);
       await admin
         .from("messages")
-        .update(statusUpdate(e, now))
+        .update(atualizacao)
         .eq("organization_id", session.organizationId)
-        .eq("external_id", e.externalId);
+        .eq("external_id", e.externalId)
+        .neq("status", "failed");
+      if (delivered_at) {
+        await admin
+          .from("messages")
+          .update({ delivered_at })
+          .eq("organization_id", session.organizationId)
+          .eq("external_id", e.externalId)
+          .neq("status", "failed")
+          .is("delivered_at", null);
+      }
+      if (read_at) {
+        await admin
+          .from("messages")
+          .update({ read_at })
+          .eq("organization_id", session.organizationId)
+          .eq("external_id", e.externalId)
+          .neq("status", "failed")
+          .is("read_at", null);
+      }
     }
   }
 

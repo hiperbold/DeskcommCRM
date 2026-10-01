@@ -17,6 +17,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { carregarComportamentoDaInstalacao } from "@/lib/instalacao/comportamento-servidor";
+import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { conferirContratoWaha, lerRoteamentoWaha } from "@/lib/waha/envelope";
@@ -28,6 +29,12 @@ export const runtime = "nodejs";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const requestId = randomUUID();
+
+  // Rota global fechada por padrão (D-108): sem token, a única defesa era o Caddy do
+  // kit, e a recusa de "sessão não registrada" servia de oráculo de nomes de sessão.
+  if (env.WAHA_GLOBAL_WEBHOOK_ENABLED !== "true") {
+    return fail("gone", "webhook global do WAHA desativado", 410, { requestId });
+  }
 
   const rawBody = await req.text();
   // ─── O contrato do fio, em DOIS momentos ─────────────────────────────────
@@ -94,7 +101,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .select(
         "id, organization_id, waha_session_name, webhook_secret_encrypted, status, is_warmup_complete, warmup_started_at",
       )
-      .eq("waha_session_name", sessionName);
+      .eq("waha_session_name", sessionName)
+      .eq("provider", "waha");
   const { data: session, error: sessErr } = await queryTolerantToMissingArchived(
     () => base().is(ARCHIVED_AT, null).maybeSingle(),
     () => base().maybeSingle(),

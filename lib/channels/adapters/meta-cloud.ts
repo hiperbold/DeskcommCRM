@@ -22,6 +22,8 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { metaContactsPayload } from "@/lib/channels/meta/contact-card";
 import { graphBaseUrl } from "@/lib/channels/meta/graph-base";
+import { lerComTeto } from "@/lib/messaging/media/ler-com-teto";
+import { MAX_MEDIA_BYTES, MediaTooLargeError } from "@/lib/messaging/media/types";
 import { resolveMetaCreds } from "../meta/credentials";
 import type {
   ChannelAdapter,
@@ -258,7 +260,10 @@ export const metaCloudAdapter: ChannelAdapter = {
       throw new Error(`meta_media_download_failed: ${download.status} ${download.statusText}`.trim());
     }
 
-    const buffer = Buffer.from(await download.arrayBuffer());
+    // Em pedaços, com o teto de mídia do sistema (D-130): `arrayBuffer()` lia a
+    // resposta inteira antes de qualquer conferência, e um fluxo grande derrubava o worker.
+    const buffer = await lerComTeto(download, MAX_MEDIA_BYTES);
+    if (!buffer) throw new MediaTooLargeError();
     const mime =
       download.headers.get("content-type")?.split(";")[0]?.trim() ||
       metadata.mime_type ||

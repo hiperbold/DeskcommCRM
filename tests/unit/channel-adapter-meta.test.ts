@@ -316,6 +316,54 @@ describe("adapter meta_cloud — mídia recebida", () => {
   });
 });
 
+describe("adapter meta_cloud — teto na mídia recebida (D-130)", () => {
+  function lookupOk() {
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        id: "987654321",
+        url: "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=987654321",
+        mime_type: "video/mp4",
+      }),
+    };
+  }
+  const entrada = { organizationId: ORG, sessionRef: "sessao-pn", url: "meta-media:987654321", hintMime: "video/mp4" };
+
+  it("fluxo sem fim: a leitura para no teto e o worker recebe MediaTooLargeError, sem encher a memória", async () => {
+    configurar();
+    sessaoNoBanco.token = "token-da-sessao";
+    let lidos = 0;
+    const infinito = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        lidos += 1;
+        controller.enqueue(new Uint8Array(1_048_576));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(lookupOk())
+        .mockResolvedValueOnce(new Response(infinito, { headers: { "content-type": "video/mp4" } })),
+    );
+
+    await expect(a().fetchInboundMedia!(entrada)).rejects.toMatchObject({ name: "MediaTooLargeError" });
+    // 50 MB de teto: a leitura parou perto dele, não seguiu o fluxo (que nunca acaba).
+    expect(lidos).toBeLessThan(80);
+  });
+
+  it("Content-Length declarado acima do teto recusa sem ler o corpo", async () => {
+    configurar();
+    sessaoNoBanco.token = "token-da-sessao";
+    const resposta = new Response("x", { headers: { "content-type": "video/mp4", "content-length": "999999999" } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(lookupOk()).mockResolvedValueOnce(resposta));
+
+    await expect(a().fetchInboundMedia!(entrada)).rejects.toMatchObject({ name: "MediaTooLargeError" });
+  });
+});
+
 describe("credencial por sessão — o que destrava multi-tenant", () => {
   it("com token na SESSÃO, o env deixa de valer", async () => {
     // Ordem sessão-primeiro: um env esquecido não pode silenciar o que foi

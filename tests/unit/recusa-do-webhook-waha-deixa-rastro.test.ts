@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// A rota global do WAHA vem fechada (410, D-108); estes casos exercitam o contrato dela.
+vi.hoisted(() => {
+  process.env.WAHA_GLOBAL_WEBHOOK_ENABLED = "true";
+});
+
 /**
  * As duas rotas do webhook do canal por QR — a GLOBAL (a sessão do corpo
  * resolve a organização) e a POR TOKEN (o token do caminho resolve) — e o

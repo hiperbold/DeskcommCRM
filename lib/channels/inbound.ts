@@ -691,11 +691,15 @@ async function datafyInbound(
       continue;
     }
     if (e.kind === "message_status") {
+      // `failed` é final: um `sent` atrasado (reentrega fora de ordem) não pode
+      // devolver a mensagem a `sent` e esconder a falha do operador (D-130). Mesma
+      // guarda do canal oficial e da UAZAPI.
       await admin
         .from("messages")
         .update({ status: e.status === "failed" ? "failed" : "sent", updated_at: agora })
         .eq("organization_id", orgId)
-        .eq("external_id", e.externalId);
+        .eq("external_id", e.externalId)
+        .neq("status", "failed");
       desfechos.push("status");
       continue;
     }

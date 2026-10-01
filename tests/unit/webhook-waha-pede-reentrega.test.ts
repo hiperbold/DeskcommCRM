@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// A rota global do WAHA vem fechada (410, D-108); estes casos exercitam o contrato dela.
+vi.hoisted(() => {
+  process.env.WAHA_GLOBAL_WEBHOOK_ENABLED = "true";
+});
+
 /**
  * O webhook WAHA não perde a mensagem quando o banco falha por um instante.
  *

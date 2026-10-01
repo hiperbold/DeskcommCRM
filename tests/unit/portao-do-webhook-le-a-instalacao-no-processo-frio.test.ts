@@ -29,6 +29,7 @@ const { envMock, linhaDaInstalacao, leiturasDaInstalacao, despachados } = vi.hoi
   envMock: {
     WAHA_HMAC_SECRET: "",
     WAHA_WEBHOOK_REQUIRE_SIGNATURE: "false",
+    WAHA_GLOBAL_WEBHOOK_ENABLED: "true",
     AI_BUDGET_ENFORCEMENT: undefined as string | undefined,
     DISCLOSURE_MODE: undefined as string | undefined,
     PROMISE_SEMANTIC_ENABLED: undefined as string | undefined,

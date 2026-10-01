@@ -85,7 +85,7 @@ export async function POST(
 
   const { data: existingKey, error: keyLookupErr } = await admin
     .from("idempotency_keys")
-    .select("id, response_body, status_code")
+    .select("id, response_body, status_code, request_hash")
     .eq("organization_id", orgId)
     .eq("key", idempotencyKey)
     .eq("endpoint", endpoint)
@@ -96,6 +96,16 @@ export async function POST(
   }
 
   if (existingKey) {
+    // A mesma chave com outro pedido (outra solicitação ou outro motivo) não devolve
+    // a resposta antiga como se fosse a deste: é reuso indevido da chave (D-104).
+    if (existingKey.request_hash && existingKey.request_hash !== requestHash) {
+      return fail(
+        "idempotency_key_reused",
+        t("A Idempotency-Key já foi usada com outro pedido."),
+        409,
+        { requestId },
+      );
+    }
     // Return cached result
     const body = existingKey.response_body as Record<string, unknown>;
     return ok(body, {
@@ -135,6 +145,30 @@ export async function POST(
       ? "lgpd.data_request_received"
       : "lgpd.redact_received";
 
+  // Reivindica o pedido ANTES de emitir (D-104): o update só vale se ainda está
+  // `received`. Dois cliques ou duas abas leem `received` ao mesmo tempo, mas só um
+  // update muda a linha; o outro não volta nada e recebe 409, sem emitir o evento
+  // de novo (a exportação sairia duas vezes para o titular).
+  const { data: reivindicado, error: updateErr } = await admin
+    .from("lgpd_requests")
+    .update({ status: "processing", updated_at: new Date().toISOString() })
+    .eq("organization_id", orgId)
+    .eq("id", id)
+    .eq("status", "received")
+    .select("id");
+
+  if (updateErr) {
+    return fail("internal_error", updateErr.message, 500, { requestId });
+  }
+  if (!reivindicado || reivindicado.length === 0) {
+    return fail(
+      "conflict",
+      t("A solicitação já foi aprovada ou mudou de status."),
+      409,
+      { requestId },
+    );
+  }
+
   // Emit event to event_log (triggers async worker)
   const { error: emitErr } = await admin.rpc("emit_event", {
     p_event_type: eventType,
@@ -158,19 +192,22 @@ export async function POST(
   });
 
   if (emitErr) {
+    // Sem evento o pedido ficaria em `processing` sem ninguém para processar, parado
+    // até o vigia de prazo (D-104). Devolve ao estado anterior e responde 5xx: o
+    // administrador vê a falha e pode aprovar de novo.
     console.error("[lgpd-approve] emit_event failed", emitErr.message);
-    // Non-blocking — worker can recover via cron
-  }
-
-  // Transition status → processing
-  const { error: updateErr } = await admin
-    .from("lgpd_requests")
-    .update({ status: "processing", updated_at: new Date().toISOString() })
-    .eq("organization_id", orgId)
-    .eq("id", id);
-
-  if (updateErr) {
-    return fail("internal_error", updateErr.message, 500, { requestId });
+    const { error: revertErr } = await admin
+      .from("lgpd_requests")
+      .update({ status: "received", updated_at: new Date().toISOString() })
+      .eq("organization_id", orgId)
+      .eq("id", id)
+      .eq("status", "processing");
+    if (revertErr) {
+      console.error("[lgpd-approve] revert to received failed", revertErr.message);
+    }
+    return fail("internal_error", t("Não foi possível iniciar o processamento. Tente aprovar de novo."), 503, {
+      requestId,
+    });
   }
 
   // Audit — fire-and-forget

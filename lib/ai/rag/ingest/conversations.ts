@@ -111,6 +111,7 @@ async function ensureConversationsSource(
 interface ConvRow {
   id: string;
   organization_id: string;
+  contact_id: string | null;
 }
 
 interface MsgRow {
@@ -157,7 +158,7 @@ export async function ingestConversationsBatch(
   // 1. Pull eligible conversations.
   const { data: convRows, error: convErr } = await admin
     .from("conversations")
-    .select("id, organization_id")
+    .select("id, organization_id, contact_id")
     .eq("organization_id", organizationId)
     .eq("usable_for_rag", true)
     .eq("status", "resolved")
@@ -170,9 +171,39 @@ export async function ingestConversationsBatch(
     return { processed: 0, flaggedReview: 0, skipped: 0, embeddingSkipped: false };
   }
 
-  const conversations = (convRows ?? []) as ConvRow[];
+  const todas = (convRows ?? []) as ConvRow[];
+
+  // Conversa de contato ANONIMIZADO fica fora da base (D-142): o titular pediu para
+  // ser esquecido, e o que o anonimizador de regex deixasse passar do nome dele
+  // viraria trecho recuperável pelo agente para outros clientes. O gatilho da
+  // anonimização apaga o que já estava indexado; aqui se impede o que ainda não
+  // estava. A conversa sai da fila (`skipped`), senão voltaria em todo lote.
+  const contatoIds = [...new Set(todas.map((c) => c.contact_id).filter((x): x is string => !!x))];
+  const anonimizados = new Set<string>();
+  if (contatoIds.length > 0) {
+    const { data: anon } = await admin
+      .from("contacts")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("is_anonymized", true)
+      .in("id", contatoIds);
+    for (const r of (anon ?? []) as Array<{ id: string }>) anonimizados.add(r.id);
+  }
+  const conversations = todas.filter((c) => !c.contact_id || !anonimizados.has(c.contact_id));
+  const deAnonimizado = todas.filter((c) => c.contact_id && anonimizados.has(c.contact_id));
+  if (deAnonimizado.length > 0) {
+    await admin
+      .from("conversations")
+      .update({ rag_review_status: "skipped" })
+      .eq("organization_id", organizationId)
+      .in(
+        "id",
+        deAnonimizado.map((c) => c.id),
+      );
+  }
+
   if (conversations.length === 0) {
-    return { processed: 0, flaggedReview: 0, skipped: 0, embeddingSkipped: false };
+    return { processed: 0, flaggedReview: 0, skipped: deAnonimizado.length, embeddingSkipped: false };
   }
 
   // 2. Single batch version per run.
@@ -195,7 +226,7 @@ export async function ingestConversationsBatch(
 
   let processed = 0;
   let flaggedReview = 0;
-  let skipped = 0;
+  let skipped = deAnonimizado.length;
   let totalChunkInserts = 0;
 
   // O perfil do PAÍS da organização (issue #1033): o mesmo conjunto de padrões

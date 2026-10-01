@@ -51,6 +51,47 @@ interface RouteCtx {
 
 const RATE_LIMIT_PER_MIN = 60;
 
+// O token está no HTML da página, então é público: o balde por token (acima) segura o
+// total, mas quem o conhece enche a fonte inteira sozinho (86 mil leads por dia),
+// esgota o teto do plano e dispara a automação de primeiro contato para números
+// arbitrários. Um visitante de verdade manda uma ou duas vezes; o balde por IP
+// (D-109) corta o resto sem tocar nos demais visitantes. Sem IP legível não há balde
+// por IP: o do token continua valendo.
+const RATE_LIMIT_PER_IP_PER_MIN = 10;
+const RATE_LIMIT_PER_IP_PER_HOUR = 60;
+
+// Um formulário não manda mais que isso; o teto vale pelo fluxo real, não só pelo
+// Content-Length declarado.
+const TETO_CORPO_BYTES = 64 * 1024;
+
+/**
+ * Lê o corpo em pedaços e para no primeiro byte acima do teto. Mesma leitura de
+ * `lib/http/corpo-com-limite.ts`, escrita aqui porque aquele módulo importa
+ * `server-only`, que a suíte de invariantes (que carrega esta rota) não resolve.
+ * Junta com `Buffer.concat`: somar texto por pedaço corrompe o acento na fronteira.
+ */
+async function lerCorpoComTeto(
+  corpo: ReadableStream<Uint8Array> | null,
+  teto: number,
+): Promise<{ ok: boolean; texto: string }> {
+  if (!corpo) return { ok: true, texto: "" };
+  const leitor = corpo.getReader();
+  const pedacos: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await leitor.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > teto) {
+      await leitor.cancel().catch(() => undefined);
+      return { ok: false, texto: "" };
+    }
+    pedacos.push(Buffer.from(value));
+  }
+  return { ok: true, texto: Buffer.concat(pedacos).toString("utf8") };
+}
+
 // ponytail: mirrors the default phone aliases in lib/webhooks/inbound.ts —
 // duplicated (not exported there) only so the route can flag a phone-looking
 // field that failed normalizePhoneBR, for observability. Keep in sync if that
@@ -85,6 +126,20 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
     });
   }
 
+  const ipDoVisitante = ipDoClienteParaInet(req.headers);
+  if (ipDoVisitante) {
+    const [porMinuto, porHora] = await Promise.all([
+      checkRateLimit(`webhook_in_ip:${token}:${ipDoVisitante}`, RATE_LIMIT_PER_IP_PER_MIN, 60),
+      checkRateLimit(`webhook_in_ip_h:${token}:${ipDoVisitante}`, RATE_LIMIT_PER_IP_PER_HOUR, 3600),
+    ]);
+    if (!porMinuto.allowed || !porHora.allowed) {
+      return fail("rate_limited", "Too many requests.", 429, {
+        requestId,
+        headers: { "Retry-After": porMinuto.allowed ? "3600" : "60" },
+      });
+    }
+  }
+
   const admin = createAdminClient();
   const { data: source, error: srcErr } = await admin
     .from("webhook_sources")
@@ -96,7 +151,15 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
     return fail("not_found", "unknown webhook token", 404, { requestId });
   }
 
-  const rawBody = await req.text();
+  const declarado = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declarado) && declarado > TETO_CORPO_BYTES) {
+    return fail("payload_too_large", "request body too large", 413, { requestId });
+  }
+  const corpoLido = await lerCorpoComTeto(req.body, TETO_CORPO_BYTES);
+  if (!corpoLido.ok) {
+    return fail("payload_too_large", "request body too large", 413, { requestId });
+  }
+  const rawBody = corpoLido.texto;
   const contentType = req.headers.get("content-type") ?? "";
   const isForm = contentType.includes("application/x-www-form-urlencoded");
   let payload: Record<string, unknown>;
@@ -672,7 +735,12 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
     respondiMapped != null &&
     respondiMapped.consent.detectedVia !== "not_found" &&
     !respondiMapped.consent.granted;
-  if (respondiMapped && contactId && !consentNegado) {
+  // Só quem PROVA a origem autoriza (D-109): o formato Respondi é público e qualquer um
+  // o imita, então numa fonte sem segredo (ou sem assinatura conferida) ele não vale
+  // como autorização para a IA atender o contato. O lead e o contato entram do mesmo
+  // jeito; só a autorização fica para um humano.
+  const fonteComOrigemProvada = Boolean(sourceSecret) && validSignature === true;
+  if (respondiMapped && contactId && !consentNegado && fonteComOrigemProvada) {
     const formId = respondiMapped.custom_fields.respondi_form_id ?? "form";
     const submissionId = respondiMapped.custom_fields.respondi_respondent_id ?? "s";
     await autorizarContatoParaIA(admin, {

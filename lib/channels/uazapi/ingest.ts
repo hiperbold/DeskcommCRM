@@ -234,14 +234,14 @@ async function insertMessage(
   const { msg } = input;
   const temMidia = msg.tipo !== "text";
 
-  const { data, error } = await admin
+  const gravar = (externalId: string) => admin
     .from("messages")
     .insert({
       organization_id: input.organizationId,
       conversation_id: input.conversationId,
       contact_id: input.contactId,
       channel_session_id: input.channelSessionId,
-      external_id: msg.externalId,
+      external_id: externalId,
       direction: msg.direction,
       // Toda linha nascida do webhook veio de FORA do CRM. O default da coluna é
       // `'crm'`, e as funções de fricção contam só `external_device`.
@@ -264,10 +264,32 @@ async function insertMessage(
     .select("id")
     .maybeSingle();
 
+  let { data, error } = await gravar(msg.externalId);
+
   // 23505 = unique (organization_id, external_id): desfecho ESPERADO de uma
   // reentrega. Tratar como falha faria a rota devolver 500 e o servidor reenviar
   // para sempre.
-  if (error?.code === "23505") return "duplicate";
+  //
+  // Mas a chave é da ORGANIZAÇÃO, e o número A mandando para o número B quando os
+  // dois são da mesma organização gera o MESMO id de mensagem nos dois webhooks (saída
+  // de A, entrada de B). O segundo lado batia no unique e virava `duplicate`: a
+  // mensagem sumia da conversa de B (D-130). Se a linha que já existe é de OUTRA
+  // conexão, o lado que chega é outra mensagem: grava com o id marcado pela conexão
+  // (a reentrega desse lado bate no unique do id marcado e segue sendo `duplicate`).
+  // O id original fica na referência de mídia, que é o que o provedor entende.
+  if (error?.code === "23505") {
+    const { data: existente } = await admin
+      .from("messages")
+      .select("channel_session_id")
+      .eq("organization_id", input.organizationId)
+      .eq("external_id", msg.externalId)
+      .maybeSingle();
+    const outraConexao =
+      existente && (existente as { channel_session_id: string | null }).channel_session_id !== input.channelSessionId;
+    if (!outraConexao) return "duplicate";
+    ({ data, error } = await gravar(`${msg.externalId}~${input.channelSessionId}`));
+    if (error?.code === "23505") return "duplicate";
+  }
   if (error || !data) throw new Error(`uazapi_ingest_insert_failed: ${error?.message ?? "sem id"}`);
   return (data as { id: string }).id;
 }

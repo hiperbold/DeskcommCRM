@@ -72,6 +72,13 @@ export interface MessageRow {
   status: string;
   body: string | null;
   has_media: boolean;
+  /**
+   * A transcrição do áudio ou a leitura da imagem/documento (`media_derived_text`).
+   * É texto sobre o titular, e a anonimização o zera (0921): o que se apaga a
+   * pedido dele é o que se entrega a pedido dele. Opcional: o tipo é montado à
+   * mão nos testes de PDF.
+   */
+  media_derived_text?: string | null;
   sent_at: string | null;
   created_at: string;
 }
@@ -562,6 +569,23 @@ export interface ExportPayload {
     decided_at: string | null;
     motivo_recusa: string | null;
   }>;
+  /** Notas do agente sobre o titular (`lead_notes`), mascaradas na anonimização (0921). */
+  lead_notes?: Array<{ id: string; headline: string; body: string; created_at: string }>;
+  /** Notas internas da equipe nas conversas dele (`conversation_notes`), mascaradas na anonimização (0921). */
+  conversation_notes?: Array<{
+    id: string;
+    conversation_id: string;
+    body: string;
+    created_by_name: string | null;
+    created_at: string;
+  }>;
+  /**
+   * Trechos da base de conhecimento nascidos das conversas dele (`ai_chunks`),
+   * apagados na anonimização (0921). Trechos de conversa já passaram pelo
+   * anonimizador; entram aqui porque é o que a organização guarda derivado do
+   * que ele disse.
+   */
+  knowledge_chunks?: Array<{ id: string; conversation_id: string; content: string; created_at: string }>;
   reply_drafts?: Array<{
     id: string;
     status: string;
@@ -834,7 +858,9 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
 
     const { data, error } = await admin
       .from("messages")
-      .select("id, conversation_id, direction, type, status, body, media_url, sent_at, created_at")
+      .select(
+        "id, conversation_id, direction, type, status, body, media_url, media_derived_text, sent_at, created_at",
+      )
       .eq("organization_id", organizationId)
       .eq("contact_id", contactId)
       .order("created_at", { ascending: false })
@@ -853,6 +879,7 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
         status: m.status,
         body: m.body,
         has_media: Boolean(m.media_url),
+        media_derived_text: m.media_derived_text ?? null,
         sent_at: m.sent_at,
         created_at: m.created_at,
       }));
@@ -1231,7 +1258,24 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
   const passagens: PassagemDeAtendimentoRow[] = [];
   const avisos_de_caso: AvisoDeCasoEntregaRow[] = [];
   const conversation_drafts: NonNullable<ExportPayload["conversation_drafts"]> = [];
+  const lead_notes: NonNullable<ExportPayload["lead_notes"]> = [];
+  const conversation_notes: NonNullable<ExportPayload["conversation_notes"]> = [];
+  const knowledge_chunks: NonNullable<ExportPayload["knowledge_chunks"]> = [];
   if (contactId) {
+    // Nota do agente: FK direta para o contato. Falha propaga: um relatório que
+    // omite a nota por erro de leitura diria que não guardamos o que guardamos.
+    for (let offset = 0; ; offset += 500) {
+      const { data, error } = await admin
+        .from("lead_notes")
+        .select("id, headline, body, created_at")
+        .eq("organization_id", organizationId)
+        .eq("contact_id", contactId)
+        .order("id")
+        .range(offset, offset + 499);
+      if (error) throw error;
+      lead_notes.push(...(data ?? []));
+      if (!data || data.length < 500) break;
+    }
     const pageSize = 500;
     const refBatchSize = 100; // Mantém o filtro IN abaixo dos limites de URL dos proxies.
     const conversationIds: string[] = [];
@@ -1378,6 +1422,40 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
           .range(offset, offset + pageSize - 1);
         if (error) throw error;
         conversation_drafts.push(...(data ?? []));
+        if (!data || data.length < pageSize) break;
+      }
+      // Nota interna da equipe e trechos de base de conhecimento: mesmo escopo
+      // (a conversa do titular), que é o que a anonimização usa (0921).
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await admin
+          .from("conversation_notes")
+          .select("id, conversation_id, body, created_by_name, created_at")
+          .eq("organization_id", organizationId)
+          .in("conversation_id", conversationIds.slice(batch, batch + refBatchSize))
+          .order("id")
+          .range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        conversation_notes.push(...(data ?? []));
+        if (!data || data.length < pageSize) break;
+      }
+      for (let offset = 0; ; offset += pageSize) {
+        const { data, error } = await admin
+          .from("ai_chunks")
+          .select("id, content, metadata, created_at")
+          .eq("organization_id", organizationId)
+          .in("metadata->>conversation_id", conversationIds.slice(batch, batch + refBatchSize))
+          .order("id")
+          .range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        for (const c of data ?? []) {
+          const meta = (c.metadata ?? {}) as Record<string, unknown>;
+          knowledge_chunks.push({
+            id: c.id,
+            conversation_id: String(meta["conversation_id"] ?? ""),
+            content: c.content,
+            created_at: c.created_at,
+          });
+        }
         if (!data || data.length < pageSize) break;
       }
     }
@@ -1542,6 +1620,9 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
     campaign_recipients,
     campaign_suppressions,
     conversation_drafts,
+    lead_notes,
+    conversation_notes,
+    knowledge_chunks,
     contact_field_proposals,
   };
 }

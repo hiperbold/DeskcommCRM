@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/channels/graph-parceiro/session", () => ({
   graphPartnerRefsDaSessao: vi.fn(async () => ({ phoneNumberId: "PN", wabaId: "WABA" })),
@@ -28,7 +28,13 @@ import { ingestMetaInbound } from "@/lib/channels/meta/ingest";
  * mais dói se vazar — mensagem forjada chegando na caixa de quem nem usa o canal.
  */
 const ORIGINAL = process.env.DATAFY_ENABLED;
+// O carimbo assinado só vale perto do relógio (D-130): o relógio destes casos é o do carimbo.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(1700000000 * 1000));
+});
 afterEach(() => {
+  vi.useRealTimers();
   if (ORIGINAL === undefined) delete process.env.DATAFY_ENABLED;
   else process.env.DATAFY_ENABLED = ORIGINAL;
   vi.clearAllMocks();

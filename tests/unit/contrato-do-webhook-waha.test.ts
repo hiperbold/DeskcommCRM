@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+// A rota global do WAHA vem fechada (410, D-108); estes casos exercitam o contrato dela.
+vi.hoisted(() => {
+  process.env.WAHA_GLOBAL_WEBHOOK_ENABLED = "true";
+});
+
 /**
  * O CONTRATO do webhook deste canal — e as duas maneiras de errar ao escrevê-lo.
  *

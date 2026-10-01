@@ -12,14 +12,15 @@
  *  3. Resolve organization_id from tenant_integrations (NOT from body).
  *  4. Decrypt and verify HMAC SHA256 (timingSafeEqual).
  *  5. Idempotency: insert webhook_events_log; skip if duplicate (23505).
- *  6. Count active (non-anonymized) contacts → expected_contacts_count.
+ *  6. Count active (non-anonymized) contacts da loja (source='nuvemshop') → expected_contacts_count.
  *  7. Insert lgpd_requests (emergency=true, scope='tenant', SLA=15 BR biz days).
  *  8. Emit lgpd.redact_received with tenant-scope payload.
  *  9. Audit log (no PII — store_id + counts only).
  * 10. Return 200 within <5s.
  *
- * NOTE: organizations.status is NOT touched here — flipped by the redact worker
- * (S-08.05) after full cascade confirmation.
+ * NOTE: organizations.status NUNCA muda, nem aqui nem no worker (D-140): apagar
+ * os dados da loja é anonimizar os contatos de origem Nuvemshop, não apagar o
+ * tenant. O CRM multicanal segue de pé com o que não veio da loja.
  */
 
 import type { NextRequest, NextResponse } from "next/server";
@@ -185,12 +186,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const webhookLogId: string | null = logInserted?.id ?? null;
 
-  // 6. Count active (non-anonymized) contacts in the tenant — stored for audit
-  //    and forwarded to the worker so it can validate cascade completeness.
+  // 6. Count active (non-anonymized) contacts da loja (source='nuvemshop') — stored
+  //    for audit and forwarded to the worker so it can validate cascade completeness.
   const { count: activeContactsCount, error: countErr } = await admin
     .from("contacts")
     .select("id", { count: "exact", head: true })
     .eq("organization_id", orgId) // programmatic tenant filter — service role bypasses RLS
+    .eq("source", "nuvemshop")
     .eq("is_anonymized", false);
 
   if (countErr) {

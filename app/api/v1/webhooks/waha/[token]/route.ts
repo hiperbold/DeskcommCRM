@@ -102,7 +102,10 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
       .select(
         "id, organization_id, waha_session_name, webhook_secret_encrypted, status, is_warmup_complete, warmup_started_at",
       )
-      .eq("webhook_path_token", token);
+      .eq("webhook_path_token", token)
+      // Só canal WAHA (D-144): o token de um canal UAZAPI, Zernio ou Datafy não pode
+      // injetar mensagem pelo formato WAHA nem contornar o HMAC da rota do próprio canal.
+      .eq("provider", "waha");
   const { data: session, error: sessErr } = await queryTolerantToMissingArchived(
     () => base().is(ARCHIVED_AT, null).maybeSingle(),
     () => base().maybeSingle(),

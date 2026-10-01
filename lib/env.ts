@@ -163,6 +163,12 @@ const schema = z.object({
   // derrubaria a ingestão de mensagens. Ligue se usa WAHA Plus ou um proxy que
   // assine — aí a verificação passa a ser obrigatória.
   WAHA_WEBHOOK_REQUIRE_SIGNATURE: z.string().optional().default("false"),
+  // "true" reabre `POST /api/v1/webhooks/waha` (a rota GLOBAL, sem token na URL, que
+  // acha a sessão pelo nome no corpo). Fechada por padrão (410): o WAHA saiu da
+  // instalação em 16/09/2026, e a única trava dessa rota era o `Caddyfile` do kit,
+  // que não existe quando o app roda atrás de outro proxy. Só quem ainda roda um WAHA
+  // próprio falando com o app pela rede interna precisa ligar.
+  WAHA_GLOBAL_WEBHOOK_ENABLED: z.string().optional().default("false"),
 
   // ─── Chamada de voz WhatsApp (WaCalls, spec 18) ───
   //

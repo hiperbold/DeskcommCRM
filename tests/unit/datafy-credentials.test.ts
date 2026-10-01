@@ -77,24 +77,40 @@ describe("verifyGraphPartnerSignature", () => {
   const ts = "1700000000";
   const body = '{"object":"whatsapp_business_account"}';
   const assinar = (s: string) => "sha256=" + createHmac("sha256", s).update(`${ts}.${body}`).digest("hex");
+  // O carimbo tem de estar dentro de 5 minutos do relógio (D-130): o "agora" destes casos é o dele.
+  const agora = 1700000000 * 1000;
 
   it("aceita a assinatura correta (HMAC de timestamp.corpo)", () => {
-    expect(verifyGraphPartnerSignature(body, assinar(secret), ts, secret)).toBe(true);
+    expect(verifyGraphPartnerSignature(body, assinar(secret), ts, secret, agora)).toBe(true);
   });
 
   it("recusa assinatura errada, peça ausente, algoritmo trocado e corpo alterado", () => {
     const sig = assinar(secret);
-    expect(verifyGraphPartnerSignature(body, sig, ts, "whsec_outro_segredo_123")).toBe(false);
-    expect(verifyGraphPartnerSignature(body, null, ts, secret)).toBe(false);
-    expect(verifyGraphPartnerSignature(body, sig, null, secret)).toBe(false);
-    expect(verifyGraphPartnerSignature(body, "sha1=abc", ts, secret)).toBe(false);
-    expect(verifyGraphPartnerSignature(`${body} `, sig, ts, secret)).toBe(false);
-    expect(verifyGraphPartnerSignature(body, sig, "1700000001", secret)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, sig, ts, "whsec_outro_segredo_123", agora)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, null, ts, secret, agora)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, sig, null, secret, agora)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, "sha1=abc", ts, secret, agora)).toBe(false);
+    expect(verifyGraphPartnerSignature(`${body} `, sig, ts, secret, agora)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, sig, "1700000001", secret, agora)).toBe(false);
+  });
+
+  it("carimbo fora de 5 minutos do relógio é recusado, mesmo com a assinatura correta (D-130)", () => {
+    const sig = assinar(secret);
+    expect(verifyGraphPartnerSignature(body, sig, ts, secret, agora + 4 * 60 * 1000)).toBe(true);
+    expect(verifyGraphPartnerSignature(body, sig, ts, secret, agora + 6 * 60 * 1000)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, sig, ts, secret, agora - 6 * 60 * 1000)).toBe(false);
+    // Sem o quinto argumento vale o relógio real: o carimbo de 2023 é um replay.
+    expect(verifyGraphPartnerSignature(body, sig, ts, secret)).toBe(false);
+  });
+
+  it("carimbo que não é número é recusado", () => {
+    const sigDeLixo = "sha256=" + createHmac("sha256", secret).update(`abc.${body}`).digest("hex");
+    expect(verifyGraphPartnerSignature(body, sigDeLixo, "abc", secret, agora)).toBe(false);
   });
 
   it("segredo que não é do painel (o provisório da conexão) nunca confere — nem assinado com ele", () => {
     const provisorio = "a".repeat(64);
-    expect(verifyGraphPartnerSignature(body, assinar(provisorio), ts, provisorio)).toBe(false);
-    expect(verifyGraphPartnerSignature(body, assinar(secret), ts, null)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, assinar(provisorio), ts, provisorio, agora)).toBe(false);
+    expect(verifyGraphPartnerSignature(body, assinar(secret), ts, null, agora)).toBe(false);
   });
 });
