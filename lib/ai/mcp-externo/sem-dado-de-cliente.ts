@@ -63,7 +63,8 @@ const PADROES: Padrao[] = [
   // casaria só os 11 dígitos finais e deixaria o `55` do país para trás.
   { tipo: "sequencia_longa", re: /\b\d{10,14}\b/g, valeEmCampoDeCodigo: false },
   // Telefone escrito como gente escreve: +55 35 99148-5627, (35) 9914-8562.
-  { tipo: "telefone", re: /(?:\+\s?\d{1,3}[\s.-]?)?\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}\b/g, valeEmCampoDeCodigo: false },
+  // `9?[\s.-]?`: o nono dígito pode vir solto, "35 9 9148 5627" (D-134).
+  { tipo: "telefone", re: /(?:\+\s?\d{1,3}[\s.-]?)?\(?\d{2}\)?[\s.-]?9?[\s.-]?\d{4}[\s.-]?\d{4}\b/g, valeEmCampoDeCodigo: false },
 ];
 
 /**
@@ -188,11 +189,18 @@ export function limparArgumentosExternos(
       for (const tipo of tipos) recusados.push(`${caminho}:${tipo}`);
       return texto;
     }
-    if (typeof valor === "number" || typeof valor === "boolean" || valor === null) {
-      // Número não se limpa: trocar por texto quebraria o esquema da
-      // ferramenta. Telefone que chega como número é pego pelo nome do campo.
+    if (typeof valor === "number") {
+      // Número de 10 a 14 dígitos fora de campo de código é a mesma "sequência
+      // longa" do texto (telefone, CPF, CNPJ escritos como número, D-134). Não
+      // dá para trocar por `[removido]` sem quebrar o esquema numérico; vira
+      // `null`, e a ferramenta externa recusa o argumento em vez de receber o dado.
+      if (!campoDeCodigo && Number.isInteger(valor) && /^\d{10,14}$/.test(String(Math.abs(valor)))) {
+        recusados.push(`${caminho}:sequencia_longa`);
+        return null;
+      }
       return valor;
     }
+    if (typeof valor === "boolean" || valor === null) return valor;
     if (Array.isArray(valor)) {
       if (vistos.has(valor)) return null;
       vistos.add(valor);

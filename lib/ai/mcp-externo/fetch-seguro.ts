@@ -12,12 +12,17 @@
  *     devolver megabytes e estourar memória antes mesmo do corte por
  *     caractere que `cliente.ts` faz no texto já extraído.
  *
- * Mesmas funções de `lib/automation/outbound-*` (webhooks de automação), com a
- * mesma janela residual de rebinding declarada lá.
+ * Mesmas funções de `lib/automation/outbound-*` (webhooks de automação). A
+ * diferença é a janela de rebinding (D-168): validar o nome e deixar o `fetch`
+ * resolver DE NOVO abria um intervalo em que o DNS podia passar a devolver um IP
+ * interno. Aqui a conexão é aberta NO ENDEREÇO QUE A GUARDA VALIDOU, com o nome
+ * original só no SNI e no cabeçalho `Host` (TLS continua valendo para o domínio).
  */
-import { getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
+import { request as requisicaoHttps } from "node:https";
+import { getDefaultAutoSelectFamilyAttemptTimeout, isIPv6, setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
+import { Readable } from "node:stream";
 
-import { assertDestinoResolvidoSeguro } from "@/lib/automation/outbound-ip";
+import { resolverDestinoSeguro } from "@/lib/automation/outbound-ip";
 import { assertSafeOutboundUrl } from "@/lib/automation/outbound-url";
 
 /**
@@ -79,18 +84,106 @@ async function comLimiteDeBytes(res: Response): Promise<Response> {
   });
 }
 
+/** O que `https.request` oferece, para o teste trocar a rede. */
+type RequisicaoHttps = typeof requisicaoHttps;
+
+/**
+ * `lookup` que só devolve os endereços JÁ validados: o `https.request` nunca
+ * chega a resolver o nome. Responde nos dois formatos que o Node pede (um
+ * endereço, ou a lista, quando `all` está ligado — o caso do auto-select de
+ * família).
+ */
+export function lookupFixo(enderecos: readonly string[]) {
+  const lista = enderecos.map((address) => ({ address, family: isIPv6(address) ? 6 : 4 }));
+  return (_nome: string, opcoes: unknown, cb: (...args: unknown[]) => void): void => {
+    const callback = (typeof opcoes === "function" ? opcoes : cb) as (...args: unknown[]) => void;
+    const todos = typeof opcoes === "object" && opcoes !== null && (opcoes as { all?: boolean }).all === true;
+    if (todos) callback(null, lista);
+    else callback(null, lista[0]!.address, lista[0]!.family);
+  };
+}
+
+/**
+ * `fetch` que conecta nos endereços validados. Corpo de requisição em memória
+ * (as mensagens MCP são JSON pequeno); a resposta continua em stream (SSE).
+ * `accept-encoding: identity`: o `fetch` do Node descompacta sozinho, o
+ * `https.request` não, e o teto de bytes precisa contar o que o servidor mandou.
+ */
+async function buscarNoEnderecoValidado(
+  input: string | URL | Request,
+  init: RequestInit | undefined,
+  enderecos: readonly string[],
+  requisitar: RequisicaoHttps,
+): Promise<Response> {
+  const req = new Request(input, init);
+  const url = new URL(req.url);
+  const cabecalhos: Record<string, string> = { "accept-encoding": "identity" };
+  req.headers.forEach((valor, nome) => {
+    cabecalhos[nome] = valor;
+  });
+  const corpo = req.body ? Buffer.from(await req.arrayBuffer()) : undefined;
+
+  return await new Promise<Response>((resolver, rejeitar) => {
+    const chamada = requisitar(
+      url,
+      {
+        method: req.method,
+        headers: cabecalhos,
+        lookup: lookupFixo(enderecos) as never,
+        // O nome do domínio continua valendo para o certificado.
+        servername: url.hostname,
+        signal: req.signal,
+      },
+      (res) => {
+        const headers = new Headers();
+        for (const [nome, valor] of Object.entries(res.headers)) {
+          if (Array.isArray(valor)) for (const v of valor) headers.append(nome, v);
+          else if (valor !== undefined) headers.set(nome, String(valor));
+        }
+        const status = res.statusCode ?? 502;
+        const semCorpo = status === 204 || status === 205 || status === 304;
+        resolver(
+          new Response(semCorpo ? null : (Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>), {
+            status,
+            statusText: res.statusMessage ?? "",
+            headers,
+          }),
+        );
+      },
+    );
+    chamada.on("error", rejeitar);
+    if (corpo) chamada.write(corpo);
+    chamada.end();
+  });
+}
+
 export function criarFetchSeguro(
-  deps: { validarHost?: (host: string) => Promise<void>; fetch?: FetchLike } = {},
+  deps: {
+    validarHost?: (host: string) => Promise<void>;
+    fetch?: FetchLike;
+    /** Teste: troca a resolução e a rede do caminho de produção. */
+    resolverHost?: (host: string) => Promise<string[]>;
+    requisitar?: RequisicaoHttps;
+  } = {},
 ): FetchLike {
-  const validarHost = deps.validarHost ?? assertDestinoResolvidoSeguro;
-  const buscar = deps.fetch ?? globalThis.fetch;
+  // `fetch` injetado (teste) segue o caminho de sempre. Sem ele, produção:
+  // resolve UMA vez, valida e conecta no endereço validado.
+  const buscar = deps.fetch;
+  const resolverHost = deps.resolverHost ?? resolverDestinoSeguro;
   return async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     // Explícito: `assertSafeOutboundUrl` só barra http em produção, sem a opção.
     if (new URL(url).protocol !== "https:") throw new Error("unsafe_url:https_required");
     assertSafeOutboundUrl(url, { httpsSempre: true });
-    await validarHost(new URL(url).hostname);
-    const res = await buscar(input, { ...init, redirect: "manual" });
+    const host = new URL(url).hostname;
+    let res: Response;
+    if (buscar) {
+      await (deps.validarHost ?? (async (h: string) => void (await resolverHost(h))))(host);
+      res = await buscar(input, { ...init, redirect: "manual" });
+    } else {
+      const enderecos = await resolverHost(host);
+      res = await buscarNoEnderecoValidado(input, init, enderecos, deps.requisitar ?? requisicaoHttps);
+    }
     if (res.status >= 300 && res.status < 400) {
       await res.body?.cancel().catch(() => {});
       throw new Error("mcp_redirecionamento_recusado");

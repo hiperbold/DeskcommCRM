@@ -11,6 +11,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Actor } from "@/lib/api/handlers/types";
 import type { Role } from "@/lib/auth/types";
+import type { MemoriaDoEscopoExterno } from "@/lib/external-db/escopo-do-contato";
 
 export interface McpContext {
   /** Somente o runtime in-process fornece o job original, nunca o cliente MCP. */
@@ -26,6 +27,16 @@ export interface McpContext {
   requestId: string;
   /** Service-role admin client. Tools devem filtrar `organization_id` em toda query. */
   supabase: SupabaseClient;
+  /**
+   * Só o runtime do agente, e só no turno de uma conversa: o cliente que o turno
+   * atende e o que as consultas dele já provaram (D-146). Nunca vem dos
+   * argumentos da tool, nem do cliente MCP externo.
+   */
+  escopoDoTurno?: {
+    contatoId: string;
+    /** Estado do escopo da leitura do banco externo (`lib/external-db/escopo-do-contato.ts`). */
+    externo: MemoriaDoEscopoExterno;
+  };
 }
 
 export type McpToolCategory = "read" | "write" | "handoff";

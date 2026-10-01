@@ -3048,6 +3048,10 @@ export const DICIONARIO: Traducoes = {
   Aprendizados: { es: "Aprendizajes" },
   Aprovada: { es: "Aprobada" },
   Aprovar: { es: "Aprobar" },
+  "Aprendizado aprovado.": { es: "Aprendizaje aprobado." },
+  "Sugestões que o assistente anotou durante conversas. Nenhum agente as segue até você aprovar. Leia com atenção: o que for aprovado passa a valer para todos os clientes.": {
+    es: "Sugerencias que el asistente anotó durante conversaciones. Ningún agente las sigue hasta que las apruebes. Léelas con atención: lo que apruebes pasa a valer para todos los clientes.",
+  },
   "Aprovar e ignorar viram registro — os dois. Quando você decidir a primeira, ela fica aqui.": {
     es: "Tanto aprobar como ignorar dejan un registro. Cuando tomes la primera decisión, aparecerá aquí.",
   },
@@ -10659,8 +10663,8 @@ export const DICIONARIO: Traducoes = {
     es: "Cierra un caso dejando registrado cómo terminó, para que deje de ocupar la fila de quien atiende. No se puede reabrir por aquí.",
   },
   "Funil de vendas": { es: "Embudo de ventas" },
-  "Guarda um aprendizado que vale para todos os atendimentos, marcado como escrito pelo assistente para você distinguir do que anotou.": {
-    es: "Guarda un aprendizaje que aplica a todas las atenciones, marcado como escrito por el asistente para que puedas distinguirlo de lo que anotaste tú.",
+  "Sugere um aprendizado que vale para todos os atendimentos. Ele fica aguardando a sua aprovação na tela Memória da IA e só passa a valer depois que você aprovar.": {
+    es: "Sugiere un aprendizaje que aplica a todas las atenciones. Queda esperando tu aprobación en la pantalla Memoria de la IA y solo empieza a valer cuando lo apruebes.",
   },
   "Interrompe o atendimento automático e chama uma pessoa, entregando um resumo do que já aconteceu na conversa.": {
     es: "Interrumpe la atención automática y llama a una persona, con un resumen de lo que ya pasó en la conversación.",

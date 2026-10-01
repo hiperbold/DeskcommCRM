@@ -136,6 +136,19 @@ export function OrgMemoryClient({ initialState }: Props) {
   }
 
   const visibleEntries = entries.filter((e) => (showArchived ? e.status === "archived" : e.status === "active"));
+  const pendentes = entries.filter((e) => e.status === "proposed");
+
+  function handleDecidirSugestao(id: string, next: "archived" | "active") {
+    setStatus.mutate(
+      { id, status: next },
+      {
+        onSuccess: () => {
+          toast.success(next === "active" ? t("Aprendizado aprovado.") : t("Aprendizado arquivado."));
+        },
+        onError: showApiError,
+      },
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -213,6 +226,48 @@ export function OrgMemoryClient({ initialState }: Props) {
           )}
         </CardContent>
       </Card>
+
+      {pendentes.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("Aguardando aprovação")}</CardTitle>
+            <CardDescription>
+              {t(
+                "Sugestões que o assistente anotou durante conversas. Nenhum agente as segue até você aprovar. Leia com atenção: o que for aprovado passa a valer para todos os clientes.",
+              )}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ol className="flex flex-col gap-2">
+              {pendentes.map((entry) => (
+                <li key={entry.id} className="flex flex-col gap-1.5 rounded-md border border-border/60 p-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{entry.title}</span>
+                    <Badge variant="info" className="text-[10px]">
+                      {rotuloDaOrigem[entry.source]}
+                    </Badge>
+                    <span className="ml-auto text-xs text-muted-foreground">{formatDate(entry.created_at, tagDoIdioma)}</span>
+                  </div>
+                  <p className="whitespace-pre-wrap text-text-muted">{entry.body}</p>
+                  <div className="flex gap-2 sm:justify-end">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={setStatus.isPending}
+                      onClick={() => handleDecidirSugestao(entry.id, "archived")}
+                    >
+                      <Archive /> {t("Arquivar")}
+                    </Button>
+                    <Button size="sm" disabled={setStatus.isPending} onClick={() => handleDecidirSugestao(entry.id, "active")}>
+                      {t("Aprovar")}
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

@@ -27,12 +27,25 @@ function limiteOuPadrao(valor: number | null, padrao: number): number {
  * (AES-256-GCM). O chamador descarta o plaintext logo depois do INSERT/UPDATE;
  * ele nunca é logado nem devolvido.
  */
-export function cifrarSenha(senha: string): {
+/**
+ * ⚠️ A cifra fica PRESA à organização e à conexão (AAD, D-168): copiar a senha
+ * cifrada de uma linha para outra não a faz decifrar. Por isso o `id` da conexão
+ * existe ANTES do INSERT (quem cadastra o gera) e a senha é cifrada com ele.
+ * Linhas antigas, cifradas sem contexto, seguem lidas por `carregarConexao`.
+ */
+export function aadDaConexao(organizationId: string, connectionId: string): string {
+  return `external_db_connections:${organizationId}:${connectionId}`;
+}
+
+export function cifrarSenha(
+  senha: string,
+  dono: { organizationId: string; connectionId: string },
+): {
   password_encrypted: string;
   password_iv: string;
   password_tag: string;
 } {
-  const e = encryptKey(senha);
+  const e = encryptKey(senha, { aad: aadDaConexao(dono.organizationId, dono.connectionId) });
   return {
     password_encrypted: bufToBytea(e.ciphertext),
     password_iv: bufToBytea(e.iv),
@@ -96,11 +109,15 @@ export async function carregarConexao(
 
   let password: string;
   try {
-    password = decryptKey({
-      ciphertext: byteaToBuffer(data.password_encrypted),
-      iv: byteaToBuffer(data.password_iv),
-      tag: byteaToBuffer(data.password_tag),
-    });
+    password = decryptKey(
+      {
+        ciphertext: byteaToBuffer(data.password_encrypted),
+        iv: byteaToBuffer(data.password_iv),
+        tag: byteaToBuffer(data.password_tag),
+      },
+      // Lê as duas formas: a legada (sem contexto) ignora o `aad`.
+      { aad: aadDaConexao(data.organization_id, data.id) },
+    );
   } catch {
     // Não loga o erro do decrypt com detalhe que possa conter material da chave.
     // Cifra indisponível é problema de INSTALAÇÃO (falta AI_CRED_AES_KEY), e a

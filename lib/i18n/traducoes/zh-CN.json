@@ -5065,7 +5065,7 @@
   "Fecha a oportunidade dizendo se ela foi ganha ou perdida e por quê, para o que já acabou parar de ser cobrado.": "关闭商机并说明是赢单还是输单及原因，让已结束的事项不再被跟进。",
   "Fecha um chamado deixando registrado como ele terminou, para ele parar de ocupar a fila de quem atende. Não dá para reabrir por aqui.": "关闭工单并记录其结束方式，使其不再占用客服队列。无法在此重新打开。",
   "Funil de vendas": "销售漏斗",
-  "Guarda um aprendizado que vale para todos os atendimentos, marcado como escrito pelo assistente para você distinguir do que anotou.": "保存适用于所有客服接待的学习内容，并标记为由助手编写，以便与你记录的内容区分。",
+  "Sugere um aprendizado que vale para todos os atendimentos. Ele fica aguardando a sua aprovação na tela Memória da IA e só passa a valer depois que você aprovar.": "建议一条适用于所有客服接待的学习内容。它会在“AI 记忆”页面等待您的批准，批准后才会生效。",
   "Interrompe o atendimento automático e chama uma pessoa, entregando um resumo do que já aconteceu na conversa.": "中断自动客服并呼叫人工，同时提供对话已发生内容的摘要。",
   "Ler o histórico da conversa": "读取对话历史",
   "Ler um chamado e o que a pessoa decidiu": "读取工单及人工做出的决定",

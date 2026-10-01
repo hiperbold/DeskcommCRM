@@ -25,7 +25,8 @@ export interface OrgMemoryEntryRow {
   title: string;
   body: string;
   source: OrigemDaMemoria;
-  status: "active" | "archived";
+  /** `proposed`: sugestão do agente aguardando uma pessoa aprovar; nenhum agente a lê antes. */
+  status: "active" | "archived" | "proposed";
   created_at: string;
 }
 export interface OrgMemoryState {

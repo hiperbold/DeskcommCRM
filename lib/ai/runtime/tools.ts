@@ -27,6 +27,13 @@ import { recusaDeCapacidadeParaOModelo } from "@/lib/mcp/recusa-para-o-modelo";
 import type { McpContext, McpToolDefinition } from "@/lib/mcp/types";
 import { resolveActiveLeadForContact, type LeadCandidate } from "@/lib/leads/active-lead";
 import { podeChamarFerramenta, recusaParaOModelo } from "@/lib/leads/escopo-de-funil";
+import {
+  aplicarEscopoDoTurno,
+  ehAmplaDemaisParaOTurno,
+  recusaDoTurnoParaOModelo,
+  type PapelDoTurno,
+} from "@/lib/mcp/escopo-do-turno";
+import { donoDoRecurso } from "@/lib/mcp/dono-do-recurso";
 
 export interface RuntimeHandoffSignal {
   triggered: boolean;
@@ -67,6 +74,12 @@ export interface PickToolsInput {
    * do turno à mão, esse id é traduzido para o negócio aberto dele.
    */
   contatoDoTurno?: string;
+  /**
+   * Quem monta: o Conversador (que fala com o cliente) ou o Operador. Ausente
+   * vale `conversador`, o mais restrito: a busca ampla só existe para o
+   * Operador. Só tem efeito com `contatoDoTurno` (ver `escopo-do-turno.ts`).
+   */
+  papelDoTurno?: PapelDoTurno;
 }
 
 /**
@@ -161,6 +174,39 @@ function wrapMcpTool(
       try {
         ensureScope(input.auth.scopes, def.requiresScope);
         ensureRole(input.auth.role, def.requiresRole);
+
+        // ── ESCOPO DO TURNO (D-096) ──────────────────────────────────────────
+        //
+        // O token efêmero vale para a organização inteira; quem limita o agente
+        // ao cliente que ele está atendendo é este ponto. Recurso de outro
+        // contato é recusado; listagem sem recorte ganha o contato do turno.
+        // Sem `contatoDoTurno` (teste sem cliente) não há a quem amarrar.
+        if (input.contatoDoTurno) {
+          const escopo = await aplicarEscopoDoTurno({
+            ferramenta: def.name,
+            argumentos: argsRecord,
+            contatoDoTurno: input.contatoDoTurno,
+            papel: input.papelDoTurno ?? "conversador",
+            donoDoRecurso: (tipo, id) =>
+              donoDoRecurso(input.supabase, input.ctx.organizationId, tipo, id),
+          });
+          if (!escopo.veredito.permitido) {
+            void auditMcpToolCall({
+              ctx: input.ctx,
+              toolName: def.name,
+              args: argsAudit,
+              durationMs: Date.now() - startedAt,
+              success: false,
+              errorMessage: `escopo_do_turno:${escopo.veredito.motivo}`,
+            });
+            return {
+              permitido: false,
+              motivo: escopo.veredito.motivo,
+              mensagem: recusaDoTurnoParaOModelo(escopo.veredito) ?? "ação não permitida.",
+            };
+          }
+          Object.assign(argsRecord, escopo.argumentos);
+        }
 
         // ── ESCOPO DE FUNIL (spec 17 passo 3) ────────────────────────────────
         //
@@ -310,8 +356,20 @@ function wrapMcpTool(
   });
 }
 
-export function pickToolsFromMcp(input: PickToolsInput): Record<string, Tool> {
+export function pickToolsFromMcp(entrada: PickToolsInput): Record<string, Tool> {
   const result: Record<string, Tool> = {};
+  // No turno de uma conversa o contexto leva o cliente atendido e a memória do
+  // escopo (um por turno, compartilhado pelas ferramentas dele): é por aí que a
+  // leitura do banco externo sabe de quem é a consulta (D-146).
+  const input: PickToolsInput = entrada.contatoDoTurno
+    ? {
+        ...entrada,
+        ctx: {
+          ...entrada.ctx,
+          escopoDoTurno: { contatoId: entrada.contatoDoTurno, externo: { conhecidos: new Set<string>() } },
+        },
+      }
+    : entrada;
 
   for (const id of input.toolIds) {
     const def = getToolByName(id);
@@ -335,6 +393,17 @@ export function pickToolsFromMcp(input: PickToolsInput): Record<string, Tool> {
     // existe aqui, então nem chega ao modelo — mesmo que a versão publicada do
     // agente a tenha marcada de quando o módulo estava ligado.
     if (deModuloDesligado(def.name, input.modulosLigados ?? [])) continue;
+
+    // Busca e listagem AMPLA (clientes, conversas, casos, negócios da
+    // organização) não existe no turno que fala com um cliente (D-096): o
+    // cliente não escolhe de quem é o dado. Mesma lógica de `apenasHumano`:
+    // não montar é o que faz a regra valer, em vez de recusar depois da tentativa.
+    if (
+      input.contatoDoTurno &&
+      ehAmplaDemaisParaOTurno(def.name, input.papelDoTurno ?? "conversador")
+    ) {
+      continue;
+    }
 
     result[def.name] = wrapMcpTool(def, input);
   }

@@ -244,7 +244,16 @@ export async function buildExternalMcpTools(
   organizationId: string,
   ids: string[],
   log: Logger,
-  opcoes: { readOnly?: boolean; contexto?: { agentId: string | null; jobId: string | null } } = {},
+  opcoes: {
+    readOnly?: boolean;
+    contexto?: {
+      agentId: string | null;
+      jobId: string | null;
+      /** Ids do cliente do turno: recusados por valor nos argumentos (D-134). */
+      contactId?: string | null;
+      conversationId?: string | null;
+    };
+  } = {},
   deps: { abrir?: typeof abrirSessao; carregar?: typeof carregarParaOTurno } = {},
 ): Promise<FerramentasExternas> {
   const abrir = deps.abrir ?? abrirSessao;
@@ -319,6 +328,9 @@ export async function buildExternalMcpTools(
           organizationId,
           opcoes.contexto?.agentId,
           opcoes.contexto?.jobId,
+          // O modelo copiava o `contact_id` para um campo livre e ele chegava ao terceiro.
+          opcoes.contexto?.contactId,
+          opcoes.contexto?.conversationId,
         ]);
         if (recusados.length > 0) {
           log.warn("dado de cliente retirado do argumento da ferramenta MCP externa", { tool: id, recusados });

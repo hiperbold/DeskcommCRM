@@ -9,6 +9,7 @@
 import type { Tool } from "ai";
 
 import { separarFerramentas } from "@/lib/ai/mcp-externo/ids";
+import type { PapelDoTurno } from "@/lib/mcp/escopo-do-turno";
 
 import type { Logger } from "../../obs/logger";
 import type { PublishedAgentConfig } from "../../agent/agent-config";
@@ -22,7 +23,7 @@ export type MotivoDaPuladaNoTurno = MotivoDaPulada | "entregue_ao_operador";
 export async function montarFerramentasDoTurno(
   cfg: CrmEdgeConfig,
   /** `contactId` é repassado como está para `interno` (`buildMcpTurnTools`), que o aceita. */
-  ids: { organizationId: string; jobId: string; contactId?: string },
+  ids: { organizationId: string; jobId: string; contactId?: string; conversationId?: string; papel?: PapelDoTurno },
   agentConfig: PublishedAgentConfig,
   log: Logger,
   options?: { readOnly: boolean },
@@ -66,7 +67,12 @@ export async function montarFerramentasDoTurno(
         // (G) quem chamou uma ferramenta de escrita, pra a linha de auditoria
         // dela — threaded aqui, um lugar só, então nem inbound-turn.ts nem
         // operator-turn.ts precisam saber que a auditoria existe.
-        contexto: { agentId: agentConfig.agentId, jobId: ids.jobId },
+        contexto: {
+          agentId: agentConfig.agentId,
+          jobId: ids.jobId,
+          contactId: ids.contactId ?? null,
+          conversationId: ids.conversationId ?? null,
+        },
       });
     } catch (err) {
       log.warn("montagem das ferramentas MCP externas falhou; turno segue só com o catálogo", {

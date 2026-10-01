@@ -4243,6 +4243,7 @@ async function executarTurnoDoAgente(
             organizationId: tenantId,
             jobId: preview?.runId ?? liveJob().id,
             ...(leadId ? { contactId: leadId } : {}),
+            ...(input.conversationId ? { conversationId: input.conversationId } : {}),
           },
           configDoTurno,
           runLog,

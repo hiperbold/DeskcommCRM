@@ -47,7 +47,8 @@ function banco(negociosDoContato: ReturnType<typeof negocio>[], opts: { erro?: b
           maybeSingle: async () => {
             consultas.push(`${tabela}:id`);
             const achado = negociosDoContato.find((n) => n.id === filtros.id);
-            return { data: achado ? { pipeline_id: achado.pipeline_id } : null, error: null };
+            // `contact_id`: o escopo do turno (D-096) pergunta de quem é o negócio.
+            return { data: achado ? { pipeline_id: achado.pipeline_id, contact_id: CONTATO } : null, error: null };
           },
           then: (ok: (r: unknown) => unknown) => {
             consultas.push(`${tabela}:contato`);

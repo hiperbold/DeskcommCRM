@@ -55,7 +55,8 @@ export default async function OrgMemoryPage() {
     .from("org_memory_entries")
     .select("id, title, body, source, status, created_at")
     .eq("organization_id", activeOrg.orgId)
-    .neq("status", "proposed")
+    // As sugestões do agente (`proposed`) aparecem para aprovação (D-145); `proposed` de outra origem segue oculto.
+    .or("status.neq.proposed,source.eq.agent")
     .order("created_at", { ascending: false });
 
   const initialState: OrgMemoryState = {

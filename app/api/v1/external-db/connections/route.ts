@@ -98,16 +98,20 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
 
   const admin = createAdminClient();
+  const idDaConexao = randomUUID();
   const { data: created, error } = await admin
     .from("external_db_connections")
     .insert({
+      // O id nasce aqui, e não no default do banco, porque a senha é cifrada
+      // presa a ele (`cifrarSenha`, D-168).
+      id: idDaConexao,
       organization_id: activeOrg.orgId,
       label: input.label,
       host: input.host,
       port: input.port,
       database_name: input.database_name,
       username: input.username,
-      ...cifrarSenha(input.password),
+      ...cifrarSenha(input.password, { organizationId: activeOrg.orgId, connectionId: idDaConexao }),
       ssl_mode: input.ssl_mode,
       enabled: input.enabled,
       max_rows: input.max_rows,

@@ -111,7 +111,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
 
   const { password, ...campos } = input;
   const patch: Record<string, unknown> = { ...campos };
-  if (password !== undefined) Object.assign(patch, cifrarSenha(password));
+  if (password !== undefined) {
+    Object.assign(patch, cifrarSenha(password, { organizationId: activeOrg.orgId, connectionId: id }));
+  }
 
   const admin = createAdminClient();
   const { data: atualizado, error } = await admin

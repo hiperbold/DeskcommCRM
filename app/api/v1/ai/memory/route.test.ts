@@ -109,6 +109,8 @@ interface EntriesCfg {
   entriesError?: unknown;
 }
 
+const filtrosOr: string[] = [];
+
 function makeEntriesBuilder(cfg: EntriesCfg) {
   const b = {
     select() {
@@ -118,6 +120,11 @@ function makeEntriesBuilder(cfg: EntriesCfg) {
       return b;
     },
     neq() {
+      return b;
+    },
+    // D-145: a listagem traz também as sugestões do agente aguardando aprovação.
+    or(filtro: string) {
+      filtrosOr.push(filtro);
       return b;
     },
     order() {
@@ -200,6 +207,17 @@ describe("GET /api/v1/ai/memory", () => {
     expect(body.data.document).toBeNull();
     expect(body.data.versions).toEqual([]);
     expect(body.data.entries).toEqual([]);
+  });
+
+  it("a listagem inclui as sugestões do agente (proposed), e só elas entre as proposed", async () => {
+    mockAuthzOk("agent");
+    filtrosOr.length = 0;
+    vi.mocked(createAdminClient).mockReturnValue(
+      makeAdminStub({ pointer: null, versions: [], entries: [] }) as never,
+    );
+    const { GET } = await import("./route");
+    await GET(getReq());
+    expect(filtrosOr).toEqual(["status.neq.proposed,source.eq.agent"]);
   });
 });
 

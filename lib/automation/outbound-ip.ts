@@ -93,10 +93,19 @@ export function ipEhEspecial(ip: string): boolean {
  * precisar descobrir sozinho — que foi exatamente como este arquivo nasceu.
  */
 export async function assertDestinoResolvidoSeguro(hostname: string): Promise<void> {
+  await resolverDestinoSeguro(hostname);
+}
+
+/**
+ * O mesmo guard, devolvendo os endereços que ele VALIDOU. Quem conecta nesses
+ * endereços (e não no nome) fecha a janela de rebinding que o `fetch` deixa:
+ * é o que `lib/ai/mcp-externo/fetch-seguro.ts` faz (D-168).
+ */
+export async function resolverDestinoSeguro(hostname: string): Promise<string[]> {
   // Literal de IP não passa por DNS: julga direto.
   if (isIPv4(hostname) || isIPv6(hostname)) {
     if (ipEhEspecial(hostname)) throw new Error("unsafe_url:private_ip");
-    return;
+    return [hostname];
   }
 
   let enderecos: Array<{ address: string }>;
@@ -112,4 +121,5 @@ export async function assertDestinoResolvidoSeguro(hostname: string): Promise<vo
   for (const { address } of enderecos) {
     if (ipEhEspecial(address)) throw new Error("unsafe_url:private_ip");
   }
+  return enderecos.map((e) => e.address);
 }

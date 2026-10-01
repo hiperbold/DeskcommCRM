@@ -66,7 +66,7 @@ export const TOOLS_EVOLUCAO = declararTools([
     category: "write",
     rotulo: "Anotar uma regra aprendida",
     explicacao:
-      "Guarda um aprendizado que vale para todos os atendimentos, marcado como escrito pelo assistente para você distinguir do que anotou.",
+      "Sugere um aprendizado que vale para todos os atendimentos. Ele fica aguardando a sua aprovação na tela Memória da IA e só passa a valer depois que você aprovar.",
     oQueToca: "Regras da empresa",
     risco: "atencao",
     pacotes: ["evoluir"],

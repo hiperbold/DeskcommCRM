@@ -498,7 +498,14 @@ export function createOperatorTurnHandler(deps: InboundTurnDeps) {
       try {
         mcp = await montarFerramentasDoTurno(
           deps.crmCfg,
-          { organizationId: tenantId, jobId: job.id, contactId: leadId },
+          // `papel: 'operador'`: é o único a manter a busca ampla (D-096).
+          {
+            organizationId: tenantId,
+            jobId: job.id,
+            contactId: leadId,
+            conversationId: payload.conversation_id,
+            papel: 'operador',
+          },
           // A ponte lê `toolIds`; o papel guarda a lista dele em
           // `operatorToolIds`. A troca acontece AQUI, num ponto só, para que
           // nenhum caminho do Operador alcance a lista do Conversador por

@@ -359,7 +359,7 @@ describe("buildExternalMcpTools", () => {
         "org-1",
         [escrita.id!],
         fakeLog(),
-        { contexto: { agentId: "agent-1", jobId: "job-1" } },
+        { contexto: { agentId: "agent-1", jobId: "job-1", contactId: null, conversationId: null } },
         { abrir: vi.fn(async () => sessaoDeVerdade), carregar },
       );
       await r.tools[escrita.id!]!.execute!({ imovel: "Casa dos Ipês" }, execCtx);
@@ -679,7 +679,7 @@ describe("montarFerramentasDoTurno", () => {
       "org-1",
       ["mcp_n8n__buscar"],
       expect.anything(),
-      { readOnly: undefined, contexto: { agentId: "agent-1", jobId: "job-1" } },
+      { readOnly: undefined, contexto: { agentId: "agent-1", jobId: "job-1", contactId: null, conversationId: null } },
     );
     expect(Object.keys(r!.tools)).toEqual(["crm_move_lead_stage", "mcp_n8n__buscar"]);
     expect(r!.toolIds).toEqual(["crm_move_lead_stage"]);

@@ -24,6 +24,7 @@ import { mintEphemeralToken, revokeEphemeralToken } from '@/lib/ai/runtime/mcp_t
 import { IDS_DO_HARNESS, motivoDoHarness } from '@/lib/mcp/tools/ferramentas-do-harness';
 import type { McpAuthResult } from '@/lib/mcp/auth';
 import type { McpContext } from '@/lib/mcp/types';
+import type { PapelDoTurno } from '@/lib/mcp/escopo-do-turno';
 import { modulosLigados } from '@/lib/instalacao/modulos';
 import { filtrarToolsComCallbackDesabilitado } from '@/lib/followup/callback-policy';
 
@@ -56,7 +57,7 @@ export interface McpTurnTools {
 export async function buildMcpTurnTools(
   cfg: CrmEdgeConfig,
   /** `contactId`: o contato do turno — ver `contatoDoTurno` em `lib/ai/runtime/tools.ts`. */
-  ids: { organizationId: string; jobId: string; contactId?: string },
+  ids: { organizationId: string; jobId: string; contactId?: string; papel?: PapelDoTurno },
   agentConfig: PublishedAgentConfig,
   log: Logger,
   options?: { readOnly: boolean },
@@ -140,6 +141,8 @@ export async function buildMcpTurnTools(
     pipelineIds: agentConfig.pipelineIds,
     modulosLigados: await modulosLigados(cfg.supabase),
     ...(ids.contactId ? { contatoDoTurno: ids.contactId } : {}),
+    // Ausente = Conversador, o mais restrito (ver `PickToolsInput.papelDoTurno`).
+    ...(ids.papel ? { papelDoTurno: ids.papel } : {}),
   });
 
   return {

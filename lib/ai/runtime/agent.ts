@@ -606,6 +606,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       pipelineIds: (version as { pipeline_ids?: string[] }).pipeline_ids ?? [],
       modulosLigados: await modulosLigados(admin),
       handoffSignal,
+      // O contato da corrida (D-096): sem ele as ferramentas valeriam para a organização inteira.
+      ...(run.contact_id ? { contatoDoTurno: run.contact_id } : {}),
     });
 
     // 8) Load history with budget.
