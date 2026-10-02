@@ -81,7 +81,7 @@ export async function POST(req: NextRequest, ctx: Context): Promise<Response> {
   if (contato.is_anonymized) {
     return fail(
       "lgpd_anonymization_irreversible",
-      t("Contato anonimizado: edição bloqueada (LGPD)."),
+      t("Contato anonimizado — edição bloqueada (LGPD)."),
       403,
       { requestId },
     );
