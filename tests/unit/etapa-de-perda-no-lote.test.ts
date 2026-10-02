@@ -92,7 +92,13 @@ function clienteStub(estado: Estado) {
         maybeSingle() {
           // A etapa de destino do lote.
           return Promise.resolve({
-            data: { id: PERDIDO_ID, name: "Perdido", is_lost: estado.isLostDaEtapa },
+            data: {
+              id: PERDIDO_ID,
+              name: "Perdido",
+              is_lost: estado.isLostDaEtapa,
+              pipeline_id: PIPELINE_ID,
+              organization_id: ORG_ID,
+            },
             error: null,
           });
         },

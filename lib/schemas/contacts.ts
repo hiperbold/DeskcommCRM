@@ -12,6 +12,8 @@ import { z } from "zod";
 import { normalizarTag, normalizarTags } from "@/lib/contacts/tag-normalizada";
 import { isValidCpf, type PerfilDoPais } from "@/lib/legal/perfil-do-pais";
 
+import { objetoComTeto, TETO_DE_TAGS } from "./tetos";
+
 const PHONE_REGEX = /^\+\d{8,15}$/;
 
 /**
@@ -52,18 +54,45 @@ export const contactCreateSchema = z.object({
     .optional(),
   // O marcador nasce em caixa baixa, pela MESMA regra da tag de conversa: o
   // "VIP" gravado verbatim não casava com o filtro `?tag=vip` (issue #1224).
-  tags: z.array(z.string()).transform(normalizarTags).optional(),
+  tags: z.array(z.string().max(200)).max(TETO_DE_TAGS).transform(normalizarTags).optional(),
   source: z.string().min(1).default("manual"),
-  source_metadata: z.record(z.string(), z.unknown()).optional(),
-  consent: z.record(z.string(), z.unknown()).optional(),
+  source_metadata: objetoComTeto.optional(),
+  consent: objetoComTeto.optional(),
   custom_fields: customFieldsSchema.optional(),
 });
 export type ContactCreate = z.infer<typeof contactCreateSchema>;
 
+/**
+ * O PATCH genérico NÃO aceita `consent` nem `source_metadata` (D-151).
+ *
+ * Quem escreve pelo PATCH é a tela, um token de API ou um agente. Com o
+ * consentimento ali, um `{"consent":{"marketing":{}}}` trocava a entrada de
+ * marketing e a recusa (`declined_at`) sumia: a guarda de automação e a de
+ * prospecção voltavam a liberar o envio. E `source_metadata.ad_id` livre
+ * alimentava a hierarquia do anúncio. O consentimento tem rota própria
+ * (`POST /api/v1/contacts/{id}/consent`, manager, só registra) e a origem é
+ * escrita pela captação, nunca por edição. Mandar a chave é 422, e não descarte
+ * em silêncio: quem chamou precisa saber que o campo não foi gravado.
+ */
+const CAMPO_FORA_DO_PATCH =
+  "Este campo não é editável por aqui. Consentimento: POST /api/v1/contacts/{id}/consent. A origem do contato é gravada só pela captação.";
+
 export const contactPatchSchema = contactCreateSchema.partial().extend({
   source: z.string().min(1).optional(),
+  consent: z.never({ error: CAMPO_FORA_DO_PATCH }).optional(),
+  source_metadata: z.never({ error: CAMPO_FORA_DO_PATCH }).optional(),
 });
 export type ContactPatch = z.infer<typeof contactPatchSchema>;
+
+/**
+ * O que `patchContactHandler` aceita: o PATCH da API mais o `consent` (e a
+ * origem) que só código do servidor passa (a confirmação de dado proposto pela
+ * IA grava a base legal junto). O schema HTTP nunca produz essas chaves.
+ */
+export type ContactPatchInterno = Omit<ContactPatch, "consent" | "source_metadata"> & {
+  consent?: Record<string, unknown>;
+  source_metadata?: Record<string, unknown>;
+};
 
 /**
  * O documento do titular vem do PERFIL DO PAÍS da organização (issue #1033).

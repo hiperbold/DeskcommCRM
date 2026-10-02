@@ -1,4 +1,5 @@
 import type { createClient } from "@/lib/supabase/server";
+import { ehInstante, ehUuid } from "@/lib/query/cursor-seguro";
 import type { TimelineItem, TimelineItemView } from "@/lib/types/contacts";
 
 /**
@@ -65,7 +66,7 @@ export function decodeCursor(raw: string): Cursor | null {
   try {
     const json = Buffer.from(raw, "base64url").toString("utf8");
     const parsed = JSON.parse(json) as Cursor;
-    if (typeof parsed.id !== "string" || typeof parsed.performed_at !== "string") return null;
+    if (!ehUuid(parsed.id) || !ehInstante(parsed.performed_at)) return null;
     return parsed;
   } catch {
     return null;

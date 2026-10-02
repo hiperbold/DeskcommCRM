@@ -71,7 +71,14 @@ function clienteStub() {
         },
         maybeSingle() {
           return Promise.resolve({
-            data: { id: ETAPA_ABERTA_ID, name: "Em contato", is_lost: false, is_won: false },
+            data: {
+              id: ETAPA_ABERTA_ID,
+              name: "Em contato",
+              is_lost: false,
+              is_won: false,
+              pipeline_id: PIPELINE_ID,
+              organization_id: ORG_ID,
+            },
             error: null,
           });
         },

@@ -58,6 +58,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
   const { data: atual } = await supabase
     .from("financial_entries")
     .select("id, status, origin, amount_cents, direction")
+    .eq("organization_id", authz.org.orgId)
     .eq("id", id)
     .maybeSingle();
   if (!atual) return fail("not_found", "Lançamento não encontrado.", 404, { requestId });
@@ -71,11 +72,14 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
   const { error } = await supabase
     .from("financial_entries")
     .update({ status: "paid", paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("organization_id", authz.org.orgId)
     .eq("id", id);
   if (error) return fail("internal_error", error.message, 500, { requestId });
 
   await audit({
     action: "financeiro.lancamento_pago",
+    actorUserId: authz.user.id,
+    organizationId: authz.org.orgId,
     resourceType: "financial_entry",
     resourceId: id,
     requestId,
@@ -102,6 +106,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx): Promise<Response> {
   const { data: atual } = await supabase
     .from("financial_entries")
     .select("id, status, origin, amount_cents")
+    .eq("organization_id", authz.org.orgId)
     .eq("id", id)
     .maybeSingle();
   if (!atual) return fail("not_found", "Lançamento não encontrado.", 404, { requestId });
@@ -123,11 +128,17 @@ export async function DELETE(_req: NextRequest, ctx: Ctx): Promise<Response> {
     );
   }
 
-  const { error } = await supabase.from("financial_entries").delete().eq("id", id);
+  const { error } = await supabase
+    .from("financial_entries")
+    .delete()
+    .eq("organization_id", authz.org.orgId)
+    .eq("id", id);
   if (error) return fail("internal_error", error.message, 500, { requestId });
 
   await audit({
     action: "financeiro.lancamento_removido",
+    actorUserId: authz.user.id,
+    organizationId: authz.org.orgId,
     resourceType: "financial_entry",
     resourceId: id,
     requestId,

@@ -1085,6 +1085,9 @@ export const AUDIT_ACTIONS = [
   // o dado que importa quando alguém pergunta "por que este cliente voltou a
   // receber?".
   "contact.unblocked",
+  // Consentimento ou recusa registrado pela rota própria do contato (D-151);
+  // metadata.finalidade, acao e origem dizem o quê. Nunca apaga uma recusa.
+  "contact.consent_registered",
 ] as const;
 
 /** Um código de auditoria. Derivado de `AUDIT_ACTIONS` — não redigite a lista. */

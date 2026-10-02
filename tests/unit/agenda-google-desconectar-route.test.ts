@@ -110,6 +110,19 @@ describe("DELETE /api/v1/agenda/google/desconectar", () => {
     ).toContain("calendar_external_events");
   });
 
+  it("audita QUEM desconectou, com a organização (D-153)", async () => {
+    const { DELETE } = await import("@/app/api/v1/agenda/google/desconectar/route");
+    await DELETE(pedido());
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "agenda.google.conexao_desconectada",
+        actorUserId: ANA,
+        organizationId: ORG,
+        resourceId: CONEXAO,
+      }),
+    );
+  });
+
   it("apaga os CALENDÁRIOS — senão o cron segue iterando conexão desligada", async () => {
     const { DELETE } = await import("@/app/api/v1/agenda/google/desconectar/route");
     await DELETE(pedido());

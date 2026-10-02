@@ -68,6 +68,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   const { data: extrato, error } = await supabase
     .from("loyalty_ledger")
     .select("id, points, reason, sale_id, created_at")
+    .eq("organization_id", authz.org.orgId)
     .eq("contact_id", contactId)
     .order("created_at", { ascending: false })
     .limit(LIMITE_DO_EXTRATO);
@@ -120,6 +121,8 @@ export async function POST(req: NextRequest): Promise<Response> {
   // LGPD chega; o audit guarda só quantos pontos e que houve justificativa.
   await audit({
     action: lido.data.points > 0 ? "fidelidade.ponto_dado" : "fidelidade.ponto_resgatado",
+    actorUserId: authz.user.id,
+    organizationId: authz.org.orgId,
     resourceType: "contact",
     resourceId: lido.data.contact_id,
     requestId,

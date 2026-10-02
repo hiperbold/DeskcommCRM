@@ -7,6 +7,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { ApiError } from "@/lib/api/types";
+import { ehInstante, ehUuid } from "@/lib/query/cursor-seguro";
 import type { Actor, HandlerCtx } from "@/lib/api/handlers/types";
 import { audit } from "@/lib/audit";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -107,10 +108,12 @@ function decodeCursor(raw: string): CursorPayload | null {
   try {
     const json = Buffer.from(raw, "base64url").toString("utf8");
     const parsed = JSON.parse(json) as CursorPayload & { last_message_at?: string | null };
-    if (typeof parsed.id !== "string") return null;
+    if (!ehUuid(parsed.id)) return null;
     // `last_message_at` é o nome legado do campo de ordenação (cursores em voo
     // durante deploy); `sort` é o genérico atual (default OU fila).
     const sort = parsed.sort ?? parsed.last_message_at ?? null;
+    // D-165: o `sort` entra no `.or()` como texto; só data de verdade passa.
+    if (sort !== null && !ehInstante(sort)) return null;
     return { sort, id: parsed.id };
   } catch {
     return null;
@@ -458,18 +461,45 @@ export async function patchConversationHandler(
     input.status === "claimed" && ctx.actor.type === "user" ? ctx.actor.id : null;
 
   if (assumirPelaRpc !== null) {
-    const { error: erroRpc } = await supabase.rpc("fn_conversation_assign", {
+    // D-165: sem a trava otimista, qualquer agent mandava `{status:"claimed"}` e
+    // tomava em silêncio a conversa em que outro estava trabalhando (o `POST
+    // /claim` exige `expected_assignee`). Conversa de OUTRO humano é 409 e a
+    // troca de dono vai pelo `/claim`; a que está livre (ou já é do próprio ator)
+    // é assumida com o dono lido como esperado, o que fecha a corrida.
+    const atual = await getConversationHandler(supabase, ctx, conversationId);
+    const donoAtual = atual.assigned_to_user_id ?? null;
+    if (donoAtual !== null && donoAtual !== assumirPelaRpc) {
+      throw new ApiError(
+        409,
+        "conflict",
+        undefined,
+        ctx.requestId,
+        traduzir(
+          "A conversa já tem outro responsável. Para assumir, use POST /api/v1/conversations/{id}/claim com expected_assignee.",
+          ctx.idioma ?? "pt-BR",
+        ),
+      );
+    }
+    const { data: assumida, error: erroRpc } = await supabase.rpc("fn_conversation_assign", {
       p_organization_id: ctx.organization_id,
       p_conversation_id: conversationId,
       p_to_user_id: assumirPelaRpc,
       p_reason: "claim",
-      p_expected_assignee: null,
-      // Sem lock otimista: este atalho nunca teve um, e passar a exigi-lo faria
-      // um cliente da API que hoje funciona começar a receber 409.
-      p_enforce_expected: false,
+      p_expected_assignee: donoAtual,
+      p_enforce_expected: true,
     });
     if (erroRpc) {
       throw new ApiError(500, "internal_error", undefined, ctx.requestId, erroRpc.message);
+    }
+    // A função devolve vazio quando o dono mudou entre a leitura e a escrita.
+    if (!assumida?.[0]) {
+      throw new ApiError(
+        409,
+        "conflict",
+        undefined,
+        ctx.requestId,
+        traduzir("A conversa mudou de responsável. Recarregue e tente de novo.", ctx.idioma ?? "pt-BR"),
+      );
     }
   }
 

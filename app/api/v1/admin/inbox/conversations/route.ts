@@ -4,6 +4,7 @@ import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
+import { exigeAcompanhamentoAtivo } from "@/lib/impersonate/leitura-com-suporte";
 import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -31,9 +32,19 @@ function encodeCursor(payload: CursorPayload): string {
   return Buffer.from(JSON.stringify(payload)).toString("base64url");
 }
 
+// O cursor entra no `.or()` do PostgREST como texto. Valida a forma (data e uuid)
+// em vez de confiar no que o base64 trouxe (D-152): uma vírgula ou um parêntese
+// ali acrescentaria condição ao filtro.
+const cursorSchema = z.object({
+  last_inbound_at: z.string().datetime({ offset: true }).nullable(),
+  id: z.string().uuid(),
+});
+
 function decodeCursor(cursor: string): CursorPayload | null {
   try {
-    return JSON.parse(Buffer.from(cursor, "base64url").toString("utf-8")) as CursorPayload;
+    const bruto = JSON.parse(Buffer.from(cursor, "base64url").toString("utf-8"));
+    const valido = cursorSchema.safeParse(bruto);
+    return valido.success ? valido.data : null;
   } catch {
     return null;
   }
@@ -65,10 +76,20 @@ export async function GET(req: NextRequest) {
 
   const { q, status, tenant_id, cursor, limit } = parsed.data;
 
+  // D-152: ler conversa de cliente exige acompanhamento ativo (motivo, TTL e
+  // aal2 vêm do `fn_start_support`). A listagem é da organização acompanhada:
+  // sem `tenant_id` assume a dela, e um `tenant_id` de outra organização é 403.
+  const acompanhamento = await exigeAcompanhamentoAtivo(tenant_id ?? null, requestId);
+  if (!acompanhamento.ok) return acompanhamento.response;
+  const organizationId = acompanhamento.support.organization_id;
+
   const admin = createAdminClient();
 
   // Decode cursor for keyset pagination
   const cursorPayload = cursor ? decodeCursor(cursor) : null;
+  if (cursor && !cursorPayload) {
+    return fail("validation_error", "Invalid cursor", 400, { requestId });
+  }
 
   // Build query — cross-tenant intentional, service-role bypasses RLS
   let query = admin
@@ -97,9 +118,8 @@ export async function GET(req: NextRequest) {
     query = query.eq("status", status);
   }
 
-  if (tenant_id) {
-    query = query.eq("organization_id", tenant_id);
-  }
+  // Sempre a organização do acompanhamento: o service role não tem RLS.
+  query = query.eq("organization_id", organizationId);
 
   if (q) {
     // search by last_message_preview or contact phone (best-effort, no FTS needed)
@@ -136,16 +156,20 @@ export async function GET(req: NextRequest) {
       })
     : null;
 
-  // Audit (lightweight — no PII in metadata)
-  void audit({
+  // Audit (lightweight — no PII in metadata). Com a organização, para ela ver
+  // na própria tela de auditoria que a plataforma leu a caixa de entrada, e
+  // esperada antes da resposta: a leitura não sai sem a gravação ter sido tentada.
+  await audit({
     action: "platform_admin.inbox_listed",
     actorUserId: adminCtx.user.id,
+    organizationId,
     actingAsPlatformAdmin: true,
     bypassedRls: true,
     requestId,
     metadata: {
-      filters: { status: status ?? null, tenant_id: tenant_id ?? null, has_q: !!q },
+      filters: { status: status ?? null, tenant_id: organizationId, has_q: !!q },
       result_count: page.length,
+      support_session_id: acompanhamento.support.id,
     },
   });
 

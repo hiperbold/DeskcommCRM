@@ -9,6 +9,8 @@
  */
 import { z } from "zod";
 
+import { objetoComTeto, tagsDeLeadComTeto } from "./tetos";
+
 /**
  * Accept either ISO 8601 (e.g. "2026-04-29T03:15:54.000Z") or Postgres-style
  * timestamptz (e.g. "2026-04-29 03:15:54.123456+00") since Supabase returns
@@ -50,7 +52,7 @@ export const moveLeadSchema = z.object({
    * com o que o lead já tem e valida o VALOR COMBINADO — é por isso que a
    * segunda tentativa passa na mesma régua que a primeira recusou.
    */
-  custom_fields: z.record(z.string(), z.unknown()).optional(),
+  custom_fields: objetoComTeto.optional(),
 });
 export type MoveLeadInput = z.infer<typeof moveLeadSchema>;
 
@@ -200,7 +202,7 @@ export const createLeadSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .nullable()
     .optional(),
-  tags: z.array(z.string()).default([]),
+  tags: tagsDeLeadComTeto.default([]),
   source: z.string().min(1).default("manual"),
 });
 export type CreateLeadInput = z.infer<typeof createLeadSchema>;
@@ -228,8 +230,8 @@ export const updateLeadSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .nullable()
     .optional(),
-  tags: z.array(z.string()).optional(),
-  custom_fields: z.record(z.string(), z.unknown()).optional(),
+  tags: tagsDeLeadComTeto.optional(),
+  custom_fields: objetoComTeto.optional(),
 });
 export type UpdateLeadInput = z.infer<typeof updateLeadSchema>;
 
@@ -262,8 +264,8 @@ export const bulkLeadActionSchema = z.discriminatedUnion("action", [
     action: z.literal("tag"),
     lead_ids: z.array(z.string().uuid()).min(1).max(50),
     params: z.object({
-      add: z.array(z.string()).optional(),
-      remove: z.array(z.string()).optional(),
+      add: tagsDeLeadComTeto.optional(),
+      remove: tagsDeLeadComTeto.optional(),
     }),
   }),
   z.object({

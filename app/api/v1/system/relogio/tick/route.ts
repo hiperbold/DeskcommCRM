@@ -2,7 +2,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 /**
  * POST /api/v1/system/relogio/tick — uma batida do relógio.
  *
- * Auth: sessão admin OU Bearer INTERNAL_SECRET (GitHub Actions / cron externo).
+ * Auth: sessão de admin da PLATAFORMA OU Bearer INTERNAL_SECRET (GitHub Actions / cron externo).
  */
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
@@ -55,7 +55,10 @@ async function sessaoAdmin(requestId: string): Promise<boolean> {
     resource: "system_relogio_tick",
     allowPlatformAdmin: true,
   });
-  return authz.ok;
+  // D-132: o tick roda a fila, o follow-up, o roteamento e a recuperação de
+  // TODAS as organizações e devolve o `detalhe` dos erros delas. Admin de uma
+  // organização não pode dispará-lo: pela sessão só entra admin de PLATAFORMA.
+  return authz.ok && authz.user.is_platform_admin === true;
 }
 
 export async function POST(req: NextRequest): Promise<Response> {

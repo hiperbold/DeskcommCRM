@@ -133,16 +133,32 @@ export async function registrarEnvioPorToken(
   await deps.pacing.registraEnvio(organizationId, segurado.channelSessionId, deps.agora());
 }
 
+/**
+ * D-167: erro na leitura do canal é RECUSA, não "sem freio". Antes o erro virava
+ * `data = null`, o canal saía como inexistente e o envio seguia sem espaçamento
+ * num número que pode ser banido. Quem chama já trata `ApiError`.
+ */
+function falhaDeLeituraDoCanal(): ApiError {
+  return new ApiError(
+    503,
+    "upstream_unavailable",
+    undefined,
+    "",
+    "Não foi possível conferir o ritmo de envio deste número agora. Tente de novo em instantes.",
+  );
+}
+
 /** As dependências reais. `admin` é service role: toda leitura filtra `organization_id`. */
 export async function depsDoRitmo(admin: SupabaseClient): Promise<DepsDoRitmo> {
   return {
     async lerCanalDaConversa(organizationId, conversationId) {
-      const { data } = await admin
+      const { data, error } = await admin
         .from("conversations")
         .select("channel_session_id, channel_sessions:channel_session_id(provider)")
         .eq("organization_id", organizationId)
         .eq("id", conversationId)
         .maybeSingle();
+      if (error) throw falhaDeLeituraDoCanal();
       const linha = data as {
         channel_session_id: string | null;
         channel_sessions: { provider: string | null } | null;
@@ -154,12 +170,13 @@ export async function depsDoRitmo(admin: SupabaseClient): Promise<DepsDoRitmo> {
       };
     },
     async lerCanalDaSessao(organizationId, channelSessionId) {
-      const { data } = await admin
+      const { data, error } = await admin
         .from("channel_sessions")
         .select("id, provider")
         .eq("organization_id", organizationId)
         .eq("id", channelSessionId)
         .maybeSingle();
+      if (error) throw falhaDeLeituraDoCanal();
       const linha = data as { id: string; provider: string | null } | null;
       if (!linha?.id) return null;
       return {

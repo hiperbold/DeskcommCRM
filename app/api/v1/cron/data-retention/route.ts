@@ -331,29 +331,47 @@ export async function podarHistorico(
     piso: RETENCAO_CANDIDATOS_GOLDEN_DIAS_PISO,
   });
 
-  const jobs = await drenar(db, "fn_podar_fila_de_jobs", fila.dias);
-  const linhas = await drenar(db, "fn_expurgar_auditoria_vencida", auditoria.dias);
-  const eventos = await drenar(db, "fn_expurgar_espelho_da_agenda", espelho.dias);
+  // D-167: cada poda roda mesmo que uma anterior tenha falhado. Antes a primeira
+  // exceção (a fila de jobs, por exemplo) deixava auditoria, espelho da agenda,
+  // nonces, conversa do caso, prospecção e rascunhos sem poda naquele dia. Os erros
+  // são juntados e sobem no FIM, com o texto de todos (o handler responde 500 e o
+  // cron externo vê a falha).
+  const erros: string[] = [];
+  const vazio = { apagadas: 0, lotes: 0, temResto: true };
+  const tentar = async (
+    poda: () => Promise<{ apagadas: number; lotes: number; temResto: boolean }>,
+  ) => {
+    try {
+      return await poda();
+    } catch (err) {
+      erros.push(err instanceof Error ? err.message : String(err));
+      return vazio;
+    }
+  };
+
+  const jobs = await tentar(() => drenar(db, "fn_podar_fila_de_jobs", fila.dias));
+  const linhas = await tentar(() => drenar(db, "fn_expurgar_auditoria_vencida", auditoria.dias));
+  const eventos = await tentar(() => drenar(db, "fn_expurgar_espelho_da_agenda", espelho.dias));
   // Quarta poda: os nonces de OAuth já queimados. O `state` vale dez minutos,
   // então um dia é folga de duas ordens de grandeza — e sem esta linha a tabela
   // cresceria para sempre, uma linha por conexão tentada, num produto que se
   // instala e ninguém monitora.
-  const nonces = await drenar(db, "fn_expurgar_nonces_de_oauth", 1);
+  const nonces = await tentar(() => drenar(db, "fn_expurgar_nonces_de_oauth", 1));
   // Quinta poda: a conversa da equipe com a IA sobre um caso (migration 0281).
   // O piso de 90 dias mora no CORPO da função; o número daqui é o que o
   // operador pediu, já elevado, e é ele que aparece no relatório da rodada.
-  const conversas = await drenar(db, "fn_expurgar_conversa_do_caso_vencida", conversaDoCaso.dias);
+  const conversas = await tentar(() => drenar(db, "fn_expurgar_conversa_do_caso_vencida", conversaDoCaso.dias));
   // Sexta poda: o registro da passagem do atendimento para uma pessoa (0291). O
   // piso de 90 dias mora no CORPO da função, como nas anteriores — e ela tem uma
   // segunda guarda que só ela tem: passagem NÃO RECONHECIDA nunca é apagada, em
   // nenhuma idade. Uma passagem aberta é alguém esperando resposta.
-  const passagens = await drenar(db, "fn_expurgar_passagens_vencidas", passagem.dias);
+  const passagens = await tentar(() => drenar(db, "fn_expurgar_passagens_vencidas", passagem.dias));
   // Sétima poda: o registro de entrega do aviso de caso no WhatsApp da equipe
   // (0292). O piso de 30 dias mora no CORPO da função, como nas anteriores. Ela
   // não guarda o texto do aviso (só o resumo criptográfico dele), então o que se
   // poda aqui é volume de operação — e é a poda de horizonte mais curto das
   // sete, porque a única pergunta que a linha responde é de semanas.
-  const avisosDeCaso = await drenar(db, "fn_expurgar_avisos_de_caso_vencidos", avisoDeCaso.dias);
+  const avisosDeCaso = await tentar(() => drenar(db, "fn_expurgar_avisos_de_caso_vencidos", avisoDeCaso.dias));
   // Oitava poda: o candidato de prospecção nativa vencido (migration 0408,
   // issue #1313). Padrão 365 / piso 90 — decisão do dono, alinhada ao
   // horizonte da conversa do caso e da captação. O piso mora no CORPO da
@@ -362,19 +380,23 @@ export async function podarHistorico(
   // (`suppression_salt is not null`) nunca entra — é ele que barra a
   // reimportação. É a primeira poda da casa cujo dado é de uma pessoa que
   // NUNCA falou com a empresa, então as duas guardas são a regra, não enfeite.
-  const prospeccaoDrenada = await drenar(db, "fn_expurgar_prospeccao_vencida", prospeccao.dias);
+  const prospeccaoDrenada = await tentar(() => drenar(db, "fn_expurgar_prospeccao_vencida", prospeccao.dias));
   // Nona poda: as observações do Jev (0421). Padrão 90 / piso 30, a janela da
   // concordância que o cartão mostra — o piso mora no CORPO da função.
-  const observacoesDrenadas = await drenar(db, "fn_expurgar_observacoes_do_jev", observacoesDoJev.dias);
+  const observacoesDrenadas = await tentar(() => drenar(db, "fn_expurgar_observacoes_do_jev", observacoesDoJev.dias));
   // Décima poda: o rascunho sugerido por integração já VENCIDO (migration 0419,
   // issue #1686). A única que não passa pelo `rpc` — a tabela 0419 não tem
   // função de expurgo, e o corte (`expires_at` + prazo) nasce em TypeScript,
   // mesma exceção da captação. Piso de 7 dias mora AQUI, no interpretador.
-  const rascunhosDrenados = await drenarRascunhos(db, rascunho.dias);
+  const rascunhosDrenados = await tentar(() => drenarRascunhos(db, rascunho.dias));
   // Décima primeira poda: o candidato ao golden set (0428, issue #1695).
   // Padrão 90 / piso 30, a janela em que o near-miss ainda é curável — o piso mora no
   // CORPO da função, como nas irmãs. A linha é rótulo, sem texto de cliente.
-  const candidatosDrenados = await drenar(db, "fn_expurgar_candidatos_do_golden", candidatosDoGolden.dias);
+  const candidatosDrenados = await tentar(() => drenar(db, "fn_expurgar_candidatos_do_golden", candidatosDoGolden.dias));
+
+  if (erros.length > 0) {
+    throw new Error(`poda de retenção com falha em ${erros.length} etapa(s): ${erros.join("; ")}`);
+  }
 
   return {
     jobs_apagados: jobs.apagadas,

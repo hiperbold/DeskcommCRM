@@ -18,12 +18,13 @@ import type { Idioma } from "@/lib/i18n/idiomas";
 import { roleAtLeast } from "@/lib/auth/types";
 import { canonicalPhoneBR, phoneLookupVariants } from "@/lib/channels/phone-variants";
 import { encontrarContatoPorTelefone } from "@/lib/channels/contato-por-telefone";
+import { mesclarConsentimento } from "@/lib/contacts/consentimento";
 import { hashCpf, encryptCpfSql } from "@/lib/contacts/cpf";
 import type { Contact } from "@/lib/types/contacts";
 import { ensureConversation, sessaoProntaParaEnvio } from "@/lib/automation/start-conversation";
 import type {
   ContactCreate,
-  ContactPatch,
+  ContactPatchInterno,
   ContactListQuery,
   ContactListQueryParams,
 } from "@/lib/schemas";
@@ -485,7 +486,7 @@ export async function patchContactHandler(
   supabase: SB,
   ctx: HandlerCtx,
   contactId: string,
-  input: ContactPatch,
+  input: ContactPatchInterno,
 ): Promise<Contact> {
   const { data: existing, error: selErr } = await supabase
     .from("contacts")
@@ -559,11 +560,14 @@ export async function patchContactHandler(
     //
     // Perda de consentimento não é bug barulhento — é a base legal de um envio
     // futuro sumindo sem ninguém ver.
-    const anterior = ((existing as { consent?: Record<string, unknown> }).consent ?? {}) as Record<
-      string,
-      unknown
-    >;
-    patch.consent = { ...anterior, ...input.consent };
+    //
+    // A recusa registrada (`declined_at`) sobrevive a qualquer entrada (D-151):
+    // o schema do PATCH da API já não aceita `consent`, e este merge é a segunda
+    // trava para quem chama o handler por código do servidor.
+    patch.consent = mesclarConsentimento(
+      (existing as { consent?: Record<string, unknown> }).consent ?? {},
+      input.consent,
+    );
   }
   if (input.cpf !== undefined) {
     patch.cpf_hash = hashCpf(input.cpf);

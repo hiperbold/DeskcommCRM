@@ -99,9 +99,12 @@ describe("GET /api/v1/anuncios/meta/[org]", () => {
     await chamar("?utm_campaign=black-friday&nome=Fulano&telefone=5511999999999");
 
     expect(estado.inserts[0]?.utm).toEqual({ utm_campaign: "black-friday" });
-    // A query crua fica guardada inteira de propósito (é a prova de onde o
-    // clique veio), mas o que vira ATRIBUIÇÃO é só a UTM normalizada.
-    expect(estado.inserts[0]?.query_raw).toMatchObject({ nome: "Fulano" });
+    // D-132: `query_raw` NÃO guarda a query inteira. A rota é pública e a landing
+    // pode repassar nome e telefone; só as chaves que `normalizarUtm` aceitou ficam.
+    const bruto = JSON.stringify(estado.inserts[0]?.query_raw);
+    expect(bruto).not.toContain("Fulano");
+    expect(bruto).not.toContain("5511999999999");
+    expect(estado.inserts[0]?.query_raw).toEqual({ utm_campaign: "black-friday" });
   });
 
   it("hit sem UTM nenhuma: vai para o WhatsApp sem ref, e não grava linha", async () => {

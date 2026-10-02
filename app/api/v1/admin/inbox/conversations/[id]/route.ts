@@ -3,6 +3,7 @@ import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
+import { exigeAcompanhamentoAtivo } from "@/lib/impersonate/leitura-com-suporte";
 import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +26,13 @@ export async function GET(
 
   const admin = createAdminClient();
 
-  // Load conversation (cross-tenant — no org filter, intentional)
+  // Só a organização do acompanhamento ativo (D-152). O filtro de organização
+  // entra na própria busca: id de conversa de outra organização é "não achei",
+  // sem confirmar que ele existe.
+  const acompanhamento = await exigeAcompanhamentoAtivo(null, requestId);
+  if (!acompanhamento.ok) return acompanhamento.response;
+  const organizationId = acompanhamento.support.organization_id;
+
   const { data: conversation, error: convError } = await admin
     .from("conversations")
     .select(`
@@ -42,6 +49,7 @@ export async function GET(
       created_at,
       updated_at
     `)
+    .eq("organization_id", organizationId)
     .eq("id", id)
     .maybeSingle();
 
@@ -56,7 +64,7 @@ export async function GET(
   const { data: organization } = await admin
     .from("organizations")
     .select("id, display_name, slug, status")
-    .eq("id", conversation.organization_id)
+    .eq("id", organizationId)
     .maybeSingle();
 
   // Load contact
@@ -64,9 +72,15 @@ export async function GET(
     ? await admin
         .from("contacts")
         .select("id, name, phone_number, email, is_anonymized, is_blocked")
+        .eq("organization_id", organizationId)
         .eq("id", conversation.contact_id)
         .maybeSingle()
     : { data: null };
+  // Contato anonimizado não devolve identificação nem pelo painel da plataforma.
+  const contatoParaAdmin =
+    contact && contact.is_anonymized
+      ? { ...contact, name: null, phone_number: null, email: null }
+      : contact;
 
   // Load last 50 messages (desc — client reverses for display)
   const { data: messages, error: msgError } = await admin
@@ -91,6 +105,7 @@ export async function GET(
       sent_by_user_id,
       created_at
     `)
+    .eq("organization_id", organizationId)
     .eq("conversation_id", id)
     .order("created_at", { ascending: false })
     .limit(50);
@@ -102,24 +117,24 @@ export async function GET(
     });
   }
 
-  // Audit — tenant_id only, no PII
-  void audit({
+  // Audit — tenant_id only, no PII. Esperada antes da resposta (D-152).
+  await audit({
     action: "platform_admin.conversation_viewed",
     actorUserId: adminCtx.user.id,
     actingAsPlatformAdmin: true,
     bypassedRls: true,
     requestId,
-    organizationId: conversation.organization_id,
+    organizationId,
     resourceType: "conversation",
     resourceId: id,
-    metadata: { tenant_id: conversation.organization_id },
+    metadata: { tenant_id: organizationId, support_session_id: acompanhamento.support.id },
   });
 
   return ok(
     {
       conversation,
       organization: organization ?? null,
-      contact: contact ?? null,
+      contact: contatoParaAdmin ?? null,
       messages: messages ?? [],
     },
     { requestId },

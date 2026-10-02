@@ -153,6 +153,7 @@ export async function DELETE(req: NextRequest): Promise<Response> {
   for (const conexao of conexoes) {
     await audit({
       action: "agenda.google.conexao_desconectada",
+      actorUserId: user.id,
       organizationId: org.orgId,
       resourceType: "calendar_connections",
       resourceId: conexao.id,

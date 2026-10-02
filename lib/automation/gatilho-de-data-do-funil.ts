@@ -195,6 +195,8 @@ export function naoDisparados(
   return leads.filter((lead) => !jaEmitidos.has(chaveDeDisparo(regraId, lead)));
 }
 
+const CHAVE_DE_CAMPO = /^[A-Za-z][A-Za-z0-9_]*$/;
+
 /**
  * Lê a configuração do gatilho como ela veio do banco (jsonb) ou da tela.
  *
@@ -209,6 +211,12 @@ export function configDoGatilhoDeData(bruto: unknown): ConfigDoGatilhoDeData | n
   const { pipeline_id: pipelineId, campo, dias } = bruto as Record<string, unknown>;
   if (typeof pipelineId !== "string" || !pipelineId.trim()) return null;
   if (typeof campo !== "string" || !campo.trim()) return null;
+  // D-167: a chave entra no `.or()` do cron como texto (`custom_fields->>campo`).
+  // Só a forma de uma chave de campo do funil passa (`settings.ts`: letra, depois
+  // letras, números e underscore); vírgula, ponto ou parêntese acrescentariam
+  // condição ao filtro. Vale na gravação da regra (o schema chama esta função) e
+  // na leitura do cron (linha torta ou antiga).
+  if (!CHAVE_DE_CAMPO.test(campo.trim())) return null;
   if (!Number.isInteger(dias)) return null;
 
   const n = dias as number;

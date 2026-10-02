@@ -274,6 +274,41 @@ describe("podarHistorico — o laço de lotes", () => {
     };
     await expect(podarHistorico(db, {})).rejects.toThrow(/permission denied/);
   });
+
+  it("D-167: uma poda que falha NÃO deixa as outras sem rodar, e o erro junta todas as falhas", async () => {
+    const chamadas: string[] = [];
+    const db: PodaDb = {
+      async rpc(nome) {
+        chamadas.push(nome);
+        // Só a fila de jobs falha; as demais são podas que o dia precisa fazer.
+        if (nome === "fn_podar_fila_de_jobs") {
+          return { data: null, error: { message: "deadlock detected" } };
+        }
+        return { data: 0, error: null };
+      },
+      async apagarRascunhos() {
+        chamadas.push("rascunhos");
+        return { data: null, error: { message: "permission denied for table conversation_drafts" } };
+      },
+    };
+    const erro = await podarHistorico(db, {}).then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(erro?.message).toMatch(/deadlock detected/);
+    expect(erro?.message).toMatch(/conversation_drafts/);
+    // A falha da primeira não cortou a auditoria, o espelho, os nonces nem o resto.
+    expect(chamadas).toEqual(
+      expect.arrayContaining([
+        "fn_expurgar_auditoria_vencida",
+        "fn_expurgar_espelho_da_agenda",
+        "fn_expurgar_nonces_de_oauth",
+        "fn_expurgar_prospeccao_vencida",
+        "fn_expurgar_candidatos_do_golden",
+        "rascunhos",
+      ]),
+    );
+  });
 });
 
 describe("a décima poda — o rascunho sugerido vencido (issue #1686)", () => {

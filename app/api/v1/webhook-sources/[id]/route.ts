@@ -10,7 +10,9 @@ import { ok, fail, noContent } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
+import { ApiError } from "@/lib/api/types";
 import { autoriaDaMudanca } from "@/lib/operacao/autoria";
+import { destinoValido } from "@/lib/operacao/entradas-automaticas";
 import { updateWebhookSourceSchema } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -51,12 +53,31 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
   const supabase = await createClient();
   const { data: existing, error: fetchErr } = await supabase
     .from("webhook_sources")
-    .select("id")
+    .select("id, default_pipeline_id, default_stage_id")
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
   if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
   if (!existing) return fail("not_found", t("Fonte não encontrada."), 404, { requestId });
+
+  // D-132: o POST confere o destino (funil e etapa desta organizacao, etapa do
+  // funil e em uso); o PATCH nao conferia, e a fonte so falhava em silencio na
+  // hora de criar o lead. Vale o par que ficaria gravado: o enviado, ou o que ja
+  // existe para a metade omitida.
+  if (parsed.data.default_pipeline_id !== undefined || parsed.data.default_stage_id !== undefined) {
+    try {
+      await destinoValido(
+        { supabase, organizationId: activeOrg.orgId, actor: { type: "user", id: user.id }, requestId },
+        parsed.data.default_pipeline_id ?? (existing as { default_pipeline_id: string }).default_pipeline_id,
+        parsed.data.default_stage_id ?? (existing as { default_stage_id: string }).default_stage_id,
+      );
+    } catch (err) {
+      if (err instanceof ApiError) {
+        return fail(err.code, err.message ?? t("Destino inválido."), err.status, { requestId });
+      }
+      throw err;
+    }
+  }
 
   // secret plaintext do input vira secret_encrypted (migration 0041); a coluna
   // em claro não existe mais. `secret: null` remove o segredo da fonte.

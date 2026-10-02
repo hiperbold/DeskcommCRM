@@ -39,6 +39,7 @@ export async function GET(_req: NextRequest, ctx: Ctx): Promise<Response> {
     .select(
       "id, number, status, contact_id, attendant_user_id, appointment_id, discount_cents, total_cents, currency, payment_method_id, notes, finalized_at, cancelled_at, cancel_reason, reversed_at, reverse_reason, created_at, sale_items(id, description, quantity, unit_price_cents, discount_cents, total_cents, commission_percent, attendant_user_id, event_type_id, created_at)",
     )
+    .eq("organization_id", authz.org.orgId)
     .eq("id", id)
     .maybeSingle();
 
@@ -81,6 +82,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
   const { data: atual } = await supabase
     .from("sales")
     .select("id, status, number")
+    .eq("organization_id", authz.org.orgId)
     .eq("id", id)
     .maybeSingle();
   if (!atual) return fail("not_found", "Comanda não encontrada.", 404, { requestId });
@@ -104,7 +106,11 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
     mudanca.cancelled_at = new Date().toISOString();
   }
 
-  const { error } = await supabase.from("sales").update(mudanca).eq("id", id);
+  const { error } = await supabase
+    .from("sales")
+    .update(mudanca)
+    .eq("organization_id", authz.org.orgId)
+    .eq("id", id);
   if (error) return fail("internal_error", error.message, 500, { requestId });
 
   // ⚠️ NUNCA espalhe o corpo lido aqui. `lib/audit` grava `metadata` CRU em
@@ -120,6 +126,8 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
   // a observação. Este é o padrão que o POST de abertura já segue.
   await audit({
     action: lido.data.cancel ? "comanda.cancelada" : "comanda.alterada",
+    actorUserId: authz.user.id,
+    organizationId: authz.org.orgId,
     resourceType: "sale",
     resourceId: id,
     requestId,

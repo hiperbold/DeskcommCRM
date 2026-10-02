@@ -22,6 +22,7 @@ import {
   retomarLeadHandler,
 } from "@/app/api/v1/leads/_handler";
 import { createLeadSchema, updateLeadSchema } from "@/lib/schemas/leads";
+import { objetoComTeto, tagsDeLeadComTeto } from "@/lib/schemas/tetos";
 import { resolveUserNames } from "./_users";
 import type { McpContext, McpToolDefinition } from "../types";
 
@@ -190,7 +191,7 @@ const createInputShape = {
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
-  tags: z.array(z.string()).optional(),
+  tags: tagsDeLeadComTeto.optional(),
   source: z.string().optional(),
 };
 
@@ -250,7 +251,7 @@ const updateInputShape = {
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
-  tags: z.array(z.string()).optional(),
+  tags: tagsDeLeadComTeto.optional(),
   /**
    * Os campos que o DONO declarou em `pipeline.settings.fields`.
    *
@@ -265,7 +266,7 @@ const updateInputShape = {
    * modelou o funil no vocabulário do próprio nicho recebia a IA como leitora,
    * nunca como escrivã.
    */
-  custom_fields: z.record(z.string(), z.unknown()).optional(),
+  custom_fields: objetoComTeto.optional(),
 };
 
 export const crmUpdateLead: McpToolDefinition<typeof updateInputShape> = {

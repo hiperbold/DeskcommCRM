@@ -145,7 +145,15 @@ describe("GET /api/v1/agenda/google/connect", () => {
     const res = await GET(pedido());
     expect(res.headers.get("location")).toBe("https://crm.exemplo/app/agenda?erro=segredo_indisponivel");
     expect(audit).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "agenda.google.conexao_falhou" }),
+      expect.objectContaining({ action: "agenda.google.conexao_falhou", actorUserId: ANA, organizationId: ORG }),
+    );
+  });
+
+  it("iniciar a conexão audita QUEM iniciou, com a organização (D-153)", async () => {
+    const { GET } = await rotaComEnv(CONFIGURADO);
+    await GET(pedido());
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "agenda.google.conexao_iniciada", actorUserId: ANA, organizationId: ORG }),
     );
   });
 

@@ -169,3 +169,23 @@ describe("a configuração que a regra guarda", () => {
     expect(configDoGatilhoDeData({ ...valida, dias: Number.NaN })).toBeNull();
   });
 });
+
+describe("D-167: a chave do campo da regra não carrega sintaxe de filtro", () => {
+  const base = { pipeline_id: "p1", dias: 1 };
+
+  it.each([
+    "data_do_pedido,organization_id.neq.x",
+    "campo)or(id.gt.0",
+    "a.b",
+    "1campo",
+    "campo com espaco",
+  ])("recusa %s", (campo) => {
+    expect(configDoGatilhoDeData({ ...base, campo })).toBeNull();
+  });
+
+  it("aceita chave de campo normal", () => {
+    expect(configDoGatilhoDeData({ ...base, campo: "data_do_pedido" })).toMatchObject({
+      campo: "data_do_pedido",
+    });
+  });
+});

@@ -440,13 +440,30 @@ async function rodarUmaCampanha(
   // ela pode ter crescido depois do snapshot, e o ponto dela é impedir o envio.
   const enderecoAtual = (contato?.phone_number ?? alvo.recipient_address ?? "").trim();
   if (enderecoAtual !== "") {
-    const { data: suprimido } = await admin
+    // D-167/D-131: erro na consulta NÃO é "não está na lista". Antes o erro
+    // virava `suprimido = null` e o envio saía para quem pode ter pedido para
+    // parar. Agora o destinatário é adiado e a próxima rodada tenta de novo.
+    // `limit(1)` e não `maybeSingle`: duas linhas para o mesmo endereço dariam
+    // erro de "mais de uma linha", e é um caso de SUPRIMIDO, não de falha.
+    const { data: suprimidos, error: erroDaLista } = await admin
       .from("campaign_suppressions")
       .select("id")
       .eq("organization_id", campanha.organization_id)
       .eq("recipient_address_hash", hashDoEndereco(enderecoAtual))
-      .maybeSingle();
-    if (suprimido) {
+      .limit(1);
+    if (erroDaLista) {
+      logger.error("[campanha] lista de exclusão indisponível; destinatário adiado", {
+        campanha: campanha.id,
+        erro: erroDaLista.message,
+      });
+      await admin
+        .from("campaign_recipients")
+        .update({ next_attempt_at: new Date(agora.getTime() + 5 * 60_000).toISOString() })
+        .eq("id", alvo.id)
+        .eq("status", "pending");
+      return { enviadas: 0, pulados: 0, concluidas: 0, detalhe: "adiado:lista_de_exclusao" };
+    }
+    if ((suprimidos ?? []).length > 0) {
       await admin
         .from("campaign_recipients")
         .update({

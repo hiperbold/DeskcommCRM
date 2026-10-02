@@ -37,6 +37,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx): Promise<Response> {
   const { data: comanda } = await supabase
     .from("sales")
     .select("id, status, number")
+    .eq("organization_id", authz.org.orgId)
     .eq("id", id)
     .maybeSingle();
   if (!comanda) return fail("not_found", "Comanda não encontrada.", 404, { requestId });
@@ -57,6 +58,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx): Promise<Response> {
   const { data, error } = await supabase
     .from("sale_items")
     .delete()
+    .eq("organization_id", authz.org.orgId)
     .eq("id", itemId)
     .eq("sale_id", id)
     .select("id")
@@ -67,6 +69,8 @@ export async function DELETE(_req: NextRequest, ctx: Ctx): Promise<Response> {
 
   await audit({
     action: "comanda.item_removido",
+    actorUserId: authz.user.id,
+    organizationId: authz.org.orgId,
     resourceType: "sale",
     resourceId: id,
     requestId,

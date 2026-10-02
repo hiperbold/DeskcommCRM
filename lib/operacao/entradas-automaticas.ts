@@ -134,7 +134,7 @@ async function fonteDaOrg(
  * A etapa é conferida contra o funil TAMBÉM: uma etapa da org mas de outro funil
  * faria os contatos entrarem num quadro e caírem numa coluna de outro.
  */
-async function destinoValido(
+export async function destinoValido(
   deps: DepsDaOperacao,
   pipelineId: string,
   stageId: string,

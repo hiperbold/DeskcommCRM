@@ -48,8 +48,10 @@ export const HORA_DE_PARABENIZAR = 9;
 /** Fuso de quem não declarou o seu — o mesmo padrão do resto do produto. */
 const FUSO_PADRAO = "America/Sao_Paulo";
 
-/** Quantos contatos uma organização pode parabenizar por rodada. */
+/** Contatos lidos por página de uma organização (a rodada pagina até `MAX_PAGINAS_POR_ORGANIZACAO`). */
 const TETO_POR_ORGANIZACAO = 200;
+/** Páginas de `TETO_POR_ORGANIZACAO` por organização numa rodada (D-131). */
+const MAX_PAGINAS_POR_ORGANIZACAO = 25;
 
 /** O PostgREST monta a lista do `in` dentro da URL, e URL tem fim. */
 const TAMANHO_DO_LOTE = 100;
@@ -106,10 +108,16 @@ async function handle(req: NextRequest): Promise<Response> {
     return ok({ organizacoes: 0, examinados: 0, emitidos: 0, pulados: {} }, { requestId });
   }
 
-  const { data: organizacoes } = await admin
-    .from("organizations")
-    .select("id, timezone")
-    .in("id", orgsComRegra.slice(0, TAMANHO_DO_LOTE));
+  // D-131: todas as organizações com regra, em fatias. Antes só as 100 primeiras
+  // (sem ordem) entravam, e as demais nunca recebiam parabéns.
+  const organizacoes: Array<{ id: unknown; timezone: unknown }> = [];
+  for (let i = 0; i < orgsComRegra.length; i += TAMANHO_DO_LOTE) {
+    const { data: fatia } = await admin
+      .from("organizations")
+      .select("id, timezone")
+      .in("id", orgsComRegra.slice(i, i + TAMANHO_DO_LOTE));
+    organizacoes.push(...(fatia ?? []));
+  }
 
   let emitidos = 0;
   let examinados = 0;
@@ -118,7 +126,7 @@ async function handle(req: NextRequest): Promise<Response> {
     pulados[motivo] = (pulados[motivo] ?? 0) + 1;
   };
 
-  for (const organizacao of organizacoes ?? []) {
+  for (const organizacao of organizacoes) {
     const org = organizacao.id as string;
     const fuso = (organizacao.timezone as string | null) ?? FUSO_PADRAO;
 
@@ -135,78 +143,91 @@ async function handle(req: NextRequest): Promise<Response> {
     }
     if (dias.length === 0) continue;
 
-    const { data: contatos, error } = await admin
-      .from("contacts")
-      .select("id")
-      .eq("organization_id", org)
-      .in("birthday_md", dias)
-      .eq("is_blocked", false)
-      .not("phone_number", "is", null)
-      .limit(TETO_POR_ORGANIZACAO);
-
-    if (error) {
-      logger.error("[contact-birthdays] consulta de contatos falhou", {
-        organization_id: org,
-        error: error.message,
-        requestId,
-      });
-      pular("consulta_falhou");
-      continue;
-    }
-    if (!contatos?.length) continue;
-    examinados += contatos.length;
-
-    // Quem já foi parabenizado nesta volta do dia não é parabenizado de novo.
-    //
-    // A janela é de 26 horas, e não de 24, porque a hora marcada pode ser
-    // alcançada DUAS vezes no dia em que o fuso recua (fim do horário de verão).
-    // Com 24 exatas, o segundo encontro cairia fora da janela por minutos e a
-    // pessoa receberia dois parabéns.
-    const desde = new Date(agora.getTime() - 26 * 3_600_000).toISOString();
-    const jaEmitidos = new Set<string>();
-    for (let i = 0; i < contatos.length; i += TAMANHO_DO_LOTE) {
-      const lote = contatos.slice(i, i + TAMANHO_DO_LOTE).map((c) => c.id as string);
-      const { data: anteriores } = await admin
-        .from("event_log")
-        .select("entity_id")
+    // D-131: paginado por id. Antes só os 200 primeiros (sem ordem) de cada
+    // organização eram vistos, e o resto do dia ficava sem parabéns. O cursor é o
+    // último id da página; o teto de páginas protege o tempo da rodada.
+    let ultimoId: string | null = null;
+    for (let pagina = 0; pagina < MAX_PAGINAS_POR_ORGANIZACAO; pagina += 1) {
+      let consultaDaPagina = admin
+        .from("contacts")
+        .select("id")
         .eq("organization_id", org)
-        .eq("event_type", "contact.birthday")
-        .in("entity_id", lote)
-        .gte("created_at", desde);
-      for (const anterior of anteriores ?? []) jaEmitidos.add(anterior.entity_id as string);
-    }
+        .in("birthday_md", dias)
+        .eq("is_blocked", false)
+        .not("phone_number", "is", null)
+        .order("id", { ascending: true })
+        .limit(TETO_POR_ORGANIZACAO);
+      if (ultimoId !== null) consultaDaPagina = consultaDaPagina.gt("id", ultimoId);
+      const { data: contatos, error } = await consultaDaPagina;
 
-    const dataLocal =
-      `${parede.ano}-${String(parede.mes).padStart(2, "0")}-${String(parede.dia).padStart(2, "0")}`;
-
-    for (const contato of contatos) {
-      const id = contato.id as string;
-      if (jaEmitidos.has(id)) {
-        pular("ja_emitido_hoje");
-        continue;
-      }
-      const { error: erroEvento } = await admin.rpc("emit_event" as never, {
-        p_event_type: "contact.birthday",
-        p_entity_kind: "contact",
-        p_entity_id: id,
-        // A data LOCAL vai no payload porque é o que a organização enxerga: quem
-        // for depurar "por que saiu ontem" precisa do dia dela, não do UTC da
-        // linha.
-        p_payload: { local_date: dataLocal },
-        p_metadata: { actor_kind: "system", source: "cron/contact-birthdays" },
-        p_organization_id: org,
-      });
-      if (erroEvento) {
-        logger.error("[contact-birthdays] emit_event falhou", {
+      if (error) {
+        logger.error("[contact-birthdays] consulta de contatos falhou", {
           organization_id: org,
-          contact_id: id,
-          error: erroEvento.message,
+          error: error.message,
           requestId,
         });
-        pular("emissao_falhou");
-        continue;
+        pular("consulta_falhou");
+        break;
       }
-      emitidos += 1;
+      if (!contatos?.length) break;
+      const contatosDaPagina = contatos.length;
+      ultimoId = contatos[contatos.length - 1]!.id as string;
+      examinados += contatosDaPagina;
+
+      // Quem já foi parabenizado nesta volta do dia não é parabenizado de novo.
+      //
+      // A janela é de 26 horas, e não de 24, porque a hora marcada pode ser
+      // alcançada DUAS vezes no dia em que o fuso recua (fim do horário de verão).
+      // Com 24 exatas, o segundo encontro cairia fora da janela por minutos e a
+      // pessoa receberia dois parabéns.
+      const desde = new Date(agora.getTime() - 26 * 3_600_000).toISOString();
+      const jaEmitidos = new Set<string>();
+      for (let i = 0; i < contatos.length; i += TAMANHO_DO_LOTE) {
+        const lote = contatos.slice(i, i + TAMANHO_DO_LOTE).map((c) => c.id as string);
+        const { data: anteriores } = await admin
+          .from("event_log")
+          .select("entity_id")
+          .eq("organization_id", org)
+          .eq("event_type", "contact.birthday")
+          .in("entity_id", lote)
+          .gte("created_at", desde);
+        for (const anterior of anteriores ?? []) jaEmitidos.add(anterior.entity_id as string);
+      }
+
+      const dataLocal =
+        `${parede.ano}-${String(parede.mes).padStart(2, "0")}-${String(parede.dia).padStart(2, "0")}`;
+
+      for (const contato of contatos) {
+        const id = contato.id as string;
+        if (jaEmitidos.has(id)) {
+          pular("ja_emitido_hoje");
+          continue;
+        }
+        const { error: erroEvento } = await admin.rpc("emit_event" as never, {
+          p_event_type: "contact.birthday",
+          p_entity_kind: "contact",
+          p_entity_id: id,
+          // A data LOCAL vai no payload porque é o que a organização enxerga: quem
+          // for depurar "por que saiu ontem" precisa do dia dela, não do UTC da
+          // linha.
+          p_payload: { local_date: dataLocal },
+          p_metadata: { actor_kind: "system", source: "cron/contact-birthdays" },
+          p_organization_id: org,
+        });
+        if (erroEvento) {
+          logger.error("[contact-birthdays] emit_event falhou", {
+            organization_id: org,
+            contact_id: id,
+            error: erroEvento.message,
+            requestId,
+          });
+          pular("emissao_falhou");
+          continue;
+        }
+        emitidos += 1;
+      }
+
+      if (contatosDaPagina < TETO_POR_ORGANIZACAO) break;
     }
   }
 

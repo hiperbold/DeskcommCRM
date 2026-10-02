@@ -18,6 +18,7 @@ import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
+import { RECUSA_DE_TROCA_DE_FUNIL } from "@/lib/leads/clonar-para-funil";
 import { resolveOwnerPatch } from "@/lib/leads/owner-patch";
 import { emitLeadActivity, stageChangeReason } from "@/lib/leads/activity-emitter";
 import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
@@ -174,14 +175,30 @@ export async function POST(req: NextRequest): Promise<Response> {
       // `is_won` entra junto com `is_lost` porque a pré-checagem de
       // quantidade (F3, decisão 5, abaixo) precisa saber se o DESTINO é uma
       // etapa ABERTA (nem ganho, nem perda): só reabertura conta para o teto.
+      // D-150: a etapa é buscada NA organização ativa e com o funil dela. A RLS
+      // de `crm_stages` mostra as etapas de TODAS as empresas de quem é membro
+      // de mais de uma, e a função 0209 só troca `stage_id`: sem esta conferência
+      // o lote deixava o lead com `pipeline_id` de um funil e etapa de outro
+      // (some dos dois quadros, regras do funil errado, transferência 0266
+      // contornada). A rota individual (`leads/[id]/move`) já barra o mesmo caso.
       const { data: etapaDeDestino, error: etapaErr } = await supabase
         .from("crm_stages")
-        .select("id, name, is_lost, is_won")
+        .select("id, name, is_lost, is_won, pipeline_id, organization_id")
+        .eq("organization_id", organizationId)
         .eq("id", input.params.stage_id)
         .maybeSingle();
       if (etapaErr) return fail("internal_error", etapaErr.message, 500, { requestId });
-      if (!etapaDeDestino) {
+      if (!etapaDeDestino || etapaDeDestino.organization_id !== organizationId) {
         return fail("not_found", t("Stage não encontrado."), 404, { requestId });
+      }
+      const leadsDeOutroFunil = visible
+        .filter((linha) => linha.pipeline_id !== etapaDeDestino.pipeline_id)
+        .map((linha) => linha.id);
+      if (leadsDeOutroFunil.length > 0) {
+        return fail("pipeline_immutable_use_clone", t(RECUSA_DE_TROCA_DE_FUNIL), 422, {
+          requestId,
+          details: { lead_ids: leadsDeOutroFunil, use: "/api/v1/leads/{id}/clone" },
+        });
       }
 
       const motivoDoLote = input.params.lost_reason ?? null;

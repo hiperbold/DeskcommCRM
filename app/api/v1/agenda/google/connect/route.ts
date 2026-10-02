@@ -85,6 +85,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // consegue conferir.
     await audit({
       action: "agenda.google.conexao_falhou",
+      actorUserId: user.id,
       organizationId: org.orgId,
       metadata: { reason: "segredo_de_state_indisponivel" },
     });
@@ -97,6 +98,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   await audit({
     action: "agenda.google.conexao_iniciada",
+    actorUserId: user.id,
     organizationId: org.orgId,
     metadata: { user_id: user.id },
   });
