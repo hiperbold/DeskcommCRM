@@ -18,6 +18,7 @@ import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { changeRoleSchema, validateRequest } from "@/lib/schemas";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export async function changeMemberRole(
@@ -77,11 +78,19 @@ export async function changeMemberRole(
     }
   }
 
-  const { error: updErr } = await supabase
+  // O papel só é gravado pelo servidor (migration 0929, D-125): o admin da organização já foi
+  // conferido acima e a linha é a da organização ativa. O banco recusa deixar a organização sem admin.
+  const { error: updErr } = await createAdminClient()
     .from("user_organizations")
     .update({ role: input.role, updated_at: new Date().toISOString() })
-    .eq("id", target.id);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+    .eq("id", target.id)
+    .eq("organization_id", activeOrg.orgId);
+  if (updErr) {
+    if (updErr.message.includes("organizacao_sem_admin")) {
+      return fail("state_conflict", t("Não é possível rebaixar o último admin do tenant."), 409, { requestId });
+    }
+    return fail("internal_error", updErr.message, 500, { requestId });
+  }
 
   await audit({
     action: "team.role_changed",

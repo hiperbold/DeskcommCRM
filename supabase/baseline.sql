@@ -56140,6 +56140,585 @@ end $function$;
 revoke execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uuid) from public, anon;
 grant execute on function public.emit_event(text, text, uuid, jsonb, jsonb, uuid) to authenticated, service_role;
 
+-- ---- a organização que se cadastra sozinha nasce em avaliação (migration 0928, fork Hiperbold, D-094) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- O defeito. fn_billing_contrato_da_organizacao_nova (0904) grava toda organização
+-- nova como `ativa` no plano Ilimitado, sem período e sem teto. Com o cadastro aberto
+-- (`signup_mode` em `aberto` ou `com_aprovacao`), qualquer pessoa criava uma empresa e
+-- ganhava funis, leads, membros, conexões e IA sem limite na chave da Hiperbold, e o
+-- conferidor de vencimento (0908) nunca mexe em contrato sem período.
+--
+-- A correção. A organização criada pelo cadastro do próprio visitante (o servidor grava
+-- `settings.billing_inicio = 'avaliacao'` no insert, em ensureTenantForUser) nasce em
+-- `avaliacao`, no plano de entrada já cadastrado (`pro`, a versão ativa), com período de
+-- um mês: início agora, fim no fim do dia do mesmo dia do mês seguinte em
+-- America/Sao_Paulo (mesma forma de "fim de dia" de fn_billing_registrar_pagamento, 0908).
+-- Nenhum preço, plano ou quantidade novos: é o plano e o ciclo mensal que já existem. Vencida
+-- a avaliação, o conferidor (0908) a leva a `atrasada` e depois a `suspensa`, e a organização
+-- só volta a `ativa` por pagamento. O Ilimitado passa a ser só por atribuição manual do admin.
+--
+-- O que NÃO muda, de propósito, para não derrubar cliente real:
+--   * organização criada pelo admin da plataforma (fn_create_tenant_with_owner) e pelo
+--     provisionamento externo (provisionExternalTenant) não trazem o marcador: seguem no
+--     Ilimitado, como hoje;
+--   * a instalação com o billing `desligado` (billing_settings.modo) segue no Ilimitado;
+--   * insert direto em organizations (script de instalação, bootstrap do dono, testes) sem
+--     o marcador segue no Ilimitado;
+--   * se o plano de entrada não existe ou não está ativo, cai no Ilimitado com aviso, como já
+--     fazia quando faltava o Ilimitado: criar organização nunca é bloqueado por esta função.
+--
+-- Só troca o CORPO da função, sem DDL em tabela nem recriar o gatilho: reaplicável com o
+-- app no ar, sem reescrever linha nenhuma.
+create or replace function public.fn_billing_contrato_da_organizacao_nova()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_plan_id uuid;
+  v_modo text;
+  v_fim timestamptz;
+begin
+  if coalesce(new.settings ->> 'billing_inicio', '') = 'avaliacao' then
+    select modo into v_modo from public.billing_settings where id = 1;
+
+    if v_modo is distinct from 'desligado' then
+      select id into v_plan_id
+      from public.billing_plans
+      where code = 'pro' and active
+      limit 1;
+
+      if v_plan_id is not null then
+        v_fim := (((now() at time zone 'America/Sao_Paulo')::date + interval '1 month')::date + 1)::timestamp
+                 at time zone 'America/Sao_Paulo';
+
+        insert into public.billing_contracts
+          (organization_id, plan_id, status, current_period_start, current_period_end)
+        values (new.id, v_plan_id, 'avaliacao', now(), v_fim)
+        on conflict (organization_id) do nothing;
+
+        return new;
+      end if;
+
+      raise warning 'billing_plano_de_entrada_ausente_na_criacao_da_organizacao';
+    end if;
+  end if;
+
+  select id into v_plan_id
+  from public.billing_plans
+  where code = 'ilimitado' and active
+  limit 1;
+
+  if v_plan_id is null then
+    -- Sem Ilimitado ativo: não insere, avisa, e a criação da organização
+    -- segue (nada nesta fase pode bloquear a criação de organização).
+    raise warning 'billing_plano_ilimitado_ausente_na_criacao_da_organizacao';
+    return new;
+  end if;
+
+  insert into public.billing_contracts (organization_id, plan_id, status)
+  values (new.id, v_plan_id, 'ativa')
+  on conflict (organization_id) do nothing;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_billing_contrato_da_organizacao_nova() is
+  '0904, redefinida na 0928 (D-094): organização com settings.billing_inicio = avaliacao (o cadastro do próprio visitante) nasce em avaliacao no plano pro, com período de um mês em America/Sao_Paulo; qualquer outra (admin da plataforma, provisionamento externo, instalação, billing desligado) segue ativa no Ilimitado. Plano de entrada ausente cai no Ilimitado com aviso.';
+
+revoke execute on function public.fn_billing_contrato_da_organizacao_nova() from public, anon, authenticated;
+grant execute on function public.fn_billing_contrato_da_organizacao_nova() to service_role;
+
+-- ---- vínculo só pelo servidor e organização nunca sem admin (migration 0929, fork Hiperbold, D-125) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- O defeito, em duas partes. user_organizations tem GRANT ALL a authenticated e as policies
+-- de escrita só exigem admin da organização (user_orgs_insert aceita `user_id` qualquer e
+-- `accepted_at` preenchido; user_orgs_update não tem with check).
+--   1. Um admin gravava pelo PostgREST uma linha com o `user_id` de outra pessoa (o uuid
+--      vaza por invited_by e por outras leituras): ao entrar sem o cookie da organização
+--      ativa a vítima caía na organização do atacante. E trocava `user_id`, `role`,
+--      `revoked_at` e `accepted_at` de linhas existentes sem passar pelas rotas.
+--   2. A única guarda de "último admin" era uma contagem no código das rotas (rebaixar e
+--      revogar), sem trava: dois admins se rebaixando ao mesmo tempo, ou qualquer escrita
+--      direta, deixavam a organização sem admin.
+--
+-- A correção, no banco, em duas peças, no padrão da 0914 e da 0915:
+--   * trg_user_orgs_so_servidor: quem não é o servidor (fn_billing_e_servidor: conexão direta
+--     sem SET ROLE, ou service_role) só insere vínculo para si mesmo (user_id = auth.uid(),
+--     o caso do admin da plataforma que entra numa empresa, que a 0918 já exige com MFA) e
+--     não muda `user_id`, `role`, `revoked_at` nem `accepted_at` de linha existente. As rotas
+--     de papel, revogação e reativação do time passam a gravar com o cliente de serviço,
+--     depois de conferir o admin da organização, e o aceite de convite e a criação de
+--     organização já gravam pelo servidor.
+--   * trg_user_orgs_nunca_zero_admin: tirar o último admin ativo da organização (rebaixar,
+--     revogar ou apagar a linha dele) é recusado com 23514 `organizacao_sem_admin`. Vale
+--     para todo mundo que chega pelo PostgREST (service_role e authenticated; a conexão direta sem
+--     SET ROLE, de migração e manutenção, fica fora), na troca de papel e na revogação, com uma trava
+--     advisory por organização que serializa duas saídas de admin ao mesmo tempo (a segunda
+--     enxerga a primeira já confirmada). O apagar a linha só é conferido para quem não é o
+--     servidor, e nunca quando a organização ou o usuário estão sendo apagados (cascata), nem
+--     no repasse do dono (fn_accept_team_invite apaga o vínculo provisório depois de criar o
+--     do dono). Admin ativo é `role = 'admin'` com `revoked_at` nulo, a mesma noção de
+--     fn_role_at_least.
+--
+-- Os nomes começam com `trg_user_orgs_` para disparar DEPOIS de trg_billing_trava_user_organizations
+-- (ordem alfabética dos gatilhos BEFORE): o teto de membros do plano continua respondendo
+-- primeiro, com a mesma mensagem.
+--
+-- Security definer pelo mesmo motivo de fn_channel_sessions_trava_uazapi_base_url (0914):
+-- fn_billing_e_servidor só tem execute para service_role, e o gatilho roda com o papel de
+-- quem grava. O papel da sessão (current_setting('role')) atravessa a troca de dono.
+--
+-- lock_timeout (D-084, B3): create trigger pega SHARE ROW EXCLUSIVE em user_organizations,
+-- que espera escrita em andamento e enfileira as seguintes; com `set lock_timeout` a criação
+-- desiste em 5s em vez de esperar sem limite, e o reaplicar tenta de novo. É `set` de sessão
+-- (o baseline é aplicado instrução por instrução, sem transação) e o `reset` devolve a sessão.
+--
+-- Idempotente e seguro com o app no ar: create or replace da função e do gatilho, sem
+-- reescrever linha nem constraint nova.
+create or replace function public.fn_user_orgs_so_servidor_grava_vinculo()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if public.fn_billing_e_servidor() then
+    return new;
+  end if;
+
+  if tg_op = 'INSERT' then
+    if new.user_id is distinct from auth.uid() then
+      raise exception 'o vínculo com a organização só pode ser gravado pelo servidor' using errcode = '42501';
+    end if;
+  elsif new.user_id is distinct from old.user_id
+     or new.role is distinct from old.role
+     or new.revoked_at is distinct from old.revoked_at
+     or new.accepted_at is distinct from old.accepted_at then
+    raise exception 'o vínculo com a organização só pode ser gravado pelo servidor' using errcode = '42501';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.fn_user_orgs_so_servidor_grava_vinculo() is
+  '0929 (D-125): quem não é o servidor (fn_billing_e_servidor) só insere vínculo para si mesmo (user_id = auth.uid()) e não muda user_id, role, revoked_at nem accepted_at de linha existente. errcode 42501, mensagem fixa. As rotas do time gravam com o cliente de serviço depois de conferir o admin.';
+
+revoke execute on function public.fn_user_orgs_so_servidor_grava_vinculo() from public, anon, authenticated;
+grant execute on function public.fn_user_orgs_so_servidor_grava_vinculo() to service_role;
+
+create or replace function public.fn_user_orgs_nunca_zero_admin()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  -- Conexão direta sem SET ROLE (migrações, manutenção, testes): o caminho do app nunca é esse, ele
+  -- sempre chega como service_role ou authenticated pelo PostgREST. Fica fora da guarda.
+  if coalesce(current_setting('role', true), 'none') = 'none'
+     or old.role is distinct from 'admin' or old.revoked_at is not null then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if new.role = 'admin' and new.revoked_at is null then
+      return new;
+    end if;
+  else
+    -- Apagar a linha: o servidor (cascata, repasse do dono, scripts) não é conferido, e a
+    -- cascata da organização ou do usuário nunca é barrada.
+    if public.fn_billing_e_servidor()
+       or not exists (select 1 from public.organizations where id = old.organization_id)
+       or not exists (select 1 from auth.users where id = old.user_id) then
+      return old;
+    end if;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('user_orgs_admins:' || old.organization_id::text, 0));
+
+  if not exists (
+    select 1 from public.user_organizations
+    where organization_id = old.organization_id
+      and role = 'admin'
+      and revoked_at is null
+      and id <> old.id
+  ) then
+    raise exception 'organizacao_sem_admin' using errcode = '23514';
+  end if;
+
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+comment on function public.fn_user_orgs_nunca_zero_admin() is
+  '0929 (D-125): recusa (23514, organizacao_sem_admin) rebaixar, revogar ou apagar o último admin ativo da organização. Trava advisory por organização serializa duas saídas ao mesmo tempo. Apagar a linha só é conferido para quem não é o servidor, e nunca na cascata da organização ou do usuário.';
+
+revoke execute on function public.fn_user_orgs_nunca_zero_admin() from public, anon, authenticated;
+grant execute on function public.fn_user_orgs_nunca_zero_admin() to service_role;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'agent_worker') then
+    execute 'revoke execute on function public.fn_user_orgs_so_servidor_grava_vinculo(), public.fn_user_orgs_nunca_zero_admin() from agent_worker';
+  end if;
+end
+$$;
+
+set lock_timeout = '5s';
+
+create or replace trigger trg_user_orgs_so_servidor
+  before insert or update of user_id, role, revoked_at, accepted_at on public.user_organizations
+  for each row
+  execute function public.fn_user_orgs_so_servidor_grava_vinculo();
+
+create or replace trigger trg_user_orgs_nunca_zero_admin
+  before update of role, revoked_at or delete on public.user_organizations
+  for each row
+  execute function public.fn_user_orgs_nunca_zero_admin();
+
+reset lock_timeout;
+
+-- ---- troca de plano e ajuste de limites deixam trilha (migration 0930, fork Hiperbold, D-133) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- O defeito. Trocar o plano (fn_billing_trocar_plano, 0904) e ajustar os limites
+-- (fn_billing_ajustar_limites, 0904) não gravavam billing_contract_eventos. A única marca era o
+-- api_audit_log, que é fire-and-forget: se o insert da auditoria falhasse, a troca ficava feita sem
+-- registro. As funções de pagamento e de estado (0908, 0909) já gravam o evento na mesma transação.
+-- A carência extra (fn_billing_estender_carencia) já gravava o evento desde a 0910 e não muda.
+--
+-- A correção. Os dois usam o tipo `plano` que a 0909 já criou em billing_contract_eventos (o CHECK
+-- não muda). fn_billing_trocar_plano grava o evento quando o plano muda (de e para são os ids das
+-- versões, como no primeiro pagamento, motivo `troca_manual`), e fn_billing_ajustar_limites grava o
+-- evento quando o ajuste muda e a organização tem contrato (de e para são o ajuste antes e depois,
+-- motivo `ajuste_de_limites: <nota>`). Ator e motivo na mesma transação da mudança. Corpo igual ao
+-- anterior fora isso.
+--
+-- Fora desta migration (adiado): o aceite dos Termos na compra e a versão em billing_orders.
+--
+-- Só troca o CORPO das duas funções (create or replace, mesmo ACL): reaplicável com o app no ar, sem
+-- DDL em tabela.
+create or replace function public.fn_billing_trocar_plano(p_org uuid, p_plan_code text, p_actor uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_plan_id uuid;
+  v_plan_id_antes uuid;
+  v_contract_id uuid;
+  v_antes_plan_code text;
+  v_antes_plan_version integer;
+  v_depois_plan_code text;
+  v_depois_plan_version integer;
+begin
+  if not exists (select 1 from public.organizations where id = p_org) then
+    raise exception 'organizacao_nao_encontrada' using errcode = 'P0002';
+  end if;
+
+  -- Advisory lock por organização, não `for update` em `organizations`: essa
+  -- trava bloquearia os inserts de qualquer tabela filha da organização
+  -- durante a troca. `for update` na linha do contrato não serve sozinho
+  -- porque não trava nada quando a linha ainda não existe (organização sem
+  -- contrato), e duas trocas concorrentes registrariam o mesmo "antes".
+  perform pg_advisory_xact_lock(hashtextextended('billing:' || p_org::text, 0));
+
+  select id into v_plan_id
+  from public.billing_plans
+  where code = p_plan_code and active
+  limit 1;
+
+  if v_plan_id is null then
+    raise exception 'plano_nao_encontrado_ou_inativo' using errcode = 'P0002';
+  end if;
+
+  -- Trava o contrato existente, se houver, para não perder o "antes" numa
+  -- troca concorrente. Organização sem contrato ainda: nada a travar, o
+  -- insert abaixo cria a linha.
+  perform 1 from public.billing_contracts where organization_id = p_org for update;
+
+  select bp.code, bp.version, bc.plan_id
+    into v_antes_plan_code, v_antes_plan_version, v_plan_id_antes
+  from public.billing_contracts bc
+  join public.billing_plans bp on bp.id = bc.plan_id
+  where bc.organization_id = p_org;
+
+  insert into public.billing_contracts (organization_id, plan_id)
+  values (p_org, v_plan_id)
+  on conflict (organization_id) do update set plan_id = excluded.plan_id
+  returning id into v_contract_id;
+
+  -- D-133 (0930): a troca fica registrada na MESMA transação (de e para são os ids das
+  -- versões, como o evento de plano do primeiro pagamento, 0909). Trocar para o mesmo plano
+  -- não muda nada e não grava evento.
+  if v_plan_id_antes is distinct from v_plan_id then
+    insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+    values (p_org, v_contract_id, 'plano', v_plan_id_antes::text, v_plan_id::text, 'troca_manual', p_actor);
+  end if;
+
+  select bp.code, bp.version
+    into v_depois_plan_code, v_depois_plan_version
+  from public.billing_contracts bc
+  join public.billing_plans bp on bp.id = bc.plan_id
+  where bc.organization_id = p_org;
+
+  return jsonb_build_object(
+    'antes', case when v_antes_plan_code is null then null
+                  else jsonb_build_object('plan_code', v_antes_plan_code, 'version', v_antes_plan_version) end,
+    'depois', jsonb_build_object('plan_code', v_depois_plan_code, 'version', v_depois_plan_version)
+  );
+end;
+$$;
+
+revoke execute on function public.fn_billing_trocar_plano(uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_trocar_plano(uuid, text, uuid) to service_role;
+
+create or replace function public.fn_billing_ajustar_limites(p_org uuid, p_limits jsonb, p_note text, p_actor uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_antes jsonb;
+  v_depois jsonb;
+  v_contract_id uuid;
+begin
+  if not exists (select 1 from public.organizations where id = p_org) then
+    raise exception 'organizacao_nao_encontrada' using errcode = 'P0002';
+  end if;
+
+  -- Mesmo racional de fn_billing_trocar_plano: advisory lock por
+  -- organização, não `for update` em `organizations`.
+  perform pg_advisory_xact_lock(hashtextextended('billing:' || p_org::text, 0));
+
+  select limits into v_antes
+  from public.billing_plan_adjustments
+  where organization_id = p_org
+  for update;
+
+  if p_limits is null or p_limits = '{}'::jsonb then
+    -- Objeto vazio apaga o ajuste: a linha só existe quando há algo a
+    -- sobrepor ao plano.
+    delete from public.billing_plan_adjustments where organization_id = p_org;
+    v_depois := null;
+  else
+    insert into public.billing_plan_adjustments (organization_id, limits, note, granted_by)
+    values (p_org, p_limits, p_note, p_actor)
+    on conflict (organization_id) do update
+      set limits = excluded.limits,
+          note = excluded.note,
+          granted_by = excluded.granted_by
+    returning limits into v_depois;
+  end if;
+
+  -- D-133 (0930): o ajuste fica registrado na MESMA transação, com a nota como motivo. Sem
+  -- contrato não há a quem pendurar o evento (billing_contract_eventos.contract_id é
+  -- obrigatório): o ajuste vale, e a auditoria do chamador segue sendo o registro.
+  if v_antes is distinct from v_depois then
+    select id into v_contract_id from public.billing_contracts where organization_id = p_org;
+    if v_contract_id is not null then
+      insert into public.billing_contract_eventos (organization_id, contract_id, tipo, de, para, motivo, actor)
+      values (p_org, v_contract_id, 'plano', v_antes::text, v_depois::text, left('ajuste_de_limites: ' || coalesce(p_note, ''), 500), p_actor);
+    end if;
+  end if;
+
+  return jsonb_build_object('antes', v_antes, 'depois', v_depois);
+end;
+$$;
+
+revoke execute on function public.fn_billing_ajustar_limites(uuid, jsonb, text, uuid) from public, anon, authenticated;
+grant execute on function public.fn_billing_ajustar_limites(uuid, jsonb, text, uuid) to service_role;
+
+-- ---- tokens do plano só com contrato em dia (migration 0931, fork Hiperbold, D-106) ----
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- O defeito. fn_billing_garantir_concessoes (0906, 0916) concedia `plano:<ciclo>` de cada mês civil a
+-- qualquer contrato que não estivesse `cancelada`. Cenário A: assina o Pro em 30/09 e paga um mês;
+-- recebe o teto cheio em setembro e outro teto cheio em 01/10, dois ciclos por um pagamento; marcando
+-- para cancelar no fim do período, levava os dois. Cenário B: contrato `atrasada` ou `suspensa` ganhava
+-- o teto do mês seguinte em 1º do mês, sem pagar.
+--
+-- A correção, nas duas frentes que o item (D-106) aponta, sem mudar preço, plano nem quantidade:
+--   * Só recebe o ciclo NOVO (plano e adicionais) o contrato em dia: `ativa` ou `avaliacao`, com o
+--     período pago ainda no futuro. Atrasada, suspensa, cancelada e o que passou do fim do período
+--     não ganham o mês que vira; voltam a ganhar quando um pagamento reativa o contrato. O que já foi
+--     concedido num ciclo aberto continua valendo. Organização sem contrato segue como antes.
+--   * A primeira concessão de plano da organização, quando o período pago começou no mesmo mês, é
+--     proporcional aos dias que restam do mês (do dia do início do período até o fim do mês, em
+--     America/Sao_Paulo). Todo ciclo seguinte, e o plano atribuído na mão sem período, levam o teto
+--     inteiro.
+--
+-- Decisão de produto registrada: o ciclo da carteira segue sendo o mês civil (a chave `plano:<ciclo>`,
+-- as carteiras, o extrato e as telas leem o mês), e o que se alinha ao período pago é QUANDO e
+-- QUANTO se concede. Alinhar o próprio ciclo ao período do contrato mexeria em todas as leituras de
+-- ciclo (extrato, livro-caixa, margem, conferidor de carteira, gate da IA) e fica fora desta
+-- migration. fn_billing_ciclo_de não muda.
+--
+-- Só troca o CORPO de fn_billing_garantir_concessoes (create or replace, mesmo ACL), sem DDL em tabela:
+-- reaplicável com o app no ar. Mesmo padrão de segurança da 0906: security definer, search_path fixo,
+-- sem trava própria (quem chama já está sob billing_tokens:<org>).
+create or replace function public.fn_billing_garantir_concessoes(p_org uuid, p_ciclo date)
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_teto bigint;
+  v_linhas int;
+  v_adicional record;
+  v_status text;
+  v_inicio timestamptz;
+  v_fim timestamptz;
+  v_corte int;
+  v_chave text;
+  v_valor bigint;
+  v_dias_do_mes int;
+  v_dias_restantes int;
+begin
+  -- Nunca concede para ciclo que já fechou (decisão 9). Comparação com o
+  -- ciclo ATUAL (de now()), não com o ciclo da chamada que disparou a
+  -- concessão: esta função é chamada com p_ciclo = ciclo DA CHAMADA por
+  -- fn_billing_debitar_chamada, e uma chamada tardia de ciclo fechado
+  -- (Tarefa 8) nunca deve criar concessão nova para um mês que já acabou.
+  if p_ciclo < public.fn_billing_ciclo_de(now()) then
+    return;
+  end if;
+
+  v_teto := (public.fn_billing_limites_efetivos(p_org) ->> 'tokens_ia_mes')::bigint;
+
+  -- D-086 e D-106: só recebe o plano e os adicionais de um ciclo NOVO o contrato em dia, isto é,
+  -- `ativa` ou `avaliacao` e sem o período já vencido. Cancelada (estorno total, ou fim do período
+  -- depois de cancelar), atrasada, suspensa e o que passou do fim do período pago não ganham o
+  -- ciclo do mês que vira: voltam a receber quando um pagamento reativa o contrato. O que já foi
+  -- concedido num ciclo aberto continua valendo. Organização sem contrato segue como antes.
+  select status, current_period_start, current_period_end
+    into v_status, v_inicio, v_fim
+    from public.billing_contracts
+    where organization_id = p_org;
+
+  if v_status is not null
+     and (v_status not in ('ativa', 'avaliacao') or (v_fim is not null and v_fim <= now())) then
+    return;
+  end if;
+
+  -- Ilimitado (teto nulo) não concede nada: o consumo cai direto na fonte
+  -- plano sem saldo, e o extrato mostra "sem limite" (decisão 9).
+  if v_teto is not null then
+    -- Item 8 da revisão (23/09/2026): to_char, não ::text. O cast de date
+    -- depende do DateStyle da sessão (ISO por padrão, mas não garantido);
+    -- to_char('YYYY-MM-DD') é o MESMO texto que o ::text de sempre produzia
+    -- (DateStyle ISO), então não duplica concessão nenhuma já gravada.
+    v_chave := 'plano:' || to_char(p_ciclo, 'YYYY-MM-DD');
+
+    -- D-106: a primeira concessão de um plano pago no meio do mês é proporcional aos dias que
+    -- restam (do dia em que o período pago começou até o fim do mês). Sem isto quem assinava no
+    -- dia 30 recebia o mês cheio no dia 30 e outro mês cheio no dia 1, dois ciclos por um
+    -- pagamento. Só vale quando é a PRIMEIRA concessão de plano da organização e o período pago
+    -- começou neste mesmo mês; plano atribuído na mão, sem período, e todo ciclo seguinte levam o
+    -- teto inteiro. A consulta só roda quando a chave do ciclo ainda não existe (uma vez por
+    -- organização por mês), nunca no caminho quente do débito.
+    if not exists (
+      select 1 from public.billing_token_ledger
+      where organization_id = p_org and chave = v_chave
+    ) then
+      v_valor := v_teto;
+
+      if v_inicio is not null
+         and public.fn_billing_ciclo_de(v_inicio) = p_ciclo
+         and not exists (
+           select 1 from public.billing_token_ledger
+           where organization_id = p_org and fonte = 'plano' and chave like 'plano:%'
+         ) then
+        v_dias_do_mes := ((p_ciclo + interval '1 month')::date - p_ciclo);
+        v_dias_restantes := ((p_ciclo + interval '1 month')::date - (v_inicio at time zone 'America/Sao_Paulo')::date);
+        v_valor := (v_teto * v_dias_restantes) / v_dias_do_mes;
+      end if;
+
+      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave)
+      values (p_org, 'plano', v_valor, v_chave)
+      on conflict (organization_id, chave) do nothing;
+
+      get diagnostics v_linhas = row_count;
+      if v_linhas > 0 then
+        insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+        values (p_org, 'plano', p_ciclo, v_valor, 0)
+        on conflict (organization_id, fonte, ciclo) do update
+          set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+              updated_at = now();
+      end if;
+    end if;
+
+    -- D-086: um crédito novo para cada corte por estorno deste ciclo.
+    v_corte := 1;
+    while exists (
+      select 1 from public.billing_token_ledger
+      where organization_id = p_org
+        and chave = 'ajuste:estorno-plano:' || to_char(p_ciclo, 'YYYY-MM-DD') || ':' || v_corte::text
+    ) loop
+      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo, nota)
+      values (
+        p_org, 'plano', v_teto,
+        'ajuste:reconcessao-plano:' || to_char(p_ciclo, 'YYYY-MM-DD') || ':' || v_corte::text, p_ciclo,
+        'Plano concedido de novo: novo pagamento depois de estorno neste ciclo'
+      )
+      on conflict (organization_id, chave) do nothing;
+
+      get diagnostics v_linhas = row_count;
+      if v_linhas > 0 then
+        insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+        values (p_org, 'plano', p_ciclo, v_teto, 0)
+        on conflict (organization_id, fonte, ciclo) do update
+          set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+              updated_at = now();
+      end if;
+
+      v_corte := v_corte + 1;
+    end loop;
+  end if;
+
+  for v_adicional in
+    select id, tokens_por_ciclo
+    from public.billing_token_adicionais
+    where organization_id = p_org and ativo
+  loop
+    -- Item 8 da revisão: to_char no ciclo (ver comentário acima); o id do
+    -- adicional continua ::text (uuid, DateStyle não afeta).
+    insert into public.billing_token_ledger (organization_id, fonte, tokens, chave)
+    values (p_org, 'adicional', v_adicional.tokens_por_ciclo, 'adicional:' || v_adicional.id::text || ':' || to_char(p_ciclo, 'YYYY-MM-DD'))
+    on conflict (organization_id, chave) do nothing;
+
+    get diagnostics v_linhas = row_count;
+    if v_linhas > 0 then
+      insert into public.billing_token_wallets (organization_id, fonte, ciclo, creditado, consumido)
+      values (p_org, 'adicional', p_ciclo, v_adicional.tokens_por_ciclo, 0)
+      on conflict (organization_id, fonte, ciclo) do update
+        set creditado = public.billing_token_wallets.creditado + excluded.creditado,
+            updated_at = now();
+    end if;
+  end loop;
+end;
+$$;
+
+comment on function public.fn_billing_garantir_concessoes(uuid, date) is
+  '0906, decisão 9, redefinida na 0916 (D-086) e na 0931 (D-106): concessão preguiçosa e idempotente da fonte plano (teto efetivo do momento) e de cada adicional ativo, para o ciclo informado. Só concede ciclo novo a contrato em dia (ativa ou avaliacao, período não vencido); a primeira concessão de plano de um período pago que começou no mês é proporcional aos dias restantes do mês. NÃO trava sozinha: quem chama (fn_billing_debitar_chamada ou a RPC de saldo) já precisa estar sob pg_try_advisory_xact_lock(''billing_tokens:<org>''). insert ... on conflict do nothing no livro-caixa; billing_token_wallets.creditado só soma quando a linha do livro-caixa entra.';
+
+revoke execute on function public.fn_billing_garantir_concessoes(uuid, date) from public, anon, authenticated;
+grant execute on function public.fn_billing_garantir_concessoes(uuid, date) to service_role;
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

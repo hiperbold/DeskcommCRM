@@ -24,6 +24,9 @@ vi.mock("@/lib/auth/server", () => ({
   mfaEmDivida: vi.fn(async () => false),
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+// D-125: o papel só é gravado pelo servidor (cliente de serviço), com o mesmo stub.
+const servidor = vi.hoisted(() => ({ stub: null as unknown }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => servidor.stub }));
 vi.mock("@/lib/audit", () => ({
   audit: vi.fn(async () => undefined),
   isServiceRoleConfigured: () => false,
@@ -61,12 +64,12 @@ function makeSupabaseStub(state: StubState) {
           };
           return chain;
         },
-        update: (values: Record<string, unknown>) => ({
-          eq: () => {
-            state.updates.push(values);
-            return Promise.resolve({ error: null });
-          },
-        }),
+        update: (values: Record<string, unknown>) => {
+          state.updates.push(values);
+          const chain: Record<string, unknown> = { eq: () => chain };
+          chain.then = (ok: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(ok);
+          return chain;
+        },
       };
     },
     rpc: async (fn: string) =>
@@ -88,8 +91,9 @@ function adminSession(state: StubState) {
   };
   vi.mocked(loadAuthUser).mockResolvedValue(user);
   vi.mocked(resolveActiveOrg).mockResolvedValue({ orgId: ORG_ID, name: "Org", role: "admin" });
+  servidor.stub = makeSupabaseStub(state);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  vi.mocked(createClient).mockResolvedValue(makeSupabaseStub(state) as any);
+  vi.mocked(createClient).mockResolvedValue(servidor.stub as any);
 }
 
 function patchReq(role: string) {

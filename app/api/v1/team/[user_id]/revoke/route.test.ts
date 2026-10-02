@@ -15,6 +15,17 @@ vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: (tabela: string) => {
       const cadeia: Record<string, unknown> = {};
+      if (tabela === "user_organizations") {
+        // D-125: o vínculo só é gravado pelo servidor (cliente de serviço).
+        const escrita: Record<string, unknown> = {};
+        escrita.update = (valores: Record<string, unknown>) => {
+          ultimoUpdate = valores;
+          return escrita;
+        };
+        escrita.eq = () => escrita;
+        escrita.then = (ok: (v: unknown) => unknown) => Promise.resolve({ error: null }).then(ok);
+        return escrita;
+      }
       cadeia.delete = () => {
         pushApagado.push(["tabela", tabela]);
         return cadeia;

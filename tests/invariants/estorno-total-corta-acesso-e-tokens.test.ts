@@ -88,6 +88,11 @@ function pagarAssinatura(org: string, pagamento: string, assinatura: string, eve
     confirmacaoSql(pagamento, "CONFIRMED", 199, `,'subscription','${assinatura}','externalReference','HC:ord:${pedido}'`),
   );
   expect(r).toContain('"resultado": "aplicado"');
+  // D-106 (0931): a primeira concessão de um período pago que começou no mês é proporcional aos
+  // dias restantes. Estes casos provam o estorno, não a proporção (provada em
+  // lote7-conta-e-cobranca-banco.test.ts), então o período pago começa no 1º dia do mês do ciclo.
+  sql(`update public.billing_contracts set current_period_start = ${CICLO}::timestamp at time zone 'America/Sao_Paulo'
+        where organization_id = '${org}' and current_period_start > ${CICLO}::timestamp at time zone 'America/Sao_Paulo';`);
   return pedido;
 }
 
@@ -365,6 +370,9 @@ describe("D-086: estorno que chega antes do pagamento (M2) e cobrança sem conce
       "evt-i916-008c", "PAYMENT_CONFIRMED", "pay_i916_008n",
       confirmacaoSql("pay_i916_008n", "CONFIRMED", 199, `,'subscription','sub_i916_008n','externalReference','HC:ord:${pedidoNovo}'`),
     );
+    // D-106 (0931): como em pagarAssinatura, o período pago começa no 1º dia do mês do ciclo.
+    sql(`update public.billing_contracts set current_period_start = ${CICLO}::timestamp at time zone 'America/Sao_Paulo'
+          where organization_id = '${ORG_SEM_CONCESSAO}' and current_period_start > ${CICLO}::timestamp at time zone 'America/Sao_Paulo';`);
     sql(`select public.fn_billing_saldo_da_carteira('${ORG_SEM_CONCESSAO}'::uuid);`);
     expect(carteira(ORG_SEM_CONCESSAO, "plano")).toBe("3000000|0");
     expect(linhasDoLivro(ORG_SEM_CONCESSAO, "chave like 'ajuste:reconcessao-plano:%'")).toBe(0);

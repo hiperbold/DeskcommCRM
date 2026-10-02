@@ -40,6 +40,7 @@ import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
 
@@ -78,10 +79,12 @@ export async function POST(
   }
 
   const nowIso = new Date().toISOString();
-  const { error: updErr } = await supabase
+  // O vínculo só é gravado pelo servidor (migration 0929, D-125): o admin já foi conferido acima.
+  const { error: updErr } = await createAdminClient()
     .from("user_organizations")
     .update({ revoked_at: null, updated_at: nowIso })
-    .eq("id", target.id);
+    .eq("id", target.id)
+    .eq("organization_id", activeOrg.orgId);
   if (updErr) {
     // Fase F3, decisão 4 (item 2): reativação pelo ADMIN é "vínculo direto",
     // não aceite de convite — nenhuma das três isenções do gatilho vale

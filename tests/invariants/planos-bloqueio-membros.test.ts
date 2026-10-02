@@ -524,12 +524,14 @@ describe("5. Modo avisar (o padrão): A2/A3 não mudam nada; D-054 continua recu
       -- Controle: o modo é o padrão (avisar), não tocado por este caso.
       select 'SONDA|modo=' || modo from public.billing_settings where id = 1;
 
-      ${comoMembro(ADMIN_AVISAR_MEMBROS)}
-      -- O mesmo insert direto que dá PT402 no caso 2 (modo bloquear) passa
-      -- livre aqui: fn_billing_bloqueia lê o modo ANTES de qualquer outra
-      -- coisa e devolve false fora de "bloquear", sem tocar nas isenções.
+      -- O mesmo insert que dá PT402 no caso 2 (modo bloquear) passa livre aqui:
+      -- fn_billing_bloqueia lê o modo ANTES de qualquer outra coisa e devolve false fora de
+      -- "bloquear", sem tocar nas isenções. Desde a 0929 (D-125) o vínculo de OUTRA pessoa só é
+      -- gravado pelo servidor, então o insert roda como servidor e não como o admin.
       insert into public.user_organizations (user_id, organization_id, role, invited_by, invited_at, accepted_at)
         values ('${NOVO_AVISAR_MEMBROS}', '${ORG_AVISAR_MEMBROS}', 'agent', '${ADMIN_AVISAR_MEMBROS}', now(), now());
+
+      ${comoMembro(ADMIN_AVISAR_MEMBROS)}
 
       insert into public.team_invites (organization_id, email, role, expires_at)
         values ('${ORG_AVISAR_MEMBROS}', 'convidado-avisar-1@invariant.test', 'agent', now() + interval '7 days');

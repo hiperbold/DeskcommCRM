@@ -112,6 +112,10 @@ export async function ensureTenantForUser(
         legal_name: orgName,
         status: "active",
         created_by: user.id,
+        // Cadastro do próprio visitante: o contrato nasce em avaliação no plano de entrada,
+        // não no Ilimitado (migration 0928, D-094). Provisionamento externo e admin da
+        // plataforma não levam o marcador e seguem como antes.
+        settings: { billing_inicio: "avaliacao" },
       })
       .select("id, slug")
       .single();

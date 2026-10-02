@@ -81,11 +81,19 @@ export async function POST(
     .in("status", ["open", "pending", "claimed", "ai_handling"]);
 
   const nowIso = new Date().toISOString();
-  const { error: updErr } = await supabase
+  // O vínculo só é gravado pelo servidor (migration 0929, D-125): o admin já foi conferido acima.
+  // O banco recusa tirar o último admin, também sob duas revogações ao mesmo tempo.
+  const { error: updErr } = await createAdminClient()
     .from("user_organizations")
     .update({ revoked_at: nowIso, updated_at: nowIso })
-    .eq("id", target.id);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+    .eq("id", target.id)
+    .eq("organization_id", activeOrg.orgId);
+  if (updErr) {
+    if (updErr.message.includes("organizacao_sem_admin")) {
+      return fail("state_conflict", t("Não é possível revogar o último admin do tenant."), 409, { requestId });
+    }
+    return fail("internal_error", updErr.message, 500, { requestId });
+  }
 
   // As chaves de API que ele criou saem junto (D-101): a chave carrega o papel de
   // quem a emitiu, e sem isto o admin desligado seguia lendo e escrevendo pelo

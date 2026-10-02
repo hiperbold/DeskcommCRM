@@ -21,6 +21,11 @@ import { audit } from "@/lib/audit";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+// D-125: o vínculo só é gravado pelo servidor (cliente de serviço).
+const admin = vi.hoisted(() => ({ update: null as null | ((v: Record<string, unknown>) => unknown) }));
+vi.mock("@/lib/supabase/admin", () => ({
+  createAdminClient: () => ({ from: () => ({ update: (v: Record<string, unknown>) => admin.update?.(v) }) }),
+}));
 vi.mock("@/lib/impersonate/support", () => ({
   requireSupportWrite: vi.fn(async () => null),
 }));
@@ -43,14 +48,17 @@ function bancoCom(
   ultimoUpdate = null;
   const update = vi.fn((valores: Record<string, unknown>) => {
     ultimoUpdate = valores;
-    return { eq: vi.fn(async () => ({ error: erroUpdate })) };
+    const cadeia: Record<string, unknown> = {};
+    cadeia.eq = () => cadeia;
+    cadeia.then = (ok: (v: unknown) => unknown) => Promise.resolve({ error: erroUpdate }).then(ok);
+    return cadeia;
   });
+  admin.update = update;
   vi.mocked(createClient).mockResolvedValue({
     from: () => ({
       select: () => ({
         eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: linha, error: null }) }) }),
       }),
-      update,
     }),
   } as never);
   return { update };
