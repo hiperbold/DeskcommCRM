@@ -22,7 +22,7 @@ Sentry.init({
 // Transparência de telemetria: uma linha no boot dizendo o que está ativo e como
 // desligar. Evita "telemetria silenciosa" num projeto open source self-host.
 if (!sentryDsn) {
-  console.info("[telemetria] Desligada (SENTRY_DSN vazio ou off) — nenhum erro é enviado.");
+  console.info("[telemetria] Desligada (SENTRY_DSN vazio ou off): nenhum erro é enviado.");
 } else if (sentryDsn === DEFAULT_SENTRY_DSN) {
   console.info(
     "[telemetria] Relatórios de erro anonimizados ATIVOS (Sentry da comunidade). " +

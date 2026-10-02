@@ -57,7 +57,7 @@ Sentry.init({
 // adaptada para o processo worker): uma linha no boot dizendo o que está
 // ativo e como desligar.
 if (!sentryDsn) {
-  console.info("[telemetria] worker: Desligada (SENTRY_DSN vazio ou off) — nenhum erro é enviado.");
+  console.info("[telemetria] worker: Desligada (SENTRY_DSN vazio ou off): nenhum erro é enviado.");
 } else if (sentryDsn === DEFAULT_SENTRY_DSN) {
   console.info(
     "[telemetria] worker: Relatórios de erro anonimizados ATIVOS (Sentry da comunidade). " +

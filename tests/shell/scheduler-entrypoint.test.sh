@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gate do docker/scheduler/entrypoint.sh (e do bate-cron.sh e healthcheck.sh que
-# ele instala) — o único artefato executável novo da doutrina de packaging, e o
+# ele instala): o único artefato executável novo da doutrina de packaging, e o
 # que ficou sem cobertura na primeira versão dela.
 #
 # O que ele guarda, e por que cada coisa:
