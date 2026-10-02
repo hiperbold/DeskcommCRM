@@ -4,7 +4,11 @@ import { carregarEnvLocal } from "../scripts/lib/env-de-teste";
 async function main() {
   const env = carregarEnvLocal();
   const a = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.SUPABASE_SERVICE_ROLE_KEY!,{ auth:{autoRefreshToken:false,persistSession:false}});
-  const email = process.argv[2] ?? "demo@deskcomm.com.br";
+  const email = process.argv[2];
+  if (!email) {
+    console.error("uso: npx tsx scripts/check-user.ts <email>");
+    process.exit(2);
+  }
   const { data: u } = await a.auth.admin.listUsers({ perPage: 200 });
   const user = u.users.find((x) => x.email === email);
   if (!user) { console.error("not found"); process.exit(1); }

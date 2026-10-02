@@ -158,6 +158,15 @@ function ehIpv4DeLoopback(hostname: string): boolean {
   );
 }
 
+/** Pedido explícito para escrever num destino remoto: variável ou flag de linha de comando. */
+function remotoPermitido(): boolean {
+  return (
+    process.env.PERMITIR_SEED_REMOTO === "1" ||
+    process.argv.includes("--allow-remote") ||
+    process.argv.includes("--permitir-remoto")
+  );
+}
+
 /**
  * Diz em voz alta contra QUAL banco o script vai escrever.
  *
@@ -188,6 +197,19 @@ function ehIpv4DeLoopback(hostname: string): boolean {
 export function anunciarDestino(script: string, c: CredenciaisSupabase): void {
   const apiLocal = destinoEhLocal(c.url);
   const bancoLocal = destinoEhLocal(c.dbUrl);
+
+  // D-162: o seed grava contas de teste com senha fixa publicada no repositório
+  // (`e2e-admin@deskcomm.test`, e o `e2e-dono` vira platform_admin). Num destino
+  // remoto isso cria acesso de administrador com senha pública. Recusa, salvo
+  // pedido explícito (ver `remotoPermitido`). Já aconteceu em 2026-08-06.
+  if ((!apiLocal || !bancoLocal) && !remotoPermitido()) {
+    throw new Error(
+      `[${script}] recusou escrever em destino REMOTO (API: ${c.url}; banco: ${hostDe(c.dbUrl)}; ` +
+        `origem: ${c.origem}). Os seeds criam usuários de teste com senha pública. ` +
+        "Para rodar de propósito contra um remoto descartável, exporte PERMITIR_SEED_REMOTO=1 " +
+        "ou passe --allow-remote.",
+    );
+  }
 
   // Formato preservado no caso são-todos-locais: é o que o operador já conhece e
   // o que a prova dos 16 seeds registrou no handoff.

@@ -146,7 +146,7 @@ Expected: imagem builda. `docker run --rm -e SUPABASE_SERVICE_ROLE_KEY=... deskc
 **Interfaces:**
 - Produces: SQL idempotente que num projeto Supabase novo cria as 38 tabelas + RLS + funções + buckets (`ai-policy`, `lgpd-exports`) + `publication supabase_realtime` (incl. `messages`, `conversations`, `crm_leads`) + `REPLICA IDENTITY FULL`.
 
-- [ ] **Step 1:** Gerar o dump do projeto remoto `rrydmwnporysaiysiztn` (via `pg_dump` com a connection string do dashboard, schemas `public` + `storage`, `--no-owner --no-privileges`, incluindo extensions). Consolidar em `supabase/baseline.sql`.
+- [ ] **Step 1:** Gerar o dump do projeto remoto `<ref-do-projeto>` (via `pg_dump` com a connection string do dashboard, schemas `public` + `storage`, `--no-owner --no-privileges`, incluindo extensions). Consolidar em `supabase/baseline.sql`.
 
 - [ ] **Step 2:** Garantir no baseline: `alter publication supabase_realtime add table public.messages, public.conversations, public.crm_leads;` e `alter table ... replica identity full;` nessas 3 (+ conferir as de IA).
 

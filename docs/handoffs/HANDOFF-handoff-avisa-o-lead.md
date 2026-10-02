@@ -133,7 +133,7 @@ teste removido da produção depois da prova.
 
 - **Entrega no aparelho.** O número da prova é sintético: a mensagem sai com
   `status='sent'` e não chega a um WhatsApp real. Confirmar mandando "preciso
-  falar com atendente" de um celular para **55 11 4863-3324**.
+  falar com atendente" de um celular para **55 11 5555-0100**.
 - **E2E de tela:** não escrito.
 - **Assimetria conhecida:** o aviso do lado do CRM nasce marcado
   (`metadata.aviso_de_escalacao`); o do MOTOR não — lá a identidade é o `seq 0` no

@@ -52,9 +52,9 @@ Em uma única sessão autônoma de ~3 horas, partindo de PRD + Regras de Negóci
 ### Infra deployada
 | Recurso | Detalhes |
 |---|---|
-| **Supabase project** | `rrydmwnporysaiysiztn` em `sa-east-1` (São Paulo), Postgres 17 |
-| **URL** | `https://rrydmwnporysaiysiztn.supabase.co` |
-| **Anon key** (publishable) | `sb_publishable_71qDjdwBUo-a8qihNdFj2Q_wew0WUAi` |
+| **Supabase project** | `<ref-do-projeto>` em `sa-east-1` (São Paulo), Postgres 17 |
+| **URL** | `https://<ref-do-projeto>.supabase.co` |
+| **Anon key** (publishable) | `<chave-publishable>` |
 | **GitHub repo** | https://github.com/melgarafael/DeskcommCRM (private) |
 
 ---

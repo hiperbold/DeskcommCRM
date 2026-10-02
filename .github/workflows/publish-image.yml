@@ -102,7 +102,7 @@ jobs:
       imagem: ${{ steps.alcance.outputs.imagem }}
     steps:
       # Só o script, não o repositório: o job é de segundos e segue assim.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: github.event_name == 'pull_request'
         with:
           sparse-checkout: scripts/pr-mexe-na-imagem.sh
@@ -200,11 +200,11 @@ jobs:
             title: DeskcommCRM voice agent
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -224,7 +224,7 @@ jobs:
 
       - name: Docker metadata (tags/labels)
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.name }}
           tags: |
@@ -263,10 +263,10 @@ jobs:
             org.opencontainers.image.title=${{ matrix.title }}
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build e push (imagem genérica — sem segredos)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -316,13 +316,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build local da imagem do app (sem push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: Dockerfile
@@ -459,7 +459,7 @@ jobs:
       packages: write
     steps:
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -536,13 +536,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build local da imagem do worker (sem push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: Dockerfile.worker
@@ -560,7 +560,7 @@ jobs:
           cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=max,scope=deskcommcrm-worker' || '' }}
 
       - name: Build local da imagem do scheduler (sem push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: Dockerfile.scheduler
@@ -580,7 +580,7 @@ jobs:
       # travada. `tests/unit/toda-imagem-publicada-constroi-em-pr.test.ts`
       # compara a matriz com os builds de PR e reprova quem esquecer a próxima.
       - name: Build local da imagem do agente de voz (sem push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: Dockerfile.voice-agent
@@ -597,6 +597,8 @@ jobs:
           # Env de mentira, igual à do smoke do app: o runner não tem Supabase.
           # Montar o admin client não abre conexão — o que se mede aqui é o
           # CAMINHO DE BOOT (o import sob `tsx`), não o banco.
+          # A imagem roda com NODE_ENV=production (D-135) e aí `lib/env.ts` cobra
+          # as chaves obrigatórias: as de mentira abaixo só fazem o schema passar.
           # `--entrypoint pnpm`: a sonda substitui o CMD do worker e prova o
           # carregamento sem depender de o entrypoint da imagem ser executável
           # fora do cluster.
@@ -605,6 +607,16 @@ jobs:
             -e NEXT_PUBLIC_SUPABASE_URL=https://exemplo.supabase.co \
             -e NEXT_PUBLIC_SUPABASE_ANON_KEY=chave-de-mentira \
             -e SUPABASE_SERVICE_ROLE_KEY=chave-de-mentira \
+            -e SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
+            -e INTERNAL_SECRET=chave-de-mentira \
+            -e CPF_ENCRYPTION_KEY=chave-de-mentira \
+            -e WAHA_BYO_ENCRYPTION_KEY=chave-de-mentira \
+            -e AI_CRED_AES_KEY=chave-de-mentira \
+            -e WAHA_API_BASE_URL=http://waha:3000 \
+            -e WAHA_API_KEY=chave-de-mentira \
+            -e WAHA_WEBHOOK_BASE_URL=http://app:3000 \
+            -e UPSTASH_REDIS_REST_URL=http://srh:80 \
+            -e UPSTASH_REDIS_REST_TOKEN=chave-de-mentira \
             -e SENTRY_DSN=off \
             deskcomm-worker:pr \
             exec tsx scripts/sonda-do-laco-de-event-log.ts)
@@ -647,6 +659,15 @@ jobs:
             -e NEXT_PUBLIC_SUPABASE_ANON_KEY=chave-de-mentira \
             -e SUPABASE_SERVICE_ROLE_KEY=chave-de-mentira \
             -e SUPABASE_DB_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
+            -e INTERNAL_SECRET=chave-de-mentira \
+            -e CPF_ENCRYPTION_KEY=chave-de-mentira \
+            -e WAHA_BYO_ENCRYPTION_KEY=chave-de-mentira \
+            -e AI_CRED_AES_KEY=chave-de-mentira \
+            -e WAHA_API_BASE_URL=http://waha:3000 \
+            -e WAHA_API_KEY=chave-de-mentira \
+            -e WAHA_WEBHOOK_BASE_URL=http://app:3000 \
+            -e UPSTASH_REDIS_REST_URL=http://srh:80 \
+            -e UPSTASH_REDIS_REST_TOKEN=chave-de-mentira \
             -e SENTRY_DSN=off \
             deskcomm-worker:pr
 

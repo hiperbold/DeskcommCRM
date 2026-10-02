@@ -300,7 +300,7 @@ Casos: (a) bind `ok` monta o payload por `buildComponents` e chama a Graph API; 
 
 - [ ] **Step 5: Prova real**
 
-Com o destinatário `5531998966398` já registrado e o template `deskcomm_prova_webhook_0088` (pt_BR, 2 parâmetros) aprovado na WABA de teste: envie **por este caminho** e prove o `wamid`. Grave em `evidence/canais/fase4/`.
+Com o destinatário `5531991110001` já registrado e o template `deskcomm_prova_webhook_0088` (pt_BR, 2 parâmetros) aprovado na WABA de teste: envie **por este caminho** e prove o `wamid`. Grave em `evidence/canais/fase4/`.
 
 **Seja econômico** — é o celular de uma pessoa. Um envio bem-sucedido basta.
 

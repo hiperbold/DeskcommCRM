@@ -83,7 +83,7 @@ jobs:
     outputs:
       e2e: ${{ steps.alcance.outputs.e2e }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: github.event_name == 'pull_request'
         with:
           sparse-checkout: scripts/pr-alcanca-o-e2e.sh
@@ -1216,7 +1216,7 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "parte ${{ matrix.parte }}: relógio do job iniciado em $(date -u +%H:%M:%S) UTC"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ─── As portas do Supabase saem da faixa efêmera do kernel ─────────────
       #
@@ -1372,7 +1372,7 @@ jobs:
       # A catraca que reprova `latest`/faixa está em
       # tests/unit/workflows-pinam-o-supabase-cli.test.ts, e roda no job
       # `verify` (o `pnpm test:unit` do ci.yml).
-      - uses: supabase/setup-cli@v3
+      - uses: supabase/setup-cli@45a513f8c64c0bc8e0e3dfe572b5c95be85f6359 # v3
         with:
           version: 2.117.0
 
@@ -1948,13 +1948,20 @@ jobs:
           # ver o comentário do passo de build: vazio NÃO desliga.
           SENTRY_DSN: "off"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: failure()
         with:
           name: playwright-report-parte-${{ matrix.parte }}
+          # O artefato de um repositório PÚBLICO é baixável por qualquer um. O
+          # trace (`trace: retain-on-failure`) guarda cookies de sessão, corpo de
+          # cada requisição e os dados semeados, então os `.zip` de trace ficam de
+          # fora, tanto em `test-results/` quanto dentro do relatório HTML (D-169).
+          # Screenshot e `error-context.md` seguem: dão o DOM do vermelho. Quem
+          # precisa do trace roda o spec localmente, onde ele continua gravado.
           path: |
             playwright-report/
             test-results/
+            !**/*.zip
           retention-days: 7
 
       # ── ONDE A MEDIÇÃO FICA ───────────────────────────────────────────────
@@ -2078,7 +2085,7 @@ jobs:
             [ "$PARTES" = "success" ]
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: always()
 
       - name: Declarar o que este job ainda NÃO cobre

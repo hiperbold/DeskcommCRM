@@ -2426,7 +2426,11 @@ STUB
   }
   telemetria_ok "template copiado (sem escolha): o --yes grava off, não consente por ninguém" \
     "$SENTRY_DO_TEMPLATE" '"off"'
-  telemetria_ok "quem ACEITOU (chave declarada e vazia) continua aceitando na reexecução" \
+  telemetria_ok "quem ACEITOU (SENTRY_DSN=community) continua aceitando na reexecução" \
+    "SENTRY_DSN='community'" '"community"'
+  # O vazio NÃO é mais aceite (D-135): sem escolha escrita a telemetria fica
+  # desligada, e a reexecução preserva a chave vazia sem religar nada.
+  telemetria_ok "chave vazia (herdada de instalação antiga) segue declarada, e o código a lê como desligada" \
     "SENTRY_DSN=''" '""'
   telemetria_ok "DSN próprio sobrevive à reexecução" \
     "SENTRY_DSN='https://abc123@o0.ingest.sentry.io/42'" '"https://abc123@o0.ingest.sentry.io/42"'

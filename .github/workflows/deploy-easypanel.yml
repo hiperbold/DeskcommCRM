@@ -8,6 +8,12 @@ name: Deploy no EasyPanel (Hiperbold)
 #   secrets.EASYPANEL_URL, secrets.EASYPANEL_API_KEY
 #   vars.EASYPANEL_PROJETO (hiperbold-crm-1)
 # Sem elas o job falha alto em vez de passar verde sem deployar.
+#
+# O publish-image roda em PARALELO com o ci e o e2e: imagem publicada não prova
+# que o commit passou nos testes (D-121). Por isso o primeiro passo espera o ci
+# e o e2e do MESMO commit terminarem em sucesso e reprova se algum não terminar
+# assim. O deploy manual (workflow_dispatch) passa pelo mesmo portão e só vale
+# na main. A lógica mora em scripts/commit-passou-nos-testes.sh.
 
 on:
   workflow_run:
@@ -25,9 +31,35 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions: {}
+    # O teto do portão é de 55 min (e2e em fila longa), mais o deploy.
+    timeout-minutes: 65
+    # Só leitura das execuções do próprio repositório, para o portão consultar o
+    # ci e o e2e. Escrita nenhuma.
+    permissions:
+      actions: read
+      contents: read
     steps:
+      # Só o script, não o repositório: o job guarda segredo de deploy e não deve
+      # baixar nem rodar mais código do que o portão. Sem credencial gravada.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          sparse-checkout: scripts/commit-passou-nos-testes.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: O commit passou nos testes?
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::deploy manual só vale na main (ref: ${GITHUB_REF})"
+            exit 1
+          fi
+          bash scripts/commit-passou-nos-testes.sh "${SHA}"
+
       - name: Conferir configuração
         run: |
           test -n "${{ secrets.EASYPANEL_URL }}"     || { echo "falta o segredo EASYPANEL_URL"; exit 1; }

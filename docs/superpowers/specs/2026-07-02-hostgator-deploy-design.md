@@ -22,7 +22,7 @@ Limite honesto de "100% HostGator": todo o **compute e o WhatsApp** rodam no VPS
 | D3 | Fluxo GitHub | Fork + `git clone` + `docker compose up` (CI/CD é opcional avançado) | Rafael |
 | D4 | Escopo do template | **Genérico** — Nuvemshop atrás de flag `NUVEMSHOP_ENABLED=false` | Rafael |
 | D5 | WhatsApp/WAHA | **WAHA Core grátis** como default (validar no código); Plus opcional via env | Rafael |
-| D6 | Baseline do schema | Gerar via **acesso MCP** ao projeto remoto `rrydmwnporysaiysiztn` | Rafael |
+| D6 | Baseline do schema | Gerar via **acesso MCP** ao projeto remoto `<ref-do-projeto>` | Rafael |
 | D7 | Workers de IA-por-evento | **Port fiel** — dormentes viram roadmap, não ativar no v1 | Rafael |
 | D8 | Redis | **Local no VPS** via `serverless-redis-http` (SRH), sem conta Upstash | Maestro (leigo-first) |
 | D9 | Reverse proxy | **Caddy** (HTTPS Let's Encrypt automático) | Maestro (menos config) |
@@ -69,7 +69,7 @@ Nenhuma outra mudança de código é necessária para o self-host: middleware, i
 
 **Problema:** as migrations `0001–0009` e `0013` são stubs `SELECT 1;` — o schema real (38 tabelas, confirmadas via MCP, todas com RLS) foi aplicado via MCP e vive só no projeto remoto. `supabase db push` num projeto novo **não** recria o schema e as migrations `0010+` (ALTER) falham.
 
-**Solução (D6):** gerar um `supabase/baseline.sql` consolidado a partir do projeto `rrydmwnporysaiysiztn`, incluindo obrigatoriamente:
+**Solução (D6):** gerar um `supabase/baseline.sql` consolidado a partir do projeto `<ref-do-projeto>`, incluindo obrigatoriamente:
 - schema `public` (38 tabelas + RLS + triggers + funções `fn_user_org_ids`/`fn_is_platform_admin`/`emit_event`/`fn_encrypt_oauth`);
 - schema `storage`: buckets `ai-policy` e `lgpd-exports` + policies (um dump só de `public` os perde);
 - extensions `uuid-ossp`, `pgcrypto`, `vector`;

@@ -120,9 +120,9 @@ export async function sendEmail(args: SendArgs): Promise<SendResult> {
       console.warn(
         "[email] envio desligado — falta RESEND_API_KEY ou RESEND_FROM_EMAIL. Payload:",
         {
-          to: args.to,
+          // Sem destinatário nem prévia do corpo: o log pode ser público e o corpo
+          // traz link de convite ou de recuperação de senha (D-135).
           subject: args.subject,
-          preview: args.text?.slice(0, 200) ?? args.html.slice(0, 200),
           tem_chave: client !== null,
           tem_remetente: from !== null,
         },

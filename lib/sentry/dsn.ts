@@ -1,13 +1,16 @@
 /**
- * DSN do Sentry com opt-out em runtime — modelo "telemetria de comunidade".
+ * DSN do Sentry, desligado por padrão. A telemetria da comunidade é opt-in.
  *
- * Por padrão, erros vão pro Sentry do projeto (DEFAULT_SENTRY_DSN): num open source
- * self-host, é o que dá visibilidade pra corrigir bugs que afetam todo mundo. Quem
- * hospeda controla isso pelo `.env`, SEM rebuild da imagem:
+ * Vazio ou ausente NÃO manda nada: o erro de uma instalação, com dado de cliente
+ * em volta, só sai para o Sentry do projeto de origem se alguém pedir por escrito.
+ * Antes, vazio caía em DEFAULT_SENTRY_DSN, e bastava a variável sumir do `.env`
+ * (ou do ambiente do contêiner) para o erro de produção ir parar na conta do
+ * autor original (D-135). Quem hospeda controla pelo `.env`, SEM rebuild:
  *
- *   SENTRY_DSN=off           → desliga toda a telemetria (nada é enviado)
- *   SENTRY_DSN=<seu-dsn>     → manda os erros pro SEU Sentry
- *   SENTRY_DSN=  (vazio)     → usa o Sentry da comunidade (padrão)
+ *   SENTRY_DSN=  (vazio) ou ausente → desligado (nada é enviado)
+ *   SENTRY_DSN=off                  → desligado, explícito
+ *   SENTRY_DSN=community            → liga o Sentry da comunidade (só erro)
+ *   SENTRY_DSN=<seu-dsn>            → manda os erros pro SEU Sentry
  *
  * Vale para servidor (process.env) e navegador (window.__PUBLIC_ENV__.SENTRY_DSN,
  * injetado em runtime pelo <PublicEnvScript/>). O DSN não é segredo — DSNs do Sentry
@@ -16,10 +19,17 @@
 export const DEFAULT_SENTRY_DSN =
   "https://58fabf8ad54504863d404a3647ef3714@o4509908078559232.ingest.us.sentry.io/4509908083212288";
 
+/** O valor que liga o Sentry da comunidade: escolha escrita, nunca o vazio. */
+export const SENTRY_DSN_COMUNIDADE = "community";
+
 export function resolveSentryDsn(value: string | undefined | null): string | undefined {
-  const v = (value ?? "").trim().toLowerCase() === "off" ? "off" : (value ?? "").trim();
-  if (v === "off" || v === "false" || v === "0") return undefined;
-  return v.length > 0 ? v : DEFAULT_SENTRY_DSN;
+  const v = (value ?? "").trim();
+  const minusculo = v.toLowerCase();
+  if (minusculo === "" || minusculo === "off" || minusculo === "false" || minusculo === "0") {
+    return undefined;
+  }
+  if (minusculo === SENTRY_DSN_COMUNIDADE) return DEFAULT_SENTRY_DSN;
+  return v;
 }
 
 /**

@@ -168,6 +168,9 @@ describe("anunciarDestino — o rótulo diz a verdade sobre os DOIS canais", () 
     const warn: string[] = [];
     const spyI = vi.spyOn(console, "info").mockImplementation((...a) => void info.push(a.join(" ")));
     const spyW = vi.spyOn(console, "warn").mockImplementation((...a) => void warn.push(a.join(" ")));
+    // Estes casos medem o RÓTULO do aviso; a recusa de remoto (D-162) tem o describe
+    // próprio logo abaixo. Aqui o pedido explícito mantém o aviso alcançável.
+    process.env.PERMITIR_SEED_REMOTO = "1";
     try {
       anunciarDestino("teste", {
         url: "http://127.0.0.1:54321",
@@ -179,6 +182,7 @@ describe("anunciarDestino — o rótulo diz a verdade sobre os DOIS canais", () 
         ...c,
       });
     } finally {
+      delete process.env.PERMITIR_SEED_REMOTO;
       spyI.mockRestore();
       spyW.mockRestore();
     }
@@ -252,5 +256,49 @@ describe("anunciarDestino — o rótulo diz a verdade sobre os DOIS canais", () 
     const texto = warn.join("\n");
     expect(texto).toContain("REMOTO");
     expect(texto).not.toContain("MISTO");
+  });
+});
+
+/**
+ * D-162: o seed grava usuários de teste com senha pública. Destino remoto é recusado
+ * (API, banco ou os dois), salvo pedido explícito.
+ */
+describe("anunciarDestino recusa destino remoto", () => {
+  const LOCAL = {
+    url: "http://127.0.0.1:54321",
+    serviceRole: "srk",
+    anonKey: "anon",
+    appUrl: "http://localhost:3000",
+    dbUrl: DB_URL,
+    origem: "ambiente",
+  } as CredenciaisSupabase;
+  const REMOTO_DB = "postgresql://postgres:senha@db.abcdefgh.supabase.co:5432/postgres";
+
+  afterEach(() => {
+    delete process.env.PERMITIR_SEED_REMOTO;
+    vi.restoreAllMocks();
+  });
+
+  it("API remota: lança", () => {
+    expect(() =>
+      anunciarDestino("seed", { ...LOCAL, url: "https://abcdefgh.supabase.co" }),
+    ).toThrow(/recusou escrever em destino REMOTO/);
+  });
+
+  it("banco remoto com API local (o par misto): lança", () => {
+    expect(() => anunciarDestino("seed", { ...LOCAL, dbUrl: REMOTO_DB })).toThrow(/REMOTO/);
+  });
+
+  it("tudo local: segue", () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    expect(() => anunciarDestino("seed", LOCAL)).not.toThrow();
+  });
+
+  it("PERMITIR_SEED_REMOTO=1 libera, e só o valor 1", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.PERMITIR_SEED_REMOTO = "true";
+    expect(() => anunciarDestino("seed", { ...LOCAL, dbUrl: REMOTO_DB })).toThrow();
+    process.env.PERMITIR_SEED_REMOTO = "1";
+    expect(() => anunciarDestino("seed", { ...LOCAL, dbUrl: REMOTO_DB })).not.toThrow();
   });
 });

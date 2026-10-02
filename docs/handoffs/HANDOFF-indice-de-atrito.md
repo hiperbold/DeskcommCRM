@@ -95,7 +95,7 @@ Ambiente: **Supabase local** (`127.0.0.1:54321`), `next build` + `next start` na
 porta 3100, login real com `e2e-manager@deskcomm.test` via Playwright.
 
 > ⚠️ **`.env.local` do repo aponta para a NUVEM DE PRODUÇÃO**
-> (`rrydmwnporysaiysiztn.supabase.co`). O app foi subido com as vars do Supabase
+> (`<ref-do-projeto>.supabase.co`). O app foi subido com as vars do Supabase
 > sobrescritas no `process.env` (o Next dá precedência a elas), e isso foi
 > **medido, não presumido**: o HTML de `/login` referencia só `127.0.0.1:54321`,
 > nenhuma ocorrência de `*.supabase.co`.

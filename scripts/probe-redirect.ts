@@ -8,8 +8,12 @@ import { carregarEnvLocal } from "../scripts/lib/env-de-teste";
 
 async function main() {
   const env = carregarEnvLocal();
-  const email = process.argv[2] ?? "demo@deskcomm.com.br";
-  const password = process.argv[3] ?? "Demo!Live2026";
+  const email = process.argv[2];
+  const password = process.argv[3];
+  if (!email || !password) {
+    console.error("uso: npx tsx scripts/probe-redirect.ts <email> <password>");
+    process.exit(2);
+  }
 
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL!, env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, {
     auth: { autoRefreshToken: false, persistSession: false },

@@ -43,7 +43,7 @@ jobs:
     steps:
       # `fetch-depth: 0` não é preciso: o script lê a ÁRVORE de origin/main, não
       # o histórico.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # E a ref é buscada EXPLICITAMENTE: não depende de o checkout raso de um
       # `schedule` ter criado `refs/remotes/origin/main`. Sem ela o script lê zero

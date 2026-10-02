@@ -1101,6 +1101,35 @@ url_do_schema() {
 # alcance de uma role de app com grants só em `public`.
 psql_run() { pg_container -i postgres:17-alpine psql "$(url_do_schema)" -v ON_ERROR_STOP=1 "$@"; }
 
+# ── JSON e cabeçalhos da admin API, sem texto do operador na linha de comando ──
+# (D-169). Os scripts de emergência montavam o JSON juntando a senha digitada:
+# aspas ou barra invertida na senha quebravam o corpo (ou injetavam campo), e o
+# segredo e a senha ficavam na linha do `curl`, visíveis em `ps`. O kit não exige
+# `jq` numa VPS de cliente, então o escape é feito aqui.
+#
+# Escapa um texto para dentro de uma string JSON (sem as aspas de fora).
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
+
+# Grava os cabeçalhos da admin API (service role) num arquivo 0600 e imprime o
+# caminho. Quem chama passa `-H @"$arquivo"` ao curl e remove o arquivo depois.
+# Assim a chave não aparece na linha de comando do processo.
+cabecalhos_admin_em_arquivo() {
+  local f
+  f="$(umask 077; mktemp)" || return 1
+  chmod 600 "$f"
+  printf 'apikey: %s\nAuthorization: Bearer %s\nContent-Type: application/json\n' \
+    "$SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY" > "$f"
+  printf '%s' "$f"
+}
+
 # ── Re-aplicar o baseline num banco que JÁ existe ────────────────────────────
 # Chamado pelo `update.sh` e pelo `install.sh` re-executado. Sem `ON_ERROR_STOP`,
 # de propósito: com a flag, o primeiro "já existe" de um clone antigo pararia o

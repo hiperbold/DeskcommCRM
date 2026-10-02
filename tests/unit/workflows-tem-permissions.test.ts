@@ -52,6 +52,13 @@ const DIR = join(process.cwd(), ".github/workflows");
  * acrescente, e acrescentar sem razão é visível em code review.
  */
 const ESCRITA_JUSTIFICADA: Record<string, string> = {
+  "release.yml::permission-contents: write":
+    "NÃO é permissão do GITHUB_TOKEN: é o escopo pedido ao token do GitHub App em " +
+    "`create-github-app-token` (`permission-contents`), que empurra a tag e o branch de release. " +
+    "Existe para LIMITAR o App ao mínimo (D-162); sem o input o token herdaria tudo o que o App tem",
+  "release.yml::permission-pull-requests: write":
+    "NÃO é permissão do GITHUB_TOKEN: é o escopo pedido ao token do GitHub App no ato 1 do " +
+    "release (abrir o PR de release). Limita o App ao mínimo (D-162)",
   "publish-image.yml::packages: write":
     "publica a imagem do app no GHCR — é o artefato que o self-hoster instala",
   "vigia-de-colisao.yml::pull-requests: write":

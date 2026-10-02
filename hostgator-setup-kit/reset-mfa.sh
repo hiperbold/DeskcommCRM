@@ -14,8 +14,10 @@ c_ylw "Isto remove TODOS os fatores MFA de $EMAIL."
 read -r -p "Confirmar? (s/N) " a; resposta_sim "$a" || die "Cancelado."
 
 step "Removendo fatores MFA"
-psql_run <<SQL
+# O e-mail vai por variável do psql (`:'email'`), que o próprio psql cita: montar o
+# SQL juntando o texto digitado deixava `x' or true or '` apagar o MFA de todos (D-169).
+psql_run -v email="$EMAIL" <<'SQL'
 delete from auth.mfa_factors
-where user_id = (select id from auth.users where email = '${EMAIL}');
+where user_id = (select id from auth.users where email = :'email');
 SQL
 c_grn "✓ MFA removido. $EMAIL entra só com a senha; cadastra um autenticador novo em Configurações › Segurança se quiser."

@@ -32,21 +32,46 @@ jobs:
   abrir-pr-de-release:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # A chave do App é capaz de criar tag, e a tag publica no parque instalado
+    # inteiro (D-162). O `environment` é onde a trava de verdade mora: mova os
+    # segredos RELEASE_APP_ID e RELEASE_APP_PRIVATE_KEY para o environment
+    # `release` (Settings > Environments), com "Deployment branches" = só `main`.
+    # Revisor obrigatório NÃO entra: o `cortar-tag` usa o mesmo environment e roda
+    # em todo push na main, então um revisor travaria cada merge. Enquanto o
+    # environment não tiver os segredos, estes jobs continuam lendo os do
+    # repositório e nada muda. O passo "Só na main" abaixo é a segunda trava, no
+    # código, e não substitui a primeira: quem edita o workflow numa branch edita
+    # também esse passo.
+    environment: release
     permissions:
       contents: read
     steps:
-      - uses: actions/create-github-app-token@v3
+      - name: Só na main
+        run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::o corte da release só roda na main (ref: ${GITHUB_REF}); a chave do App não é aberta a outra branch."
+            exit 1
+          fi
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: token
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # O mínimo que o ato 1 usa: empurrar o branch `release/*` e abrir o PR.
+          permission-contents: write
+          permission-pull-requests: write
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # `fetch-depth: 0` porque o corte compara com as tags, e o checkout
           # raso padrão não traz nenhuma.
           fetch-depth: 0
           token: ${{ steps.token.outputs.token }}
+          # O token NÃO fica no .git/config: o `pnpm install` e o `tsx` abaixo
+          # rodam código de dependência e não devem poder lê-lo. O `git push`
+          # passa a credencial só no comando (passo "Abrir o PR").
+          persist-credentials: false
 
       - uses: ./.github/actions/preparar-node
         # O teto do preâmbulo mora aqui porque passo de composite action não
@@ -72,7 +97,13 @@ jobs:
           git checkout -b "release/${VERSAO}"
           git add CHANGELOG.md .changes
           git commit -m "release(${VERSAO}): a versão montada a partir dos fragmentos declarados"
-          git push origin "release/${VERSAO}"
+          # A credencial vai só neste comando, por variável de ambiente do git
+          # (nem argumento, nem .git/config): ver `persist-credentials` do checkout.
+          cabecalho=$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${cabecalho}" \
+            git push origin "release/${VERSAO}"
           {
             echo "Esta versão sai como **${VERSAO}**, e o número foi CALCULADO a partir do que cada PR declarou — ninguém digitou."
             echo
@@ -89,6 +120,9 @@ jobs:
   cortar-tag:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    # Mesmo environment do ato 1: é nele que os segredos do App devem morar,
+    # presos à branch `main` (ver o comentário lá em cima).
+    environment: release
     permissions:
       contents: read
       # A guarda pergunta à API quem abriu o PR de origem do merge
@@ -97,16 +131,21 @@ jobs:
       # Leitura só — quem escreve continua sendo o token do App.
       pull-requests: read
     steps:
-      - uses: actions/create-github-app-token@v3
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: token
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # O mínimo do ato 2: empurrar a tag e publicar a release.
+          permission-contents: write
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           token: ${{ steps.token.outputs.token }}
+          # Sem o token no .git/config durante o `pnpm install` e o `tsx` (D-162).
+          # O push da tag leva a credencial só no próprio comando.
+          persist-credentials: false
 
       - uses: ./.github/actions/preparar-node
         # O teto do preâmbulo mora aqui porque passo de composite action não
@@ -345,6 +384,7 @@ jobs:
         if: steps.pendente.outputs.cortar == 'sim'
         env:
           VERSAO: ${{ steps.pendente.outputs.versao }}
+          GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
           set -euo pipefail
           git config user.name  'deskcomm-release[bot]'
@@ -352,7 +392,12 @@ jobs:
           # Tag ANOTADA: guarda autor e data, e é o que `git describe
           # --exact-match` do agent.sh espera encontrar na VPS.
           git tag -a "v${VERSAO}" -m "v${VERSAO}"
-          git push origin "v${VERSAO}"
+          # Credencial só neste comando (checkout com `persist-credentials: false`).
+          cabecalho=$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${cabecalho}" \
+            git push origin "v${VERSAO}"
 
       # A tag basta para a VPS (o `agent.sh` faz `git fetch --tags`), mas não
       # para quem chega pelo GitHub: sem a release publicada, a página do

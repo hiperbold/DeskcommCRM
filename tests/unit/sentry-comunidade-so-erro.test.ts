@@ -213,8 +213,9 @@ describe("o init do cliente honra a política", () => {
  *
  * Mesma família do e2e que escrevia no banco de produção: o default é a coisa
  * mais perigosa quando o default é "manda para o nosso servidor de verdade".
- * `resolveSentryDsn("")` cai no DSN da comunidade — então a AUSÊNCIA da chave no
- * ambiente da suíte é o que mandava dado de teste para lá.
+ * Antes `resolveSentryDsn("")` caía no DSN da comunidade, e a AUSÊNCIA da chave no
+ * ambiente da suíte era o que mandava dado de teste para lá. Hoje o vazio desliga,
+ * mas a chave `off` continua obrigatória no gerador: não depender do padrão.
  */
 describe("o ambiente da suíte desliga a telemetria", () => {
   it("o gerador do .env.e2e escreve SENTRY_DSN=off", () => {
@@ -225,7 +226,7 @@ describe("o ambiente da suíte desliga a telemetria", () => {
     expect(
       /^SENTRY_DSN=off$/m.test(gerador),
       "o ambiente da suíte voltou a ficar sem SENTRY_DSN. Sem a chave, " +
-        "`resolveSentryDsn` cai no DSN da comunidade e a suíte passa a MANDAR DADO " +
+        "o padrão do DSN pode mudar de novo e a suíte passa a MANDAR DADO " +
         "para o Sentry de produção do projeto — e a cor do CI volta a depender do " +
         "estado de cobrança de um terceiro.",
     ).toBe(true);
@@ -233,7 +234,35 @@ describe("o ambiente da suíte desliga a telemetria", () => {
 
   it("e `off` de fato desliga — a guarda acima não vale nada se o valor não desligasse", () => {
     expect(resolveSentryDsn("off")).toBeUndefined();
-    // Controle: o vazio NÃO desliga, e é por isso que a linha acima é obrigatória.
-    expect(isCommunityDsn(resolveSentryDsn(""))).toBe(true);
+    expect(resolveSentryDsn("OFF")).toBeUndefined();
+  });
+});
+
+/**
+ * A TELEMETRIA DA COMUNIDADE SÓ LIGA POR ESCOLHA ESCRITA (D-135).
+ *
+ * Antes, vazio ou ausente caía no DSN do autor original: bastava a variável sumir
+ * do `.env` ou do ambiente do contêiner para o erro de produção, com dado de
+ * cliente em volta, ir para a conta de um terceiro. Agora o padrão é desligado.
+ */
+describe("resolveSentryDsn: sem escolha escrita, nada sai", () => {
+  it.each([[undefined], [null], [""], ["   "], ["off"], ["false"], ["0"]])(
+    "%j não resolve DSN nenhum",
+    (valor) => {
+      expect(resolveSentryDsn(valor)).toBeUndefined();
+    },
+  );
+
+  it("`community` liga o Sentry da comunidade, e só ele", () => {
+    const dsn = resolveSentryDsn("community");
+    expect(dsn).toBeDefined();
+    expect(isCommunityDsn(dsn)).toBe(true);
+    expect(isCommunityDsn(resolveSentryDsn(" Community "))).toBe(true);
+  });
+
+  it("DSN próprio passa intacto e NÃO é tratado como o da comunidade", () => {
+    const proprio = "https://abc123@o0.ingest.sentry.io/42";
+    expect(resolveSentryDsn(proprio)).toBe(proprio);
+    expect(isCommunityDsn(resolveSentryDsn(proprio))).toBe(false);
   });
 });

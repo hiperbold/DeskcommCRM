@@ -25,15 +25,31 @@ fi
 # encontrasse no código o definiria no `.env` e não veria efeito.
 APP_ORIGIN="http://app:3000"
 
-# O crond executa cada linha por `/bin/sh -c`, então o segredo é REAVALIADO pelo
-# shell na hora de disparar. Interpolá-lo cru dentro de aspas duplas fazia com
-# que um `$` no valor virasse expansão de variável (o header sairia truncado, e
-# todo cron responderia 401 em silêncio) e uma crase virasse substituição de
-# comando — execução arbitrária a cada minuto. Medido com um segredo hostil: a
-# versão com aspas duplas entregava `segrafaelmelgacoredo/Users/rafaelmelgaco…`,
-# com o `whoami` EXECUTADO. Aqui o valor vai entre aspas SIMPLES, com as aspas
-# simples internas escapadas — dentro delas o sh não interpreta nada.
-SEGREDO_SEGURO="$(printf '%s' "$INTERNAL_SECRET" | sed "s/'/'\\\\''/g")"
+# O SEGREDO NÃO VAI NA LINHA DO CRON. A versão anterior o escrevia dentro do
+# `curl -H 'Authorization: Bearer ...'` de cada linha, e a linha de comando de um
+# processo é pública para quem lista processos no contêiner (`ps`, /proc): o
+# INTERNAL_SECRET aparecia por alguns segundos a cada minuto, em cada rota
+# (D-135). Agora ele vive só num arquivo 0600 com o cabeçalho pronto, que o
+# `curl -H @arquivo` lê (via bate-cron.sh). Como é um arquivo e não texto
+# reavaliado por `/bin/sh -c`, `$`, crase e aspas no valor passam literais,
+# sem a interpolação que antes executava comando (medido com segredo hostil).
+#
+# Quebra de linha no segredo injetaria cabeçalho: recusa.
+QUEBRA_DE_LINHA="
+"
+RETORNO_DE_CARRO="$(printf '\r')"
+case "$INTERNAL_SECRET" in
+  *"$QUEBRA_DE_LINHA"* | *"$RETORNO_DE_CARRO"*)
+    echo "scheduler: INTERNAL_SECRET contém quebra de linha, recusado." >&2
+    exit 1
+    ;;
+esac
+
+ARQUIVO_DO_CABECALHO="${SCHEDULER_AUTH_FILE:-/etc/scheduler/auth.header}"
+BATE="${BATE_CRON_PATH:-/usr/local/bin/bate-cron.sh}"
+mkdir -p "$(dirname "$ARQUIVO_DO_CABECALHO")"
+( umask 077; printf 'Authorization: Bearer %s\n' "$INTERNAL_SECRET" > "$ARQUIVO_DO_CABECALHO" )
+chmod 600 "$ARQUIVO_DO_CABECALHO"
 
 # minuto|timeout|caminho — uma linha por cron. O caminho vai COMPLETO de
 # propósito: o literal `api/v1/cron/<rota>` é o contrato que
@@ -178,8 +194,12 @@ umask 077
 : > "$DESTINO"
 echo "$CRONS" | while IFS='|' read -r quando timeout rota; do
   [ -n "$rota" ] || continue
-  printf '%s curl -fsS -m%s -H '"'"'Authorization: Bearer %s'"'"' "%s/%s" >/dev/null 2>&1\n' \
-    "$quando" "$timeout" "$SEGREDO_SEGURO" "$APP_ORIGIN" "$rota" >> "$DESTINO"
+  # O resultado de cada batida (código HTTP) é gravado e as falhas vão para o log
+  # do contêiner: antes a saída ia para /dev/null e um segredo divergente dava 401
+  # em todos os crons sem nenhum sintoma. Ver docker/scheduler/bate-cron.sh e o
+  # healthcheck.
+  printf '%s %s %s "%s/%s"\n' \
+    "$quando" "$BATE" "$timeout" "$APP_ORIGIN" "$rota" >> "$DESTINO"
 done
 
 exec crond -f -l 2

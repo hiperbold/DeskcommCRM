@@ -237,7 +237,7 @@ Sabote: ignore o ramo de card (monte tudo plano) → o caso do carrossel vermelh
 
 - [ ] **Step 5: Prova contra a API real (é barata e vale mais que o unit)**
 
-Com o destinatário `5531998966398` já registrado, monte o payload com `buildComponents` e envie de verdade:
+Com o destinatário `5531991110001` já registrado, monte o payload com `buildComponents` e envie de verdade:
 
 ```bash
 pnpm exec tsx scripts/spike-send-template.ts   # criar neste step

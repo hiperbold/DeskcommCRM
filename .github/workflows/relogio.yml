@@ -57,16 +57,15 @@ jobs:
             exit 1
           fi
           BASE="${APP_URL%/}"
-          # -w com o código, e o corpo separado: `curl -f` sozinho esconde o
-          # motivo, e o motivo é o que a pessoa precisa para consertar.
-          CORPO=$(mktemp)
-          CODIGO=$(curl -sS -o "$CORPO" -w '%{http_code}' -X POST \
+          # -w com o código: `curl -f` sozinho esconde o motivo. O CORPO da resposta
+          # fica de fora do log: o repositório é público, o log também, e o corpo
+          # do tick pode trazer contagem e identificador da instalação (D-135).
+          # Quem precisa do corpo repete o curl à mão, como o runbook ensina.
+          CODIGO=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
             -H "Authorization: Bearer ${SECRET}" \
             --max-time 90 \
             "${BASE}/api/v1/system/relogio/tick" || echo "000")
           echo "HTTP ${CODIGO}"
-          head -c 2000 "$CORPO" || true
-          echo
           # ⚠️ A GUARDA QUE FAZ ESTE ARQUIVO VALER ALGUMA COISA. Sem ela o
           # Actions fica VERDE com 401, 404 ou 500 — e o follow-up parado, com o
           # painel dizendo que o relógio está saudável. Falha-em-verde é o pior

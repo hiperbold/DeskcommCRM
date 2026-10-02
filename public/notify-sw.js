@@ -19,7 +19,14 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientes) => {
       const origem = self.location.origin;
-      const url = href ? new URL(href, origem).href : origem + "/app/inbox";
+      // Só abre destino da MESMA origem: um href absoluto de outro site cai na caixa de entrada (D-135).
+      let destino = null;
+      try {
+        destino = href ? new URL(href, origem) : null;
+      } catch (e) {
+        destino = null;
+      }
+      const url = destino && destino.origin === origem ? destino.href : origem + "/app/inbox";
       const alvo = clientes.find((c) => "focus" in c);
       if (alvo) {
         return alvo.focus().then(() => {

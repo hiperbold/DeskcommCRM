@@ -1475,7 +1475,9 @@ if [ -z "${SENTRY_DSN+x}" ]; then
     printf '\n%s\n' "$(t "Você pode mudar depois no .env, a qualquer momento.")"
     read -r -p "$(t "  Enviar relatórios de erro anonimizados? (s/N) ")" _tel
     if resposta_sim "${_tel:-}"; then
-      SENTRY_DSN=""
+      # `community` é o valor que liga o Sentry da comunidade. Vazio desliga:
+      # a telemetria nunca liga por ausência de escolha (D-135).
+      SENTRY_DSN="community"
       c_grn "$(t "✓ Telemetria de erros ligada — obrigado, isso ajuda o projeto.")"
     else
       SENTRY_DSN="off"
@@ -2068,12 +2070,16 @@ step "$(t "Criando o primeiro admin ({1})" "$OWNER_EMAIL")"
 #    (|| true): a re-execução é idempotente, o passo seguinte encontra o usuário.
 # No single-server o Caddy pode ainda estar emitindo o certificado: fala com o
 # gateway local, que já respondeu ao validador.
-curl -fsS -X POST "${SUPABASE_INTERNAL_URL:-${NEXT_PUBLIC_SUPABASE_URL}}/auth/v1/admin/users" \
-  -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-  -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"${OWNER_EMAIL}\",\"password\":\"${OWNER_PASSWORD}\",\"email_confirm\":true,\"user_metadata\":{\"locale\":\"${APP_LOCALE:-pt-BR}\"}}" \
-  >/dev/null 2>&1 || true
+#    Cabeçalhos por arquivo 0600 e corpo por stdin, com escape de JSON: a service
+#    role e a senha não entram na linha do curl (visível em `ps`) e uma aspa na
+#    senha não quebra o corpo (D-169).
+_cab_owner="$(cabecalhos_admin_em_arquivo)"
+printf '{"email":"%s","password":"%s","email_confirm":true,"user_metadata":{"locale":"%s"}}' \
+    "$(json_escape "$OWNER_EMAIL")" "$(json_escape "$OWNER_PASSWORD")" "$(json_escape "${APP_LOCALE:-pt-BR}")" \
+  | curl -fsS -X POST "${SUPABASE_INTERNAL_URL:-${NEXT_PUBLIC_SUPABASE_URL}}/auth/v1/admin/users" \
+      -H @"$_cab_owner" --data-binary @- \
+      >/dev/null 2>&1 || true
+rm -f "$_cab_owner"
 
 # 2) Resolve o id direto do auth.users e cria org + membership + platform_admin.
 #    Resolver o uid DENTRO do SQL evita parsing frágil de JSON e funciona tanto para
@@ -2341,7 +2347,7 @@ fi
 telemetria_no_banner() {
   if [ "${SENTRY_DSN:-}" = "off" ]; then
     printf '%s\n' "$(t "  Telemetria: DESLIGADA — nenhum relatório de erro sai desta instalação.")"
-    printf '%s\n' "$(t "  Para ligar, apague a linha SENTRY_DSN do .env e rode: {1}" "docker compose $(dc_files) up -d")"
+    printf '%s\n' "$(t "  Para ligar, ponha SENTRY_DSN='community' no .env e rode: {1}" "docker compose $(dc_files) up -d")"
   else
     printf '%s\n' "$(t "  Telemetria: LIGADA — só relatórios de erro anonimizados vão ao Sentry do")"
     printf '%s\n' "$(t "  projeto. Para desligar, ponha SENTRY_DSN='off' no .env e rode: {1}" "docker compose $(dc_files) up -d")"

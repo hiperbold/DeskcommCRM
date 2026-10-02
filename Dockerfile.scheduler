@@ -16,16 +16,22 @@ ENV TZ=UTC
 RUN apk add --no-cache curl tzdata
 
 COPY docker/scheduler/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# `bate-cron.sh` é o que cada linha do crontab executa (o segredo vai por arquivo,
+# não pela linha de comando, e o código HTTP de cada rota é registrado);
+# `healthcheck.sh` lê esses registros. Ver o cabeçalho de cada um (D-135).
+COPY docker/scheduler/bate-cron.sh /usr/local/bin/bate-cron.sh
+COPY docker/scheduler/healthcheck.sh /usr/local/bin/healthcheck.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/bate-cron.sh /usr/local/bin/healthcheck.sh
 
 # A versão depois das camadas que custam (o `apk add`): a instrução `ARG` entra
 # na chave de cache de tudo o que vem depois, e ela muda a cada release.
 ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION
 
-# Prova de vida: se o crond morrer, o contêiner cai e o `restart: unless-stopped`
-# o traz de volta. Sem isto, um crond morto fica indistinguível de um cron ocioso.
+# Prova de vida: o crond de pé E ao menos uma rota respondendo 2xx nos últimos 10
+# minutos. Só `pgrep crond` dava verde com o segredo divergente do app (401 em todo
+# cron, saída descartada). Ver docker/scheduler/healthcheck.sh.
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
-  CMD pgrep crond >/dev/null || exit 1
+  CMD /usr/local/bin/healthcheck.sh
 
 CMD ["/usr/local/bin/entrypoint.sh"]

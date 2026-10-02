@@ -1,6 +1,8 @@
 import { withSentryConfig } from "@sentry/nextjs/config";
 import type { NextConfig } from "next";
 
+import { CABECALHOS_DE_SEGURANCA_EXTRAS } from "./lib/security/cabecalhos";
+
 /** Performance budget (EPIC-12 §S-12.05):
  *  - LCP < 2.5s p75
  *  - CLS < 0.1 p75
@@ -127,6 +129,9 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // CSP só em Report-Only e HSTS sem includeSubDomains (D-124). Texto e
+          // caminho para ativar: lib/security/cabecalhos.ts e docs/runbooks/csp-e-hsts.md.
+          ...CABECALHOS_DE_SEGURANCA_EXTRAS,
           // microphone=(self): o gravador de voz do composer (PTT estilo WhatsApp)
           // usa getUserMedia({audio}); microphone=() bloquearia em TODA origem,
           // inclusive a própria — daria "microphone is not allowed in this document".

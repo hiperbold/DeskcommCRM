@@ -228,7 +228,7 @@ O `@Arquiteto` não respondeu em duas tentativas. Segurar a wave esperando decis
 
 ### Prova da 0070 — verificação independente do regente
 
-Não aceitei o relatório do implementer: rodei `psql` eu mesmo contra `rrydmwnporysaiysiztn`.
+Não aceitei o relatório do implementer: rodei `psql` eu mesmo contra `<ref-do-projeto>`.
 
 | Checagem | Resultado |
 |---|---|
@@ -2383,7 +2383,7 @@ inteira existe para matar.
 #### 🔴 PENDENTE — precisa de humano
 
 `psql` do repo conecta como **`agent_worker`**; `crm_lead_activities` pertence a **`postgres`** →
-`must be owner of table`. O worktree não está linkado ao CLI. Projeto: `rrydmwnporysaiysiztn`
+`must be owner of table`. O worktree não está linkado ao CLI. Projeto: `<ref-do-projeto>`
 (o mesmo do `.env.local` — conferido).
 
 **Não tentei `supabase db push`** de propósito: empurraria todas as migrations pendentes de outra

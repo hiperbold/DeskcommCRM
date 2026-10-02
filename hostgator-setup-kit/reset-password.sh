@@ -16,10 +16,15 @@ read -r -s -p "Nova senha para $EMAIL: " pw; echo
 [ -n "$pw" ] || die "Senha vazia."
 
 step "Redefinindo senha"
-curl -fsS -X PUT "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users/${uid}" \
-  -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-  -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-  -H "Content-Type: application/json" \
-  -d "{\"password\":\"${pw}\"}" >/dev/null \
-  && c_grn "✓ senha redefinida para $EMAIL" \
-  || die "Falha ao redefinir. Confira a service_role key."
+# Cabeçalhos por arquivo 0600 e corpo por stdin: nem a chave nem a senha entram na
+# linha de comando (visível em `ps`), e a senha é escapada para o JSON (D-169).
+cab="$(cabecalhos_admin_em_arquivo)"
+if printf '{"password":"%s"}' "$(json_escape "$pw")" \
+  | curl -fsS -X PUT "${NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users/${uid}" \
+      -H @"$cab" --data-binary @- >/dev/null; then
+  rm -f "$cab"
+  c_grn "✓ senha redefinida para $EMAIL"
+else
+  rm -f "$cab"
+  die "Falha ao redefinir. Confira a service_role key."
+fi

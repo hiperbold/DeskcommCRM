@@ -134,7 +134,7 @@ PME brasileiro de e-commerce na **Nuvemshop**:
 
 ### Infra deployada
 
-- ✅ **Supabase project ativo em sa-east-1** (`rrydmwnporysaiysiztn`)
+- ✅ **Supabase project ativo em sa-east-1** (`<ref-do-projeto>`)
 - ✅ **15 tabelas com RLS** habilitada (organizations, contacts, crm_leads, event_log, audit_log, idempotency_keys, etc.)
 - ✅ **3 migrations aplicadas** (platform_base, event_log, customer_360)
 - ✅ **Triggers de domínio** (auto won/lost, denorm activity, emit events, seed pipeline)

@@ -7,7 +7,12 @@ source "$(dirname "$0")/_common.sh"
 enter_project
 
 BACKUP_DIR="${BACKUP_DIR:-$PROJECT_DIR/backups}"
+# O dump leva `auth.users` (hashes de senha) e o snapshot leva a sessão pareada do
+# WhatsApp: nascem legíveis só pelo dono. Sem isto saíam 0644 (D-169). A pasta em
+# 0700 cobre também os arquivos que o `docker run` grava como root.
+umask 077
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 # Timestamp vem do host (não do script) pra manter determinismo do kit.
 ts="$(date +%Y%m%d-%H%M%S)"
 
