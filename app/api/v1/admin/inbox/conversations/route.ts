@@ -156,7 +156,7 @@ export async function GET(req: NextRequest) {
       })
     : null;
 
-  // Audit (lightweight — no PII in metadata). Com a organização, para ela ver
+  // Audit (lightweight: no PII in metadata). Com a organização, para ela ver
   // na própria tela de auditoria que a plataforma leu a caixa de entrada, e
   // esperada antes da resposta: a leitura não sai sem a gravação ter sido tentada.
   await audit({

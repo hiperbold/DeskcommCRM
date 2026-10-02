@@ -1,5 +1,5 @@
 /**
- * D-164 — tags e objetos livres de lead e contato têm teto.
+ * D-164: tags e objetos livres de lead e contato têm teto.
  *
  * Sem teto, um agente ou token gravava milhares de tags longas ou um jsonb de
  * vários MB em 50 leads por chamada (a linha incha, o quadro do funil seleciona

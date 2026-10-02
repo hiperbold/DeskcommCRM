@@ -1,5 +1,5 @@
 /**
- * POST /api/v1/contacts/{id}/consent — registra um consentimento ou uma recusa.
+ * POST /api/v1/contacts/{id}/consent: registra um consentimento ou uma recusa.
  *
  * É a única porta HTTP que escreve `contacts.consent` (D-151). O PATCH genérico
  * do contato deixou de aceitar o campo: um agente ou token `mcp:write` que
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest, ctx: Context): Promise<Response> {
   if (contato.is_anonymized) {
     return fail(
       "lgpd_anonymization_irreversible",
-      t("Contato anonimizado — edição bloqueada (LGPD)."),
+      t("Contato anonimizado: edição bloqueada (LGPD)."),
       403,
       { requestId },
     );

@@ -1,5 +1,5 @@
 /**
- * D-152 — o admin da plataforma só lê conversa de cliente com acompanhamento
+ * D-152: o admin da plataforma só lê conversa de cliente com acompanhamento
  * (sessão de suporte) ativo na organização.
  *
  * Roda os Route Handlers REAIS de `admin/inbox/conversations` (lista e detalhe)

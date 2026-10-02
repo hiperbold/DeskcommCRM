@@ -1,5 +1,5 @@
 /**
- * D-150 — mover em lote só para etapa do MESMO funil do lead, na organização ativa.
+ * D-150: mover em lote só para etapa do MESMO funil do lead, na organização ativa.
  *
  * Prova, contra o Route Handler REAL de `POST /api/v1/leads/bulk` (auth e Supabase
  * mockados), que a etapa de destino é conferida antes da função do banco:

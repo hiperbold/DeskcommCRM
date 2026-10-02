@@ -1,5 +1,5 @@
 /**
- * D-151 — o consentimento do contato não se reescreve pelo PATCH genérico, e a
+ * D-151: o consentimento do contato não se reescreve pelo PATCH genérico, e a
  * recusa registrada nunca é apagada por nenhuma porta.
  *
  * Cobre as três camadas:

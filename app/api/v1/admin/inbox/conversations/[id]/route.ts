@@ -117,7 +117,7 @@ export async function GET(
     });
   }
 
-  // Audit — tenant_id only, no PII. Esperada antes da resposta (D-152).
+  // Audit: tenant_id only, no PII. Esperada antes da resposta (D-152).
   await audit({
     action: "platform_admin.conversation_viewed",
     actorUserId: adminCtx.user.id,
