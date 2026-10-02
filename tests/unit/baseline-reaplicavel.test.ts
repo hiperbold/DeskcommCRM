@@ -197,7 +197,9 @@ describe("baseline.sql é re-aplicável", () => {
     // parar de achar policies, `problemas` fica vazio e o `toEqual([])` acima passa
     // por omissão. A margem é folgada de propósito — este par existe para pegar
     // regex morto, não para cravar contagem.
-    expect(guardadasNoCorpo, "policies guardadas no corpo").toBeGreaterThan(25);
+    // 25 em 2026-10-02, quando a 0932 passou a recriar as policies de contacts e idempotency_keys
+    // (as duas criações guardadas do corpo saíram; o piso desce de 25 para 20, sem cravar contagem).
+    expect(guardadasNoCorpo, "policies guardadas no corpo").toBeGreaterThan(20);
     expect(guardadasNoApendice, "policies guardadas no apêndice").toBeGreaterThan(70);
   });
 });

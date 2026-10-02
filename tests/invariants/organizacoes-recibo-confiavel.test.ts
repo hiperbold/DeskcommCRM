@@ -12,7 +12,7 @@ const seed = `begin;
 insert into auth.users(id,email) values ('${actor}','owner-0219@invariant.test'),('${attacker}','attacker-0219@invariant.test');
 insert into public.platform_admins(user_id,granted_by,scope,mfa_required,reason) values ('${actor}','${actor}','full',false,'Local invariant fixture');
 insert into public.organizations(id,slug,display_name,legal_name) values ('${org}','attacker-0219','Attacker','Attacker'),('${victim}','victim-0219','Victim','Victim');
-insert into public.user_organizations(organization_id,user_id,role,accepted_at) values ('${org}','${attacker}','viewer',now());`;
+insert into public.user_organizations(organization_id,user_id,role,accepted_at) values ('${org}','${attacker}','agent',now());`;
 const asAttacker = `set local role authenticated; select set_config('request.jwt.claims','{"sub":"${attacker}"}',true);`;
 const receipt = `(organization_id,key,endpoint,request_hash,status_code,response_body)`;
 function prove(body: string) { expect(sql(`${seed}\n${body}\nrollback; select 'proved';`)).toContain("proved"); }

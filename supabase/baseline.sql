@@ -4096,11 +4096,6 @@ END IF; END $baseline_guard$;
 ALTER TABLE "public"."idempotency_keys" ENABLE ROW LEVEL SECURITY;
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'idempotency_tenant' AND polrelid = '"public"."idempotency_keys"'::regclass) THEN
-CREATE POLICY "idempotency_tenant" ON "public"."idempotency_keys" USING (("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids"))) WITH CHECK (("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")));
-END IF; END $baseline_guard$;
 
 
 
@@ -4251,11 +4246,6 @@ END IF; END $baseline_guard$;
 
 
 
-DO $baseline_guard$ BEGIN
-IF NOT EXISTS (SELECT 1 FROM pg_policy
-                WHERE polname = 'tenant_isolation_contacts_all' AND polrelid = '"public"."contacts"'::regclass) THEN
-CREATE POLICY "tenant_isolation_contacts_all" ON "public"."contacts" USING ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"())) WITH CHECK ((("organization_id" IN ( SELECT "public"."fn_user_org_ids"() AS "fn_user_org_ids")) OR "public"."fn_is_platform_admin"()));
-END IF; END $baseline_guard$;
 
 
 
@@ -5380,24 +5370,6 @@ create policy "messages_select" on public.messages
     )
   );
 
-create policy "messages_insert" on public.messages
-  for insert with check (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
-create policy "messages_update" on public.messages
-  for update using (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  ) with check (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
-create policy "messages_delete" on public.messages
-  for delete using (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
 
 -- Forward-fix do G4-01: fn_conversation_assign (0031/0032) passa a SECURITY
 -- DEFINER. Com o SELECT de conversations visibility-aware, o `update ... returning
@@ -6157,11 +6129,6 @@ create policy "crm_lead_activities_select" on public.crm_lead_activities
     )
   );
 
-create policy "crm_lead_activities_insert" on public.crm_lead_activities
-  for insert with check (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
 
 drop policy if exists "tenant_isolation_crm_lead_links_all" on public.crm_lead_links;
 drop policy if exists "crm_lead_links_select" on public.crm_lead_links;
@@ -6178,24 +6145,6 @@ create policy "crm_lead_links_select" on public.crm_lead_links
     )
   );
 
-create policy "crm_lead_links_insert" on public.crm_lead_links
-  for insert with check (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
-create policy "crm_lead_links_update" on public.crm_lead_links
-  for update using (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  ) with check (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
-create policy "crm_lead_links_delete" on public.crm_lead_links
-  for delete using (
-    (organization_id in (select public.fn_user_org_ids()))
-    or public.fn_is_platform_admin()
-  );
 
 
 -- ---- user_organizations SELECT org-wide para manager+ (migration 0044) ----
@@ -8750,11 +8699,6 @@ create index if not exists idx_crm_lead_reactivations_vencendo
 
 alter table public.crm_lead_reactivations enable row level security;
 
-drop policy if exists tenant_isolation_crm_lead_reactivations_all on public.crm_lead_reactivations;
-create policy tenant_isolation_crm_lead_reactivations_all on public.crm_lead_reactivations
-  for all
-  using (organization_id in (select fn_user_org_ids()))
-  with check (organization_id in (select fn_user_org_ids()));
 
 -- `proposed_at` e `updated_at` são do banco, como na 0081.
 create or replace function public.fn_carimba_reativacao()
@@ -11570,11 +11514,6 @@ create index if not exists idx_contact_field_proposals_vencendo
 
 alter table public.contact_field_proposals enable row level security;
 
-drop policy if exists tenant_isolation_contact_field_proposals_all on public.contact_field_proposals;
-create policy tenant_isolation_contact_field_proposals_all on public.contact_field_proposals
-  for all
-  using (organization_id in (select public.fn_user_org_ids()))
-  with check (organization_id in (select public.fn_user_org_ids()));
 
 revoke all on public.contact_field_proposals from anon;
 
@@ -56718,6 +56657,719 @@ comment on function public.fn_billing_garantir_concessoes(uuid, date) is
 
 revoke execute on function public.fn_billing_garantir_concessoes(uuid, date) from public, anon, authenticated;
 grant execute on function public.fn_billing_garantir_concessoes(uuid, date) to service_role;
+
+-- ---- tabelas que a sessão do usuário grava passam a exigir papel (migration 0932, fork Hiperbold, D-113) ----
+-- 0932, tabelas que a sessão do usuário grava passam a exigir papel (D-113, segunda metade) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- A 0926 revogou a escrita do `authenticated` nas tabelas que só o servidor grava. Sobravam as
+-- que a sessão de usuário grava de fato, ainda com policy `for all` só por tenant: um viewer
+-- apagava mensagens, editava contatos, inseria `cron_jobs` (a IA mandava mensagem ao contato a
+-- cada minuto e gastava a carteira) e forjava itens da Central, atividades e vínculos de negócio.
+-- Aqui a escrita passa a pedir papel no `using` e no `with check`, e o papel é o da menor rota
+-- que grava a tabela com a sessão do usuário (medido lendo as rotas; todas pedem agent ou mais,
+-- então o viewer deixa de escrever em qualquer uma). Onde a escrita legítima é de agent, a
+-- policy exige agent e não revoga; onde nenhuma rota grava com a sessão (só serviço, pool ou
+-- função definer) a operação sobe para manager em vez de ficar aberta ao membro qualquer.
+--
+--   tabela                    insert    update    delete
+--   contacts                  agent     agent     agent      (POST, PATCH e DELETE de contato pedem agent)
+--   messages                  agent     agent     agent      (editar/revogar é agent; ocultar é manager; apagar contato e o eco do próprio envio apagam com a sessão)
+--   idempotency_keys          agent     agent     agent      (as quatro rotas que usam o recibo pedem agent; o teste organizacoes-recibo-confiavel fixa que o membro apaga o próprio recibo)
+--   cron_jobs                 agent*    manager   manager    (*só `kind = 'at'` e `job_kind = 'followup_turn'`: é o que a rota de reativação grava; recorrente e outros motores só pelo serviço)
+--   lead_state                manager   agent     manager    (o aviso de próxima ação limpa `next_action`; o resto é do motor)
+--   lead_checkpoints          agent     manager   manager    (a devolução ao agente grava um checkpoint; o resto é do motor)
+--   contact_field_proposals   manager   agent     manager    (decidir a proposta é agent; criar e vencer é do motor)
+--   lead_notes                manager   manager   manager    (nenhuma rota grava; é a memória do agente, escrita pelo motor)
+--   crm_lead_reactivations    manager   agent     manager    (decidir é agent; propor e vencer é do motor)
+--   crm_lead_activities       agent     (sem policy de update e delete)
+--   crm_lead_links            agent     manager   manager    (marcar compromisso vincula; a limpeza é função definer)
+--
+-- FORA daqui, de propósito: `agent_inbox_items`. Os testes dos planos (planos-assinatura-estados,
+-- planos-trava-avisa) fixam que o viewer encerra o aviso real da Central e que itens de outro tipo
+-- seguem graváveis pelo membro; subir o papel é decisão de produto e fica ADIADO.
+--
+-- Cada `for all` vira quatro policies (select por organização, como era, e as três de escrita).
+-- O ramo de admin de plataforma fica onde existia (contacts, messages, crm_lead_*). O select de
+-- `messages`, `crm_lead_activities` e `crm_lead_links` não muda aqui (já olha a visibilidade).
+-- Os gatilhos definer e o serviço seguem gravando: RLS não os alcança.
+-- Reaplicável com o app no ar: um DO por tabela, `drop policy if exists`, lock_timeout curto.
+-- Não cria função.
+
+do $t_contacts$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_contacts_all on public.contacts;
+ drop policy if exists tenant_isolation_contacts_select on public.contacts;
+ create policy tenant_isolation_contacts_select on public.contacts for select using ((organization_id in (select public.fn_user_org_ids()) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_contacts_insert on public.contacts;
+ create policy tenant_isolation_contacts_insert on public.contacts for insert with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_contacts_update on public.contacts;
+ create policy tenant_isolation_contacts_update on public.contacts for update using (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin())) with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+ drop policy if exists tenant_isolation_contacts_delete on public.contacts;
+ create policy tenant_isolation_contacts_delete on public.contacts for delete using (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+end
+$t_contacts$;
+do $t_cron_jobs$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_cron_jobs_all on public.cron_jobs;
+ drop policy if exists tenant_isolation_cron_jobs_select on public.cron_jobs;
+ create policy tenant_isolation_cron_jobs_select on public.cron_jobs for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_cron_jobs_insert on public.cron_jobs;
+ create policy tenant_isolation_cron_jobs_insert on public.cron_jobs for insert with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) and kind = 'at' and job_kind = 'followup_turn'));
+ drop policy if exists tenant_isolation_cron_jobs_update on public.cron_jobs;
+ create policy tenant_isolation_cron_jobs_update on public.cron_jobs for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_cron_jobs_delete on public.cron_jobs;
+ create policy tenant_isolation_cron_jobs_delete on public.cron_jobs for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_cron_jobs$;
+do $t_idempotency_keys$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists idempotency_tenant on public.idempotency_keys;
+ drop policy if exists idempotency_tenant_select on public.idempotency_keys;
+ create policy idempotency_tenant_select on public.idempotency_keys for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists idempotency_tenant_insert on public.idempotency_keys;
+ create policy idempotency_tenant_insert on public.idempotency_keys for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+ drop policy if exists idempotency_tenant_update on public.idempotency_keys;
+ create policy idempotency_tenant_update on public.idempotency_keys for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+ drop policy if exists idempotency_tenant_delete on public.idempotency_keys;
+ create policy idempotency_tenant_delete on public.idempotency_keys for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+end
+$t_idempotency_keys$;
+do $t_lead_state$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_lead_state_all on public.lead_state;
+ drop policy if exists tenant_isolation_lead_state_select on public.lead_state;
+ create policy tenant_isolation_lead_state_select on public.lead_state for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_lead_state_insert on public.lead_state;
+ create policy tenant_isolation_lead_state_insert on public.lead_state for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_lead_state_update on public.lead_state;
+ create policy tenant_isolation_lead_state_update on public.lead_state for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+ drop policy if exists tenant_isolation_lead_state_delete on public.lead_state;
+ create policy tenant_isolation_lead_state_delete on public.lead_state for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_lead_state$;
+do $t_lead_checkpoints$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_lead_checkpoints_all on public.lead_checkpoints;
+ drop policy if exists tenant_isolation_lead_checkpoints_select on public.lead_checkpoints;
+ create policy tenant_isolation_lead_checkpoints_select on public.lead_checkpoints for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_lead_checkpoints_insert on public.lead_checkpoints;
+ create policy tenant_isolation_lead_checkpoints_insert on public.lead_checkpoints for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+ drop policy if exists tenant_isolation_lead_checkpoints_update on public.lead_checkpoints;
+ create policy tenant_isolation_lead_checkpoints_update on public.lead_checkpoints for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_lead_checkpoints_delete on public.lead_checkpoints;
+ create policy tenant_isolation_lead_checkpoints_delete on public.lead_checkpoints for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_lead_checkpoints$;
+do $t_contact_field_proposals$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_contact_field_proposals_all on public.contact_field_proposals;
+ drop policy if exists tenant_isolation_contact_field_proposals_select on public.contact_field_proposals;
+ create policy tenant_isolation_contact_field_proposals_select on public.contact_field_proposals for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_contact_field_proposals_insert on public.contact_field_proposals;
+ create policy tenant_isolation_contact_field_proposals_insert on public.contact_field_proposals for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_contact_field_proposals_update on public.contact_field_proposals;
+ create policy tenant_isolation_contact_field_proposals_update on public.contact_field_proposals for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+ drop policy if exists tenant_isolation_contact_field_proposals_delete on public.contact_field_proposals;
+ create policy tenant_isolation_contact_field_proposals_delete on public.contact_field_proposals for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_contact_field_proposals$;
+do $t_lead_notes$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_lead_notes_all on public.lead_notes;
+ drop policy if exists tenant_isolation_lead_notes_select on public.lead_notes;
+ create policy tenant_isolation_lead_notes_select on public.lead_notes for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_lead_notes_insert on public.lead_notes;
+ create policy tenant_isolation_lead_notes_insert on public.lead_notes for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_lead_notes_update on public.lead_notes;
+ create policy tenant_isolation_lead_notes_update on public.lead_notes for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_lead_notes_delete on public.lead_notes;
+ create policy tenant_isolation_lead_notes_delete on public.lead_notes for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_lead_notes$;
+do $t_crm_lead_reactivations$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists tenant_isolation_crm_lead_reactivations_all on public.crm_lead_reactivations;
+ drop policy if exists tenant_isolation_crm_lead_reactivations_select on public.crm_lead_reactivations;
+ create policy tenant_isolation_crm_lead_reactivations_select on public.crm_lead_reactivations for select using (organization_id in (select public.fn_user_org_ids()));
+ drop policy if exists tenant_isolation_crm_lead_reactivations_insert on public.crm_lead_reactivations;
+ create policy tenant_isolation_crm_lead_reactivations_insert on public.crm_lead_reactivations for insert with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+ drop policy if exists tenant_isolation_crm_lead_reactivations_update on public.crm_lead_reactivations;
+ create policy tenant_isolation_crm_lead_reactivations_update on public.crm_lead_reactivations for update using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent'))) with check ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')));
+ drop policy if exists tenant_isolation_crm_lead_reactivations_delete on public.crm_lead_reactivations;
+ create policy tenant_isolation_crm_lead_reactivations_delete on public.crm_lead_reactivations for delete using ((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')));
+end
+$t_crm_lead_reactivations$;
+do $t_messages$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists messages_insert on public.messages;
+ create policy messages_insert on public.messages for insert with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+ drop policy if exists messages_update on public.messages;
+ create policy messages_update on public.messages for update using (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin())) with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+ drop policy if exists messages_delete on public.messages;
+ create policy messages_delete on public.messages for delete using (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+end
+$t_messages$;
+do $t_crm_lead_activities$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists crm_lead_activities_insert on public.crm_lead_activities;
+ create policy crm_lead_activities_insert on public.crm_lead_activities for insert with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+end
+$t_crm_lead_activities$;
+do $t_crm_lead_links$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists crm_lead_links_insert on public.crm_lead_links;
+ create policy crm_lead_links_insert on public.crm_lead_links for insert with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'agent')) or public.fn_is_platform_admin()));
+ drop policy if exists crm_lead_links_update on public.crm_lead_links;
+ create policy crm_lead_links_update on public.crm_lead_links for update using (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')) or public.fn_is_platform_admin())) with check (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')) or public.fn_is_platform_admin()));
+ drop policy if exists crm_lead_links_delete on public.crm_lead_links;
+ create policy crm_lead_links_delete on public.crm_lead_links for delete using (((organization_id in (select public.fn_user_org_ids()) and public.fn_role_at_least(organization_id, 'manager')) or public.fn_is_platform_admin()));
+end
+$t_crm_lead_links$;
+
+-- ---- vínculos só apontam para a própria organização (migration 0933, fork Hiperbold, D-127) ----
+-- 0933, vínculos das tabelas que a sessão grava só apontam para a própria organização (D-127, resto) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- As FKs simples (`messages.conversation_id` e as demais) só garantem que o pai existe, não de
+-- QUAL organização ele é: membro de A inseria mensagem com `organization_id = A` e a conversa de
+-- B, que aparecia para a equipe de B e entrava no histórico que a IA de B lê. Mesma classe da
+-- 0403 (lead, contato e responsável). FK composta pediria índice único (organization_id, id) nos
+-- pais e reconstruir FK em tabela quente com o app no ar; o gatilho cobre todo escritor (sessão,
+-- serviço, função) sem esse custo. Um gatilho por tabela, com as colunas que apontam para
+-- conversa, negócio ou contato: messages, conversation_notes, crm_lead_activities,
+-- crm_lead_links, crm_lead_reactivations, contact_field_proposals, lead_notes, lead_checkpoints,
+-- cron_jobs e lead_state.
+-- Só confere o campo que MUDOU (ou tudo, no insert): linha antiga não é varrida e reenviar o que
+-- a linha já tem não é ligar de novo. Pai inexistente fica para a FK (23503 do mesmo jeito).
+-- O erro é o 23503 genérico, sem dizer se o id existe noutra organização.
+-- Security definer com search_path fixo: precisa ver o pai por cima da RLS (o pai de outra
+-- organização é invisível para quem escreve). Não é RPC: revoga EXECUTE de todos.
+-- Reaplicável com o app no ar: `create or replace` e um DO por tabela com lock_timeout curto.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+create or replace function public.fn_messages_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.conversation_id is not null
+     and (tg_op = 'INSERT' or new.conversation_id is distinct from old.conversation_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.conversations p
+        where p.id = new.conversation_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_messages_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_messages$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_messages_vinculos_da_organizacao on public.messages;
+ create trigger trg_messages_vinculos_da_organizacao
+   before insert or update of conversation_id, contact_id, organization_id on public.messages
+   for each row execute function public.fn_messages_vinculos_da_organizacao();
+end
+$g_messages$;
+
+create or replace function public.fn_conversation_notes_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.conversation_id is not null
+     and (tg_op = 'INSERT' or new.conversation_id is distinct from old.conversation_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.conversations p
+        where p.id = new.conversation_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_conversation_notes_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_conversation_notes$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_conversation_notes_vinculos_da_organizacao on public.conversation_notes;
+ create trigger trg_conversation_notes_vinculos_da_organizacao
+   before insert or update of conversation_id, organization_id on public.conversation_notes
+   for each row execute function public.fn_conversation_notes_vinculos_da_organizacao();
+end
+$g_conversation_notes$;
+
+create or replace function public.fn_crm_lead_activities_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.lead_id is not null
+     and (tg_op = 'INSERT' or new.lead_id is distinct from old.lead_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.crm_leads p
+        where p.id = new.lead_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_crm_lead_activities_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_crm_lead_activities$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_crm_lead_activities_vinculos_da_organizacao on public.crm_lead_activities;
+ create trigger trg_crm_lead_activities_vinculos_da_organizacao
+   before insert or update of lead_id, contact_id, organization_id on public.crm_lead_activities
+   for each row execute function public.fn_crm_lead_activities_vinculos_da_organizacao();
+end
+$g_crm_lead_activities$;
+
+create or replace function public.fn_crm_lead_links_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.lead_id is not null
+     and (tg_op = 'INSERT' or new.lead_id is distinct from old.lead_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.crm_leads p
+        where p.id = new.lead_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_crm_lead_links_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_crm_lead_links$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_crm_lead_links_vinculos_da_organizacao on public.crm_lead_links;
+ create trigger trg_crm_lead_links_vinculos_da_organizacao
+   before insert or update of lead_id, organization_id on public.crm_lead_links
+   for each row execute function public.fn_crm_lead_links_vinculos_da_organizacao();
+end
+$g_crm_lead_links$;
+
+create or replace function public.fn_crm_lead_reactivations_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.lead_id is not null
+     and (tg_op = 'INSERT' or new.lead_id is distinct from old.lead_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.crm_leads p
+        where p.id = new.lead_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_crm_lead_reactivations_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_crm_lead_reactivations$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_crm_lead_reactivations_vinculos_da_organizacao on public.crm_lead_reactivations;
+ create trigger trg_crm_lead_reactivations_vinculos_da_organizacao
+   before insert or update of lead_id, organization_id on public.crm_lead_reactivations
+   for each row execute function public.fn_crm_lead_reactivations_vinculos_da_organizacao();
+end
+$g_crm_lead_reactivations$;
+
+create or replace function public.fn_contact_field_proposals_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+
+  if new.conversation_id is not null
+     and (tg_op = 'INSERT' or new.conversation_id is distinct from old.conversation_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.conversations p
+        where p.id = new.conversation_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_contact_field_proposals_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_contact_field_proposals$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_contact_field_proposals_vinculos_da_organizacao on public.contact_field_proposals;
+ create trigger trg_contact_field_proposals_vinculos_da_organizacao
+   before insert or update of contact_id, conversation_id, organization_id on public.contact_field_proposals
+   for each row execute function public.fn_contact_field_proposals_vinculos_da_organizacao();
+end
+$g_contact_field_proposals$;
+
+create or replace function public.fn_lead_notes_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_lead_notes_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_lead_notes$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_lead_notes_vinculos_da_organizacao on public.lead_notes;
+ create trigger trg_lead_notes_vinculos_da_organizacao
+   before insert or update of contact_id, organization_id on public.lead_notes
+   for each row execute function public.fn_lead_notes_vinculos_da_organizacao();
+end
+$g_lead_notes$;
+
+create or replace function public.fn_lead_checkpoints_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+
+  if new.conversation_id is not null
+     and (tg_op = 'INSERT' or new.conversation_id is distinct from old.conversation_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.conversations p
+        where p.id = new.conversation_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_lead_checkpoints_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_lead_checkpoints$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_lead_checkpoints_vinculos_da_organizacao on public.lead_checkpoints;
+ create trigger trg_lead_checkpoints_vinculos_da_organizacao
+   before insert or update of contact_id, conversation_id, organization_id on public.lead_checkpoints
+   for each row execute function public.fn_lead_checkpoints_vinculos_da_organizacao();
+end
+$g_lead_checkpoints$;
+
+create or replace function public.fn_cron_jobs_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_cron_jobs_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_cron_jobs$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_cron_jobs_vinculos_da_organizacao on public.cron_jobs;
+ create trigger trg_cron_jobs_vinculos_da_organizacao
+   before insert or update of contact_id, organization_id on public.cron_jobs
+   for each row execute function public.fn_cron_jobs_vinculos_da_organizacao();
+end
+$g_cron_jobs$;
+
+create or replace function public.fn_lead_state_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_lead_state_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_lead_state$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_lead_state_vinculos_da_organizacao on public.lead_state;
+ create trigger trg_lead_state_vinculos_da_organizacao
+   before insert or update of contact_id, organization_id on public.lead_state
+   for each row execute function public.fn_lead_state_vinculos_da_organizacao();
+end
+$g_lead_state$;
+
+-- ---- a etapa do negócio é do mesmo funil e organização (migration 0934, fork Hiperbold, D-150) ----
+-- 0934, a etapa do negócio é do mesmo funil e da mesma organização dele (D-150, parte do banco) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- `fn_mover_leads_em_lote` (0263) só trocava `stage_id` e o gatilho 0403 só conferia contato e
+-- dono. Quem chamava a RPC (ou escrevia `crm_leads` pela REST) com uma etapa de outro funil
+-- deixava o negócio com `pipeline_id` de um funil e etapa de outro: some dos dois quadros, as
+-- regras de reabertura rodam no funil errado e a transferência entre funis (0266) é contornada;
+-- membro de duas empresas ainda podia apontar o negócio para a etapa da outra. A rota já recusa
+-- (lote 8); agora o banco também:
+--   1. a RPC confere, antes de escrever, que a etapa existe na organização do lote (PT404) e que
+--      todo negócio do lote é do funil dela (PT422), na mesma transação;
+--   2. gatilho em `crm_leads` (before insert ou update de stage_id, pipeline_id):
+--      a etapa tem de ser da organização e do funil do próprio negócio (PT422). Só confere quando
+--      a etapa ou o funil mudam (a troca de organização é da trava do plano, 0905); negócio antigo não é varrido. Etapa inexistente fica para a FK.
+--      Security definer porque a etapa de outra organização é invisível sob RLS.
+-- A transferência entre funis cria um negócio novo no funil de destino (clone), então não é
+-- afetada. Reaplicável com o app no ar: `create or replace` e um DO com lock_timeout curto.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+CREATE OR REPLACE FUNCTION public.fn_mover_leads_em_lote(p_organization_id uuid, p_lead_ids uuid[], p_stage_id uuid, p_lost_reason text DEFAULT NULL::text)
+ RETURNS TABLE(lead_id uuid, from_stage_id uuid, pipeline_id uuid)
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+declare
+  v_piso numeric;
+  -- Motivo em branco é ausência de motivo, nunca um motivo de uma letra.
+  v_motivo text := nullif(btrim(coalesce(p_lost_reason, '')), '');
+  v_coluna_motivo text := '';
+  v_etapa_org uuid;
+  v_etapa_funil uuid;
+begin
+  -- D-150: a etapa de destino é da MESMA organização e do MESMO funil de todo lead do lote.
+  -- A rota já confere; aqui a regra mora no banco, onde todo chamador passa. Erro genérico
+  -- (PT404/PT422), sem dizer se o id existe noutra organização.
+  select s.organization_id, s.pipeline_id into v_etapa_org, v_etapa_funil
+    from public.crm_stages s where s.id = p_stage_id;
+  if not found or v_etapa_org is distinct from p_organization_id then
+    raise exception 'Etapa não encontrada.' using errcode = 'PT404';
+  end if;
+  if exists (
+    select 1 from public.crm_leads l
+     where l.organization_id = p_organization_id
+       and l.id = any(p_lead_ids)
+       and l.pipeline_id is distinct from v_etapa_funil
+  ) then
+    raise exception 'Etapa de outro funil: use a transferência entre funis.' using errcode = 'PT422';
+  end if;
+
+  -- `coalesce(..., 0)` cobre a etapa vazia; o DEFAULT da coluna é 1000, então
+  -- o primeiro card de um lote para uma etapa vazia cai em 1000, como um card
+  -- criado à mão.
+  select coalesce(max(l.position_in_stage), 0)
+    into v_piso
+    from public.crm_leads l
+   where l.organization_id = p_organization_id
+     and l.stage_id = p_stage_id
+     and not (l.id = any(p_lead_ids));
+
+  -- Só com motivo a gravar a coluna entra na escrita (ver o cabeçalho).
+  if v_motivo is not null then
+    v_coluna_motivo := ', lost_reason = $4';
+  end if;
+
+  return query execute format($f$
+  with alvo as (
+    select l.id,
+           l.stage_id    as from_stage_id,
+           l.pipeline_id as pipeline_id,
+           -- A ordem do lote no destino é a ordem em que ele estava no quadro:
+           -- etapa, depois posição. `id` só desempata para o resultado ser
+           -- determinístico (dois cards podem legitimamente empatar hoje :
+           -- é justamente o estado que a migration 0209 deixa de produzir).
+           row_number() over (order by l.stage_id, l.position_in_stage, l.id) as ordem
+      from public.crm_leads l
+     where l.organization_id = $1
+       and l.id = any($2)
+  ),
+  movidos as (
+    update public.crm_leads l
+       set stage_id          = $3,
+           position_in_stage = $5 + (a.ordem * 1000),
+           updated_at        = now()%s
+      from alvo a
+     where l.id = a.id
+       and l.organization_id = $1
+    returning l.id, a.from_stage_id, a.pipeline_id
+  )
+  select m.id, m.from_stage_id, m.pipeline_id from movidos m
+  $f$, v_coluna_motivo)
+  using p_organization_id, p_lead_ids, p_stage_id, v_motivo, v_piso;
+end;
+$function$;
+
+create or replace function public.fn_lead_etapa_do_mesmo_funil()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if tg_op = 'UPDATE'
+     and new.stage_id is not distinct from old.stage_id
+     and new.pipeline_id is not distinct from old.pipeline_id
+  then
+    return new;
+  end if;
+
+  if exists (
+    select 1 from public.crm_stages s
+     where s.id = new.stage_id
+       and (s.organization_id is distinct from new.organization_id
+            or s.pipeline_id is distinct from new.pipeline_id)
+  )
+  then
+    raise exception 'Etapa não pertence ao funil deste negócio.' using errcode = 'PT422';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_lead_etapa_do_mesmo_funil() from public, anon, authenticated;
+
+do $g_crm_leads_etapa$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_lead_etapa_do_mesmo_funil on public.crm_leads;
+ create trigger trg_lead_etapa_do_mesmo_funil
+   before insert or update of stage_id, pipeline_id on public.crm_leads
+   for each row execute function public.fn_lead_etapa_do_mesmo_funil();
+end
+$g_crm_leads_etapa$;
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

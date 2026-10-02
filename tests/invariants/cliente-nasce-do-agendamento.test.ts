@@ -1062,7 +1062,12 @@ describe("as três colunas são do sistema", () => {
         ["admin", ADMIN_A],
       ] as const) {
         const r = await tentarComoUsuario(uid, sql, [contato, forjado]);
-        expect(r, `${quem} gravou ${coluna}`).toBe("42501:colunas_de_cliente_sao_do_sistema");
+        // D-113 (0932): o viewer deixou de escrever em `contacts` (a RLS filtra a linha e o
+        // UPDATE passa sem tocar em nada); agent e admin chegam ao BEFORE UPDATE e levam 42501.
+        // Nos dois casos o valor não muda, o que se confere logo abaixo.
+        expect(r, `${quem} gravou ${coluna}`).toBe(
+          quem === "viewer" ? "passou" : "42501:colunas_de_cliente_sao_do_sistema",
+        );
       }
     }
 
@@ -1074,9 +1079,9 @@ describe("as três colunas são do sistema", () => {
     // continua da equipe. Sem ele, um `revoke` largo demais em `contacts`
     // deixaria este caso verde quebrando a tela de Contatos inteira.
     expect(
-      await tentarComoUsuario(VIEWER_A, "update contacts set display_name = $2 where id = $1", [
+      await tentarComoUsuario(AGENT_A, "update contacts set display_name = $2 where id = $1", [
         contato,
-        "renomeado pelo viewer",
+        "renomeado pelo agent",
       ]),
     ).toBe("passou");
     expect((await lerContato(contato)).tags, "e a etiqueta segue lá").toContain(TAG_DE_CLIENTE);

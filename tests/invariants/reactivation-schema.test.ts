@@ -58,7 +58,7 @@ describe("0082 · proposta de reativação chega ao clone", () => {
     expect(
       sql(`select count(*) from pg_policies
             where tablename='crm_lead_reactivations'
-              and policyname='tenant_isolation_crm_lead_reactivations_all'`),
+              and policyname='tenant_isolation_crm_lead_reactivations_select'`),
     ).toBe("1");
   });
 
