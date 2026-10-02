@@ -1105,6 +1105,12 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
   });
 
   const startedAt = Date.now();
+  // O que os passos JÁ CONCLUÍDOS custaram ao provedor (D-156). Num laço de
+  // ferramentas, uma falha no passo 3 não desfaz o que os passos 1 e 2 gastaram:
+  // sem esta soma a linha de falha saía com zero token, e llm_calls, carteira e
+  // orçamento deixavam de contar dinheiro já pago (e o job, ao tentar de novo,
+  // repetia o gasto sem que ninguém o visse).
+  const pagos = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   let result: Awaited<ReturnType<typeof generateText>>;
   try {
     input.abortSignal?.throwIfAborted();
@@ -1128,6 +1134,12 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
           : input.pararQuando === undefined
             ? stepCountIs(input.maxSteps)
             : [stepCountIs(input.maxSteps), input.pararQuando],
+      onStepFinish: (passo) => {
+        pagos.inputTokens += passo.usage?.inputTokens ?? 0;
+        pagos.outputTokens += passo.usage?.outputTokens ?? 0;
+        pagos.cacheReadTokens += passo.usage?.inputTokenDetails?.cacheReadTokens ?? 0;
+        pagos.cacheWriteTokens += passo.usage?.inputTokenDetails?.cacheWriteTokens ?? 0;
+      },
       temperature,
       topP,
       topK,
@@ -1148,6 +1160,7 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
     // Grava e RELANÇA: quem chama continua decidindo o que fazer com a falha
     // (o worker reagenda, o dry-run mostra na tela). Engolir aqui trocaria uma
     // falha invisível por uma silenciosa, que é pior.
+    const jaPagou = pagos.inputTokens + pagos.outputTokens > 0;
     await registrarFalha(db, {
       input,
       purpose,
@@ -1157,6 +1170,23 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
       origemDaChave: config.origemDaChave,
       latencyMs: Date.now() - startedAt,
       erro: err,
+      ...(jaPagou
+        ? {
+            usoParcial: {
+              ...pagos,
+              // Preço desconhecido continua nulo, nunca zero; a falha em calcular não
+              // pode impedir a gravação da linha.
+              custoCents: await custoCentsComCatalogo(
+                config.provider,
+                model,
+                pagos,
+                cfg.cacheTtl ?? '1h',
+                deps.log,
+                resolvedorDeCatalogoPeloDb(db).precoDoCatalogoOuNull,
+              ).catch(() => null),
+            },
+          }
+        : {}),
     }).catch(() => {
       // O log da falha não pode causar uma segunda falha. Se o próprio INSERT
       // de erro falhar, o erro ORIGINAL é o que interessa a quem chamou.
@@ -1409,9 +1439,53 @@ async function registrarFalha(
     origemDaChave: OrigemDaChaveLlm;
     latencyMs: number;
     erro: unknown;
+    /**
+     * O que os passos concluídos antes da falha já custaram (D-156). Ausente em
+     * toda recusa nossa (orçamento, carteira, assinatura): nelas nada saiu para o
+     * provedor e os tokens ficam em zero.
+     */
+    usoParcial?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      custoCents: number | null;
+    };
   },
 ): Promise<void> {
   const { error_code, error_message, http_status } = normalizarErro(d.erro);
+  if (d.usoParcial) {
+    const u = d.usoParcial;
+    await db.query(
+      `insert into llm_calls
+         (organization_id, contact_id, job_id, variant_id, purpose, provider, model,
+          input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents, latency_ms,
+          status, error_code, error_message, http_status, origem_da_escolha, agent_id, origem_da_chave)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'erro', $14, $15, $16, $17, $18, $19)`,
+      [
+        d.input.tenantId,
+        d.input.leadId ?? null,
+        d.input.jobId ?? null,
+        d.input.variantId ?? null,
+        d.purpose,
+        d.provider,
+        d.model,
+        u.inputTokens,
+        u.outputTokens,
+        u.cacheReadTokens,
+        u.cacheWriteTokens,
+        u.custoCents,
+        d.latencyMs,
+        error_code,
+        error_message,
+        http_status,
+        d.origem,
+        d.input.agentId ?? null,
+        d.origemDaChave,
+      ],
+    );
+    return;
+  }
   await db.query(
     `insert into llm_calls
        (organization_id, contact_id, job_id, variant_id, purpose, provider, model,

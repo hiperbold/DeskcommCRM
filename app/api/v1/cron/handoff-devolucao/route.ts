@@ -49,8 +49,11 @@ import { autorizaCron } from "@/lib/auth/cron-auth";
 
 export const dynamic = "force-dynamic";
 
-/** Teto de conversas lidas por rodada; o que sobrar entra na próxima. */
+/** Tamanho da página de leitura (D-161: a varredura percorre todas as páginas). */
 const SCAN_LIMIT = 500;
+
+/** Válvula contra varredura infinita: 100 páginas são 50 mil conversas candidatas. */
+const MAX_PAGINAS_DA_VARREDURA = 100;
 
 /** Quem age é o produto, não uma pessoa — `emitLeadActivity` grava como sistema. */
 const ATOR_DO_CRON = { type: "webhook_source", id: "cron:handoff-devolucao" } as const;
@@ -138,17 +141,32 @@ export async function devolverHandoffsVencidos(
   if (prazoPorOrg.size === 0) return { organizacoes: 0, examinadas: 0, devolvidas: 0, falhas: 0 };
   const orgIds = [...prazoPorOrg.keys()];
 
-  const { data, error } = await admin
-    .from("conversations")
-    .select(
-      "id, organization_id, channel_session_id, status, assignee_kind, assigned_to_user_id, assigned_at, bot_silenced_until, last_handoff_at, last_outbound_at, status_changed_at",
-    )
-    .in("organization_id", orgIds)
-    .in("status", ["open", "pending", "claimed", "ai_handling"])
-    .or("bot_silenced_until.eq.infinity,assignee_kind.eq.user,assigned_to_user_id.not.is.null")
-    .limit(SCAN_LIMIT);
-  if (error) throw new Error(`conversations: ${error.message}`);
-  const conversas = (data ?? []) as ConversaEmHandoff[];
+  // D-161: lê TODAS as candidatas, em páginas ordenadas. Com `limit(500)` sem
+  // ordem, acima de 500 candidatas as mesmas ocupavam a janela e as vencidas
+  // nunca voltavam ao agente.
+  const conversas: ConversaEmHandoff[] = [];
+  for (let pagina = 0; pagina < MAX_PAGINAS_DA_VARREDURA; pagina++) {
+    const { data, error } = await admin
+      .from("conversations")
+      .select(
+        "id, organization_id, channel_session_id, status, assignee_kind, assigned_to_user_id, assigned_at, bot_silenced_until, last_handoff_at, last_outbound_at, status_changed_at",
+      )
+      .in("organization_id", orgIds)
+      .in("status", ["open", "pending", "claimed", "ai_handling"])
+      .or("bot_silenced_until.eq.infinity,assignee_kind.eq.user,assigned_to_user_id.not.is.null")
+      .order("id", { ascending: true })
+      .range(pagina * SCAN_LIMIT, pagina * SCAN_LIMIT + SCAN_LIMIT - 1);
+    if (error) throw new Error(`conversations: ${error.message}`);
+    const lote = (data ?? []) as ConversaEmHandoff[];
+    conversas.push(...lote);
+    if (lote.length < SCAN_LIMIT) break;
+    if (pagina === MAX_PAGINAS_DA_VARREDURA - 1) {
+      logger.warn("[handoff-devolucao] varredura atingiu o teto de páginas; o resto fica para a próxima rodada", {
+        paginas: MAX_PAGINAS_DA_VARREDURA,
+        requestId,
+      });
+    }
+  }
 
   const vencidas = selecionarVencidas(conversas, {
     prazoPorOrg,

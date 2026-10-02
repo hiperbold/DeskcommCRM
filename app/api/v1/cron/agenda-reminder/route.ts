@@ -75,6 +75,14 @@ import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { moldeDoDegrau } from "@/lib/agenda/lembretes";
 import { autorizaCron } from "@/lib/auth/cron-auth";
+import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import {
+  canalDoLembrete,
+  fusoDoLembrete,
+  liberarReserva,
+  organizacaoPodeReceberLembrete,
+  reservarDegraus,
+} from "@/lib/agenda/lembrete-guardas";
 
 export const dynamic = "force-dynamic";
 
@@ -101,6 +109,8 @@ interface CompromissoAVencer {
   contact_id: string;
   title: string;
   starts_at: string;
+  /** Fuso em que o compromisso foi gravado (o da jornada), e o que a hora do lembrete usa. */
+  time_zone: string | null;
   location_details: string | null;
   reminder_sent_offsets_minutes: number[] | null;
   calendar_event_types: TipoDoCompromisso | TipoDoCompromisso[] | null;
@@ -265,7 +275,7 @@ async function handle(req: NextRequest): Promise<Response> {
   const { data, error } = await admin
     .from("calendar_appointments")
     .select(
-      "id, organization_id, contact_id, title, starts_at, location_details, reminder_sent_offsets_minutes, " +
+      "id, organization_id, contact_id, title, starts_at, time_zone, location_details, reminder_sent_offsets_minutes, " +
         "calendar_event_types!inner(name, reminder_enabled, reminder_minutes_before, reminder_extra_offsets_minutes, reminder_template_name, reminder_body, reminder_bodies, location_details)",
     )
     .eq("status", "confirmed")
@@ -341,30 +351,35 @@ async function handle(req: NextRequest): Promise<Response> {
       continue;
     }
 
-    const { data: canal } = await admin
-      .from("channel_sessions")
-      .select("id")
-      .eq("organization_id", org)
-      .eq("status", "WORKING")
-      .limit(1)
+    // Os mesmos portões dos outros produtores automáticos: organização que não
+    // está ativa e conta em modo leitura não recebem lembrete nenhum.
+    const { data: organizacao } = await admin
+      .from("organizations")
+      .select("timezone, locale, status")
+      .eq("id", org)
       .maybeSingle();
+    if (!organizacaoPodeReceberLembrete(organizacao?.status)) {
+      pular("organizacao_inativa");
+      continue;
+    }
+    if (await contaEmModoLeitura(admin, org)) {
+      pular("assinatura_suspensa");
+      continue;
+    }
 
-    if (!canal) {
+    // O número em que o contato já conversa; nunca uma linha de voz nem uma
+    // sessão qualquer da organização.
+    const canalId = await canalDoLembrete(admin, org, contato.id);
+    if (!canalId) {
       pular("sem_canal");
       continue;
     }
 
-    const foraDaJanela = await adiarAteAJanelaAbrir(admin, org, canal.id);
+    const foraDaJanela = await adiarAteAJanelaAbrir(admin, org, canalId);
     if (foraDaJanela) {
       pular("fora_da_janela");
       continue;
     }
-
-    const { data: organizacao } = await admin
-      .from("organizations")
-      .select("timezone, locale")
-      .eq("id", org)
-      .maybeSingle();
 
     let molde = moldeDoDegrau(tipo, Math.min(...pendentes));
     if (!molde && tipo.reminder_template_name) {
@@ -382,17 +397,32 @@ async function handle(req: NextRequest): Promise<Response> {
       nomeDoContato: nomeDoContato(contato),
       titulo: linha.title,
       quando: new Date(linha.starts_at),
-      timezone: organizacao?.timezone ?? "America/Sao_Paulo",
+      timezone: fusoDoLembrete(linha.time_zone, organizacao?.timezone),
       local: linha.location_details ?? tipo.location_details ?? null,
       idioma: normalizarIdioma(organizacao?.locale),
       molde,
       tipoNome: tipo.name,
     });
 
-    await espacarEnvio(canal.id);
+    // RESERVA ANTES DE ENVIAR (D-115). Se a rodada anterior ainda está em curso
+    // (o curl do agendador corta em 45 s, a rota não), ela já reservou o degrau
+    // ou vai reservar: quem perde o compare-and-swap não manda nada.
+    const reserva = {
+      appointmentId: linha.id,
+      organizationId: org,
+      lidos: linha.reminder_sent_offsets_minutes,
+      pendentes,
+    };
+    const { reservado, gravados } = await reservarDegraus(admin, reserva);
+    if (!reservado) {
+      pular("reservado_por_outra_rodada");
+      continue;
+    }
+
+    await espacarEnvio(canalId);
 
     try {
-      const conversaId = await ensureConversation(admin, org, contato.id, canal.id);
+      const conversaId = await ensureConversation(admin, org, contato.id, canalId);
       // `webhook_source` é o ator que esta base dá a envio nascido de worker —
       // o mesmo que `lib/followup/enviar-texto-fixo.ts` usa. O `id` é o
       // compromisso, para o audit da mensagem correlacionar com a linha que a
@@ -408,25 +438,17 @@ async function handle(req: NextRequest): Promise<Response> {
           typeof sendMessageHandler
         >[2],
       );
-      // Carimba a TENTATIVA — o desfecho da entrega vive na mensagem.
-      //
-      // Carimba TODOS os degraus vencidos, não só o que motivou este texto: os
-      // outros já venceram, e deixá-los pendentes faria a próxima rodada mandar
-      // a mesma mensagem de novo.
-      await admin
-        .from("calendar_appointments")
-        .update({
-          reminder_sent_at: new Date().toISOString(),
-          reminder_sent_offsets_minutes: [
-            ...new Set([...(linha.reminder_sent_offsets_minutes ?? []), ...pendentes]),
-          ],
-        })
-        .eq("id", linha.id)
-        .eq("organization_id", org);
+      // O carimbo da TENTATIVA já foi gravado na reserva, com TODOS os degraus
+      // vencidos (não só o que motivou este texto: deixar os outros pendentes
+      // faria a próxima rodada mandar a mesma mensagem de novo). O desfecho da
+      // entrega vive na mensagem.
       enviados += 1;
     } catch (err) {
       const mensagem = err instanceof Error ? err.message : String(err);
       logger.error("[agenda-reminder] envio falhou", { appointmentId: linha.id, error: mensagem, requestId });
+      // A exceção veio antes de o envio ser registrado: devolve a reserva para a
+      // próxima rodada tentar de novo.
+      await liberarReserva(admin, reserva, gravados);
       pular("erro_no_envio");
     }
   }

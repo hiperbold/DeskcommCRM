@@ -162,15 +162,21 @@ describe("isolamento entre organizações (estrutural)", () => {
     expect(buscaDeContato.slice(0, 400)).toContain('.eq("organization_id", org)');
   });
 
+  // D-115: o canal e o carimbo moram em `lib/agenda/lembrete-guardas.ts`; a rota
+  // entrega a organização da linha do compromisso a eles.
+  const guardas = readFileSync(join(__dirname, "../../../../../lib/agenda/lembrete-guardas.ts"), "utf8");
+
   it("resolve o canal DENTRO da organização do compromisso", () => {
-    const buscaDeCanal = fonte.slice(fonte.indexOf('.from("channel_sessions")'));
-    expect(fonte).toContain('.from("channel_sessions")');
-    expect(buscaDeCanal.slice(0, 400)).toContain('.eq("organization_id", org)');
+    expect(fonte).toContain("canalDoLembrete(admin, org, contato.id)");
+    const buscaDeCanal = guardas.slice(guardas.indexOf('.from("channel_sessions")'));
+    expect(guardas).toContain('.from("channel_sessions")');
+    expect(buscaDeCanal.slice(0, 400)).toContain('.eq("organization_id", organizationId)');
   });
 
   it("carimba o compromisso DENTRO da organização dele", () => {
-    const carimbo = fonte.slice(fonte.indexOf("reminder_sent_at: new Date()"));
-    expect(carimbo.slice(0, 400)).toContain('.eq("organization_id", org)');
+    expect(fonte).toContain("organizationId: org,");
+    const carimbo = guardas.slice(guardas.indexOf("reminder_sent_at: new Date()"));
+    expect(carimbo.slice(0, 400)).toContain('.eq("organization_id", reserva.organizationId)');
   });
 
   it("a organização vem da linha do compromisso, nunca de parâmetro", () => {

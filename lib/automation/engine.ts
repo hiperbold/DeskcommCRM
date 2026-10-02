@@ -24,6 +24,11 @@ import { regraDoEvento } from "@/lib/automation/gatilho-de-data-do-funil";
 import { ENTIDADE_ESPERADA_POR_GATILHO } from "@/lib/schemas/webhooks";
 import { logger } from "@/lib/logger";
 import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import {
+  eventoVelhoDemais,
+  falhaDeMensagemDaAutomacao,
+  TETO_FALHAS_POR_CONTATO_POR_HORA,
+} from "@/lib/automation/protecao-de-laco";
 
 export const AUTOMATION_CONSUMER_KEY = "automation-rules";
 
@@ -166,10 +171,36 @@ export async function runAutomationForEvent(
 
   const expectedKind = EXPECTED_ENTITY_KIND[row.event_type];
   if (expectedKind && row.entity_kind !== expectedKind) {
-  
+
     return { consumer_key: AUTOMATION_CONSUMER_KEY, status: "skipped", detail: "entity_kind_mismatch" };
   }
 
+  // D-114: evento velho (backlog reprocessado) e falha da mensagem da própria
+  // automação não disparam regra. Antes de qualquer consulta: custo zero.
+  if (eventoVelhoDemais(row.event_type, row.created_at)) {
+    return { consumer_key: AUTOMATION_CONSUMER_KEY, status: "skipped", detail: "evento_antigo" };
+  }
+  if (falhaDeMensagemDaAutomacao(row.event_type, row.payload)) {
+    return { consumer_key: AUTOMATION_CONSUMER_KEY, status: "skipped", detail: "falha_de_mensagem_da_automacao" };
+  }
+  // Disjuntor: o mesmo contato não passa de N falhas processadas por hora, de
+  // onde quer que venham. Pega o laço que a checagem de origem não reconhece.
+  if (row.event_type === "message.failed" && typeof row.payload?.contact_id === "string") {
+    const { count } = await admin
+      .from("event_log")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", row.organization_id)
+      .eq("event_type", "message.failed")
+      .eq("payload->>contact_id", row.payload.contact_id)
+      .gte("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString());
+    if ((count ?? 0) > TETO_FALHAS_POR_CONTATO_POR_HORA) {
+      logger.warn("[automation.engine] teto de falhas por contato atingido, laço de message.failed?", {
+        organization_id: row.organization_id,
+        contact_id: row.payload.contact_id,
+      });
+      return { consumer_key: AUTOMATION_CONSUMER_KEY, status: "skipped", detail: "teto_de_falhas_por_contato" };
+    }
+  }
   const { data: rules, error } = await admin
     .from("automation_rules")
     .select("id, name, conditions, actions")

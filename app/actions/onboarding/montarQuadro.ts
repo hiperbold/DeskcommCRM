@@ -23,6 +23,11 @@ import {
   type PropostaDeFunil,
 } from "@/lib/onboarding/proposta-de-funil";
 import { escolherPacotePorTexto, sugerirFunil, type Sugestao } from "@/lib/onboarding/sugerir-funil";
+import { chaveDaSugestao, sugestaoDoCache, sugestaoParaGuardar } from "@/lib/onboarding/cache-da-sugestao";
+import { veredictoDaCarteira, veredictoDoOrcamento, type OrigemDaChave } from "@/lib/ai/gate-de-custo";
+import { registrarTelemetriaSemCusto } from "@/lib/ai/telemetria-sem-custo";
+import { logger } from "@/lib/logger";
+import type { OnboardingState } from "@/lib/schemas/onboarding";
 import { requireOnboardingCtx, patchOnboardingState, loadOnboardingState, OnboardingError } from "./_shared";
 
 /** O funil que o gatilho semeou — o que a pessoa tem antes deste passo. */
@@ -42,7 +47,7 @@ export interface QuadroAtual {
 async function cerebroDoFuncionario(
   admin: ReturnType<typeof createAdminClient>,
   orgId: string,
-): Promise<{ provider: string; model: string; apiKey: string } | { erro: string }> {
+): Promise<{ provider: string; model: string; apiKey: string; origemDaChave: OrigemDaChave } | { erro: string }> {
   const { data: agente } = await admin
     .from("ai_agents")
     .select("published_version_id")
@@ -75,7 +80,7 @@ async function cerebroDoFuncionario(
   if (credentialId) {
     try {
       const cred = await loadCredential(credentialId, orgId);
-      return { provider, model, apiKey: cred.apiKey };
+      return { provider, model, apiKey: cred.apiKey, origemDaChave: "credencial_da_organizacao" };
     } catch {
       return { erro: "não consegui usar a chave cadastrada" };
     }
@@ -83,7 +88,7 @@ async function cerebroDoFuncionario(
 
   const daInstalacao = chaveDePlataforma(provider);
   if (!daInstalacao) return { erro: `esta instalação não tem chave de ${provider}` };
-  return { provider, model, apiKey: daInstalacao };
+  return { provider, model, apiKey: daInstalacao, origemDaChave: "chave_da_instalacao" };
 }
 
 async function carregarQuadroAtual(
@@ -111,6 +116,26 @@ async function carregarQuadroAtual(
     nome: String(funil.name ?? ""),
     colunas: (etapas ?? []).map((e) => String(e.name ?? "")),
   };
+}
+
+/** Por que a IA não deve ser chamada agora, em português para a tela; null quando pode. */
+async function vetoDeCusto(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  origemDaChave: OrigemDaChave,
+): Promise<string | null> {
+  try {
+    const carteira = await veredictoDaCarteira(admin, orgId, origemDaChave, "onboarding_funil");
+    if (carteira?.acao === "bloquear") return "os tokens de IA do plano acabaram";
+    const orcamento = await veredictoDoOrcamento(admin, orgId, "onboarding_funil", new Date());
+    if (orcamento?.acao === "bloquear") return "o limite de gasto com IA foi atingido";
+  } catch (err) {
+    logger.warn("[onboarding] leitura de carteira ou orçamento falhou: a sugestão SEGUE", {
+      organization_id: orgId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return null;
 }
 
 export interface DadosDoPasso {
@@ -157,6 +182,31 @@ export async function dadosDoPasso(orgId: string, negocio: string): Promise<Dado
     };
   }
 
+  // D-118: a sugestão já gerada para ESTE negócio e ESTE modelo não se paga de
+  // novo. Recarregar a página (ou abrir em duas abas) lê do estado do onboarding.
+  const chave = chaveDaSugestao(contexto, cerebro.provider, cerebro.model);
+  const estado: OnboardingState = await loadOnboardingState(orgId)
+    .then((r) => r.state)
+    .catch((): OnboardingState => ({}));
+  const guardada = sugestaoDoCache(estado.funil_sugestao, chave);
+  if (guardada) return { atual, sugestao: guardada };
+
+  // Mesmos vetos do atendimento: carteira de tokens (só na chave da instalação) e
+  // orçamento em dólar. Se estão zerados, o pacote pronto resolve sem gastar nada.
+  // Leitura que falha SEGUE, com a causa no log.
+  const motivoDoVeto = await vetoDeCusto(admin, orgId, cerebro.origemDaChave);
+  if (motivoDoVeto) {
+    return {
+      atual,
+      sugestao: {
+        origem: "pacote",
+        pacote: escolherPacotePorTexto(`${negocio} ${oQueFaz}`),
+        porque: motivoDoVeto,
+      },
+    };
+  }
+
+  let uso = { entrada: 0, saida: 0 };
   const sugestao = await sugerirFunil(contexto, async ({ system, prompt }) => {
     const r = await generateText({
       model: buildModel(cerebro.provider, cerebro.apiKey, cerebro.model),
@@ -167,7 +217,27 @@ export async function dadosDoPasso(orgId: string, negocio: string): Promise<Dado
       // colar a chave.
       maxOutputTokens: 900,
     });
+    uso = { entrada: r.usage?.inputTokens ?? 0, saida: r.usage?.outputTokens ?? 0 };
     return r.text;
+  });
+
+  // Telemetria da chamada: sem a linha em llm_calls, o gasto do onboarding na chave
+  // da instalação não aparecia em carteira, orçamento nem tela de uso.
+  await registrarTelemetriaSemCusto({
+    organizationId: orgId,
+    purpose: "onboarding_funil",
+    provider: cerebro.provider,
+    model: cerebro.model,
+    inputTokens: uso.entrada,
+    outputTokens: uso.saida,
+    origemDaChave: cerebro.origemDaChave,
+  });
+
+  await patchOnboardingState(orgId, { funil_sugestao: sugestaoParaGuardar(sugestao, chave) }).catch((err) => {
+    logger.warn("[onboarding] não consegui guardar a sugestão de funil", {
+      organization_id: orgId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   });
 
   return { atual, sugestao };

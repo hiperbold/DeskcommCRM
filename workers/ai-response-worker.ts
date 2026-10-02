@@ -38,7 +38,13 @@ import {
   HANDOFF_REASON_ASSINATURA,
   TITULO_ASSINATURA_SUSPENSA,
 } from "@/lib/agent-engine/edge/llm/assinatura";
-import { normalizarChaveDePlanosBloqueio, normalizarModoDeBilling } from "@/lib/agent-engine/edge/llm/carteira";
+import {
+  carteiraBloqueioTitulo,
+  corpoDoBloqueioDaCarteira,
+  normalizarChaveDePlanosBloqueio,
+  normalizarModoDeBilling,
+} from "@/lib/agent-engine/edge/llm/carteira";
+import { veredictoDaCarteira } from "@/lib/ai/gate-de-custo";
 import { modoDeBillingCacheado } from "@/lib/billing/planos/modo-cacheado";
 import { computeCost } from "@/lib/ai/cost";
 import { silencioVigente } from "@/lib/inbox/comando-da-conversa";
@@ -260,6 +266,28 @@ export async function processMessageReceived(row: EventRow): Promise<ProcessResu
     ctx.agent.model,
   );
   const model = resolvido?.model ?? null;
+  if (model && resolvido) {
+    // D-156: a carteira de tokens também vale neste caminho legado. Antes a
+    // organização com a carteira zerada seguia respondendo pela chave da
+    // instalação, e o saldo ficava negativo sem teto (o débito só vinha depois,
+    // pelo gatilho do llm_calls).
+    const vetoDeCarteira = await vetoPorCarteiraDeTokens({
+      orgId: ctx.organization_id,
+      conversationId: ctx.conversation_id,
+      serviceBoundary: ctx.serviceBoundary,
+      leadId,
+      origemDaChave: origemDaChaveDoModelo(resolvido.origem),
+    });
+    if (vetoDeCarteira !== null) {
+      logger.info("[ai-response-worker] skip", {
+        reason: vetoDeCarteira.reason,
+        detail: vetoDeCarteira.detail,
+        conversation_id: conversationId,
+        message_id: messageId,
+      });
+      return { status: "skipped", reason: vetoDeCarteira.reason, detail: vetoDeCarteira.detail };
+    }
+  }
   if (!model || !resolvido) {
     logger.warn("[ai-response-worker] modelo do agente sem provider configurado", {
       organization_id: ctx.organization_id,
@@ -717,6 +745,83 @@ async function vetoPorAssinaturaSuspensa(alvo: {
   });
   return skip("assinatura_suspensa");
 }
+
+/**
+ * A carteira de tokens no caminho legado (D-156). Mesma decisão do engine
+ * (`veredictoDaCarteira` usa `deveConsultarCarteira` e a RPC
+ * `fn_billing_ia_pode_responder`): só vale para a chave da instalação, e só no
+ * modo bloquear. Bloqueio abre o aviso da Central e passa a conversa à fila
+ * humana, sem gastar token. Leitura que falha SEGUE, com a causa no log.
+ *
+ * O motivo e a origem da passagem reaproveitam o vocabulário fechado do banco
+ * (`orcamento_de_ia`, `legado_teto`), como o engine faz para a carteira;
+ * `metadata.source` distingue.
+ */
+async function vetoPorCarteiraDeTokens(alvo: {
+  serviceBoundary?: ServiceBoundary;
+  orgId: string;
+  conversationId: string;
+  leadId: string | null;
+  origemDaChave: "chave_da_instalacao" | "credencial_da_organizacao" | null;
+}): Promise<SkipDecision | null> {
+  if (alvo.origemDaChave === null) return null;
+  const admin = createAdminClient();
+  let veredito;
+  try {
+    veredito = await veredictoDaCarteira(admin, alvo.orgId, alvo.origemDaChave, "bot_respond");
+  } catch (err) {
+    logger.warn("[ai-response] carteira de tokens não pôde ser lida: a resposta SEGUE", {
+      organization_id: alvo.orgId,
+      causa: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+  if (!veredito || veredito.acao !== "bloquear") return null;
+
+  const titulo = carteiraBloqueioTitulo(veredito.ciclo);
+  const { count } = await admin
+    .from("agent_inbox_items")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", alvo.orgId)
+    .eq("kind", "other")
+    .eq("ref_kind", "billing_carteira")
+    .eq("title", titulo)
+    .eq("status", "open");
+  if ((count ?? 0) === 0) {
+    const { error } = await admin.from("agent_inbox_items").insert({
+      organization_id: alvo.orgId,
+      kind: "other",
+      severity: "critical",
+      title: titulo,
+      body: corpoDoBloqueioDaCarteira(veredito.saldo),
+      ref_kind: "billing_carteira",
+      ref_id: alvo.orgId,
+    });
+    if (error) {
+      logger.warn("[ai-response] aviso da carteira zerada não pôde ser aberto na Central", {
+        organization_id: alvo.orgId,
+        causa: error.message,
+      });
+    }
+  }
+
+  await triggerHandoff({
+    conversationId: alvo.conversationId,
+    serviceBoundary: alvo.serviceBoundary,
+    organizationId: alvo.orgId,
+    reason: HANDOFF_REASON_ORCAMENTO,
+    origem: "legado_teto",
+    leadId: alvo.leadId,
+    metadata: { source: "carteira_de_tokens", saldo: veredito.saldo },
+  });
+  logger.warn("[ai-response] resposta recusada: carteira de tokens zerada: conversa na fila humana", {
+    organization_id: alvo.orgId,
+    conversation_id: alvo.conversationId,
+  });
+  return skip("carteira_de_tokens_esgotada");
+}
+
+export const __test_vetoPorCarteiraDeTokens = vetoPorCarteiraDeTokens;
 
 /**
  * Abre o aviso crítico na Central, deduplicado por TÍTULO ABERTO — mesmo

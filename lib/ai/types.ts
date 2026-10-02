@@ -55,6 +55,7 @@ export type SkipReason =
    * (`TITULO_ASSINATURA_SUSPENSA`) — mesma doutrina de `budget_exceeded` acima.
    */
   | "assinatura_suspensa"
+  | "carteira_de_tokens_esgotada"
   | "silenced_post_handoff"
   | "handoff_recent"
   | "conversation_not_found"

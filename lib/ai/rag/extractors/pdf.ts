@@ -97,12 +97,27 @@ export interface OpcoesDeExtracao {
    * worker (~170 MB) + filho (heap + ~70 MB de runtime) cabem nos 512 MB.
    */
   heapMb?: number;
+  /** Teto de páginas lidas (D-157). Acima disto a extração recusa o arquivo. */
+  maxPaginas?: number;
+  /** Teto de caracteres extraídos (D-157). Chegou nele, a leitura para e o texto sai truncado. */
+  maxCaracteres?: number;
   /** Depois disto o filho é morto e a extração falha com `PdfExtractError`. */
   timeoutMs?: number;
 }
 
 const PDFJS_LEGACY = "pdfjs-dist/legacy/build/pdf.mjs";
 const HEAP_DO_FILHO_MB = 160;
+
+/**
+ * D-157: o app Next extrai o PDF DENTRO do próprio processo (o pdfjs vive no
+ * bundle, não existe `pdf.mjs` em disco no standalone para um filho abrir), então
+ * um PDF com milhares de páginas ou fluxo que se expande para gigabytes derrubava
+ * o app de TODAS as organizações. O que se pode limitar ali é o trabalho: páginas,
+ * texto extraído e tempo. O processo à parte, com teto de heap, segue valendo no
+ * worker.
+ */
+export const MAX_PAGINAS_DO_PDF = 500;
+export const MAX_CARACTERES_DO_PDF = 3_000_000;
 const TEMPO_MAXIMO_MS = 60_000;
 
 /** `processo-a-parte` só sob o `tsx` — é o único lugar onde o custo existe. */
@@ -122,10 +137,13 @@ export async function extractPdfText(
 ): Promise<string> {
   const estrategia = opcoes.estrategia ?? estrategiaPadrao();
   if (estrategia === "processo-a-parte") return extrairEmProcessoAParte(buffer, opcoes);
-  return extrairEmProcesso(buffer);
+  return extrairEmProcesso(buffer, opcoes);
 }
 
-async function extrairEmProcesso(buffer: Buffer): Promise<string> {
+async function extrairEmProcesso(buffer: Buffer, opcoes: OpcoesDeExtracao = {}): Promise<string> {
+  const maxPaginas = opcoes.maxPaginas ?? MAX_PAGINAS_DO_PDF;
+  const maxCaracteres = opcoes.maxCaracteres ?? MAX_CARACTERES_DO_PDF;
+  const prazo = Date.now() + (opcoes.timeoutMs ?? TEMPO_MAXIMO_MS);
   try {
     const pdfjsLib = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as typeof PdfjsDist;
 
@@ -143,8 +161,21 @@ async function extrairEmProcesso(buffer: Buffer): Promise<string> {
     const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
     const pdfDocument = await loadingTask.promise;
 
+    if (pdfDocument.numPages > maxPaginas) {
+      throw new PdfExtractError(
+        `o PDF tem ${pdfDocument.numPages} páginas; o limite é ${maxPaginas}`,
+        undefined,
+        "falha",
+      );
+    }
+
     const pageTexts: string[] = [];
+    let caracteres = 0;
     for (let pageNum = 1; pageNum <= pdfDocument.numPages; pageNum++) {
+      if (Date.now() > prazo) {
+        throw new PdfExtractError("a extração do PDF excedeu o tempo máximo e foi interrompida");
+      }
+      if (caracteres >= maxCaracteres) break;
       const page = await pdfDocument.getPage(pageNum);
       const content = await page.getTextContent();
 
@@ -158,10 +189,13 @@ async function extrairEmProcesso(buffer: Buffer): Promise<string> {
         .map((item) => ("str" in item ? item.str + (item.hasEOL ? "\n" : "") : ""))
         .join("")
         .trim();
-      if (pageText.length > 0) pageTexts.push(pageText);
+      if (pageText.length > 0) {
+        pageTexts.push(pageText);
+        caracteres += pageText.length;
+      }
     }
 
-    const combined = pageTexts.join("\n\n").trim();
+    const combined = pageTexts.join("\n\n").trim().slice(0, maxCaracteres);
     if (combined.length === 0) {
       throw new PdfExtractError("pdfjs-dist extracted no text (possibly image-only PDF)", undefined, "sem_texto");
     }
@@ -232,17 +266,25 @@ import { readFileSync } from "node:fs";
 const responder = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
 try {
   const pdfjs = await import(process.argv[1]);
+  const maxPaginas = Number(process.argv[2]);
+  const maxCaracteres = Number(process.argv[3]);
   const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(0)) }).promise;
+  if (doc.numPages > maxPaginas) throw new Error("o PDF tem " + doc.numPages + " páginas; o limite é " + maxPaginas);
   const paginas = [];
+  let caracteres = 0;
   for (let n = 1; n <= doc.numPages; n++) {
+    if (caracteres >= maxCaracteres) break;
     const conteudo = await (await doc.getPage(n)).getTextContent();
     const texto = conteudo.items
       .map((item) => ("str" in item ? item.str + (item.hasEOL ? "\\n" : "") : ""))
       .join("")
       .trim();
-    if (texto.length > 0) paginas.push(texto);
+    if (texto.length > 0) {
+      paginas.push(texto);
+      caracteres += texto.length;
+    }
   }
-  responder({ ok: true, texto: paginas.join("\\n\\n").trim() });
+  responder({ ok: true, texto: paginas.join("\\n\\n").trim().slice(0, maxCaracteres) });
 } catch (e) {
   responder({ ok: false, erro: String((e && e.message) || e) });
 }
@@ -289,7 +331,7 @@ async function extrairEmProcessoAParte(
   const saida = await new Promise<SaidaDoFilho>((resolve, reject) => {
     const filho = spawn(
       process.execPath,
-      [`--max-old-space-size=${heapMb}`, "--input-type=module", "--eval", SCRIPT_DO_FILHO, url],
+      [`--max-old-space-size=${heapMb}`, "--input-type=module", "--eval", SCRIPT_DO_FILHO, url, String(opcoes.maxPaginas ?? MAX_PAGINAS_DO_PDF), String(opcoes.maxCaracteres ?? MAX_CARACTERES_DO_PDF)],
       { env, stdio: ["pipe", "pipe", "pipe"] },
     );
     let stdout = "";

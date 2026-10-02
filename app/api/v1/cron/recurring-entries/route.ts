@@ -44,6 +44,40 @@ export function competenciaDoMes(ano: number, mes: number, diaDoMes: number): st
   return `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
 }
 
+/**
+ * A data civil de hoje NO FUSO da organização (D-161).
+ *
+ * Em UTC, às 21h de Brasília do último dia do mês já é dia 1 do mês seguinte, e a
+ * rotina gerava o lançamento do mês que ainda não começou para o cliente. O mês e
+ * o dia da competência são os da organização.
+ */
+export function dataCivilNoFuso(
+  agora: Date,
+  timezone: string | null | undefined,
+): { ano: number; mes: number; hoje: string } {
+  const partes = (tz: string) => {
+    const p = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(agora);
+    const v = (t: string) => p.find((x) => x.type === t)?.value ?? "";
+    return { ano: Number(v("year")), mes: Number(v("month")), dia: v("day") };
+  };
+  let r;
+  try {
+    r = partes(timezone || "America/Sao_Paulo");
+  } catch {
+    r = partes("America/Sao_Paulo");
+  }
+  return { ano: r.ano, mes: r.mes, hoje: `${r.ano}-${String(r.mes).padStart(2, "0")}-${r.dia}` };
+}
+
+/** Página de leitura dos moldes: o PostgREST corta em 1000 linhas (`max_rows`). */
+const PAGINA_DE_MOLDES = 500;
+const MAX_PAGINAS_DE_MOLDES = 100;
+
 async function handle(req: NextRequest): Promise<Response> {
   const requestId = randomUUID();
 
@@ -53,32 +87,57 @@ async function handle(req: NextRequest): Promise<Response> {
 
   const admin = createAdminClient();
   const agora = new Date();
-  const ano = agora.getUTCFullYear();
-  const mes = agora.getUTCMonth() + 1;
 
-  const { data: moldes, error } = await admin
-    .from("recurring_entries")
-    .select(
-      "id, organization_id, account_id, account_plan_id, direction, amount_cents, currency, name, day_of_month",
-    )
-    .eq("is_active", true);
+  // Todos os moldes, em páginas ordenadas: além de 1000 o PostgREST cortava e os
+  // moldes excedentes nunca geravam lançamento (D-161).
+  const moldes: Array<Record<string, unknown>> = [];
+  for (let pagina = 0; pagina < MAX_PAGINAS_DE_MOLDES; pagina++) {
+    const { data: lote, error } = await admin
+      .from("recurring_entries")
+      .select(
+        "id, organization_id, account_id, account_plan_id, direction, amount_cents, currency, name, day_of_month",
+      )
+      .eq("is_active", true)
+      .order("id", { ascending: true })
+      .range(pagina * PAGINA_DE_MOLDES, pagina * PAGINA_DE_MOLDES + PAGINA_DE_MOLDES - 1);
+    if (error) {
+      logger.error("[recurring-entries] consulta falhou", { error: error.message, requestId });
+      return fail("internal_error", "Falha ao buscar recorrências.", 500, { requestId });
+    }
+    moldes.push(...(lote ?? []));
+    if ((lote ?? []).length < PAGINA_DE_MOLDES) break;
+  }
 
-  if (error) {
-    logger.error("[recurring-entries] consulta falhou", { error: error.message, requestId });
-    return fail("internal_error", "Falha ao buscar recorrências.", 500, { requestId });
+  // O fuso de cada organização que tem molde (consulta em blocos: o filtro `in` vai na URL).
+  const fusoDaOrg = new Map<string, string | null>();
+  const orgIds = [...new Set(moldes.map((m) => m.organization_id as string))];
+  for (let i = 0; i < orgIds.length; i += 100) {
+    const { data: orgs, error: erroDeFuso } = await admin
+      .from("organizations")
+      .select("id, timezone")
+      .in("id", orgIds.slice(i, i + 100));
+    if (erroDeFuso) {
+      logger.warn("[recurring-entries] não consegui ler o fuso das organizações; usando o padrão", {
+        error: erroDeFuso.message,
+        requestId,
+      });
+      break;
+    }
+    for (const o of (orgs ?? []) as Array<{ id: string; timezone: string | null }>) fusoDaOrg.set(o.id, o.timezone);
   }
 
   let gerados = 0;
   let jaExistiam = 0;
   let falharam = 0;
 
-  for (const molde of moldes ?? []) {
+  for (const molde of moldes) {
+    const { ano, mes, hoje } = dataCivilNoFuso(agora, fusoDaOrg.get(molde.organization_id as string));
     const competencia = competenciaDoMes(ano, mes, molde.day_of_month as number);
 
     // Só gera quando a data já chegou. Sem isto, no dia 1 nasceriam as doze
     // contas do mês inteiro e a tela de pendências viraria uma lista de coisas
     // que ainda não venceram.
-    if (competencia > agora.toISOString().slice(0, 10)) continue;
+    if (competencia > hoje) continue;
 
     const { error: erroInsert } = await admin.from("financial_entries").insert({
       organization_id: molde.organization_id,
@@ -126,7 +185,7 @@ async function handle(req: NextRequest): Promise<Response> {
   }
 
   return ok(
-    { moldes: (moldes ?? []).length, gerados, ja_existiam: jaExistiam, falharam },
+    { moldes: moldes.length, gerados, ja_existiam: jaExistiam, falharam },
     { requestId },
   );
 }

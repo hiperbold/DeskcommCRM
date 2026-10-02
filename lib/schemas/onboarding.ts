@@ -114,6 +114,21 @@ export const onboardingStateSchema = z.object({
       skipped: z.boolean().optional(),
     })
     .optional(),
+  /**
+   * A última sugestão de funil pedida à IA, presa à chave do que a gerou (D-118):
+   * recarregar o passo não chama o modelo de novo. Ver
+   * `lib/onboarding/cache-da-sugestao.ts`.
+   */
+  funil_sugestao: z
+    .object({
+      chave: z.string(),
+      gerada_em: z.string(),
+      origem: z.enum(["ia", "pacote"]),
+      proposta: z.unknown().optional(),
+      pacote_id: z.string().optional(),
+      porque: z.string().optional(),
+    })
+    .optional(),
   team: z
     .object({
       invites_sent: z.number(),

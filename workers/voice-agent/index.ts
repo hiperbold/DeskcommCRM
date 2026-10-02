@@ -55,6 +55,7 @@ import { resolveOrCreateCallerContact } from "@/lib/voip/resolve-caller";
 import { garantirLeadDaConversa } from "@/lib/leads/nascimento-do-lead";
 import { buscarConhecimento, resolverAcervoDoAgente } from "@/lib/ai/knowledge/busca";
 import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { MOTIVO_LIMITE_DE_DURACAO, registrarUsoDaVoz, verificarAtendimentoDaVoz } from "@/lib/ai/voz/limites-da-voz";
 
 const supabaseAdmin = createAdminClient();
 
@@ -191,6 +192,9 @@ interface ActiveAudioSocketCall {
   bridge: AudioSocketCallBridge;
   callRowId: string;
   answeredAt: string;
+  organizationId: string;
+  voiceModel: string;
+  origemDaChave: "chave_da_instalacao" | "credencial_da_organizacao";
   transcript: { speaker: string; text: string; ts: string }[];
 }
 const activeAudioSocketCalls = new Map<string, ActiveAudioSocketCall>(); // key = uuid (== voice_calls.asterisk_channel_id)
@@ -206,7 +210,7 @@ function appendAudioSocketTranscriptTurn(uuid: string, turn: { speaker: string; 
   call.transcript.push({ ...turn, ts: new Date().toISOString() });
 }
 
-async function finalizeAudioSocketCall(uuid: string) {
+async function finalizeAudioSocketCall(uuid: string, reason?: string) {
   const call = activeAudioSocketCalls.get(uuid);
   if (!call) return;
   activeAudioSocketCalls.delete(uuid);
@@ -220,12 +224,21 @@ async function finalizeAudioSocketCall(uuid: string) {
     .from("voice_calls")
     .update({
       status: "ended",
-      end_reason: "user_ended",
+      // O teto de duração derrubou a ligação (D-117): o motivo é do operador, não do cliente.
+      end_reason: reason === MOTIVO_LIMITE_DE_DURACAO ? "duration_limit" : "user_ended",
       ended_at: endedAt.toISOString(),
       duration_ms: durationMs,
       transcript: call.transcript,
     })
     .eq("id", call.callRowId);
+
+  // Uma linha em llm_calls por ligação: origem da chave e duração (D-117).
+  await registrarUsoDaVoz(supabaseAdmin, {
+    organizationId: call.organizationId,
+    model: call.voiceModel,
+    origemDaChave: call.origemDaChave,
+    duracaoMs: durationMs,
+  });
 }
 
 async function handleAudioSocketConnection(socket: net.Socket, uuid: string, leftover: Buffer) {
@@ -259,6 +272,23 @@ async function handleAudioSocketConnection(socket: net.Socket, uuid: string, lef
     return;
   }
 
+  // D-117: teto de duração, carteira de tokens e orçamento ANTES de abrir a sessão
+  // Realtime. Sem a chave própria da organização, a ligação é paga pela instalação.
+  const origemDaChave = agent.origemDaChave ?? "chave_da_instalacao";
+  const decisao = await verificarAtendimentoDaVoz(supabaseAdmin, {
+    organizationId: callRow.organization_id,
+    origemDaChave,
+  });
+  if (!decisao.atender) {
+    console.error(`[audiosocket] organização ${callRow.organization_id} sem atendimento por IA: ${decisao.motivo}`);
+    await supabaseAdmin
+      .from("voice_calls")
+      .update({ status: "ended", end_reason: decisao.motivo, ended_at: new Date().toISOString() })
+      .eq("id", callRow.id);
+    socket.end();
+    return;
+  }
+
   // Mesmo acervo que o agente de texto (WhatsApp) já usa — reaproveita
   // resolverAcervoDoAgente/buscarConhecimento em vez de reimplementar RAG
   // pro canal de voz. NÃO aguardado aqui: dispara em paralelo com a abertura
@@ -284,7 +314,8 @@ async function handleAudioSocketConnection(socket: net.Socket, uuid: string, lef
     voiceModel: agent.voiceModel,
     apiKey: agent.apiKey,
     onTranscriptTurn: (turn) => appendAudioSocketTranscriptTurn(uuid, turn),
-    onCallEnded: () => finalizeAudioSocketCall(uuid),
+    onCallEnded: (reason) => finalizeAudioSocketCall(uuid, reason),
+    maxDurationMs: decisao.maxMs,
     knowledgeSourceIdsPromise,
     searchKnowledge: async (pergunta: string) => {
       const knowledgeSourceIds = await knowledgeSourceIdsPromise;
@@ -301,7 +332,15 @@ async function handleAudioSocketConnection(socket: net.Socket, uuid: string, lef
   });
 
   const answeredAt = new Date().toISOString();
-  activeAudioSocketCalls.set(uuid, { bridge, callRowId: callRow.id, answeredAt, transcript: [] });
+  activeAudioSocketCalls.set(uuid, {
+    bridge,
+    callRowId: callRow.id,
+    answeredAt,
+    organizationId: callRow.organization_id,
+    voiceModel: agent.voiceModel,
+    origemDaChave,
+    transcript: [],
+  });
 
   await supabaseAdmin
     .from("voice_calls")

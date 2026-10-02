@@ -6,6 +6,7 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AGENT_CONFIG_DEFAULTS, agentConfigSchema } from "@/lib/ai/guardrails-schema";
 import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { logger } from "@/lib/logger";
 
 export interface VoiceAgentConfig {
   id: string;
@@ -24,6 +25,12 @@ export interface VoiceAgentConfig {
    * Credenciais pra esta org, ou env OPENAI_API_KEY do servidor.
    */
   apiKey: string;
+  /**
+   * De quem é a chave acima: da organização (cadastrada em IA > Credenciais) ou
+   * da INSTALAÇÃO (o `OPENAI_API_KEY` do servidor, que a Hiperbold paga). É o que
+   * decide se a ligação entra na carteira e no teto diário (D-117).
+   */
+  origemDaChave: "chave_da_instalacao" | "credencial_da_organizacao";
 }
 
 /**
@@ -36,7 +43,9 @@ export interface VoiceAgentConfig {
  * chaves cadastradas e nenhuma escolha explícita, variar sozinho no dia em que
  * alguém cadastra uma segunda é pior que sempre usar a mesma.
  */
-async function resolverChaveOpenAiDaVoz(organizationId: string): Promise<string> {
+async function resolverChaveOpenAiDaVoz(
+  organizationId: string,
+): Promise<{ apiKey: string; origemDaChave: VoiceAgentConfig["origemDaChave"] }> {
   try {
     const admin = createAdminClient();
     const { data } = await admin
@@ -51,18 +60,25 @@ async function resolverChaveOpenAiDaVoz(organizationId: string): Promise<string>
       .maybeSingle();
 
     if (data) {
-      return decryptKey({
-        ciphertext: byteaToBuffer(data.api_key_encrypted),
-        iv: byteaToBuffer(data.api_key_iv),
-        tag: byteaToBuffer(data.api_key_tag),
-      });
+      return {
+        apiKey: decryptKey({
+          ciphertext: byteaToBuffer(data.api_key_encrypted),
+          iv: byteaToBuffer(data.api_key_iv),
+          tag: byteaToBuffer(data.api_key_tag),
+        }),
+        origemDaChave: "credencial_da_organizacao",
+      };
     }
   } catch {
-    // Decrypt falhou ou a query deu erro -- cai pro .env abaixo, log já
-    // aconteceu no INFO deste arquivo se aplicável; não vale a pena arriscar
-    // ecoar detalhe de credencial no log do worker.
+    // Decrypt falhou ou a query deu erro -- cai pro .env abaixo. Não se ecoa
+    // detalhe de credencial no log do worker, mas a QUEDA em si é registrada
+    // abaixo: cair para a chave da instalação em silêncio faz a Hiperbold pagar
+    // a ligação de quem tinha chave própria (D-117, agrava o D-080).
+    logger.warn("[voice-agent] credencial da organização falhou: usando a chave da instalação", {
+      organization_id: organizationId,
+    });
   }
-  return process.env.OPENAI_API_KEY ?? "";
+  return { apiKey: process.env.OPENAI_API_KEY ?? "", origemDaChave: "chave_da_instalacao" };
 }
 
 export async function getActiveVoiceAgent(organizationId: string): Promise<VoiceAgentConfig | null> {
@@ -92,6 +108,6 @@ export async function getActiveVoiceAgent(organizationId: string): Promise<Voice
     voiceModel: cfg.voice_model,
     ragTopK: cfg.rag_top_k,
     ragSimilarityThreshold: cfg.rag_similarity_threshold,
-    apiKey: await resolverChaveOpenAiDaVoz(organizationId),
+    ...(await resolverChaveOpenAiDaVoz(organizationId)),
   };
 }

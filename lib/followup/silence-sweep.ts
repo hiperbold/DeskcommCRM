@@ -274,6 +274,12 @@ export function createSupabaseSilenceSweepDb(admin: SupabaseClient): SilenceSwee
       // conversa, inclusive uma que um humano já fechou de propósito — medido
       // ao desenhar o primeiro fluxo de silêncio real (num tenant de produção): o gatilho
       // só faz sentido enquanto "o fluxo da conversa ainda está ativo".
+      // D-161: PAGINADO. Sem `range`, o PostgREST cortava em `max_rows` (1000) e as
+      // conversas além disso nunca entravam no fluxo de silêncio.
+      const PAGINA = 500;
+      const MAX_PAGINAS = 100;
+      const linhas: unknown[] = [];
+      for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
       const { data, error } = await admin
         .from("conversations")
         .select(
@@ -286,8 +292,13 @@ export function createSupabaseSilenceSweepDb(admin: SupabaseClient): SilenceSwee
         .order("sent_at", { referencedTable: "messages", ascending: false })
         .limit(1, { referencedTable: "messages" })
         .not("last_inbound_at", "is", null)
-        .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`);
+        .not("status", "in", `(${CONVERSATION_TERMINAL_STATUSES.join(",")})`)
+        .order("id", { ascending: true })
+        .range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1);
       if (error) throw new Error(error.message);
+      linhas.push(...(data ?? []));
+      if ((data ?? []).length < PAGINA) break;
+      }
 
       type Row = {
         id: string; service_revision: number; current_demanda_id: string | null; demandas: { revision: number; fechada_em: string | null } | null;
@@ -304,7 +315,7 @@ export function createSupabaseSilenceSweepDb(admin: SupabaseClient): SilenceSwee
         string,
         { boundary: ServiceBoundary; at: number; tags: string[]; blocked: boolean; permitidoPeloGate: boolean }
       >();
-      for (const row of (data ?? []) as unknown as Row[]) {
+      for (const row of linhas as unknown as Row[]) {
         const source = row.messages?.[0];
         const boundary = parseServiceBoundary(source);
         if (!source || !boundary) continue;

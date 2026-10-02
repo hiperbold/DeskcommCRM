@@ -149,6 +149,8 @@ vi.mock("@/lib/supabase/admin", () => ({
         eq: registrar("eq"),
         or: () => chain,
         limit: () => resolver(),
+        order: () => chain,
+        range: () => resolver(),
         then: (res: (v: unknown) => unknown) => resolver().then(res),
       };
       return chain;

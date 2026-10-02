@@ -29,6 +29,7 @@
 import WebSocket from "ws";
 import type { Socket } from "node:net";
 import { pcm16ToUlaw, ulawToPcm16 } from "@/lib/voip/ulaw";
+import { MOTIVO_LIMITE_DE_DURACAO } from "@/lib/ai/voz/limites-da-voz";
 
 // Fallback só pra quem ainda não configurou nada na aba Voz do agente
 // (config.voice_model) -- normalmente this.ctx.voiceModel já vem preenchido
@@ -79,7 +80,12 @@ export interface AudioSocketCallContext {
   /** Chave da OpenAI pra esta org -- ver resolverChaveOpenAiDaVoz em lib/ai/agents.ts. */
   apiKey?: string;
   onTranscriptTurn: (turn: { speaker: "agent" | "customer"; text: string }) => void;
-  onCallEnded: () => void;
+  onCallEnded: (reason?: string) => void;
+  /**
+   * Duração máxima da ligação (D-117). Passou disso, a ponte encerra: sem timer,
+   * quem liga e fica na linha deixa a sessão Realtime aberta, e paga, por horas.
+   */
+  maxDurationMs?: number;
   /**
    * Resolvida em PARALELO com a abertura deste WebSocket (index.ts dispara
    * os dois ao mesmo tempo, não aguarda uma coisa antes da outra) — o
@@ -146,6 +152,7 @@ export class AudioSocketCallBridge {
   // tempo certo sozinho; AudioSocket é só bytes crus, o pacing é nosso.
   private outboundQueue = Buffer.alloc(0);
   private pacerTimer: NodeJS.Timeout | null = null;
+  private durationTimer: NodeJS.Timeout | null = null;
 
   private readonly realtimeModel: string;
 
@@ -170,6 +177,10 @@ export class AudioSocketCallBridge {
     this.setupRealtime();
 
     this.pacerTimer = setInterval(() => this.pumpOutboundQueue(), FRAME_MS);
+
+    if (ctx.maxDurationMs && ctx.maxDurationMs > 0) {
+      this.durationTimer = setTimeout(() => this.handleEnd(MOTIVO_LIMITE_DE_DURACAO), ctx.maxDurationMs);
+    }
   }
 
   /** Roda a cada 20ms — manda NO MÁXIMO um frame por tick, nunca a fila inteira de uma vez. */
@@ -229,7 +240,7 @@ export class AudioSocketCallBridge {
     if (this.closed) return;
     this.closed = true;
     console.info(`[audiosocket] call=${this.ctx.callId} encerrando (${reason})`);
-    this.ctx.onCallEnded();
+    this.ctx.onCallEnded(reason);
     this.close();
   }
 
@@ -473,6 +484,7 @@ export class AudioSocketCallBridge {
 
   close() {
     if (this.pacerTimer) clearInterval(this.pacerTimer);
+    if (this.durationTimer) clearTimeout(this.durationTimer);
     this.realtimeWs.close();
     if (!this.socket.destroyed) this.socket.end();
   }

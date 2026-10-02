@@ -30,6 +30,7 @@ import {
   markVersionFailed,
   markVersionReady,
 } from "@/lib/ai/rag/version";
+import { herdarChunksDaVersaoAtiva } from "@/lib/ai/rag/herdar-chunks";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const CONV_MAX_CHARS = 1600;
@@ -413,7 +414,25 @@ export async function ingestConversationsBatch(
   // g. Finalize version.
   try {
     if (totalChunkInserts > 0) {
-      await markVersionReady(versionId, organizationId, totalChunkInserts);
+      // D-159: `activateVersion` desativa as outras versões da fonte, e esta só tem
+      // as conversas de hoje. Os trechos da versão ativa vêm junto; se a cópia
+      // falhar, a versão nova NÃO é ativada e o acervo anterior segue de pé.
+      let herdados = 0;
+      try {
+        herdados = await herdarChunksDaVersaoAtiva(admin, {
+          organizationId,
+          knowledgeSourceId: sourceId,
+          versaoNovaId: versionId,
+        });
+      } catch (err) {
+        console.error(
+          "[kb-conversations] não consegui herdar o acervo anterior; versão nova não ativada",
+          err instanceof Error ? err.message : String(err),
+        );
+        await markVersionFailed(versionId, organizationId, "herdar_acervo_falhou");
+        return { processed, flaggedReview, skipped, embeddingSkipped: false };
+      }
+      await markVersionReady(versionId, organizationId, totalChunkInserts + herdados);
       await activateVersion({ organizationId, knowledgeSourceId: sourceId, versionId });
     } else {
       await markVersionFailed(versionId, organizationId, "no_chunks_ingested");
