@@ -190,3 +190,9 @@ Não são defeitos, mas vale saber: (a) sem `asaas_sandbox_concede` o evento de 
 - `ASAAS_ENABLED` e `compraLigada()` (as duas chaves da decisão 18 lidas do ambiente e do banco) não foram exercitadas: a configuração foi injetada com `habilitado: true`. A tela e a ação do cliente (`app/actions/settings/compraDoPlano.ts`), sessão e permissão não foram exercitadas: `iniciarCompra` foi chamada direto.
 - Pix e pacote de tokens pelo fluxo real (só a parte 1 mediu o Pix, sem CRM); anual (`price_yearly_cents` ainda nulo, o plano anual não é vendável); semestral; renovação mensal de verdade (a segunda cobrança só nasce perto do vencimento); `PAYMENT_RECEIVED` real do cartão (32 dias depois); estorno parcial (só a partir de 01/10, continua pendente da parte 1 com `pay_o55qzq8il73rzfo3`); o mês depois do dia 31 (ver passo 6).
 - Organização nova com compra concorrente (dois cliques): coberto por testes do CRM, não repetido aqui.
+
+## Fechamento em 05/10/2026
+
+- Item 3 medido: a fatura hospedada paga à mão (cartão 4444, `pay_sk4k22lsiobuzrw3`) deixou a assinatura `ACTIVE` com `creditCard` preenchido (bandeira, final e `creditCardToken`), então a renovação cobra o cartão sozinha. Na cobrança: `status: CONFIRMED`, `paymentDate` nulo, `confirmedDate` e `clientPaymentDate` no dia, `creditDate` 32 dias depois.
+- Item 7: o estorno parcial do cartão de `pay_o55qzq8il73rzfo3`, paga em 30/09, CONTINUA recusado em 05/10 com a mesma mensagem (400 `invalid_action`, "só pode ser estornada parcialmente no próximo dia"). A cobrança segue `CONFIRMED` até o `creditDate` (02/11); o sandbox não avança sozinho. O status depois de um parcial não é medível no sandbox: fica para a compra real de baixo valor em produção (D-071).
+- Limpeza (`limpar`) feita: as três assinaturas de teste removidas e o parcelamento apagado; o que já estava pago fica como histórico.
