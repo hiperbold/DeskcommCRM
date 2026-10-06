@@ -15,10 +15,16 @@ import {
   AUTH_LIMITS,
 } from "@/lib/auth/rate-limit";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
+import { captchaRecusadoPeloGoTrue } from "@/lib/security/turnstile";
 
 export type SignInResult = {
   ok: false;
-  error: "invalid_credentials" | "rate_limited" | "validation_error" | "mfa_required";
+  error:
+    | "invalid_credentials"
+    | "rate_limited"
+    | "validation_error"
+    | "mfa_required"
+    | "captcha_failed";
   details?: Record<string, unknown>;
   challengeId?: string;
 };
@@ -33,7 +39,12 @@ export type SignInResult = {
  *
  * On failure: returns an error discriminator. Caller renders inline message.
  */
-export async function signInWithPassword(input: LoginInput, next?: string): Promise<SignInResult> {
+export async function signInWithPassword(
+  input: LoginInput,
+  next?: string,
+  /** Token do Turnstile (D-173). Só o GoTrue o confere, e só com a proteção ligada nele. */
+  captchaToken?: string,
+): Promise<SignInResult> {
   const parsed = loginSchema.safeParse(input);
   if (!parsed.success) {
     return {
@@ -74,7 +85,22 @@ export async function signInWithPassword(input: LoginInput, next?: string): Prom
   const { data, error } = await supabase.auth.signInWithPassword({
     email: parsed.data.email,
     password: parsed.data.password,
+    ...(captchaToken ? { options: { captchaToken } } : {}),
   });
+
+  // Captcha recusado pelo GoTrue não é senha errada: não gasta o orçamento da
+  // conta (quem erra o captcha não adivinhou nada) e a tela precisa dizer o
+  // motivo certo, senão a pessoa troca de senha sem necessidade.
+  if (captchaRecusadoPeloGoTrue(error)) {
+    await audit({
+      action: "auth.login_failed",
+      metadata: { email_hash: hashEmail(parsed.data.email), reason: "captcha_failed" },
+      requestId,
+      ip,
+      userAgent,
+    });
+    return { ok: false, error: "captcha_failed" };
+  }
 
   if (error || !data.user) {
     // Só senha errada gasta o orçamento da conta.

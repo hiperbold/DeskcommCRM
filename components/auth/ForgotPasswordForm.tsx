@@ -10,9 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { requestPasswordReset } from "@/app/actions/auth/requestPasswordReset";
+import { TurnstileWidget, useCaptcha } from "@/components/auth/TurnstileWidget";
 
-export function ForgotPasswordForm() {
+export function ForgotPasswordForm({ turnstileSiteKey }: { turnstileSiteKey?: string | null }) {
   const t = useT();
+  const captcha = useCaptcha(turnstileSiteKey);
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
@@ -27,14 +29,19 @@ export function ForgotPasswordForm() {
   });
 
   const onSubmit = (values: ForgotPasswordInput) => {
+    if (!captcha.pronto) return;
     setServerError(null);
     startTransition(async () => {
-      const res = await requestPasswordReset(values);
+      const res = await requestPasswordReset(values, captcha.token ?? undefined);
       if (res.ok) {
         setSent(true);
         return;
       }
-      if (res.error === "rate_limited") {
+      // Token de uso único: depois de uma tentativa que falhou, o widget gera outro.
+      if (captcha.ativo) captcha.renovar();
+      if (res.error === "captcha_failed") {
+        setServerError(t("Não foi possível confirmar a verificação de segurança. Tente novamente."));
+      } else if (res.error === "rate_limited") {
         setServerError(t("Muitas tentativas. Aguarde alguns minutos."));
       } else if (res.error === "validation_error") {
         setServerError(t("Email inválido. Confira o campo."));
@@ -82,7 +89,14 @@ export function ForgotPasswordForm() {
           {serverError}
         </div>
       )}
-      <Button type="submit" className="w-full" disabled={isPending}>
+      {turnstileSiteKey && (
+        <TurnstileWidget
+          siteKey={turnstileSiteKey}
+          onToken={captcha.setToken}
+          resetKey={captcha.resetKey}
+        />
+      )}
+      <Button type="submit" className="w-full" disabled={isPending || !captcha.pronto}>
         {isPending ? t("Enviando...") : t("Enviar link de redefinição")}
       </Button>
     </form>

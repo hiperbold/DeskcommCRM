@@ -833,6 +833,12 @@ const HOSTS_DECLARADOS: Record<string, EntradaDeHost> = {
     motivo:
       "endpoint da plataforma que roda o crawler do Google Places (`lib/prospecting/provider.ts`). É o destino do request, com a chave da PRÓPRIA organização — trocar pelo domínio do revendedor quebraria a chamada, e esconder o nome não esconde para onde o dado vai.",
   },
+  // ── verificação contra robô (D-173) ──
+  "challenges.cloudflare.com": {
+    categoria: "FORNECEDOR",
+    motivo:
+      "endpoint do Cloudflare Turnstile: o script do widget das telas de entrada (`components/auth/TurnstileWidget.tsx`), o `siteverify` que confere o token da captação pública (`lib/security/turnstile.ts`) e a origem liberada na CSP (`lib/security/cabecalhos.ts`). É o destino do request e do iframe do widget: trocar pelo domínio do revendedor faria o desafio não carregar.",
+  },
   // ── identificador de fio: NÃO é destino de chamada nem texto de tela ──────
   "s.whatsapp.net": {
     categoria: "PROTOCOLO",

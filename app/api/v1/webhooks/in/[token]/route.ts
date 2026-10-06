@@ -35,6 +35,11 @@ import {
 } from "@/lib/webhooks/rdstation";
 import { origemDaPagina, registrarCaptacao } from "@/lib/webhooks/captacao";
 import { ipDoClienteParaInet } from "@/lib/http/ip-do-cliente";
+import {
+  TURNSTILE_CAMPO_DO_FORMULARIO,
+  captacaoExigeTurnstile,
+  verificarTurnstile,
+} from "@/lib/security/turnstile";
 import { decryptWebhookSecret } from "@/lib/webhooks/secrets";
 import { ApiError } from "@/lib/api/types";
 import { STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
@@ -215,6 +220,45 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
       rejectReason: "assinatura_invalida",
     });
     return fail("unauthenticated", "invalid_signature", 401, { requestId });
+  }
+
+  // O token do Turnstile viaja no campo que o widget injeta no formulário (ou no
+  // cabeçalho, para quem envia por fetch) e NÃO é dado do lead: sai do payload antes
+  // do log e do mapeamento, para não virar campo personalizado.
+  const campoDoToken = payload[TURNSTILE_CAMPO_DO_FORMULARIO];
+  const tokenDoTurnstile =
+    typeof campoDoToken === "string" ? campoDoToken : req.headers.get("x-turnstile-token");
+  delete payload[TURNSTILE_CAMPO_DO_FORMULARIO];
+
+  // D-173: verificação contra robô na captação anônima. Só vale quando o operador liga
+  // (TURNSTILE_CAPTACAO_EXIGIR) e só para quem NÃO prova a origem: envio com assinatura
+  // HMAC válida é integração de servidor e não tem widget para resolver. Erro de rede
+  // da Cloudflare recusa (falha fechado): deixar passar abriria a porta no pior momento.
+  if (captacaoExigeTurnstile() && !validSignature) {
+    const turnstile = await verificarTurnstile(tokenDoTurnstile, origemDaCaptacao.remoteIp);
+    if (!turnstile.ok) {
+      await registrarCaptacao(admin, {
+        ...fonteDaCaptacao,
+        ...origemDaCaptacao,
+        fields: payload,
+        outcome: "recusado",
+        rejectReason: "verificacao_de_seguranca",
+      });
+      if (turnstile.motivo === "indisponivel") {
+        return fail(
+          "captcha_unavailable",
+          "A verificação de segurança está indisponível agora. Tente novamente em instantes.",
+          503,
+          { requestId, headers: { "Retry-After": "30" } },
+        );
+      }
+      return fail(
+        "captcha_failed",
+        "Não foi possível confirmar a verificação de segurança. Recarregue a página e envie de novo.",
+        400,
+        { requestId },
+      );
+    }
   }
 
   const headersJson: Record<string, string> = {};

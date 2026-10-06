@@ -44,6 +44,7 @@
  */
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
+import { captchaRecusadoPeloGoTrue } from "@/lib/security/turnstile";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -88,7 +89,13 @@ export type ResultadoDaContaDeConvite =
        * convite na mão, então não fura a anti-enumeração — o comentário disso
        * está em `signUp.ts`). Os outros três são falha de infraestrutura.
        */
-      motivo: "conta_ja_existe" | "rate_limited" | "criacao_recusada" | "email_de_confirmacao_falhou";
+      motivo:
+        | "conta_ja_existe"
+        | "rate_limited"
+        | "criacao_recusada"
+        | "email_de_confirmacao_falhou"
+        // O `/resend` do GoTrue também exige captcha quando a proteção está ligada (D-173).
+        | "captcha_failed";
       detalhe?: string;
     };
 
@@ -118,6 +125,8 @@ export async function criarContaDeConvite(params: {
   inviteToken: string;
   fullName: string;
   emailRedirectTo: string;
+  /** Token do Turnstile: com a proteção ligada no GoTrue, o `/resend` o exige (D-173). */
+  captchaToken?: string;
 }): Promise<ResultadoDaContaDeConvite> {
   const admin = createAdminClient();
   const { data, error } = await admin.auth.admin.createUser({
@@ -145,7 +154,10 @@ export async function criarContaDeConvite(params: {
   const { error: erroResend } = await supabase.auth.resend({
     type: "signup",
     email: params.email,
-    options: { emailRedirectTo: params.emailRedirectTo },
+    options: {
+      emailRedirectTo: params.emailRedirectTo,
+      ...(params.captchaToken ? { captchaToken: params.captchaToken } : {}),
+    },
   });
 
   if (erroResend) {
@@ -158,6 +170,9 @@ export async function criarContaDeConvite(params: {
         user_id: data.user.id,
         detalhe: erroDelete.message,
       });
+    }
+    if (captchaRecusadoPeloGoTrue(erroResend)) {
+      return { ok: false, motivo: "captcha_failed", detalhe: erroResend.message };
     }
     return {
       ok: false,

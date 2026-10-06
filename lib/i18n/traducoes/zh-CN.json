@@ -5438,5 +5438,10 @@
   "Sua assinatura atual ainda está no período pago de outro plano. A troca de plano ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.": "您当前的订阅仍处于另一个套餐的已付费周期内。暂不支持更换套餐：请联系支持，或在周期结束后重新订购。",
   "Sua assinatura atual ainda está no período pago em outro ciclo. A troca de ciclo ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.": "您当前的订阅仍处于另一个周期的已付费期内。暂不支持更换周期：请联系支持，或在周期结束后重新订购。",
   "Aceite os Termos de Uso para continuar.": "请接受使用条款后继续。",
-  "Os Termos de Uso foram atualizados. Recarregue a página e aceite de novo para continuar.": "使用条款已更新。请刷新页面并重新接受后继续。"
+  "Os Termos de Uso foram atualizados. Recarregue a página e aceite de novo para continuar.": "使用条款已更新。请刷新页面并重新接受后继续。",
+  "Não foi possível confirmar a verificação de segurança. Tente novamente.": "无法确认安全验证。请重试。",
+  "Não foi possível carregar a verificação de segurança. Recarregue a página.": "无法加载安全验证。请刷新页面。",
+  "Não foi possível confirmar a verificação de segurança. Recarregue a página e envie de novo.": "无法确认安全验证。请刷新页面后重新提交。",
+  "A verificação de segurança está indisponível agora. Tente novamente em instantes.": "安全验证暂时不可用。请稍后再试。",
+  "O envio não passou na verificação de segurança (Turnstile): faltou o token do widget no formulário, ele estava inválido ou a Cloudflare não respondeu.": "提交未通过安全验证（Turnstile）：表单中缺少组件令牌、令牌无效，或 Cloudflare 未响应。"
 }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ForgotPasswordForm } from "@/components/auth/ForgotPasswordForm";
+import { turnstileSiteKey } from "@/lib/security/turnstile";
 import { createClient } from "@/lib/supabase/server";
 import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -25,7 +26,8 @@ export default async function ForgotPasswordPage() {
           {t("Informe seu e-mail e enviaremos um link de redefinição")}
         </p>
       </div>
-      <ForgotPasswordForm />
+      {/* A chave pública do Turnstile é lida aqui, em runtime: a imagem é construída sem ela (D-173). */}
+      <ForgotPasswordForm turnstileSiteKey={turnstileSiteKey()} />
       <p className="text-center text-sm text-muted-foreground">
         {t("Lembrou a senha?")}{" "}
         <Link href="/login" className="font-medium text-foreground underline underline-offset-4">

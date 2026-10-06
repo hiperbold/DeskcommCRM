@@ -11,9 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signInWithPassword } from "@/app/actions/auth/signInWithPassword";
+import { TurnstileWidget, useCaptcha } from "@/components/auth/TurnstileWidget";
 
-export function LoginForm({ next }: { next?: string }) {
+export function LoginForm({ next, turnstileSiteKey }: { next?: string; turnstileSiteKey?: string | null }) {
   const t = useT();
+  const captcha = useCaptcha(turnstileSiteKey);
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
@@ -28,11 +30,15 @@ export function LoginForm({ next }: { next?: string }) {
   });
 
   const onSubmit = (values: LoginInput) => {
+    if (!captcha.pronto) return;
     setServerError(null);
     startTransition(async () => {
       // Server Action redirects on success — no return value reaches here.
       // On failure, an error discriminator is returned and rendered inline.
-      const res = await signInWithPassword(values, next);
+      const res = await signInWithPassword(values, next, captcha.token ?? undefined);
+      // O token é de uso único: depois de qualquer tentativa que volte para cá
+      // (senha errada, limite, captcha), o widget gera outro.
+      if (captcha.ativo) captcha.renovar();
       if (!res) {
         // Should be unreachable (redirect throws), but guard anyway.
         router.replace(next || "/app");
@@ -51,6 +57,8 @@ export function LoginForm({ next }: { next?: string }) {
         setServerError(t("Muitas tentativas. Aguarde alguns minutos."));
       } else if (res.error === "validation_error") {
         setServerError(t("Dados inválidos. Confira os campos."));
+      } else if (res.error === "captcha_failed") {
+        setServerError(t("Não foi possível confirmar a verificação de segurança. Tente novamente."));
       } else {
         setServerError(t("Erro inesperado. Tente novamente."));
       }
@@ -94,7 +102,14 @@ export function LoginForm({ next }: { next?: string }) {
           {serverError}
         </div>
       )}
-      <Button type="submit" className="w-full" disabled={isPending}>
+      {turnstileSiteKey && (
+        <TurnstileWidget
+          siteKey={turnstileSiteKey}
+          onToken={captcha.setToken}
+          resetKey={captcha.resetKey}
+        />
+      )}
+      <Button type="submit" className="w-full" disabled={isPending || !captcha.pronto}>
         {isPending ? t("Entrando...") : t("Entrar")}
       </Button>
     </form>

@@ -4,6 +4,7 @@ import { EntrarComGoogle } from "@/components/auth/EntrarComGoogle";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { modoDeCadastro } from "@/lib/auth/politica-de-cadastro";
 import { branding } from "@/lib/branding";
+import { turnstileSiteKey } from "@/lib/security/turnstile";
 import { createClient } from "@/lib/supabase/server";
 import { idiomaDoVisitante } from "@/lib/i18n/idiomaAnonimo";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -141,7 +142,8 @@ export default async function LoginPage({
           )}
         </div>
       )}
-      <LoginForm next={next} />
+      {/* A chave pública do Turnstile é lida aqui, em runtime: a imagem é construída sem ela (D-173). */}
+      <LoginForm next={next} turnstileSiteKey={turnstileSiteKey()} />
       <EntrarComGoogle next={next} />
       <div className="space-y-2 text-center text-sm">
         <p>

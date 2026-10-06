@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signUp } from "@/app/actions/auth/signUp";
+import { TurnstileWidget, useCaptcha } from "@/components/auth/TurnstileWidget";
 
 /**
  * Convite em curso: a conta está sendo criada para ACEITAR um convite, não para
@@ -29,8 +30,15 @@ export interface ConviteDoSignup {
   email: string;
 }
 
-export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
+export function SignupForm({
+  convite,
+  turnstileSiteKey,
+}: {
+  convite?: ConviteDoSignup;
+  turnstileSiteKey?: string | null;
+}) {
   const t = useT();
+  const captcha = useCaptcha(turnstileSiteKey);
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [serverError, setServerError] = useState<string | null>(null);
@@ -62,6 +70,7 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
   });
 
   const onSubmit = (values: SignupInput & { full_name: string }) => {
+    if (!captcha.pronto) return;
     setServerError(null);
     startTransition(async () => {
       // No modo convite o e-mail do formulário é readonly, e readonly no
@@ -74,7 +83,9 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
             password_confirm: values.password_confirm,
           }
         : values;
-      const res = await signUp(entrada, convite?.token);
+      const res = await signUp(entrada, convite?.token, captcha.token ?? undefined);
+      // Token de uso único: gasto aqui, o widget gera outro para a próxima tentativa.
+      if (captcha.ativo && !res.ok) captcha.renovar();
       if (res.ok) {
         /**
          * ⚠️ O PROVEDOR JÁ DEIXOU A PESSOA ENTRAR — não existe e-mail para ela
@@ -107,6 +118,8 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
         setServerError(t("Muitas tentativas. Aguarde alguns minutos."));
       } else if (res.error === "validation_error") {
         setServerError(t("Dados inválidos. Confira os campos."));
+      } else if (res.error === "captcha_failed") {
+        setServerError(t("Não foi possível confirmar a verificação de segurança. Tente novamente."));
       } else if (res.error === "conta_ja_existe" && convite) {
         // Ramo próprio porque o `else` mandava "Tente novamente" — e tentar de
         // novo nunca funciona quando a conta já existe. Em vez da mensagem,
@@ -248,7 +261,14 @@ export function SignupForm({ convite }: { convite?: ConviteDoSignup }) {
           {serverError}
         </div>
       )}
-      <Button type="submit" className="w-full" disabled={isPending}>
+      {turnstileSiteKey && (
+        <TurnstileWidget
+          siteKey={turnstileSiteKey}
+          onToken={captcha.setToken}
+          resetKey={captcha.resetKey}
+        />
+      )}
+      <Button type="submit" className="w-full" disabled={isPending || !captcha.pronto}>
         {isPending ? t("Criando conta...") : t("Criar conta")}
       </Button>
     </form>

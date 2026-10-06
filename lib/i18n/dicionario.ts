@@ -13514,6 +13514,22 @@ export const DICIONARIO: Traducoes = {
   },
   "6. Saiba mais": { es: "6. Más información" },
   "O tratamento dos dados é descrito na": { es: "El tratamiento de los datos se describe en la" },
+  // ─── VERIFICAÇÃO DE SEGURANÇA (Turnstile, D-173) ───
+  "Não foi possível confirmar a verificação de segurança. Tente novamente.": {
+    es: "No se pudo confirmar la verificación de seguridad. Inténtalo de nuevo.",
+  },
+  "Não foi possível carregar a verificação de segurança. Recarregue a página.": {
+    es: "No se pudo cargar la verificación de seguridad. Recarga la página.",
+  },
+  "Não foi possível confirmar a verificação de segurança. Recarregue a página e envie de novo.": {
+    es: "No se pudo confirmar la verificación de seguridad. Recarga la página y envía de nuevo.",
+  },
+  "A verificação de segurança está indisponível agora. Tente novamente em instantes.": {
+    es: "La verificación de seguridad no está disponible ahora. Inténtalo de nuevo en unos instantes.",
+  },
+  "O envio não passou na verificação de segurança (Turnstile): faltou o token do widget no formulário, ele estava inválido ou a Cloudflare não respondeu.": {
+    es: "El envío no pasó la verificación de seguridad (Turnstile): faltó el token del widget en el formulario, era inválido o Cloudflare no respondió.",
+  },
 };
 
 /**

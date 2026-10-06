@@ -20,16 +20,20 @@
  *   (hidratação, `<PublicEnvScript/>`); o passo seguinte é trocar isso por nonce no
  *   proxy, e é a parte que exige medir antes de bloquear;
  * - `connect-src` aceita `https:` e `wss:` porque o Supabase da instalação (próprio ou
- *   Cloud) e o Sentry do operador têm domínios que variam por instalação.
+ *   Cloud) e o Sentry do operador têm domínios que variam por instalação;
+ * - `challenges.cloudflare.com` em `script-src`, `connect-src` e `frame-src` é o que o
+ *   widget do Turnstile pede (D-173). O `frame-src` é explícito porque, sem ele, o
+ *   navegador cai no `default-src 'self'` e recusaria o iframe do widget.
  */
 export const CSP_REPORT_ONLY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https: wss:",
+  "connect-src 'self' https: wss: https://challenges.cloudflare.com",
+  "frame-src 'self' https://challenges.cloudflare.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

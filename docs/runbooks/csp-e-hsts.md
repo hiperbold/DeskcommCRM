@@ -10,6 +10,9 @@ aplicado em `next.config.ts` (`headers()`).
 | `Strict-Transport-Security: max-age=31536000` | ativo | O navegador passa a exigir HTTPS neste host por 1 ano depois do primeiro acesso seguro. Ignorado em resposta HTTP, então instalação sem TLS não muda. |
 | `Content-Security-Policy-Report-Only` | só observação | O navegador avalia a política e registra a violação no console. Nada é bloqueado. |
 
+A política já libera `https://challenges.cloudflare.com` em `script-src`, `connect-src` e `frame-src`
+para o widget do Turnstile (D-173, ver `docs/runbooks/turnstile.md`).
+
 ## Como ativar a CSP de verdade
 
 1. Abra as telas principais (login, inbox, leads, agenda, configurações, admin) com o

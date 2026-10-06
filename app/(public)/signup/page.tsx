@@ -4,6 +4,7 @@ import { EntrarComGoogle } from "@/components/auth/EntrarComGoogle";
 import { SignupForm } from "@/components/auth/SignupForm";
 import { Button } from "@/components/ui/button";
 import { branding } from "@/lib/branding";
+import { turnstileSiteKey } from "@/lib/security/turnstile";
 import { verifyInviteToken } from "@/lib/auth/invite-token";
 import { modoDeCadastro } from "@/lib/auth/politica-de-cadastro";
 import { createClient } from "@/lib/supabase/server";
@@ -108,7 +109,8 @@ export default async function SignupPage({
         </p>
       )}
 
-      <SignupForm convite={convite} />
+      {/* A chave pública do Turnstile é lida aqui, em runtime: a imagem é construída sem ela (D-173). */}
+      <SignupForm convite={convite} turnstileSiteKey={turnstileSiteKey()} />
       {/* O convite atravessa o Google na URL de retorno: sem ele, quem foi
           convidado e cria a conta com Google ganharia uma empresa própria. */}
       <EntrarComGoogle convite={convite?.token} />

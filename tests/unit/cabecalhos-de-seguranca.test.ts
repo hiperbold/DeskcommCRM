@@ -44,6 +44,14 @@ describe("cabeçalhos de segurança", () => {
     expect(CSP_REPORT_ONLY).toMatch(/media-src[^;]*blob:/);
   });
 
+  it("o widget do Turnstile (challenges.cloudflare.com) cabe em script-src, connect-src e frame-src (D-173)", () => {
+    for (const diretiva of ["script-src", "connect-src", "frame-src"]) {
+      expect(CSP_REPORT_ONLY).toMatch(new RegExp(`${diretiva}[^;]*https://challenges\\.cloudflare\\.com`));
+    }
+    // O frame-src explícito não pode apagar o 'self' que o default-src já dava aos iframes.
+    expect(CSP_REPORT_ONLY).toMatch(/frame-src 'self'/);
+  });
+
   it("HSTS de 1 ano, sem includeSubDomains nem preload", () => {
     expect(HSTS).toBe("max-age=31536000");
     expect(HSTS).not.toMatch(/includeSubDomains|preload/i);

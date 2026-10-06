@@ -31,7 +31,11 @@ export type MotivoDaRecusa =
   // F3, decisão 5 (Tarefa 7): o gatilho de crm_leads recusou por PT402 (teto
   // de leads do plano). Motivo próprio: "erro_ao_criar_lead" sugeriria falha
   // de configuração do funil/etapa da fonte, e aqui o problema é outro.
-  | "limite_do_plano";
+  | "limite_do_plano"
+  // D-173: a captação exige o Turnstile (TURNSTILE_CAPTACAO_EXIGIR) e o envio veio
+  // sem token, com token inválido, ou a Cloudflare não respondeu. Quem publicou o
+  // formulário precisa ver que a batida chegou e por que morreu.
+  | "verificacao_de_seguranca";
 
 /** O que a tela mostra para cada motivo, em português de gente. */
 export const MOTIVO_DA_RECUSA_LABEL: Record<MotivoDaRecusa, string> = {
@@ -43,6 +47,8 @@ export const MOTIVO_DA_RECUSA_LABEL: Record<MotivoDaRecusa, string> = {
     "Os dados chegaram, mas o lead não pôde ser criado — confira se o funil e a etapa da fonte ainda existem.",
   limite_do_plano:
     "Os dados chegaram, mas o plano desta organização já está no limite de leads. Fale com o suporte para ampliar.",
+  verificacao_de_seguranca:
+    "O envio não passou na verificação de segurança (Turnstile): faltou o token do widget no formulário, ele estava inválido ou a Cloudflare não respondeu.",
 };
 
 export interface CaptacaoParaRegistrar {

@@ -16,6 +16,7 @@ import { audit, hashEmail } from "@/lib/audit";
 import { authRateLimited, AUTH_LIMITS } from "@/lib/auth/rate-limit";
 import { env } from "@/lib/env";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
+import { captchaRecusadoPeloGoTrue } from "@/lib/security/turnstile";
 
 export type SignUpResult =
   | {
@@ -56,7 +57,8 @@ export type SignUpResult =
         | "rate_limited"
         | "signup_failed"
         | "somente_convite"
-        | "conta_ja_existe";
+        | "conta_ja_existe"
+        | "captcha_failed";
       details?: Record<string, unknown>;
     };
 
@@ -79,6 +81,8 @@ export async function signUp(
    * token com o e-mail que o provedor de auth confirmou.
    */
   inviteToken?: string,
+  /** Token do Turnstile (D-173). Só o GoTrue o confere, e só com a proteção ligada nele. */
+  captchaToken?: string,
 ): Promise<SignUpResult> {
   const temConvite = typeof inviteToken === "string" && inviteToken.trim() !== "";
   const parsed = temConvite
@@ -157,6 +161,7 @@ export async function signUp(
       inviteToken: convite,
       fullName: (parsed.data as SignupComConviteInput).full_name,
       emailRedirectTo: `${origin}/auth/confirm?type=signup`,
+      captchaToken,
     });
 
     if (!criada.ok) {
@@ -177,6 +182,7 @@ export async function signUp(
       });
       if (criada.motivo === "conta_ja_existe") return { ok: false, error: "conta_ja_existe" };
       if (criada.motivo === "rate_limited") return { ok: false, error: "rate_limited" };
+      if (criada.motivo === "captcha_failed") return { ok: false, error: "captcha_failed" };
       return { ok: false, error: "signup_failed" };
     }
 
@@ -199,6 +205,7 @@ export async function signUp(
       // sobrevive ao redirect do GoTrue e é o que distingue este fluxo do de
       // recovery quando a verificação chega via `code` (PKCE), não `token_hash`.
       emailRedirectTo: `${origin}/auth/confirm?type=signup`,
+      ...(captchaToken ? { captchaToken } : {}),
       // O convite é revalidado no servidor mesmo tendo sido validado ao montar
       // a tela: o campo de e-mail do formulário é adulterável no cliente, e a
       // decisão que importa acontece com o e-mail JÁ confirmado pelo provedor.
@@ -217,6 +224,8 @@ export async function signUp(
 
   if (error) {
     if (error.status === 429) return { ok: false, error: "rate_limited" };
+    // Captcha recusado: a conta nem chegou a ser tentada, a tela precisa dizer o motivo certo.
+    if (captchaRecusadoPeloGoTrue(error)) return { ok: false, error: "captcha_failed" };
 
     // ── O BECO SEM SAÍDA DE QUEM JÁ TEM CONTA ────────────────────────────
     //

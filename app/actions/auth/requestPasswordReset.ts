@@ -8,12 +8,13 @@ import { audit, hashEmail } from "@/lib/audit";
 import { authRateLimited, AUTH_LIMITS } from "@/lib/auth/rate-limit";
 import { env } from "@/lib/env";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
+import { captchaRecusadoPeloGoTrue } from "@/lib/security/turnstile";
 
 export type RequestPasswordResetResult =
   | { ok: true }
   | {
       ok: false;
-      error: "validation_error" | "rate_limited" | "request_failed";
+      error: "validation_error" | "rate_limited" | "request_failed" | "captcha_failed";
       details?: Record<string, unknown>;
     };
 
@@ -24,6 +25,8 @@ export type RequestPasswordResetResult =
  */
 export async function requestPasswordReset(
   input: ForgotPasswordInput,
+  /** Token do Turnstile (D-173). Só o GoTrue o confere, e só com a proteção ligada nele. */
+  captchaToken?: string,
 ): Promise<RequestPasswordResetResult> {
   const parsed = forgotPasswordSchema.safeParse(input);
   if (!parsed.success) {
@@ -58,10 +61,12 @@ export async function requestPasswordReset(
     // Supabase usa o template padrão dele, que só devolve `code` (PKCE), sem
     // `type`; /auth/confirm depende deste param pra saber que é recovery.
     redirectTo: `${origin}/auth/confirm?type=recovery`,
+    ...(captchaToken ? { captchaToken } : {}),
   });
 
   if (error) {
     if (error.status === 429) return { ok: false, error: "rate_limited" };
+    if (captchaRecusadoPeloGoTrue(error)) return { ok: false, error: "captcha_failed" };
     await audit({
       action: "auth.password_reset_request_failed",
       metadata: {
