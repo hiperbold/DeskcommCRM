@@ -669,7 +669,13 @@ async function tokensDoPlano(l: Letra, rotulo: string): Promise<void> {
   });
   checar(`${rotulo}: o pagamento da assinatura NÃO grava nada na carteira sozinho (concessão é preguiçosa)`, (antes.carteiras as Dict[]).length === 0 && (antes.livro as Dict[]).length === 0, { carteiras: (antes.carteiras as Dict[]).length, livro: (antes.livro as Dict[]).length });
   const plano = (depois.carteiras as Dict[]).find((w) => w.fonte === "plano");
-  checar(`${rotulo}: na primeira leitura do saldo o Pro concede 3.000.000 tokens (fonte plano, ciclo atual) no livro e na carteira`, Number(plano?.creditado) === 3_000_000 && (depois.livro as Dict[]).some((x) => x.fonte === "plano" && Number(x.tokens) === 3_000_000), { carteira: plano && { creditado: plano.creditado, ciclo: plano.ciclo }, livro: (depois.livro as Dict[]).length });
+  // D-106 (0931): a primeira concessão de um período pago que começou neste mês é proporcional aos dias
+  // que restam do mês (do dia do início até o fim, em São Paulo), com divisão inteira como no banco.
+  const hojeSp = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+  const [ano, mes, dia] = hojeSp.split("-").map(Number);
+  const diasDoMes = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+  const esperado = Math.floor((3_000_000 * (diasDoMes - dia + 1)) / diasDoMes);
+  checar(`${rotulo}: na primeira leitura do saldo o Pro concede 3.000.000 proporcional aos dias restantes do mês (${esperado}, fonte plano, ciclo atual) no livro e na carteira`, Number(plano?.creditado) === esperado && (depois.livro as Dict[]).some((x) => x.fonte === "plano" && Number(x.tokens) === esperado), { esperado, carteira: plano && { creditado: plano.creditado, ciclo: plano.ciclo }, livro: (depois.livro as Dict[]).length });
 }
 
 async function etapaWebhookA(): Promise<void> {
@@ -767,7 +773,7 @@ async function etapaWebhookA(): Promise<void> {
 function pick(f: Dict): Dict {
   const c = f.contrato as Dict;
   return {
-    contrato: { plan_id: c.plan_id, status: c.status, cycle: c.cycle, asaas_subscription_id: c.asaas_subscription_id, current_period_start: iso(c.current_period_start), current_period_end: iso(c.current_period_end), cancel_at_period_end: c.cancel_at_period_end, encerrada: c.asaas_assinatura_encerrada_em },
+    contrato: { plan_id: c.plan_id, status: c.status, cycle: c.cycle, asaas_subscription_id: c.asaas_subscription_id, current_period_start: iso(c.current_period_start), current_period_end: iso(c.current_period_end), cancel_at_period_end: c.cancel_at_period_end, encerrada: c.asaas_assinatura_encerrada_em, bloqueio_a_partir_de: c.bloqueio_a_partir_de },
     pedidos: (f.pedidos as Dict[]).map((p) => ({ id: p.id, status: p.status })),
     pagamentos: (f.pagamentos as Dict[]).map((p) => ({ status: p.status, gross_cents: p.gross_cents, asaas_payment_id: p.asaas_payment_id })),
     carteiras: (f.carteiras as Dict[]).map((w) => ({ fonte: w.fonte, creditado: w.creditado, consumido: w.consumido })),

@@ -196,3 +196,16 @@ Não são defeitos, mas vale saber: (a) sem `asaas_sandbox_concede` o evento de 
 - Item 3 medido: a fatura hospedada paga à mão (cartão 4444, `pay_sk4k22lsiobuzrw3`) deixou a assinatura `ACTIVE` com `creditCard` preenchido (bandeira, final e `creditCardToken`), então a renovação cobra o cartão sozinha. Na cobrança: `status: CONFIRMED`, `paymentDate` nulo, `confirmedDate` e `clientPaymentDate` no dia, `creditDate` 32 dias depois.
 - Item 7: o estorno parcial do cartão de `pay_o55qzq8il73rzfo3`, paga em 30/09, CONTINUA recusado em 05/10 com a mesma mensagem (400 `invalid_action`, "só pode ser estornada parcialmente no próximo dia"). A cobrança segue `CONFIRMED` até o `creditDate` (02/11); o sandbox não avança sozinho. O status depois de um parcial não é medível no sandbox: fica para a compra real de baixo valor em produção (D-071).
 - Limpeza (`limpar`) feita: as três assinaturas de teste removidas e o parcelamento apagado; o que já estava pago fica como histórico.
+
+## Ciclos semestral e anual (D-176), 06/10/2026
+
+Rodado com `homologar-asaas-e2e-sandbox.mts` (etapas de ciclo), chave sandbox do CRM, banco local com backup antes (`F:/temp/2026-10-06/asaas/banco-local-antes-ciclos.dump`) e baseline reaplicado até a 0944. Organizações de teste C (semestral) e D (anual).
+
+- Semestral no cartão (C): assinatura `SEMIANNUALLY` de R$ 1.049,00, próximo vencimento 2027-04-06; pagamento confirmado e webhook aplicado; contrato Pro semestral ativo de 06/10/2026 a 07/04/2027 (vencimento + 6 meses + 1 dia), igual ao Asaas.
+- Anual no cartão (D): assinatura `YEARLY` de R$ 1.899,00, próximo vencimento 2027-10-06; contrato Pro anual ativo até 07/10/2027.
+- Tokens: a primeira concessão do mês é proporcional aos dias restantes (D-106): 2.516.129 de 3.000.000 em 06/10 (26 de 31 dias). A checagem antiga do script esperava 3.000.000 cheio e foi ajustada à regra.
+- Troca de ciclo: com o anual ativo, mensal e semestral são recusados com a mensagem de troca de ciclo e sem nenhuma chamada ao Asaas; o mesmo anual de novo é recusado por assinatura ativa. Nenhum pedido criado.
+- Estorno total do semestral: cobrança `REFUNDED`, pedido estornado, contrato cancelado na hora, assinatura removida no Asaas, tokens do plano zerados por lançamento negativo, carência zerada no corte (`bloqueio_a_partir_de` igual ao instante do estorno). A checagem da carência falhou por defeito do script (a foto do contrato não trazia o campo); conferido direto no banco e corrigido no script.
+- Cancelamento do anual pelo cliente: DELETE da assinatura no Asaas, marcador de encerramento, acesso mantido até o fim do período; segunda tentativa recusada; `SUBSCRIPTION_DELETED` não muda o contrato.
+- Limpeza: nenhuma assinatura aberta sobrou para C e D; as cobranças ficam como histórico. Nada apagado no banco local.
+- Não homologado ponta a ponta: Pix semestral e anual e a renovação depois de 6 e 12 meses (cobertos por `tests/invariants/venda-semestral-e-anual-banco.test.ts`).
