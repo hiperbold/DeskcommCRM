@@ -60077,6 +60077,13 @@ comment on column public.billing_orders.termos_aceitos_em is
   '0943 (D-133): o momento do aceite dos Termos de Uso, junto de termos_versao. Nulo quando termos_versao é nula.';
 
 -- ── 2. fn_billing_criar_pedido com o aceite dos Termos ──
+-- B1 (auditoria do lote 16): drop, create, comment, revoke, grant e o revoke do agent_worker vão
+-- dentro de UMA transação curta (begin ... commit). O baseline é reaplicado em produção por
+-- `psql -f` em autocommit, e a função nova nasce com EXECUTE para PUBLIC (o ACL padrão do
+-- Supabase) até o revoke: sem a transação havia uma janela em que anon e authenticated a
+-- executavam. Se qualquer instrução falhar, o commit desfaz o bloco inteiro. Não toca tabela.
+begin;
+
 drop function if exists public.fn_billing_criar_pedido(uuid, text, text, text, text, text, text, uuid, uuid);
 
 create or replace function public.fn_billing_criar_pedido(
@@ -60377,6 +60384,8 @@ begin
 end
 $agent_worker_criar_pedido$;
 
+commit;
+
 -- ---- reserva atômica de vaga no ritmo de envio por token (migration 0944, fork Hiperbold, D-167) ----
 --
 -- Faixa 09xx reservada ao fork (ver 0901).
@@ -60400,6 +60409,13 @@ $agent_worker_criar_pedido$;
 -- lib/agent-engine/pacing/ledger-supabase.ts: a aplicação calcula p_teto, p_espera_ms e
 -- p_inicio_do_dia e o banco só compara e grava, atomicamente. Só service_role executa. Funções novas
 -- por create or replace, sem DDL de tabela: reaplicável com o app no ar.
+
+-- B1 (auditoria do lote 16): as duas funções, seus comment, revoke e grant, e o revoke do
+-- agent_worker vão dentro de UMA transação curta (begin ... commit). O baseline é reaplicado em
+-- produção por `psql -f` em autocommit, e cada função nova nasce com EXECUTE para PUBLIC (o ACL
+-- padrão do Supabase) até o revoke: sem a transação havia uma janela em que anon e authenticated
+-- as executavam. Se qualquer instrução falhar, o commit desfaz o bloco inteiro. Não toca tabela.
+begin;
 
 create or replace function public.fn_pacing_reservar_vaga(
   p_org uuid,
@@ -60515,6 +60531,8 @@ begin
   end if;
 end
 $agent_worker_pacing$;
+
+commit;
 
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --

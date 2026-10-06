@@ -22,6 +22,13 @@
 -- p_inicio_do_dia e o banco só compara e grava, atomicamente. Só service_role executa. Funções novas
 -- por create or replace, sem DDL de tabela: reaplicável com o app no ar.
 
+-- B1 (auditoria do lote 16): as duas funções, seus comment, revoke e grant, e o revoke do
+-- agent_worker vão dentro de UMA transação curta (begin ... commit). O baseline é reaplicado em
+-- produção por `psql -f` em autocommit, e cada função nova nasce com EXECUTE para PUBLIC (o ACL
+-- padrão do Supabase) até o revoke: sem a transação havia uma janela em que anon e authenticated
+-- as executavam. Se qualquer instrução falhar, o commit desfaz o bloco inteiro. Não toca tabela.
+begin;
+
 create or replace function public.fn_pacing_reservar_vaga(
   p_org uuid,
   p_canal uuid,
@@ -136,3 +143,5 @@ begin
   end if;
 end
 $agent_worker_pacing$;
+
+commit;

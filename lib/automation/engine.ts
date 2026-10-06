@@ -25,6 +25,10 @@ import { ENTIDADE_ESPERADA_POR_GATILHO } from "@/lib/schemas/webhooks";
 import { logger } from "@/lib/logger";
 import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
 import {
+  limparCacheDoStatusDaOrganizacao,
+  statusDaOrganizacaoCacheado,
+} from "@/lib/billing/assinatura/status-da-organizacao";
+import {
   eventoVelhoDemais,
   falhaDeMensagemDaAutomacao,
   TETO_FALHAS_POR_CONTATO_POR_HORA,
@@ -157,34 +161,8 @@ async function registrarAdiamento(
   }
 }
 
-const TTL_STATUS_DA_ORGANIZACAO_MS = 30_000;
-const statusDaOrganizacao = new Map<string, { status: string | null; expiraEm: number }>();
-
-/** `organizations.status` com cache de 30s por organização. `null` = não conseguiu ler (segue). */
-export async function statusDaOrganizacaoCacheado(admin: SupabaseClient, organizationId: string): Promise<string | null> {
-  const agora = Date.now();
-  const guardado = statusDaOrganizacao.get(organizationId);
-  if (guardado && guardado.expiraEm > agora) return guardado.status;
-  let status: string | null = null;
-  try {
-    const { data, error } = await admin.from("organizations").select("status").eq("id", organizationId).maybeSingle();
-    if (error) throw new Error(error.message);
-    status = typeof (data as { status?: unknown } | null)?.status === "string" ? (data as { status: string }).status : null;
-  } catch (err) {
-    logger.error("[automation.engine] não foi possível ler o status da organização", {
-      organization_id: organizationId,
-      error: (err instanceof Error ? err.message : String(err)).slice(0, 200),
-    });
-    return null;
-  }
-  statusDaOrganizacao.set(organizationId, { status, expiraEm: agora + TTL_STATUS_DA_ORGANIZACAO_MS });
-  return status;
-}
-
-/** Só para teste: esquece o cache. */
-export function limparCacheDoStatusDaOrganizacao(): void {
-  statusDaOrganizacao.clear();
-}
+// O cache do status da organização (30s) mora em status-da-organizacao.ts, compartilhado com o follow-up (M1).
+export { statusDaOrganizacaoCacheado, limparCacheDoStatusDaOrganizacao };
 
 export async function runAutomationForEvent(
   admin: SupabaseClient,
@@ -248,7 +226,8 @@ export async function runAutomationForEvent(
   // D-091: organização suspensa (ou arquivada) não dispara automação. Checado só DEPOIS do
   // "no_rules" (zero custo quando não há regra) e com cache curto por organização: uma leitura por
   // organização a cada 30s, não por evento. Falha de leitura NÃO para a automação (mesma doutrina de
-  // `contaEmModoLeitura`), mas grita no log.
+  // `contaEmModoLeitura`), mas grita no log. Isso é ACEITO aqui (B3): automação não gasta IA do
+  // motor, e o gasto de IA é quem falha fechado.
   const statusDaOrg = await statusDaOrganizacaoCacheado(admin, row.organization_id);
   if (statusDaOrg !== null && statusDaOrg !== "active") {
     logger.info("[automation.engine] organização não está ativa (D-091): evento consumido sem executar", {

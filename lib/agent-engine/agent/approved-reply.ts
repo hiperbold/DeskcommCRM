@@ -42,12 +42,24 @@ export function createApprovedReplyHandler(
       await withServiceJob(pool, job, async () => {
         const policy = await assertApprovedReplyPg(pool, context);
         const { rows } = await pool.query<
-          LgpdContactFields & { daily_message_limit: number | null }
+          LgpdContactFields & { daily_message_limit: number | null; org_status?: string | null }
         >(
-          `select c.source,c.consent,c.is_anonymized,s.daily_message_limit from contacts c join channel_sessions s on s.organization_id=c.organization_id and s.id=$3 where c.organization_id=$1 and c.id=$2`,
+          `select c.source,c.consent,c.is_anonymized,s.daily_message_limit,(select o.status from organizations o where o.id=c.organization_id) as org_status from contacts c join channel_sessions s on s.organization_id=c.organization_id and s.id=$3 where c.organization_id=$1 and c.id=$2`,
           [job.organization_id, job.contact_id, policy.channel_session_id],
         );
         if (!rows[0]) throw new StaleServiceBoundaryError();
+        // M2 (D-091): resposta já aprovada por humano, mas a organização foi suspensa (ou
+        // arquivada) depois: não sai. O status vem da leitura que já existia aqui. Só um status
+        // explícito diferente de 'active' barra.
+        if (typeof rows[0].org_status === "string" && rows[0].org_status !== "active") {
+          deps.log.warn("approved_reply não enviada: organização não está ativa (D-091)", {
+            job_id: job.id,
+            tenant_id: job.organization_id,
+            status: rows[0].org_status,
+          });
+          await settle("failed", "organizacao_inativa");
+          return;
+        }
         const channel =
           deps.channel?.(pool) ??
           createRuntimeSendChannel(pool, { ...deps.crmCfg, agentActorId: policy.agent_id });

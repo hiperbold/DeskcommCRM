@@ -145,6 +145,28 @@ export class LlmAssinaturaSuspensaError extends LlmBudgetExceededError {
   }
 }
 
+/**
+ * Organização suspensa ou arquivada (`organizations.status` diferente de `active`): M2 da auditoria
+ * do lote 16 (D-091). Os produtores já param de enfileirar, mas o job que JÁ estava na fila quando a
+ * organização foi suspensa rodava e gastava a chave da Hiperbold. O seam recusa antes de sair byte.
+ *
+ * NÃO estende `LlmBudgetExceededError` de propósito: aquela classe aciona a escolta de handoff
+ * (`comHandoffSeOrcamentoAcabar`), que AVISA O LEAD e devolve a conversa à fila humana, e uma conta
+ * suspensa não manda mensagem nenhuma. `terminal = true` é o contrato da fila
+ * (`workers/agent-worker/main.ts`): o job vai para `cancelJob` (desfecho claro, sem retry e sem
+ * `job_dead` crítico), porque tentar de novo dá o mesmo resultado até alguém reativar a conta.
+ */
+export class LlmOrganizacaoInativaError extends Error {
+  override readonly name = 'llm_organizacao_inativa';
+  readonly terminal = true;
+  constructor(readonly statusDaOrg: string) {
+    super(
+      `organização com status "${statusDaOrg}" (não está ativa): chamada recusada antes de sair byte ` +
+        'para o provedor; o job é cancelado e a conversa não recebe resposta da IA',
+    );
+  }
+}
+
 /** Provider da config sem entrada no registry — erro de config, nunca fallback. */
 export class LlmProviderUnknownError extends Error {
   override readonly name = 'llm_provider_unknown';
@@ -917,6 +939,19 @@ export async function runModelCall(db: pg.Pool, cfg: LlmEdgeConfig, input: RunMo
   // A config da org é lida ANTES da decisão porque o resolvedor precisa dela
   // como último degrau da precedência (o padrão, quando ninguém mais opinou).
   const padrao = await resolveOrgLlmConfig(db, cfg, input.tenantId, input.llmOverride);
+
+  // M2 (D-091): organização suspensa ou arquivada não gasta IA, nem em job que já estava na fila.
+  // O status veio da leitura da config acima (zero consulta a mais). Só um status explícito diferente
+  // de 'active' barra; leitura que falha NÃO chega aqui, ela lança lá em cima (fecha). Vale para
+  // todo propósito, inclusive os isentos de orçamento: sem resposta ao lead, não há o que proteger.
+  if (typeof padrao.statusDaOrg === 'string' && padrao.statusDaOrg !== 'active') {
+    deps.log?.warn('llm: chamada recusada: organização não está ativa (D-091)', {
+      organization_id: input.tenantId,
+      purpose,
+      status: padrao.statusDaOrg,
+    });
+    throw new LlmOrganizacaoInativaError(padrao.statusDaOrg);
+  }
 
   // O painel de provedores entra AQUI, e é o que faz `purpose` deixar de ser
   // só um rótulo de custo e virar decisão. Sem binding configurado, `decisao`

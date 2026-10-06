@@ -38,7 +38,7 @@ import { enviarTextoFixoPendente } from "@/lib/followup/enviar-texto-fixo";
 import { encerrarRoteirosVencidos } from "@/lib/followup/atendimento";
 import { createSupabaseSilenceSweepDb, runSilenceSweep } from "@/lib/followup/silence-sweep";
 import { autorizaCron } from "@/lib/auth/cron-auth";
-import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { contaBloqueadaParaProduzir, motivoDeNaoProduzir } from "@/lib/billing/assinatura/pode-produzir";
 import { encerrarEnrollmentPorAssinaturaSuspensa } from "@/lib/followup/encerrar-por-assinatura-suspensa";
 
 export const dynamic = "force-dynamic";
@@ -57,8 +57,10 @@ export const dynamic = "force-dynamic";
  *  sem abrir `followup_dead`. */
 async function enqueueJob(job: FollowupJobRequest): Promise<void> {
   const admin = createAdminClient();
-  if (await contaEmModoLeitura(admin, job.organization_id)) {
-    logger.info("[followup-flow-worker.cron] turno não enfileirado: organização em modo leitura", {
+  const motivoDoBloqueio = await motivoDeNaoProduzir(admin, job.organization_id);
+  if (motivoDoBloqueio) {
+    logger.info("[followup-flow-worker.cron] turno não enfileirado: organização não pode produzir", {
+      motivo: motivoDoBloqueio,
       organization_id: job.organization_id,
       contact_id: job.contact_id,
       followup_enrollment_id: job.payload.followup_enrollment_id,
@@ -67,6 +69,7 @@ async function enqueueJob(job: FollowupJobRequest): Promise<void> {
       admin,
       job.organization_id,
       job.payload.followup_enrollment_id,
+      motivoDoBloqueio,
     );
     return;
   }
@@ -147,7 +150,7 @@ async function handle(req: NextRequest): Promise<Response> {
       clock: () => new Date(),
       // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não
       // ganha follow-up de silêncio novo.
-      contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
+      contaEmModoLeitura: (organizationId) => contaBloqueadaParaProduzir(admin, organizationId),
     });
     if (sweepSummary.enrolled || sweepSummary.pointers_gated_out || sweepSummary.skipped_existing) {
       void audit({

@@ -29,12 +29,14 @@ export async function encerrarEnrollmentPorAssinaturaSuspensa(
   admin: SupabaseClient,
   organizationId: string,
   enrollmentId: string,
+  /** M1: organização suspensa/arquivada encerra com `organizacao_inativa`; o padrão é a cobrança. */
+  motivo: string = MOTIVO_ASSINATURA_SUSPENSA,
 ): Promise<void> {
   const { error } = await admin
     .from("followup_enrollments")
     .update({
       status: "cancelled",
-      cancel_reason: MOTIVO_ASSINATURA_SUSPENSA,
+      cancel_reason: motivo,
       next_eval_at: null,
       claimed_until: null,
       completed_at: new Date().toISOString(),

@@ -228,7 +228,18 @@ async function processEvent(
   );
   // D-091: organização suspensa (ou arquivada) não gasta IA. A leitura da organização já existia
   // aqui, o status vem de carona: zero consulta a mais. O evento é consumido sem job.
-  const statusDaOrg = modeRows[0]?.status;
+  //
+  // B3: no gasto de IA o portão falha FECHADO. Organização SEM LINHA em `organizations` não segue
+  // (antes `modeRows[0]` indefinido caía direto no caminho que gasta): o evento é consumido, porque
+  // tentar de novo dá o mesmo. Leitura que FALHA lança daqui e o evento volta a `pending` com espera
+  // (até 5 tentativas), o desfecho transitório já certo do laço acima.
+  if (modeRows[0] === undefined) {
+    log.warn('drain: organização sem linha em organizations (B3), evento descartado sem gasto', {
+      event_id: event.id,
+    });
+    return 'processado';
+  }
+  const statusDaOrg = modeRows[0].status;
   if (typeof statusDaOrg === 'string' && statusDaOrg !== 'active') {
     log.info('drain: organização não está ativa (D-091), evento pulado', {
       event_id: event.id,

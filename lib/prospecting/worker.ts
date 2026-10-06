@@ -340,6 +340,9 @@ export async function sendNextCandidate(
  * D-091: as organizações que o tick de prospecção atende. Organização suspensa (ou arquivada) não
  * prospecta: sai da lista na mesma consulta, sem leitura a mais.
  */
+// B3: aceito. Aqui o filtro é no INÍCIO do tick: organização suspensa durante o tick (até 3 min)
+// ainda termina o que já começou. Prospecção não gasta IA do motor, e falhar fechado vale para o
+// gasto de IA (`runModelCall`, dreno e dispatcher).
 export const SQL_ORGANIZACOES_DO_TICK =
   "select organization_id from prospecting_campaigns where (status='running' or search_status in ('starting','running')) and not exists (select 1 from organizations o where o.id=prospecting_campaigns.organization_id and o.status<>'active') group by organization_id order by min(updated_at) limit 20";
 

@@ -30,7 +30,6 @@ export async function acceptWelcome(formData: FormData): Promise<AcceptWelcomeRe
     display_name: String(formData.get("display_name") ?? "").trim(),
     o_que_faz: String(formData.get("o_que_faz") ?? "").trim() || undefined,
     timezone: String(formData.get("timezone") ?? "America/Sao_Paulo"),
-    accepted_terms_at: new Date().toISOString(),
   };
 
   let input;
@@ -48,7 +47,9 @@ export async function acceptWelcome(formData: FormData): Promise<AcceptWelcomeRe
       ctx.orgId,
       {
         welcome: {
-          accepted_at: input.accepted_terms_at ?? new Date().toISOString(),
+          // B4: a data do aceite é SEMPRE a hora do servidor, ao lado da versão dos Termos. Nada que
+          // venha do navegador (nem o campo opcional `accepted_terms_at` do schema) entra aqui.
+          accepted_at: new Date().toISOString(),
           terms_version: VERSAO_DOS_TERMOS,
           timezone: input.timezone,
           display_name: input.display_name,

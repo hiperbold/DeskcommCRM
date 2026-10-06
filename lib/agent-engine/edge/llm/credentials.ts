@@ -194,6 +194,13 @@ export interface OrgLlmConfig {
    */
   orcamentoIndisponivelPorque: string | null;
   /**
+   * `organizations.status` lido na MESMA consulta da config (M2 da auditoria do lote 16, D-091): o
+   * seam `runModelCall` recusa a chamada quando é um status explícito diferente de `active`, para o
+   * job que já estava na fila quando a organização foi suspensa não gastar a chave da Hiperbold.
+   * Ausente ou `null` só quando a linha não traz a coluna (dublê de teste): a coluna é NOT NULL no banco.
+   */
+  statusDaOrg?: string | null;
+  /**
    * O endereço da PRÓPRIA credencial, e só o provedor personalizado (#1642) tem
    * um (`ai_provider_credentials.base_url`). `null` nos nativos: o endpoint deles
    * é intrínseco.
@@ -242,6 +249,7 @@ const llmSettingsSchema = z
  */
 const SQL_CONFIG_COM_ORCAMENTO = `
   select o.settings->'llm'            as llm,
+         o.status                     as org_status,
          b.monthly_limit_cents        as teto,
          b.enforcement_mode           as modo,
          b.enforcement_effective_at   as efetivo_em,
@@ -251,10 +259,11 @@ const SQL_CONFIG_COM_ORCAMENTO = `
    where o.id = $1`;
 
 /** A query de antes da 0159 — a rede quando o schema do clone está atrasado. */
-const SQL_CONFIG_LEGADO = `select settings->'llm' as llm from organizations where id = $1`;
+const SQL_CONFIG_LEGADO = `select settings->'llm' as llm, status as org_status from organizations where id = $1`;
 
 interface LinhaDeConfig {
   llm: unknown;
+  org_status?: string | null;
   teto?: number | string | null;
   modo?: string | null;
   efetivo_em?: Date | null;
@@ -429,5 +438,6 @@ export async function resolveOrgLlmConfig(
     enabledModels: settings.enabled_models,
     orcamento,
     orcamentoIndisponivelPorque,
+    statusDaOrg: typeof linha?.org_status === 'string' ? linha.org_status : null,
   };
 }

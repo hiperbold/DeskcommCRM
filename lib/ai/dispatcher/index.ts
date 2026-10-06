@@ -139,7 +139,22 @@ export async function dispatchAgents(opts: DispatchOptions = {}): Promise<Dispat
   // 1b. Resolve organizations.settings.ai_dispatch_mode for the batch's orgs in
   //     one query (G6-02). 'external' orgs delegate dispatch to the Vendaval
   //     runtime; the native dispatcher must leave their events untouched.
-  const { modes: dispatchModeByOrg, inativas: orgsInativas } = await loadDispatchModes(candidateEvents);
+  const {
+    modes: dispatchModeByOrg,
+    inativas: orgsInativas,
+    encontradas: orgsEncontradas,
+    leituraFalhou,
+  } = await loadDispatchModes(candidateEvents);
+
+  // B3: no gasto de IA o portão falha FECHADO. Sem conseguir ler `organizations` não dá para saber se
+  // a organização está ativa nem em modo 'external', e antes todo o lote era processado assim mesmo.
+  // Agora nenhum evento é reivindicado nem consumido: ficam `pending`, sem gastar tentativa, e a
+  // próxima rodada do dispatcher lê de novo (o erro é transitório; o evento só some se a organização
+  // de fato não existir, ramo abaixo).
+  if (leituraFalhou) {
+    summary.errors.push("organizations_read_failed: lote não processado, os eventos seguem pending");
+    return summary;
+  }
 
   // 2. Claim each event optimistically (CAS on status='pending'). Skip when
   //    another worker already processed/claimed it in this tick.
@@ -158,6 +173,14 @@ export async function dispatchAgents(opts: DispatchOptions = {}): Promise<Dispat
     // conta não responde mensagem velha.
     if (orgsInativas.has(event.organization_id)) {
       await markEventProcessed(event, "skipped_org_inativa");
+      summary.outcomes.skipped_org_inativa += 1;
+      continue;
+    }
+
+    // B3: organização sem linha em `organizations` (a leitura foi bem, ela não veio): consumido sem
+    // processar. Permanente, tentar de novo dá o mesmo.
+    if (!orgsEncontradas.has(event.organization_id)) {
+      await markEventProcessed(event, "skipped_org_inativa", { reason: "org_inexistente" });
       summary.outcomes.skipped_org_inativa += 1;
       continue;
     }
@@ -347,25 +370,34 @@ async function processEvent(event: EventRow): Promise<DispatchOutcome> {
 
 /**
  * Resolve organizations.settings.ai_dispatch_mode for every org present in the
- * batch, in a single query. Orgs absent from the result (or with an
- * absent/invalid key) resolve to the default 'native' via the schema's
- * `.catch("native")`, i.e. they are processed as today.
+ * batch, in a single query. Orgs with an absent/invalid key resolve to the
+ * default 'native' via the schema's `.catch("native")`, i.e. they are
+ * processed as today. B3 (auditoria do lote 16): this is AI spend, so the gate
+ * fails CLOSED. A failed read sets `leituraFalhou` (the caller leaves the whole
+ * batch pending) and orgs absent from the result are not in `encontradas`
+ * (the caller consumes their events without processing).
  */
-async function loadDispatchModes(
-  events: EventRow[],
-): Promise<{ modes: Map<string, string>; inativas: Set<string> }> {
+async function loadDispatchModes(events: EventRow[]): Promise<{
+  modes: Map<string, string>;
+  inativas: Set<string>;
+  /** Organizações que a leitura devolveu (as ausentes não existem: B3). */
+  encontradas: Set<string>;
+  /** B3: a leitura falhou, o chamador falha FECHADO (não processa o lote). */
+  leituraFalhou: boolean;
+}> {
   const modes = new Map<string, string>();
   const inativas = new Set<string>();
+  const encontradas = new Set<string>();
   const orgIds = [...new Set(events.map((e) => e.organization_id))];
-  if (orgIds.length === 0) return { modes, inativas };
+  if (orgIds.length === 0) return { modes, inativas, encontradas, leituraFalhou: false };
 
   const admin = createAdminClient();
   const { data, error } = await admin.from("organizations").select("id, settings, status").in("id", orgIds);
   if (error) {
-    logger.warn("[agent-dispatcher] loadDispatchModes failed — defaulting to native", {
+    logger.warn("[agent-dispatcher] loadDispatchModes failed, lote não processado (B3, falha fechado)", {
       error: error.message,
     });
-    return { modes, inativas };
+    return { modes, inativas, encontradas, leituraFalhou: true };
   }
 
   for (const row of (data ?? []) as Array<{
@@ -375,10 +407,11 @@ async function loadDispatchModes(
   }>) {
     const raw = row.settings?.ai_dispatch_mode;
     modes.set(row.id, aiDispatchModeSchema.parse(raw));
+    encontradas.add(row.id);
     // D-091: só um status explícito diferente de 'active' barra (a coluna é NOT NULL no banco).
     if (typeof row.status === "string" && row.status !== "active") inativas.add(row.id);
   }
-  return { modes, inativas };
+  return { modes, inativas, encontradas, leituraFalhou: false };
 }
 
 // ---------------------------------------------------------------------------

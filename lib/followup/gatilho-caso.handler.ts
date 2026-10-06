@@ -12,7 +12,7 @@
  */
 import type { EventHandler, HandlerResult } from "@/lib/event-log/dispatcher";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { contaBloqueadaParaProduzir } from "@/lib/billing/assinatura/pode-produzir";
 import { createSupabaseFollowupGateDb } from "@/lib/followup/agent-followup-gate";
 import {
   EVENTO_CASO_ABERTO,
@@ -38,7 +38,7 @@ export const followupGatilhoCasoHandler: EventHandler = {
           // `app/api/v1/cron/followup-flow-worker/route.ts` para a varredura
           // de silêncio. Só afeta o caso ABERTO: ver o comentário em
           // `GatilhoCasoDeps.contaEmModoLeitura`.
-          contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
+          contaEmModoLeitura: (organizationId) => contaBloqueadaParaProduzir(admin, organizationId),
         },
         row,
       );

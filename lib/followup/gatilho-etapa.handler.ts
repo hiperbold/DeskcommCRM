@@ -6,7 +6,7 @@
  */
 import type { EventHandler, HandlerResult } from "@/lib/event-log/dispatcher";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { contaBloqueadaParaProduzir } from "@/lib/billing/assinatura/pode-produzir";
 import { createSupabaseFollowupGateDb } from "@/lib/followup/agent-followup-gate";
 import {
   EVENTO_DE_ETAPA,
@@ -30,7 +30,7 @@ export const followupGatilhoEtapaHandler: EventHandler = {
           // Tarefa 7, decisão 8 da fase F4: mesma wiring de
           // `app/api/v1/cron/followup-flow-worker/route.ts` para a varredura
           // de silêncio.
-          contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
+          contaEmModoLeitura: (organizationId) => contaBloqueadaParaProduzir(admin, organizationId),
         },
         row,
       );

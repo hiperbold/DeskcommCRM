@@ -53,6 +53,13 @@ comment on column public.billing_orders.termos_aceitos_em is
   '0943 (D-133): o momento do aceite dos Termos de Uso, junto de termos_versao. Nulo quando termos_versao é nula.';
 
 -- ── 2. fn_billing_criar_pedido com o aceite dos Termos ──
+-- B1 (auditoria do lote 16): drop, create, comment, revoke, grant e o revoke do agent_worker vão
+-- dentro de UMA transação curta (begin ... commit). O baseline é reaplicado em produção por
+-- `psql -f` em autocommit, e a função nova nasce com EXECUTE para PUBLIC (o ACL padrão do
+-- Supabase) até o revoke: sem a transação havia uma janela em que anon e authenticated a
+-- executavam. Se qualquer instrução falhar, o commit desfaz o bloco inteiro. Não toca tabela.
+begin;
+
 drop function if exists public.fn_billing_criar_pedido(uuid, text, text, text, text, text, text, uuid, uuid);
 
 create or replace function public.fn_billing_criar_pedido(
@@ -352,3 +359,5 @@ begin
   end if;
 end
 $agent_worker_criar_pedido$;
+
+commit;

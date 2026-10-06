@@ -14,7 +14,7 @@ import { createSupabaseAdminClient, type FollowupJobRequest } from "@/lib/follow
 import type { EnrollmentRow } from "@/lib/followup/node-handlers";
 import { completeTurnForEnrollment, type TurnBridgeAdminClient } from "@/lib/followup/turn-bridge";
 import { logger } from "@/lib/logger";
-import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { motivoDeNaoProduzir } from "@/lib/billing/assinatura/pode-produzir";
 import { encerrarEnrollmentPorAssinaturaSuspensa } from "@/lib/followup/encerrar-por-assinatura-suspensa";
 
 function ponteSupabase(admin: SupabaseClient): TurnBridgeAdminClient {
@@ -101,19 +101,23 @@ export async function enviarTextoFixoPendente(
     const jobClaim={worker_id:claimed.locked_by as string,acquired_at:claimed.locked_at as string};
 
     // Tarefa 7, decisão 8 da fase F4: organização em modo leitura não recebe
-    // este texto fixo. O job já está "running" (claimed acima); `settle(...,
+    // este texto fixo. M1 (auditoria do lote 16): organização suspensa ou arquivada pelo admin da
+    // plataforma também não, mesmo com a cobrança em dia (`motivoDeNaoProduzir` junta os dois).
+    // O job já está "running" (claimed acima); `settle(...,
     // true)` marca `done` SEM enviar e sem completar o turno do enrollment,
     // o mesmo caminho que a linha `!enr` já usa alguns parágrafos abaixo
     // quando o job chegou tarde. Achado 3 da revisão (F4): sem mais deixar o
     // enrollment "parado nesse nó" à espera de um turno que nunca mais chega
-    // ele é ENCERRADO aqui (cancelled/assinatura_suspensa), em vez de morrer
+    // ele é ENCERRADO aqui (cancelled, com o motivo), em vez de morrer
     // sozinho ~11h depois com o aviso falso `followup_dead`.
-    if (await contaEmModoLeitura(admin, job.organization_id as string)) {
-      logger.info("[followup] texto fixo não enviado: organização em modo leitura", {
+    const motivoDoBloqueio = await motivoDeNaoProduzir(admin, job.organization_id as string);
+    if (motivoDoBloqueio) {
+      logger.info("[followup] texto fixo não enviado: organização não pode produzir", {
         organization_id: job.organization_id,
         enrollment_id: enrollmentId,
+        motivo: motivoDoBloqueio,
       });
-      await encerrarEnrollmentPorAssinaturaSuspensa(admin, job.organization_id as string, enrollmentId);
+      await encerrarEnrollmentPorAssinaturaSuspensa(admin, job.organization_id as string, enrollmentId, motivoDoBloqueio);
       await settle(job.organization_id, job.id, jobClaim.acquired_at, true);
       continue;
     }

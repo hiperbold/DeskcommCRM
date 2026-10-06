@@ -7,7 +7,7 @@
  */
 import type { EventHandler, HandlerResult } from "@/lib/event-log/dispatcher";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { contaEmModoLeitura } from "@/lib/billing/assinatura/modo-leitura";
+import { contaBloqueadaParaProduzir } from "@/lib/billing/assinatura/pode-produzir";
 import { createSupabaseFollowupGateDb } from "@/lib/followup/agent-followup-gate";
 import { avancarFollowupsAtivosDoContato } from "@/lib/followup/aplicar-inbound";
 import {
@@ -31,7 +31,7 @@ export const followupGatilhoRetornoHandler: EventHandler = {
           clock: () => new Date(),
           // Tarefa 7, decisão 8 da fase F4: mesma wiring de
           // `gatilho-etapa.handler.ts` para a varredura de silêncio.
-          contaEmModoLeitura: (organizationId) => contaEmModoLeitura(admin, organizationId),
+          contaEmModoLeitura: (organizationId) => contaBloqueadaParaProduzir(admin, organizationId),
         },
         row,
       );

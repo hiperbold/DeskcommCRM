@@ -65,9 +65,10 @@ export function createMeetDeliveryHandler(deps: {
             archived_at: string | null;
             contact_locale: string | null;
             organization_locale: string;
+            org_status?: string | null;
           }
         >(
-          `select a.meeting_url,a.location_kind,a.starts_at,a.time_zone,c.source,c.consent,c.is_anonymized,c.locale as contact_locale,o.locale as organization_locale,v.channel_session_id,s.daily_message_limit,to_jsonb(s)->>'archived_at' as archived_at
+          `select a.meeting_url,a.location_kind,a.starts_at,a.time_zone,c.source,c.consent,c.is_anonymized,c.locale as contact_locale,o.locale as organization_locale,o.status as org_status,v.channel_session_id,s.daily_message_limit,to_jsonb(s)->>'archived_at' as archived_at
            from calendar_appointments a join contacts c on c.organization_id=a.organization_id and c.id=a.contact_id
            join organizations o on o.id=a.organization_id
            join conversations v on v.organization_id=a.organization_id and v.contact_id=c.id and v.id=$3
@@ -81,6 +82,18 @@ export function createMeetDeliveryHandler(deps: {
           ],
         );
         const row = rows[0];
+        // M2 (D-091): organização suspensa (ou arquivada) não manda a entrega do compromisso. O
+        // status vem da leitura (o join com organizations) que já existia. O job fecha como falho
+        // e o aviso do compromisso vai para a Central, como em qualquer entrega que não saiu.
+        if (typeof row?.org_status === "string" && row.org_status !== "active") {
+          deps.log.warn("entrega do compromisso não enviada: organização não está ativa (D-091)", {
+            job_id: job.id,
+            tenant_id: job.organization_id,
+            status: row.org_status,
+          });
+          await settle("failed");
+          return;
+        }
         const url = meetVideoUrl(row?.meeting_url);
         // ⛔ A EXIGÊNCIA DE LINK VALE SÓ ONDE O LOCAL É O MEET, e a assimetria é
         // deliberada: visita e ligação não têm sala, e recusar a entrega delas
