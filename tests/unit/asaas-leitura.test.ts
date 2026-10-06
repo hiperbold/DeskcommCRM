@@ -141,6 +141,7 @@ describe("planosParaVenda", () => {
             version: 3,
             for_sale: false,
             price_monthly_cents: 39900,
+            price_semiannual_cents: 214900,
             price_yearly_cents: null,
           },
         ],
@@ -156,6 +157,7 @@ describe("planosParaVenda", () => {
         version: 3,
         forSale: false,
         priceMonthlyCents: 39900,
+        priceSemiannualCents: 214900,
         priceYearlyCents: null,
       },
     ]);

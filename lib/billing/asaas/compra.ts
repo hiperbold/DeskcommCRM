@@ -128,7 +128,7 @@ import "server-only";
  */
 import type { ClienteAsaasHttp } from "./cliente";
 import type { AmbienteAsaas, ConfigAsaas } from "./config";
-import type { AssinaturaAsaas, CobrancaAsaas } from "./contratos";
+import type { AssinaturaAsaas, CicloAsaas, CobrancaAsaas } from "./contratos";
 import { centavosParaReais, dataSaoPaulo } from "./dinheiro";
 import { documentoValido } from "./documento";
 import { ErroAsaasException } from "./erros";
@@ -137,7 +137,24 @@ import { ErroAsaasException } from "./erros";
 
 export type TipoPedido = "assinatura" | "pacote_tokens";
 export type MetodoPedido = "CREDIT_CARD" | "PIX";
-export type CicloPedido = "monthly" | "yearly";
+export type CicloPedido = "monthly" | "semiannual" | "yearly";
+
+/**
+ * O ciclo do pedido no vocabulário do Asaas (D-176). Mensal, semestral e
+ * anual viram assinatura `MONTHLY`, `SEMIANNUALLY` e `YEARLY` quando o método
+ * é o cartão; no Pix o ciclo só decide o valor e o período (cobrança avulsa).
+ */
+export const CICLO_ASAAS_DO_PEDIDO: Record<CicloPedido, CicloAsaas> = {
+  monthly: "MONTHLY",
+  semiannual: "SEMIANNUALLY",
+  yearly: "YEARLY",
+};
+
+const ROTULO_DO_CICLO_NA_DESCRICAO: Record<CicloPedido, string> = {
+  monthly: "mensal",
+  semiannual: "semestral",
+  yearly: "anual",
+};
 export type StatusPedido =
   | "criado"
   | "processando"
@@ -361,6 +378,8 @@ export const MENSAGEM_PAGADOR_OBRIGATORIO =
   "Informe seus dados de pagamento para concluir a primeira compra.";
 export const MENSAGEM_SEM_ASSINATURA_ASAAS =
   "Esta organização não tem uma assinatura Asaas ativa para cancelar.";
+export const MENSAGEM_TROCA_DE_CICLO =
+  "Sua assinatura atual ainda está no período pago em outro ciclo. A troca de ciclo ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.";
 export const MENSAGEM_OUTRA_OFERTA_ABERTA =
   "Há um pedido em aberto de outra opção. Conclua ou peça para cancelar antes de escolher outra.";
 
@@ -399,6 +418,9 @@ function mensagemDoErroDoPedido(erro: RpcErro): string {
   if (contemCodigo(erro, "billing_metodo_invalido_para_oferta")) {
     return "Essa forma de pagamento não está disponível para esta oferta.";
   }
+  if (contemCodigo(erro, "billing_troca_de_ciclo_indisponivel")) {
+    return MENSAGEM_TROCA_DE_CICLO;
+  }
   if (contemCodigo(erro, "billing_ja_tem_assinatura_asaas")) {
     return "Sua organização já tem uma assinatura ativa.";
   }
@@ -413,7 +435,7 @@ function mensagemDoErroDoPedido(erro: RpcErro): string {
 
 function montarDescricao(pedido: PedidoLinha): string {
   if (pedido.tipo === "assinatura") {
-    const periodo = pedido.ciclo === "yearly" ? "anual" : "mensal";
+    const periodo = pedido.ciclo ? ROTULO_DO_CICLO_NA_DESCRICAO[pedido.ciclo] : "mensal";
     const plano = pedido.planoNome ?? "assinatura";
     return `HiperCRM, plano ${plano} ${periodo}`;
   }
@@ -867,7 +889,7 @@ async function criarAssinaturaEDevolver(
       billingType: "CREDIT_CARD",
       value: centavosParaReais(pedido.amountCents),
       nextDueDate,
-      cycle: pedido.ciclo === "yearly" ? "YEARLY" : "MONTHLY",
+      cycle: CICLO_ASAAS_DO_PEDIDO[pedido.ciclo ?? "monthly"],
       description: descricao,
       externalReference: pedido.externalReference,
     });

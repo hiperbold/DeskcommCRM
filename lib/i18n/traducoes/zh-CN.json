@@ -5427,5 +5427,12 @@
   "5. Empresas que conectaram um número": "5. 已连接号码的企业",
   "A empresa que conectou um número do WhatsApp pode desconectá-lo em Conexões, excluindo o canal. Isso apaga do sistema o token de acesso da Meta daquele número.": "已连接 WhatsApp 号码的企业可以在“连接”中删除该渠道以断开号码。这会从系统中删除该号码的 Meta 访问令牌。",
   "6. Saiba mais": "6. 了解更多",
-  "O tratamento dos dados é descrito na": "数据的处理方式详见"
+  "O tratamento dos dados é descrito na": "数据的处理方式详见",
+  "Mensal": "按月",
+  "Semestral": "按半年",
+  "Anual": "按年",
+  "Total do período": "周期总价",
+  "Economia de": "节省",
+  "em relação ao mensal": "相比按月付费",
+  "Preço semestral": "半年价格"
 }

@@ -466,6 +466,7 @@ describe("0909 Tarefa 3: as sete funções existem, com a assinatura do plano, e
 
 describe("0909 Tarefa 3: fn_billing_criar_pedido, as seis mensagens de recusa do plano e a ordem das travas (decisão 12)", () => {
   it("as seis mensagens próprias existem no corpo da função", () => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da migration 0909, não o baseline (a 0941 redefine a função mais adiante, no baseline).
     const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_criar_pedido(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
@@ -484,6 +485,7 @@ describe("0909 Tarefa 3: fn_billing_criar_pedido, as seis mensagens de recusa do
   });
 
   it("lê billing_settings SEM for share nem for update (decisão 12)", () => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da migration 0909, não o baseline (a 0941 redefine a função mais adiante, no baseline).
     const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_criar_pedido(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
@@ -493,6 +495,7 @@ describe("0909 Tarefa 3: fn_billing_criar_pedido, as seis mensagens de recusa do
   });
 
   it("usa só o advisory lock billing_assinatura:<org> (a segunda trava da ordem fixa, decisão 12), nunca billing:<org>", () => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da migration 0909, não o baseline (a 0941 redefine a função mais adiante, no baseline).
     const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_criar_pedido(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
@@ -502,6 +505,7 @@ describe("0909 Tarefa 3: fn_billing_criar_pedido, as seis mensagens de recusa do
   });
 
   it("devolve proxima_cobranca_em (decisão 26)", () => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da migration 0909, não o baseline (a 0941 redefine a função mais adiante, no baseline).
     const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_criar_pedido(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     const corpo = MIGRATION_0909.slice(inicio, fim);
@@ -919,6 +923,7 @@ describe("0909 Tarefa 5: as quatro peças existem, com a assinatura do plano, em
 
 describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo (decisão 5)", () => {
   const corpo = (() => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da migration 0909, não o baseline (a 0941 redefine a função mais adiante, no baseline).
     const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_periodo_do_ciclo(");
     const fim = MIGRATION_0909.indexOf("\n$$;", inicio);
     return MIGRATION_0909.slice(inicio, fim);
@@ -934,6 +939,7 @@ describe("0909 Tarefa 5: fn_billing_asaas_periodo_do_ciclo (decisão 5)", () => 
   });
 
   it("é IMMUTABLE (função pura)", () => {
+    // sonda-do-baseline: primeira-de-proposito: lê o arquivo da migration 0909, não o baseline (a 0941 redefine a função mais adiante, no baseline).
     const inicio = MIGRATION_0909.indexOf("create or replace function public.fn_billing_asaas_periodo_do_ciclo(");
     const fimAssinatura = MIGRATION_0909.indexOf("language plpgsql", inicio);
     const assinatura = MIGRATION_0909.slice(inicio, fimAssinatura + "language plpgsql\nimmutable".length);

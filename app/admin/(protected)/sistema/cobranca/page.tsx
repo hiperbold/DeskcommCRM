@@ -235,6 +235,7 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                   <TableHead>{t("Plano")}</TableHead>
                   <TableHead>{t("À venda")}</TableHead>
                   <TableHead>{t("Preço mensal")}</TableHead>
+                  <TableHead>{t("Preço semestral")}</TableHead>
                   <TableHead>{t("Preço anual")}</TableHead>
                   {podeEscrever && <TableHead />}
                 </TableRow>
@@ -249,6 +250,9 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                       </Badge>
                     </TableCell>
                     <TableCell>{formatCentsBRL(p.priceMonthlyCents)}</TableCell>
+                    <TableCell>
+                      {p.priceSemiannualCents === null ? t("não definido") : formatCentsBRL(p.priceSemiannualCents)}
+                    </TableCell>
                     <TableCell>
                       {p.priceYearlyCents === null ? t("não definido") : formatCentsBRL(p.priceYearlyCents)}
                     </TableCell>

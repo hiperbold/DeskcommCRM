@@ -12844,6 +12844,11 @@ export const DICIONARIO: Traducoes = {
   Suspensa: { es: "Suspendida" },
   Mensal: { es: "Mensual" },
   Anual: { es: "Anual" },
+  Semestral: { es: "Semestral" },
+  "Total do período": { es: "Total del período" },
+  "Economia de": { es: "Ahorro de" },
+  "em relação ao mensal": { es: "frente al plan mensual" },
+  "Preço semestral": { es: "Precio semestral" },
   Limites: { es: "Límites" },
   "O que o plano contratado prevê, o que o ajuste desta organização define por cima, e o que vale hoje.": {
     es: "Lo que prevé el plan contratado, lo que define por encima el ajuste de esta organización, y lo que vale hoy.",

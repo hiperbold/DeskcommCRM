@@ -42,7 +42,10 @@ export type CriarClienteRequest = z.infer<typeof criarClienteRequestSchema>;
 
 // ─── Assinatura (subscription) ───────────────────────────────────────────
 
-export const cicloAsaasSchema = z.enum(["MONTHLY", "YEARLY"]);
+// SEMIANNUALLY entra na D-176 (venda semestral): a homologação de 30/09/2026
+// mediu no sandbox que a API aceita o ciclo em CREDIT_CARD e devolve o mesmo
+// `cycle` pedido, com `nextDueDate` seis meses adiante.
+export const cicloAsaasSchema = z.enum(["MONTHLY", "SEMIANNUALLY", "YEARLY"]);
 export type CicloAsaas = z.infer<typeof cicloAsaasSchema>;
 
 export const assinaturaAsaasSchema = z

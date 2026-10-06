@@ -433,10 +433,13 @@ describe("0909 Tarefa 3: fn_billing_criar_pedido, as seis recusas da decisão 18
     expect(erro).toContain("billing_plano_fora_de_venda");
   });
 
-  it("billing_preco_nao_definido quando o ciclo é yearly (price_yearly_cents nulo, N8)", () => {
+  it("billing_preco_nao_definido quando o ciclo é yearly e o plano está sem preço anual (a 0941 grava o anual de Pro, Max e Escale, então o teste anula na transação)", () => {
     const erro = erroSob(
       "service_role",
-      `select public.fn_billing_criar_pedido('${ORG_PEDIDO}'::uuid, 'assinatura', 'pro', 'yearly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null)`,
+      `begin;
+       update public.billing_plans set price_yearly_cents = null where code = 'pro' and active;
+       select public.fn_billing_criar_pedido('${ORG_PEDIDO}'::uuid, 'assinatura', 'pro', 'yearly', null, 'CREDIT_CARD', 'sandbox', gen_random_uuid(), null);
+       rollback`,
     );
     expect(erro).not.toBeNull();
     expect(erro).toContain("billing_preco_nao_definido");

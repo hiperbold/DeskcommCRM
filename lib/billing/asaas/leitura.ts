@@ -113,7 +113,9 @@ export interface PlanoParaVenda {
   version: number;
   forSale: boolean;
   priceMonthlyCents: number;
-  /** `null` até o Filipe definir (N8/N9, restrição fixa 3 da fase). */
+  /** `null` até alguém definir (D-176): o plano sem esse preço não aparece para compra semestral. */
+  priceSemiannualCents: number | null;
+  /** `null` até alguém definir (N8/N9, restrição fixa 3 da fase). */
   priceYearlyCents: number | null;
 }
 
@@ -128,6 +130,7 @@ interface LinhaDoPlanoCru {
   version: number;
   for_sale: boolean;
   price_monthly_cents: number;
+  price_semiannual_cents: number | null;
   price_yearly_cents: number | null;
 }
 
@@ -139,7 +142,7 @@ export async function planosParaVenda(
   try {
     const { data, error } = await admin
       .from("billing_plans")
-      .select("code, name, version, for_sale, price_monthly_cents, price_yearly_cents")
+      .select("code, name, version, for_sale, price_monthly_cents, price_semiannual_cents, price_yearly_cents")
       .eq("active", true)
       .order("price_monthly_cents", { ascending: true });
 
@@ -153,6 +156,7 @@ export async function planosParaVenda(
         version: l.version,
         forSale: l.for_sale,
         priceMonthlyCents: l.price_monthly_cents,
+        priceSemiannualCents: l.price_semiannual_cents,
         priceYearlyCents: l.price_yearly_cents,
       })),
       leituraFalhou: false,

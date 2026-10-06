@@ -222,6 +222,8 @@ function rotuloDoCiclo(cycle: string, t: (texto: string) => string): string {
   switch (cycle) {
     case "monthly":
       return t("Mensal");
+    case "semiannual":
+      return t("Semestral");
     case "yearly":
       return t("Anual");
     default:

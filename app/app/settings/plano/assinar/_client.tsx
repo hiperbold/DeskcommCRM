@@ -42,10 +42,14 @@ import type { ResultadoIniciarCompra } from "@/lib/billing/asaas/compra";
 
 import {
   chaveParaProximaTentativaDeCompra,
+  ciclosDisponiveis,
   classificarDesfechoDaTentativa,
   montarPagadorDoFormulario,
+  precoDoCiclo,
+  resumoDoCiclo,
   urlDeRedirecionamentoEhSegura,
   type CamposDoFormularioDoPagador,
+  type CicloDeCompra,
   type DadosDoPagador,
   type DesfechoDaTentativaDeCompra,
   type EscolhaDeCompra,
@@ -128,7 +132,7 @@ export function AssinarOuComprarClient({
 function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; precisaPagador: boolean }) {
   const t = useT();
   const tagDoIdioma = useTagDeIdioma();
-  const [ciclo, setCiclo] = useState<"monthly" | "yearly">("monthly");
+  const [ciclo, setCiclo] = useState<CicloDeCompra>("monthly");
   const [metodo, setMetodo] = useState<"CREDIT_CARD" | "PIX">("CREDIT_CARD");
   const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
   const [pendente, setPendente] = useState(false);
@@ -139,12 +143,21 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
   const [chave, setChave] = useState<string>(() => randomId());
   const tentativaAnteriorRef = useRef<{ escolha: EscolhaDeCompra; desfecho: DesfechoDaTentativaDeCompra } | null>(null);
 
-  const temAnual = plano.priceYearlyCents !== null && plano.priceYearlyCents > 0;
+  // Só os ciclos com preço no catálogo aparecem (D-176): o plano sem preço
+  // semestral ou anual simplesmente não oferece esse botão.
+  const ciclos = ciclosDisponiveis(plano);
+  const resumo = resumoDoCiclo(plano, ciclo);
 
-  function escolherCiclo(novo: "monthly" | "yearly") {
+  function escolherCiclo(novo: CicloDeCompra) {
     setCiclo(novo);
     if (novo === "monthly") setMetodo("CREDIT_CARD");
   }
+
+  const rotuloDoCiclo: Record<CicloDeCompra, string> = {
+    monthly: t("Mensal"),
+    semiannual: t("Semestral"),
+    yearly: t("Anual"),
+  };
 
   async function assinar() {
     const escolhaAtual: EscolhaDeCompra = { tipo: "assinatura", planCode: plano.code, ciclo, metodo };
@@ -220,29 +233,39 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
       <CardContent className="space-y-4">
         <div className="space-y-1.5">
           <span className="text-sm font-medium">{t("Ciclo")}</span>
-          <div className="flex w-fit items-center gap-0.5 rounded-md border bg-muted p-0.5">
-            <button
-              type="button"
-              aria-pressed={ciclo === "monthly"}
-              className={classeDoToggle(ciclo === "monthly")}
-              onClick={() => escolherCiclo("monthly")}
-            >
-              {t("Mensal")}
-            </button>
-            {temAnual && (
+          <div className="flex w-fit flex-wrap items-center gap-0.5 rounded-md border bg-muted p-0.5">
+            {ciclos.map((opcao) => (
               <button
+                key={opcao}
                 type="button"
-                aria-pressed={ciclo === "yearly"}
-                className={classeDoToggle(ciclo === "yearly")}
-                onClick={() => escolherCiclo("yearly")}
+                data-testid={`ciclo-${plano.code}-${opcao}`}
+                aria-pressed={ciclo === opcao}
+                className={classeDoToggle(ciclo === opcao)}
+                onClick={() => escolherCiclo(opcao)}
               >
-                {t("Anual")} · {formatarReais(plano.priceYearlyCents as number, tagDoIdioma)}
+                {rotuloDoCiclo[opcao]}
+                {opcao !== "monthly" && ` · ${formatarReais(precoDoCiclo(plano, opcao) as number, tagDoIdioma)}`}
               </button>
-            )}
+            ))}
           </div>
         </div>
 
-        {ciclo === "yearly" && (
+        {ciclo !== "monthly" && resumo && (
+          <div className="space-y-0.5 text-sm" data-testid={`resumo-${plano.code}`}>
+            <p>
+              {t("Total do período")}: <span className="font-medium">{formatarReais(resumo.totalCents, tagDoIdioma)}</span> (
+              {resumo.meses} {t("meses")})
+            </p>
+            {resumo.economiaCents > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {t("Economia de")} {formatarReais(resumo.economiaCents, tagDoIdioma)} ({resumo.economiaPercentual}%){" "}
+                {t("em relação ao mensal")}
+              </p>
+            )}
+          </div>
+        )}
+
+        {ciclo !== "monthly" && (
           <div className="space-y-1.5">
             <span className="text-sm font-medium">{t("Forma de pagamento")}</span>
             <div className="flex w-fit items-center gap-0.5 rounded-md border bg-muted p-0.5">

@@ -99,12 +99,76 @@ const EMAIL_RAZOAVEL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * quantidade certa de dígitos (11 ou 14), para não gastar uma volta ao
  * servidor com um documento obviamente incompleto.
  */
+// ─── Ciclos de venda e economia (D-176) ────────────────────────────────────
+
+/** Os três ciclos à vista que a tela oferece. Cartão renova sozinho no Asaas; Pix paga o período e não renova. */
+export type CicloDeCompra = "monthly" | "semiannual" | "yearly";
+
+/** Quantos meses o preço de cada ciclo cobre. */
+export const MESES_DO_CICLO: Record<CicloDeCompra, number> = { monthly: 1, semiannual: 6, yearly: 12 };
+
+/** Os preços do plano que a tela lê (`PlanoParaVenda`, `lib/billing/asaas/leitura.ts`), sem importar aquele arquivo `server-only`. */
+export interface PrecosDoPlano {
+  priceMonthlyCents: number;
+  priceSemiannualCents: number | null;
+  priceYearlyCents: number | null;
+}
+
+/** O preço do PERÍODO inteiro no ciclo, ou `null` quando o plano não vende esse ciclo (preço nulo ou zero). */
+export function precoDoCiclo(plano: PrecosDoPlano, ciclo: CicloDeCompra): number | null {
+  const preco =
+    ciclo === "monthly"
+      ? plano.priceMonthlyCents
+      : ciclo === "semiannual"
+        ? plano.priceSemiannualCents
+        : plano.priceYearlyCents;
+  return preco !== null && preco > 0 ? preco : null;
+}
+
+/** Os ciclos que este plano vende, na ordem da tela: mensal, semestral, anual. */
+export function ciclosDisponiveis(plano: PrecosDoPlano): CicloDeCompra[] {
+  return (["monthly", "semiannual", "yearly"] as const).filter((ciclo) => precoDoCiclo(plano, ciclo) !== null);
+}
+
+export interface ResumoDoCiclo {
+  /** O que se paga de uma vez, em centavos. */
+  totalCents: number;
+  meses: number;
+  /** O que o mensal custaria no mesmo período, em centavos. */
+  totalNoMensalCents: number;
+  /** Quanto o ciclo poupa contra pagar o mensal pelo mesmo período; nunca negativo. */
+  economiaCents: number;
+  /** A economia em % do mensal, arredondada para BAIXO (nunca promete mais do que o preço entrega). */
+  economiaPercentual: number;
+}
+
+/**
+ * O total do período e a economia contra o mensal, calculados SÓ dos preços do
+ * catálogo (nenhum desconto é digitado aqui). `null` quando o plano não vende o
+ * ciclo ou não tem preço mensal para comparar.
+ */
+export function resumoDoCiclo(plano: PrecosDoPlano, ciclo: CicloDeCompra): ResumoDoCiclo | null {
+  const total = precoDoCiclo(plano, ciclo);
+  const mensal = precoDoCiclo(plano, "monthly");
+  if (total === null || mensal === null) return null;
+  const meses = MESES_DO_CICLO[ciclo];
+  const totalNoMensal = mensal * meses;
+  const economia = Math.max(0, totalNoMensal - total);
+  return {
+    totalCents: total,
+    meses,
+    totalNoMensalCents: totalNoMensal,
+    economiaCents: economia,
+    economiaPercentual: totalNoMensal > 0 ? Math.floor((economia * 100) / totalNoMensal) : 0,
+  };
+}
+
 // ─── Chave de idempotência da tentativa de compra (correção 6 da revisão) ──
 
 export interface EscolhaDeAssinatura {
   tipo: "assinatura";
   planCode: string;
-  ciclo: "monthly" | "yearly";
+  ciclo: CicloDeCompra;
   metodo: "CREDIT_CARD" | "PIX";
 }
 

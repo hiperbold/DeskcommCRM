@@ -4,7 +4,7 @@
  * A compra pelo PRÓPRIO CLIENTE, atrás da chave: fase F5, Tarefa 15
  * (`hiperbold/planos/fase-F5-tarefas.md`). Três ações da tela `/app/settings/
  * plano` (Tarefa 20, fora desta tarefa): assinar um plano (cartão ou Pix
- * anual), comprar um pacote de tokens, e cancelar a assinatura Asaas ativa.
+ * semestral e anual), comprar um pacote de tokens, e cancelar a assinatura Asaas ativa.
  *
  * ─── Organização SEMPRE da sessão, nunca da entrada (decisão 17) ──────────
  *
@@ -112,7 +112,7 @@ const PAGADOR = z.object({
 
 const entradaIniciarAssinatura = z.object({
   planCode: CODIGO,
-  ciclo: z.enum(["monthly", "yearly"]),
+  ciclo: z.enum(["monthly", "semiannual", "yearly"]),
   metodo: z.enum(["CREDIT_CARD", "PIX"]),
   chave: CHAVE,
   pagador: PAGADOR.optional(),
@@ -230,7 +230,7 @@ async function auditarPedido(
 
 export async function iniciarAssinatura(input: {
   planCode: string;
-  ciclo: "monthly" | "yearly";
+  ciclo: "monthly" | "semiannual" | "yearly";
   metodo: "CREDIT_CARD" | "PIX";
   chave: string;
   pagador?: { nome: string; documento: string; email?: string; celular?: string };

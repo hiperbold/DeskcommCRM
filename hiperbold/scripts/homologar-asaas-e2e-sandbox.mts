@@ -16,8 +16,9 @@
  *     Gerar com: docker exec supabase_db_deskcomm-crm pg_dump -U postgres -d postgres -Fc > <arquivo>
  *  4. O script só ESCREVE no banco em: (a) `billing_settings` (chaves de teste,
  *     valor anterior anotado em estado.json), (b) `billing_plans.for_sale` pela
- *     função oficial, (c) DUAS organizações de teste criadas por ele ("Homologação
- *     Asaas <data>") e nas tabelas dessas duas organizações e de `asaas_webhook_events`.
+ *     função oficial, (c) as organizações de teste criadas por ele ("Homologação
+ *     Asaas <data>": A e B no roteiro mensal; C e D nas etapas de ciclo) e nas tabelas
+ *     dessas organizações e de `asaas_webhook_events`.
  *     Nunca apaga nada, nunca toca em organização ou usuário existente. O
  *     processador de eventos é global por natureza: antes de cada rodada o script
  *     confere que não há evento pendente que não seja dele e aborta se houver.
@@ -46,6 +47,23 @@
  *   recompra-a     extra do passo 7: depois do estorno, a organização A consegue comprar de novo? (sem chamar o Asaas)
  *   cancelar-b     passo 8: cancelarAssinaturaDoCliente na organização B (+ SUBSCRIPTION_DELETED).
  *   limpar         passo 9: remove no Asaas as assinaturas de teste abertas (não apaga nada no banco).
+ *
+ * Etapas de ciclo (D-176, venda semestral e anual à vista). Rodam sozinhas, SEM as etapas acima, com
+ * `ciclos` (todas em sequência) ou uma a uma. Cada uma cria a compra pelo fluxo do CRM (iniciarCompra),
+ * paga a primeira cobrança pela API do sandbox e entrega PAYMENT_CONFIRMED ao handler, como o roteiro mensal:
+ *   preparar-ciclos  confere os preços do catálogo (Pro 104900 e 189900), liga compra, venda do Pro e
+ *                    asaas_sandbox_concede no banco LOCAL e cria as organizações C e D.
+ *   semestral-c      Pro semestral no cartão: assinatura SEMIANNUALLY de R$ 1.049,00, nextDueDate 6 meses
+ *                    adiante, contrato semiannual com período de 6 meses mais 1 dia, tokens do plano.
+ *   anual-d          Pro anual no cartão: assinatura YEARLY de R$ 1.899,00, período de 12 meses mais 1 dia.
+ *   troca-de-ciclo   a organização D (anual ativa) tenta mensal e semestral: recusada com a mensagem de
+ *                    troca de ciclo e SEM nenhuma chamada ao Asaas; tentar o mesmo anual de novo recusa
+ *                    por assinatura ativa.
+ *   estornar-c       estorno total da cobrança do semestral: corta o contrato e zera os tokens do mês.
+ *   cancelar-d       cancelamento do anual pelo cliente (DELETE da assinatura, acesso até o fim do período).
+ *   limpar           o mesmo do roteiro mensal, agora para A, B, C e D.
+ * A renovação do semestral e do anual (cobrança nova daqui a 6 e 12 meses) não dá para observar no sandbox:
+ * ela é coberta pelos testes de banco (tests/invariants/venda-semestral-e-anual-banco.test.ts).
  *
  * Variáveis: HOMOLOG_E2E_DIR (padrão /mnt/f/temp/2026-09-30/asaas/e2e), BACKUP_DUMP.
  * Estado em $HOMOLOG_E2E_DIR/estado.json; resultados (sem segredo) em resultados.json.
@@ -155,6 +173,23 @@ function log(msg: string): void {
 
 // ─── Estado e resultados ──────────────────────────────────────────────────
 type Dict = Record<string, unknown>;
+/** A, B: roteiro original (mensal). C, D: etapas de ciclo (semestral e anual, D-176). */
+type Letra = "A" | "B" | "C" | "D";
+type CicloDeTeste = "monthly" | "semiannual" | "yearly";
+interface OfertaDeTeste {
+  ciclo: CicloDeTeste;
+  cicloAsaas: "MONTHLY" | "SEMIANNUALLY" | "YEARLY";
+  meses: number;
+  /** O preço do período no catálogo (centavos), da decisão do Filipe em 29/09/2026 para o Pro. */
+  valorCents: number;
+  nome: string;
+}
+const OFERTAS: Record<CicloDeTeste, OfertaDeTeste> = {
+  monthly: { ciclo: "monthly", cicloAsaas: "MONTHLY", meses: 1, valorCents: 19900, nome: "mensal" },
+  semiannual: { ciclo: "semiannual", cicloAsaas: "SEMIANNUALLY", meses: 6, valorCents: 104900, nome: "semestral" },
+  yearly: { ciclo: "yearly", cicloAsaas: "YEARLY", meses: 12, valorCents: 189900, nome: "anual" },
+};
+const reais = (centavos: number): string => `R$ ${(centavos / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
 const DIR = process.env.HOMOLOG_E2E_DIR ?? "/mnt/f/temp/2026-09-30/asaas/e2e";
 mkdirSync(DIR, { recursive: true });
 const ARQ_ESTADO = join(DIR, "estado.json");
@@ -203,15 +238,12 @@ function partesData(d: string): [number, number, number] {
 function fmt(a: number, m: number, d: number): string {
   return `${String(a).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
-/** due + 1 mês "por calendário, com clamp no último dia do mês" (o que o interval do Postgres faz). */
-function maisUmMes(d: string): string {
+/** due + N meses "por calendário, com clamp no último dia do mês" (o que o interval do Postgres faz). */
+function maisMeses(d: string, n: number): string {
   const [a, m, dia] = partesData(d);
-  let na = a;
-  let nm = m + 1;
-  if (nm > 12) {
-    nm = 1;
-    na += 1;
-  }
+  const total = a * 12 + (m - 1) + n;
+  const na = Math.floor(total / 12);
+  const nm = (total % 12) + 1;
   const ultimo = new Date(Date.UTC(na, nm, 0)).getUTCDate();
   return fmt(na, nm, Math.min(dia, ultimo));
 }
@@ -269,7 +301,7 @@ async function direto(metodo: "GET" | "POST" | "DELETE" | "PUT", caminho: string
 // ─── Projeto: módulos reais ───────────────────────────────────────────────
 const imp = (p: string) => import(pathToFileURL(join(RAIZ, p)).href);
 const { criarClienteAsaas } = (await imp("lib/billing/asaas/cliente.ts")) as typeof import("../../lib/billing/asaas/cliente");
-const { iniciarCompra, cancelarAssinaturaDoCliente } = (await imp("lib/billing/asaas/compra.ts")) as typeof import("../../lib/billing/asaas/compra");
+const { iniciarCompra, cancelarAssinaturaDoCliente, MENSAGEM_TROCA_DE_CICLO } = (await imp("lib/billing/asaas/compra.ts")) as typeof import("../../lib/billing/asaas/compra");
 const { dbCompraSupabase } = (await imp("lib/billing/asaas/db-compra-supabase.ts")) as typeof import("../../lib/billing/asaas/db-compra-supabase");
 const { criarDbEventosAsaasSobre, processarEventosAsaas } = (await imp("lib/billing/asaas/processar-eventos.ts")) as typeof import("../../lib/billing/asaas/processar-eventos");
 const { createAdminClient } = (await imp("lib/supabase/admin.ts")) as typeof import("../../lib/supabase/admin");
@@ -371,7 +403,7 @@ function iso(v: unknown): string | null {
   return v ? new Date(String(v)).toISOString() : null;
 }
 
-const org = (l: "A" | "B"): string => {
+const org = (l: Letra): string => {
   const id = estado[`org${l}`] as string | undefined;
   if (!id) throw new Error(`sem organização ${l}: rode "preparar" antes`);
   return id;
@@ -501,7 +533,7 @@ async function etapaPreparar(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 // Passo 2: compra (iniciarCompra com dependências reais)
 // ═══════════════════════════════════════════════════════════════════════════
-async function comprar(l: "A" | "B", rotulo: string, vencimentoEsperado: string): Promise<void> {
+async function comprar(l: Letra, rotulo: string, vencimentoEsperado: string, oferta: OfertaDeTeste = OFERTAS.monthly): Promise<void> {
   const organizationId = org(l);
   const ts = Date.now();
   chamadasCliente.length = 0;
@@ -513,7 +545,7 @@ async function comprar(l: "A" | "B", rotulo: string, vencimentoEsperado: string)
     actorId: ATOR,
     tipo: "assinatura",
     planCode: "pro",
-    ciclo: "monthly",
+    ciclo: oferta.ciclo,
     metodo: "CREDIT_CARD",
     chave,
     pagador: pagadorDeTeste(ts),
@@ -549,12 +581,13 @@ async function comprar(l: "A" | "B", rotulo: string, vencimentoEsperado: string)
   });
 
   checar(`${rotulo}: iniciarCompra devolve redirecionar para a fatura do sandbox`, resultado.tipo === "redirecionar" && /^https:\/\/sandbox\.asaas\.com\//.test(resultado.url), resultado);
-  checar(`${rotulo}: pedido em aguardando_pagamento, Pro mensal, cartão, R$ 199,00 (19900) do banco`, pedido.status === "aguardando_pagamento" && pedido.ciclo === "monthly" && pedido.metodo === "CREDIT_CARD" && pedido.amount_cents === 19900 && pedido.ambiente === "sandbox", pedido);
+  checar(`${rotulo}: pedido em aguardando_pagamento, Pro ${oferta.nome}, cartão, ${reais(oferta.valorCents)} (${oferta.valorCents}) do banco`, pedido.status === "aguardando_pagamento" && pedido.ciclo === oferta.ciclo && pedido.metodo === "CREDIT_CARD" && pedido.amount_cents === oferta.valorCents && pedido.ambiente === "sandbox", pedido);
   checar(`${rotulo}: external_reference do pedido é HC:ord:<id>`, pedido.external_reference === `HC:ord:${String(pedido.id)}`, pedido.external_reference);
   checar(`${rotulo}: pedido guarda assinatura, cobrança e fatura do Asaas`, Boolean(pedido.asaas_subscription_id && pedido.asaas_payment_id && pedido.invoice_url));
   checar(`${rotulo}: cliente no Asaas com externalReference HC:org:<org> e sem notificações`, cliente?.corpo.externalReference === `HC:org:${organizationId}` && cliente?.corpo.notificationDisabled === true, cliente?.corpo);
-  checar(`${rotulo}: assinatura no Asaas MONTHLY CREDIT_CARD R$ 199 com o externalReference do pedido`, sub?.corpo.cycle === "MONTHLY" && sub?.corpo.billingType === "CREDIT_CARD" && sub?.corpo.value === 199 && sub?.corpo.externalReference === pedido.external_reference, sub?.corpo);
+  checar(`${rotulo}: assinatura no Asaas ${oferta.cicloAsaas} CREDIT_CARD ${reais(oferta.valorCents)} com o externalReference do pedido`, sub?.corpo.cycle === oferta.cicloAsaas && sub?.corpo.billingType === "CREDIT_CARD" && sub?.corpo.value === oferta.valorCents / 100 && sub?.corpo.externalReference === pedido.external_reference, sub?.corpo);
   checar(`${rotulo}: primeira cobrança vence em ${vencimentoEsperado} e herda o externalReference`, cobranca?.dueDate === vencimentoEsperado && cobranca?.externalReference === pedido.external_reference, cobranca && { dueDate: cobranca.dueDate, externalReference: cobranca.externalReference });
+  checar(`${rotulo}: o próximo vencimento da assinatura no Asaas é ${oferta.meses} mês(es) depois do primeiro (${maisMeses(vencimentoEsperado, oferta.meses)})`, sub?.corpo.nextDueDate === maisMeses(vencimentoEsperado, oferta.meses), { nextDueDate: sub?.corpo.nextDueDate });
   checar(`${rotulo}: a fatura devolvida é a da cobrança do Asaas`, resultado.tipo === "redirecionar" && resultado.url === cobranca?.invoiceUrl);
   checar(`${rotulo}: contrato ainda não muda antes do pagamento (assinatura Asaas só entra no pagamento)`, (f.contrato as Dict).asaas_subscription_id === null, (f.contrato as Dict).asaas_subscription_id);
 }
@@ -566,7 +599,7 @@ async function etapaCompraA(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 // Passo 3: pagamento pela API do sandbox
 // ═══════════════════════════════════════════════════════════════════════════
-async function pagar(l: "A" | "B", rotulo: string): Promise<void> {
+async function pagar(l: Letra, rotulo: string): Promise<void> {
   const cobrancaId = estado[`cobranca${l}`] as string;
   const r = await direto("POST", `/payments/${cobrancaId}/payWithCreditCard`, {
     creditCard: { holderName: "HOMOLOGACAO HIPERCRM", number: "4444444444444444", expiryMonth: "12", expiryYear: "2030", ccv: "123" },
@@ -593,25 +626,25 @@ async function etapaPagarA(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 // Passos 4 e 5: webhook -> handler -> processador
 // ═══════════════════════════════════════════════════════════════════════════
-function esperadoDoPeriodo(due: string): { inicio: number; fim: number; fimData: string } {
-  const fimData = maisUmDia(maisUmMes(due));
+function esperadoDoPeriodo(due: string, meses = 1): { inicio: number; fim: number; fimData: string } {
+  const fimData = maisUmDia(maisMeses(due, meses));
   return { inicio: meiaNoiteSP(due), fim: meiaNoiteSP(fimData), fimData };
 }
 
-async function aplicarEsperado(l: "A" | "B", rotulo: string, due: string, plano: "pro"): Promise<void> {
+async function aplicarEsperado(l: Letra, rotulo: string, due: string, plano: "pro", oferta: OfertaDeTeste = OFERTAS.monthly): Promise<void> {
   const f = await foto(org(l));
   const c = f.contrato as Dict;
   const pedido = (f.pedidos as Dict[])[0] ?? {};
   const pags = (f.pagamentos as Dict[]).filter((p) => p.origem === "asaas");
-  const esp = esperadoDoPeriodo(due);
+  const esp = esperadoDoPeriodo(due, oferta.meses);
   const sub = await direto("GET", `/subscriptions/${estado[`sub${l}`] as string}`);
   const nextDueAsaas = sub.corpo.nextDueDate as string;
 
   checar(`${rotulo}: billing_orders ficou pago com pago_em`, pedido.status === "pago" && Boolean(pedido.pago_em), { status: pedido.status, pago_em: pedido.pago_em });
-  checar(`${rotulo}: contrato virou plano Pro, mensal, ativa, gateway asaas, assinatura e ambiente gravados`, c.plan_id === (estado.planos as Dict)[plano] && c.cycle === "monthly" && c.status === "ativa" && c.gateway === "asaas" && c.asaas_subscription_id === estado[`sub${l}`] && c.asaas_ambiente === "sandbox" && c.asaas_assinatura_encerrada_em === null && c.cancel_at_period_end === false, { plan_id: c.plan_id, cycle: c.cycle, status: c.status, gateway: c.gateway, sub: c.asaas_subscription_id, ambiente: c.asaas_ambiente });
+  checar(`${rotulo}: contrato virou plano Pro, ${oferta.nome}, ativa, gateway asaas, assinatura e ambiente gravados`, c.plan_id === (estado.planos as Dict)[plano] && c.cycle === oferta.ciclo && c.status === "ativa" && c.gateway === "asaas" && c.asaas_subscription_id === estado[`sub${l}`] && c.asaas_ambiente === "sandbox" && c.asaas_assinatura_encerrada_em === null && c.cancel_at_period_end === false, { plan_id: c.plan_id, cycle: c.cycle, status: c.status, gateway: c.gateway, sub: c.asaas_subscription_id, ambiente: c.asaas_ambiente });
   checar(`${rotulo}: current_period_start = ${due} 00h de São Paulo`, ms(c.current_period_start) === esp.inicio, { gravado: iso(c.current_period_start), esperado: new Date(esp.inicio).toISOString() });
-  checar(`${rotulo}: current_period_end = ${esp.fimData} 00h de São Paulo (vencimento + 1 mês + 1 dia)`, ms(c.current_period_end) === esp.fim, { gravado: iso(c.current_period_end), esperado: new Date(esp.fim).toISOString() });
-  checar(`${rotulo}: uma linha em billing_payments, origem asaas, CONFIRMED, 19900, ligada ao pedido, mesmo período`, pags.length === 1 && pags[0]!.origem === "asaas" && pags[0]!.status === "CONFIRMED" && pags[0]!.gross_cents === 19900 && pags[0]!.order_id === pedido.id && pags[0]!.asaas_payment_id === estado[`cobranca${l}`] && ms(pags[0]!.billing_period_start) === esp.inicio && ms(pags[0]!.billing_period_end) === esp.fim, pags.map((p) => ({ origem: p.origem, status: p.status, gross: p.gross_cents, ini: iso(p.billing_period_start), fim: iso(p.billing_period_end) })));
+  checar(`${rotulo}: current_period_end = ${esp.fimData} 00h de São Paulo (vencimento + ${oferta.meses} mês(es) + 1 dia)`, ms(c.current_period_end) === esp.fim, { gravado: iso(c.current_period_end), esperado: new Date(esp.fim).toISOString() });
+  checar(`${rotulo}: uma linha em billing_payments, origem asaas, CONFIRMED, ${oferta.valorCents}, ligada ao pedido, mesmo período`, pags.length === 1 && pags[0]!.origem === "asaas" && pags[0]!.status === "CONFIRMED" && pags[0]!.gross_cents === oferta.valorCents && pags[0]!.order_id === pedido.id && pags[0]!.asaas_payment_id === estado[`cobranca${l}`] && ms(pags[0]!.billing_period_start) === esp.inicio && ms(pags[0]!.billing_period_end) === esp.fim, pags.map((p) => ({ origem: p.origem, status: p.status, gross: p.gross_cents, ini: iso(p.billing_period_start), fim: iso(p.billing_period_end) })));
   checar(`${rotulo}: fim do período do CRM = nextDueDate da assinatura no Asaas (${nextDueAsaas}) + 1 dia`, maisUmDia(nextDueAsaas) === esp.fimData, { nextDueDateAsaas: nextDueAsaas, fimDoCrm: esp.fimData });
   registrar(`${rotulo}_estado_do_banco_apos_aplicar`, {
     pedido: { status: pedido.status, pago_em: pedido.pago_em },
@@ -623,7 +656,7 @@ async function aplicarEsperado(l: "A" | "B", rotulo: string, due: string, plano:
   });
 }
 
-async function tokensDoPlano(l: "A" | "B", rotulo: string): Promise<void> {
+async function tokensDoPlano(l: Letra, rotulo: string): Promise<void> {
   const antes = await foto(org(l));
   const saldo = await admin.rpc("fn_billing_saldo_da_carteira" as never, { p_org: org(l) } as never);
   const depois = await foto(org(l));
@@ -803,20 +836,20 @@ async function etapaDia31B(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 // Passo 7: estorno total pelo Asaas (organização A)
 // ═══════════════════════════════════════════════════════════════════════════
-async function etapaEstornarA(): Promise<void> {
-  const organizationId = org("A");
-  const cobrancaId = estado.cobrancaA as string;
+async function estornar(l: Letra, oferta: OfertaDeTeste, rotulo = "passo7"): Promise<void> {
+  const organizationId = org(l);
+  const cobrancaId = estado[`cobranca${l}`] as string;
   const antes = await foto(organizationId);
   const snapAntes = pick(antes);
   const r = await direto("POST", `/payments/${cobrancaId}/refund`, { description: "Homologação: estorno total" });
   await dormir(2000);
   const depois = await direto("GET", `/payments/${cobrancaId}`);
-  registrar("passo7_estorno_no_asaas", { refund: { status: r.status, statusDaCobranca: r.corpo.status, erros: r.status === 200 ? undefined : r.corpo.errors }, cobrancaDepois: { status: depois.corpo.status, refunds: depois.corpo.refunds } });
-  checar("passo7: estorno total (sem value) no Asaas devolve 200 e a cobrança fica REFUNDED", r.status === 200 && depois.corpo.status === "REFUNDED", { status: r.status, cobranca: depois.corpo.status });
+  registrar(`${rotulo}_estorno_no_asaas`, { refund: { status: r.status, statusDaCobranca: r.corpo.status, erros: r.status === 200 ? undefined : r.corpo.errors }, cobrancaDepois: { status: depois.corpo.status, refunds: depois.corpo.refunds } });
+  checar(`${rotulo}: estorno total (sem value) no Asaas devolve 200 e a cobrança fica REFUNDED`, r.status === 200 && depois.corpo.status === "REFUNDED", { status: r.status, cobranca: depois.corpo.status });
 
   const evt = montarEvento("PAYMENT_REFUNDED", depois.corpo, "payment");
   guardarEvento(evt.id as string);
-  estado.eventoEstornoA = evt;
+  estado[`eventoEstorno${l}`] = evt;
   salvarEstado();
   const entrega = await entregar(evt);
   const proc = await processar();
@@ -826,7 +859,7 @@ async function etapaEstornarA(): Promise<void> {
   const pags = f.pagamentos as Dict[];
   const original = pags.find((p) => p.asaas_payment_id === cobrancaId);
   const estorno = pags.find((p) => p.status === "REFUNDED");
-  registrar("passo7_webhook_estorno", {
+  registrar(`${rotulo}_webhook_estorno`, {
     resposta: entrega,
     rodada: proc,
     evento: resumoEvento(linha),
@@ -840,23 +873,23 @@ async function etapaEstornarA(): Promise<void> {
   });
   // D-086 (migration 0916): o estorno total é cancelamento. O banco devolve os alarmes de corte e o
   // processador remove a assinatura no Asaas (DELETE, fora de transação) e só depois grava o marcador.
-  checar("passo7: handler 200; o processador fez GET da cobrança e aplicou PAYMENT_REFUNDED (alarmes estorno_confirmado, estorno_cortou_acesso, remover_assinatura_pendente)", entrega.status === 200 && proc.http.some((h) => h.startsWith("GET /payments/")) && linha?.resultado === "aplicado" && linha?.alarme === "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente", { http: proc.http, evento: resumoEvento(linha) });
-  checar("passo7: pedido passou a estornado", (f.pedidos as Dict[]).every((p) => p.status === "estornado"), (f.pedidos as Dict[]).map((p) => p.status));
-  checar("passo7: nova linha REFUNDED em billing_payments ligada ao pagamento original, valor 19900, sem período", Boolean(estorno) && estorno?.estorna_pagamento_id === original?.id && estorno?.gross_cents === 19900 && estorno?.billing_period_start === null, estorno);
+  checar(`${rotulo}: handler 200; o processador fez GET da cobrança e aplicou PAYMENT_REFUNDED (alarmes estorno_confirmado, estorno_cortou_acesso, remover_assinatura_pendente)`, entrega.status === 200 && proc.http.some((h) => h.startsWith("GET /payments/")) && linha?.resultado === "aplicado" && linha?.alarme === "estorno_confirmado,estorno_cortou_acesso,remover_assinatura_pendente", { http: proc.http, evento: resumoEvento(linha) });
+  checar(`${rotulo}: pedido passou a estornado`, (f.pedidos as Dict[]).every((p) => p.status === "estornado"), (f.pedidos as Dict[]).map((p) => p.status));
+  checar(`${rotulo}: nova linha REFUNDED em billing_payments ligada ao pagamento original, valor ${oferta.valorCents}, sem período`, Boolean(estorno) && estorno?.estorna_pagamento_id === original?.id && estorno?.gross_cents === oferta.valorCents && estorno?.billing_period_start === null, estorno);
   // D-086: contrato cancelado na hora, com o fim do período em now e a carência zerada.
   const cAntes = snapAntes.contrato as Dict;
   const cDepois = snapDepois.contrato as Dict;
   const agoraMs = Date.now();
   const fimMs = new Date(cDepois.current_period_end as string).getTime();
   const carenciaMs = cDepois.bloqueio_a_partir_de ? new Date(cDepois.bloqueio_a_partir_de as string).getTime() : Number.NaN;
-  checar("passo7: o contrato foi cancelado na hora (status cancelada, cancel_at_period_end ligado, fim do período em now, não mais o de 31/10)", cDepois.status === "cancelada" && cDepois.cancel_at_period_end === true && fimMs <= agoraMs && fimMs > agoraMs - 10 * 60 * 1000, { antes: cAntes, depois: cDepois });
-  checar("passo7: a carência foi zerada no mesmo corte (bloqueio_a_partir_de <= agora), então fn_billing_modo_leitura vale na hora quando a plataforma está em bloquear", Number.isFinite(carenciaMs) && carenciaMs <= agoraMs, { bloqueio_a_partir_de: cDepois.bloqueio_a_partir_de });
-  checar("passo7: o processador removeu a assinatura no Asaas (DELETE /subscriptions) e DEPOIS gravou o marcador de encerramento", proc.http.some((h) => h.startsWith("DELETE /subscriptions/")) && cDepois.asaas_assinatura_encerrada_em !== null, { http: proc.http, marcador: cDepois.asaas_assinatura_encerrada_em });
+  checar(`${rotulo}: o contrato foi cancelado na hora (status cancelada, cancel_at_period_end ligado, fim do período em now, não mais o de 31/10)`, cDepois.status === "cancelada" && cDepois.cancel_at_period_end === true && fimMs <= agoraMs && fimMs > agoraMs - 10 * 60 * 1000, { antes: cAntes, depois: cDepois });
+  checar(`${rotulo}: a carência foi zerada no mesmo corte (bloqueio_a_partir_de <= agora), então fn_billing_modo_leitura vale na hora quando a plataforma está em bloquear`, Number.isFinite(carenciaMs) && carenciaMs <= agoraMs, { bloqueio_a_partir_de: cDepois.bloqueio_a_partir_de });
+  checar(`${rotulo}: o processador removeu a assinatura no Asaas (DELETE /subscriptions) e DEPOIS gravou o marcador de encerramento`, proc.http.some((h) => h.startsWith("DELETE /subscriptions/")) && cDepois.asaas_assinatura_encerrada_em !== null, { http: proc.http, marcador: cDepois.asaas_assinatura_encerrada_em });
   const evs = (f.eventosDoContrato as Dict[]).filter((e) => e.motivo === "estorno_asaas");
-  checar("passo7: o corte deixou eventos do contrato com motivo estorno_asaas (estado, periodo, cancelar_no_fim, carencia)", ["estado", "periodo", "cancelar_no_fim"].every((tipo) => evs.some((e) => e.tipo === tipo)), evs.map((e) => e.tipo));
+  checar(`${rotulo}: o corte deixou eventos do contrato com motivo estorno_asaas (estado, periodo, cancelar_no_fim, carencia)`, ["estado", "periodo", "cancelar_no_fim"].every((tipo) => evs.some((e) => e.tipo === tipo)), evs.map((e) => e.tipo));
   const planoDepois = (snapDepois.carteiras as Dict[]).find((c) => c.fonte === "plano");
   const corte = (snapDepois.livro as Dict[]).find((l) => typeof l.chave === "string" && (l.chave as string).startsWith("ajuste:estorno-plano:"));
-  checar("passo7: os tokens do plano foram zerados por lançamento NEGATIVO no livro-caixa (saldo do ciclo = 0) e nenhuma linha do livro sumiu", Boolean(planoDepois) && (planoDepois?.creditado as number) === (planoDepois?.consumido as number) && Boolean(corte) && (corte?.tokens as number) < 0 && (snapDepois.livro as Dict[]).length >= (snapAntes.livro as Dict[]).length + 1, { carteira: planoDepois, corte });
+  checar(`${rotulo}: os tokens do plano foram zerados por lançamento NEGATIVO no livro-caixa (saldo do ciclo = 0) e nenhuma linha do livro sumiu`, Boolean(planoDepois) && (planoDepois?.creditado as number) === (planoDepois?.consumido as number) && Boolean(corte) && (corte?.tokens as number) < 0 && (snapDepois.livro as Dict[]).length >= (snapAntes.livro as Dict[]).length + 1, { carteira: planoDepois, corte });
 
   // Idempotência do estorno: mesma entrega de novo.
   const snapA = pick(await foto(organizationId));
@@ -864,7 +897,11 @@ async function etapaEstornarA(): Promise<void> {
   const entrega2 = await entregar(evt);
   const proc2 = await processar();
   const snapB = pick(await foto(organizationId));
-  checar("passo7: reentrega do mesmo PAYMENT_REFUNDED não cria evento, não reserva nada e não muda o banco", entrega2.status === 200 && (await contarEventos()) === evN && proc2.resumo.reservados === 0 && JSON.stringify(snapA) === JSON.stringify(snapB));
+  checar(`${rotulo}: reentrega do mesmo PAYMENT_REFUNDED não cria evento, não reserva nada e não muda o banco`, entrega2.status === 200 && (await contarEventos()) === evN && proc2.resumo.reservados === 0 && JSON.stringify(snapA) === JSON.stringify(snapB));
+}
+
+async function etapaEstornarA(): Promise<void> {
+  await estornar("A", OFERTAS.monthly);
 }
 
 /**
@@ -884,9 +921,9 @@ async function etapaRecompraA(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 // Passo 8: cancelamento pelo cliente (organização B)
 // ═══════════════════════════════════════════════════════════════════════════
-async function etapaCancelarB(): Promise<void> {
-  const organizationId = org("B");
-  const subId = estado.subB as string;
+async function cancelar(l: Letra, rotulo = "passo8"): Promise<void> {
+  const organizationId = org(l);
+  const subId = estado[`sub${l}`] as string;
   const antes = await foto(organizationId);
   const subAntes = await direto("GET", `/subscriptions/${subId}`);
   chamadasCliente.length = 0;
@@ -897,7 +934,7 @@ async function etapaCancelarB(): Promise<void> {
   const f = await foto(organizationId);
   const c = f.contrato as Dict;
   const r2 = await cancelarAssinaturaDoCliente(depsCompra, organizationId, ATOR);
-  registrar("passo8_cancelamento", {
+  registrar(`${rotulo}_cancelamento`, {
     resultado: r1,
     httpParaOAsaas: http,
     assinaturaAntes: { status: subAntes.status === 200 ? subAntes.corpo.status : subAntes.status, deleted: subAntes.corpo.deleted },
@@ -908,12 +945,12 @@ async function etapaCancelarB(): Promise<void> {
     pedidos: (f.pedidos as Dict[]).map((p) => ({ id: p.id, status: p.status })),
     segundaChamada: r2,
   });
-  checar("passo8: cancelarAssinaturaDoCliente devolve ok com cancelAtPeriodEnd", r1.tipo === "ok" && r1.cancelAtPeriodEnd === true, r1);
-  checar("passo8: o CRM chamou DELETE /subscriptions/{id} no Asaas", http.some((h) => h === `DELETE /subscriptions/${subId}`), http);
-  checar("passo8: no Asaas a assinatura foi removida (deleted ou 404)", subDepois.status === 404 || subDepois.corpo.deleted === true, { status: subDepois.status, deleted: subDepois.corpo.deleted });
-  checar("passo8: contrato com marcador de encerramento, cancel_at_period_end true, status e período preservados (acesso até o fim)", c.asaas_assinatura_encerrada_em !== null && c.cancel_at_period_end === true && c.status === "ativa" && iso(c.current_period_end) === iso((antes.contrato as Dict).current_period_end), { encerrada: c.asaas_assinatura_encerrada_em, cancel: c.cancel_at_period_end, status: c.status });
-  checar("passo8: evento de auditoria cancelar_no_fim gravado", (f.eventosDoContrato as Dict[]).some((e) => e.tipo === "cancelar_no_fim" && e.para === "true"), (f.eventosDoContrato as Dict[]).map((e) => e.tipo));
-  checar("passo8: segunda chamada é recusada (já encerrada) sem novo DELETE", r2.tipo === "erro", r2);
+  checar(`${rotulo}: cancelarAssinaturaDoCliente devolve ok com cancelAtPeriodEnd`, r1.tipo === "ok" && r1.cancelAtPeriodEnd === true, r1);
+  checar(`${rotulo}: o CRM chamou DELETE /subscriptions/{id} no Asaas`, http.some((h) => h === `DELETE /subscriptions/${subId}`), http);
+  checar(`${rotulo}: no Asaas a assinatura foi removida (deleted ou 404)`, subDepois.status === 404 || subDepois.corpo.deleted === true, { status: subDepois.status, deleted: subDepois.corpo.deleted });
+  checar(`${rotulo}: contrato com marcador de encerramento, cancel_at_period_end true, status e período preservados (acesso até o fim)`, c.asaas_assinatura_encerrada_em !== null && c.cancel_at_period_end === true && c.status === "ativa" && iso(c.current_period_end) === iso((antes.contrato as Dict).current_period_end), { encerrada: c.asaas_assinatura_encerrada_em, cancel: c.cancel_at_period_end, status: c.status });
+  checar(`${rotulo}: evento de auditoria cancelar_no_fim gravado`, (f.eventosDoContrato as Dict[]).some((e) => e.tipo === "cancelar_no_fim" && e.para === "true"), (f.eventosDoContrato as Dict[]).map((e) => e.tipo));
+  checar(`${rotulo}: segunda chamada é recusada (já encerrada) sem novo DELETE`, r2.tipo === "erro", r2);
 
   // O Asaas manda SUBSCRIPTION_DELETED depois do DELETE: entrega ao handler e processa.
   const recurso = { ...(subAntes.corpo as Dict), deleted: true, status: "INACTIVE" };
@@ -924,9 +961,126 @@ async function etapaCancelarB(): Promise<void> {
   const proc = await processar();
   const linha = await evento(evt.id as string);
   const snapB = pick(await foto(organizationId));
-  registrar("passo8_subscription_deleted", { resposta: entrega, rodada: proc, evento: resumoEvento(linha), contratoAntes: snapA.contrato, contratoDepois: snapB.contrato });
-  checar("passo8: SUBSCRIPTION_DELETED: handler 200, processador faz GET /subscriptions e fecha o evento sem erro", entrega.status === 200 && proc.http.some((h) => h === `GET /subscriptions/${subId}`) && linha !== null && linha.resultado !== "erro" && linha.resultado !== "aguardando", { http: proc.http, evento: resumoEvento(linha) });
-  checar("passo8: SUBSCRIPTION_DELETED não muda o contrato já marcado", JSON.stringify(snapA.contrato) === JSON.stringify(snapB.contrato), { antes: snapA.contrato, depois: snapB.contrato });
+  registrar(`${rotulo}_subscription_deleted`, { resposta: entrega, rodada: proc, evento: resumoEvento(linha), contratoAntes: snapA.contrato, contratoDepois: snapB.contrato });
+  checar(`${rotulo}: SUBSCRIPTION_DELETED: handler 200, processador faz GET /subscriptions e fecha o evento sem erro`, entrega.status === 200 && proc.http.some((h) => h === `GET /subscriptions/${subId}`) && linha !== null && linha.resultado !== "erro" && linha.resultado !== "aguardando", { http: proc.http, evento: resumoEvento(linha) });
+  checar(`${rotulo}: SUBSCRIPTION_DELETED não muda o contrato já marcado`, JSON.stringify(snapA.contrato) === JSON.stringify(snapB.contrato), { antes: snapA.contrato, depois: snapB.contrato });
+}
+
+async function etapaCancelarB(): Promise<void> {
+  await cancelar("B");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Etapas de ciclo (D-176): venda semestral e anual à vista
+// ═══════════════════════════════════════════════════════════════════════════
+async function etapaPrepararCiclos(): Promise<void> {
+  const ts = Date.now();
+  const planos = await admin.from("billing_plans").select("id, code, for_sale, price_monthly_cents, price_semiannual_cents, price_yearly_cents").eq("active", true).in("code", ["pro", "max", "escale"]);
+  const linhas = (planos.data ?? []) as Array<{ id: string; code: string; for_sale: boolean; price_monthly_cents: number; price_semiannual_cents: number | null; price_yearly_cents: number | null }>;
+  const decididos: Record<string, [number, number]> = { pro: [104900, 189900], max: [214900, 379900], escale: [319900, 574900] };
+  for (const [code, [semestral, anual]] of Object.entries(decididos)) {
+    const p = linhas.find((x) => x.code === code);
+    checar(`ciclos: ${code} tem semestral ${semestral} e anual ${anual} no catálogo (decisão de 29/09/2026)`, p?.price_semiannual_cents === semestral && p?.price_yearly_cents === anual, p);
+  }
+  estado.planos = Object.fromEntries(linhas.map((p) => [p.code, p.id]));
+
+  const antes = await admin.from("billing_settings").select("compra_pelo_cliente, asaas_sandbox_concede").eq("id", 1).maybeSingle();
+  const cfg = antes.data as { compra_pelo_cliente: boolean; asaas_sandbox_concede: boolean } | null;
+  const ligou: string[] = [];
+  if (!cfg?.compra_pelo_cliente) {
+    const r = await admin.rpc("fn_billing_definir_compra_pelo_cliente" as never, { p_sim: true, p_actor: ATOR } as never);
+    if (r.error) throw new Error(`definir_compra_pelo_cliente: ${r.error.message}`);
+    ligou.push("billing_settings.compra_pelo_cliente (estava false)");
+  }
+  if (!linhas.find((p) => p.code === "pro")?.for_sale) {
+    const r = await admin.rpc("fn_billing_definir_a_venda" as never, { p_plan_code: "pro", p_sim: true, p_actor: ATOR } as never);
+    if (r.error) throw new Error(`definir_a_venda pro: ${r.error.message}`);
+    ligou.push("billing_plans.for_sale pro (estava false)");
+  }
+  if (!cfg?.asaas_sandbox_concede) {
+    // Sem esta chave o pagamento de sandbox nunca concede (por desenho, só para instalação de teste).
+    const r = await admin.from("billing_settings").update({ asaas_sandbox_concede: true }).eq("id", 1);
+    if (r.error) throw new Error(`ligar asaas_sandbox_concede: ${r.error.message}`);
+    estado.ligouSandboxConcede = true;
+    ligou.push("billing_settings.asaas_sandbox_concede (estava false)");
+  }
+
+  const data = hojeBR();
+  const criadas: Dict = {};
+  for (const [l, nome] of [["C", `Homologação Asaas ${data} (semestral)`], ["D", `Homologação Asaas ${data} (anual)`]] as Array<[Letra, string]>) {
+    if (estado[`org${l}`]) {
+      criadas[l] = { jaExistia: estado[`org${l}`] };
+      continue;
+    }
+    const slug = `homolog-asaas-${ts}-${l.toLowerCase()}`;
+    const ins = await admin.from("organizations").insert({ slug, legal_name: nome, display_name: nome }).select("id").single();
+    if (ins.error) throw new Error(`criar organização ${l}: ${ins.error.message}`);
+    estado[`org${l}`] = (ins.data as { id: string }).id;
+    estado[`slug${l}`] = slug;
+    criadas[l] = { id: estado[`org${l}`], slug, nome };
+  }
+  salvarEstado();
+  registrar("ciclos_preparar", { backup: { arquivo: BACKUP, bytes: BACKUP_BYTES }, ligadoNoBancoLocal: ligou, organizacoes: criadas, precos: linhas });
+  checar("ciclos: organizações C e D criadas com contrato inicial", (await Promise.all((["C", "D"] as const).map((l) => sel("billing_contracts", org(l))))).every((c) => c.length === 1));
+}
+
+/** PAYMENT_CONFIRMED da primeira cobrança no handler real, processador, e conferência de período e tokens. */
+async function confirmarPagamento(l: Letra, rotulo: string, oferta: OfertaDeTeste): Promise<void> {
+  const pagamentoAsaas = estado[`pagamentoAsaas${l}`] as Dict | undefined;
+  if (!pagamentoAsaas) throw new Error(`sem pagamento da organização ${l}: a compra e o pagamento rodam antes`);
+  const evt = montarEvento("PAYMENT_CONFIRMED", pagamentoAsaas, "payment");
+  guardarEvento(evt.id as string);
+  estado[`eventoConfirmado${l}`] = evt;
+  salvarEstado();
+  const entrega = await entregar(evt);
+  const proc = await processar();
+  const linha = await evento(evt.id as string);
+  registrar(`${rotulo}_webhook`, { resposta: entrega, rodada: proc, evento: resumoEvento(linha) });
+  checar(`${rotulo}: handler 200 e evento aplicado`, entrega.status === 200 && linha?.resultado === "aplicado", resumoEvento(linha));
+  checar(`${rotulo}: o processador consultou o Asaas só por GET`, proc.http.some((h) => h.startsWith("GET /payments/")) && proc.http.every((h) => h.startsWith("GET ")), proc.http);
+  await aplicarEsperado(l, rotulo, pagamentoAsaas.dueDate as string, "pro", oferta);
+  await tokensDoPlano(l, rotulo);
+}
+
+async function etapaSemestralC(): Promise<void> {
+  await comprar("C", "semestral", hojeBR(), OFERTAS.semiannual);
+  await pagar("C", "semestral");
+  await confirmarPagamento("C", "semestral", OFERTAS.semiannual);
+}
+
+async function etapaAnualD(): Promise<void> {
+  await comprar("D", "anual", hojeBR(), OFERTAS.yearly);
+  await pagar("D", "anual");
+  await confirmarPagamento("D", "anual", OFERTAS.yearly);
+}
+
+/** Quem já tem o anual em andamento não troca de ciclo: a recusa é do banco e nada chega ao Asaas. */
+async function etapaTrocaDeCiclo(): Promise<void> {
+  const organizationId = org("D");
+  const antes = await foto(organizationId);
+  const tentativas: Dict[] = [];
+  for (const ciclo of ["monthly", "semiannual", "yearly"] as const) {
+    httpLog.length = 0;
+    chamadasCliente.length = 0;
+    const r = await iniciarCompra(depsCompra, { organizationId, actorId: ATOR, tipo: "assinatura", planCode: "pro", ciclo, metodo: "CREDIT_CARD", chave: randomUUID(), pagador: pagadorDeTeste(Date.now()) });
+    tentativas.push({ ciclo, resultado: r, chamadasAoAsaas: [...httpLog] });
+    if (ciclo === "yearly") {
+      checar("troca-de-ciclo: o mesmo anual de novo é recusado por já haver assinatura ativa (mensagem de assinatura ativa, não a de troca)", r.tipo === "erro" && r.mensagem === "Sua organização já tem uma assinatura ativa." && httpLog.length === 0, { r, http: [...httpLog] });
+    } else {
+      checar(`troca-de-ciclo: ${ciclo} sobre o anual ativo é recusado com a mensagem de troca de ciclo e sem chamar o Asaas`, r.tipo === "erro" && r.mensagem === MENSAGEM_TROCA_DE_CICLO && httpLog.length === 0, { r, http: [...httpLog] });
+    }
+  }
+  const depois = await foto(organizationId);
+  registrar("troca_de_ciclo", { tentativas, pedidosAntes: (antes.pedidos as Dict[]).length, pedidosDepois: (depois.pedidos as Dict[]).length });
+  checar("troca-de-ciclo: nenhum pedido novo foi criado e o contrato não mudou", (depois.pedidos as Dict[]).length === (antes.pedidos as Dict[]).length && JSON.stringify(pick(antes).contrato) === JSON.stringify(pick(depois).contrato));
+}
+
+async function etapaEstornarC(): Promise<void> {
+  await estornar("C", OFERTAS.semiannual, "semestral_estorno");
+}
+
+async function etapaCancelarD(): Promise<void> {
+  await cancelar("D", "anual_cancelamento");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -934,7 +1088,7 @@ async function etapaCancelarB(): Promise<void> {
 // ═══════════════════════════════════════════════════════════════════════════
 async function etapaLimpar(): Promise<void> {
   const saida: Dict = {};
-  for (const l of ["A", "B"] as const) {
+  for (const l of ["A", "B", "C", "D"] as const) {
     const cid = estado[`clienteAsaas${l}`] as string | undefined;
     if (!cid) continue;
     const lista = await direto("GET", `/subscriptions?customer=${cid}`);
@@ -955,7 +1109,7 @@ async function etapaLimpar(): Promise<void> {
     };
     checar(`passo9: nenhuma assinatura aberta sobrou no Asaas para o cliente ${l}`, ((depois.corpo.data as Dict[]) ?? []).every((s) => s.deleted === true || s.status === "INACTIVE"), saida[l]);
   }
-  saida.bancoLocal = { organizacoesDeTesteMantidas: { A: estado.orgA, B: estado.orgB }, observacao: "nada foi apagado no banco local" };
+  saida.bancoLocal = { organizacoesDeTesteMantidas: { A: estado.orgA, B: estado.orgB, C: estado.orgC, D: estado.orgD }, observacao: "nada foi apagado no banco local" };
   registrar("passo9_limpeza", saida);
 }
 
@@ -970,15 +1124,22 @@ const etapas: Record<string, () => Promise<void>> = {
   "recompra-a": etapaRecompraA,
   "cancelar-b": etapaCancelarB,
   limpar: etapaLimpar,
+  "preparar-ciclos": etapaPrepararCiclos,
+  "semestral-c": etapaSemestralC,
+  "anual-d": etapaAnualD,
+  "troca-de-ciclo": etapaTrocaDeCiclo,
+  "estornar-c": etapaEstornarC,
+  "cancelar-d": etapaCancelarD,
 };
 const ORDEM = ["preparar", "compra-a", "pagar-a", "webhook-a", "dia31-b", "estornar-a", "recompra-a", "cancelar-b", "limpar"];
+const ORDEM_CICLOS = ["preparar-ciclos", "semestral-c", "anual-d", "troca-de-ciclo", "estornar-c", "cancelar-d", "limpar"];
 
 const pedida = process.argv[2];
-if (!pedida || (pedida !== "tudo" && !etapas[pedida])) {
-  console.error(`uso: tsx hiperbold/scripts/homologar-asaas-e2e-sandbox.mts <${["tudo", ...ORDEM].join("|")}>`);
+if (!pedida || (pedida !== "tudo" && pedida !== "ciclos" && !etapas[pedida])) {
+  console.error(`uso: tsx hiperbold/scripts/homologar-asaas-e2e-sandbox.mts <${["tudo", "ciclos", ...new Set([...ORDEM, ...ORDEM_CICLOS])].join("|")}>`);
   process.exit(1);
 }
-const lista = pedida === "tudo" ? ORDEM : [pedida];
+const lista = pedida === "tudo" ? ORDEM : pedida === "ciclos" ? ORDEM_CICLOS : [pedida];
 try {
   for (const nome of lista) {
     log(`\n=== ${nome} ===`);

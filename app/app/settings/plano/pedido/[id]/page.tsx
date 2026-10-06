@@ -54,7 +54,9 @@ export default async function PedidoPage({ params }: { params: Promise<{ id: str
 
   const descricaoDaOferta =
     data.tipo === "assinatura"
-      ? [data.planoNome, data.ciclo === "yearly" ? t("Anual") : t("Mensal")].filter(Boolean).join(" · ")
+      ? [data.planoNome, data.ciclo === "yearly" ? t("Anual") : data.ciclo === "semiannual" ? t("Semestral") : t("Mensal")]
+          .filter(Boolean)
+          .join(" · ")
       : data.pacoteNome;
 
   return (
