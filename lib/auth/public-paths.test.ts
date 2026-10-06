@@ -42,10 +42,15 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/legal/privacy")).toBe(true);
   });
 
-  it("e só esses dois: /legal não é um portão aberto", () => {
+  it("libera a página de exclusão de dados: a Meta só aceita a URL se abrir sem login", () => {
+    expect(isPublicPath("/legal/data-deletion")).toBe(true);
+  });
+
+  it("e só esses três: /legal não é um portão aberto", () => {
     // Entrada larga aqui é furo de auth em toda a aplicação, não só nesta tela.
     expect(isPublicPath("/legal")).toBe(false);
     expect(isPublicPath("/legal/terms/interno")).toBe(false);
+    expect(isPublicPath("/legal/data-deletion/x")).toBe(false);
     expect(isPublicPath("/legal/qualquer-outra")).toBe(false);
   });
 

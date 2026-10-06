@@ -13458,6 +13458,38 @@ export const DICIONARIO: Traducoes = {
   },
   "Erro ao carregar a previsão.": { es: "Error al cargar la previsión." },
   "Falha ao calcular a previsão do funil.": { es: "No se pudo calcular la previsión del embudo." },
+
+  // Página pública /legal/data-deletion (URL de exclusão de dados exigida pela Meta).
+  "Exclusão de dados": { es: "Eliminación de datos" },
+  "Como pedir a exclusão dos dados tratados por esta instalação do": {
+    es: "Cómo solicitar la eliminación de los datos tratados por esta instalación de",
+  },
+  "1. O que esta página explica": { es: "1. Qué explica esta página" },
+  "Esta página explica como pedir a exclusão dos dados pessoais tratados por esta instalação, inclusive os que chegam pelo WhatsApp, pela API oficial da Meta. Quem responde por esses dados é": {
+    es: "Esta página explica cómo solicitar la eliminación de los datos personales tratados por esta instalación, incluidos los que llegan por WhatsApp, a través de la API oficial de Meta. Quien responde por esos datos es",
+  },
+  "2. Como pedir": { es: "2. Cómo solicitarlo" },
+  "Escreva para o encarregado de dados:": { es: "Escribe al encargado de datos:" },
+  "Informe o telefone ou o e-mail usado na conversa, para confirmarmos que o pedido é do titular dos dados. A resposta vem em até 15 dias, como determina a LGPD.": {
+    es: "Indica el teléfono o el correo electrónico usado en la conversación, para confirmar que la solicitud es del titular de los datos. La respuesta llega en un plazo de hasta 15 días, como determina la LGPD.",
+  },
+  "3. O que acontece com os seus dados": { es: "3. Qué ocurre con tus datos" },
+  "O pedido é atendido por anonimização: ela remove a identificação (nome, telefone, e-mail, conteúdo das conversas e arquivos) e preserva apenas o registro sem identificação. A anonimização": {
+    es: "La solicitud se atiende mediante anonimización: elimina la identificación (nombre, teléfono, correo electrónico, contenido de las conversaciones y archivos) y conserva solo el registro sin identificación. La anonimización",
+  },
+  "Se quiser guardar uma cópia antes, peça também a exportação dos seus dados: ela reúne o que existe sobre você.": {
+    es: "Si quieres guardar una copia antes, solicita también la exportación de tus datos: reúne lo que existe sobre ti.",
+  },
+  "4. O que pode ficar": { es: "4. Qué puede permanecer" },
+  "Podem permanecer os registros que a lei obriga a guardar, como os de natureza fiscal e a prova de auditoria, pelo prazo legal.": {
+    es: "Pueden permanecer los registros que la ley obliga a conservar, como los de naturaleza fiscal y la prueba de auditoría, durante el plazo legal.",
+  },
+  "5. Empresas que conectaram um número": { es: "5. Empresas que conectaron un número" },
+  "A empresa que conectou um número do WhatsApp pode desconectá-lo em Conexões, excluindo o canal. Isso apaga do sistema o token de acesso da Meta daquele número.": {
+    es: "La empresa que conectó un número de WhatsApp puede desconectarlo en Conexiones, eliminando el canal. Esto borra del sistema el token de acceso de Meta de ese número.",
+  },
+  "6. Saiba mais": { es: "6. Más información" },
+  "O tratamento dos dados é descrito na": { es: "El tratamiento de los datos se describe en la" },
 };
 
 /**
