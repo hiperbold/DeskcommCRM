@@ -639,7 +639,8 @@ async function rodarUmaCampanha(
     // `.eq("status","sending")` porque o ack pode ter chegado ANTES desta linha:
     // o trigger já teria avançado o destinatário para `sent`/`delivered`, e
     // escrever por cima o rebaixaria.
-    await admin
+    const idDaMensagem = (mensagem as { id?: string }).id ?? messageId;
+    const { data: fechado } = await admin
       .from("campaign_recipients")
       .update({
         status: falhou ? "failed" : "sent",
@@ -649,10 +650,22 @@ async function rodarUmaCampanha(
         // `messages`, e a linha da mensagem só existe depois do envio. Gravá-lo
         // antes — que era o desenho original, para o trigger de ack sempre achar
         // o destinatário — viola a FK e a reserva falha inteira.
-        message_id: (mensagem as { id?: string }).id ?? messageId,
+        message_id: idDaMensagem,
       })
       .eq("id", alvo.id)
-      .eq("status", "sending");
+      .eq("status", "sending")
+      .select("id");
+    // D-131: se o ack chegou antes, o trigger (0935, pelo metadata) já tirou o
+    // destinatário de `sending`, e a escrita acima não casou. O vínculo com a
+    // mensagem é gravado do mesmo jeito, sem mexer no status que o ack avançou:
+    // sem ele os acks seguintes (lido) não achariam o destinatário pelo message_id.
+    if ((fechado ?? []).length === 0) {
+      await admin
+        .from("campaign_recipients")
+        .update({ message_id: idDaMensagem })
+        .eq("id", alvo.id)
+        .is("message_id", null);
+    }
 
     return {
       enviadas: falhou ? 0 : 1,

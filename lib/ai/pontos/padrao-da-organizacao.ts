@@ -50,6 +50,7 @@
  */
 import { escolherModeloNoCatalogo } from "@/lib/ai/agents/escolher-modelo";
 import { audit } from "@/lib/audit";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
 export type ResultadoDoPadrao =
@@ -86,29 +87,18 @@ export async function definirPadraoDeIaDaOrganizacao(
   if (escolha === null) return { ok: false, motivo: "leitura_falhou" };
   if (!escolha.escolhido) return { ok: false, motivo: "sem_modelo_no_catalogo" };
 
-  const { data: orgAtual, error: leituraErr } = await p.admin
-    .from("organizations")
-    .select("settings")
-    .eq("id", p.orgId)
-    .maybeSingle();
-  if (leituraErr || !orgAtual) return { ok: false, motivo: "leitura_falhou" };
-
-  const settingsAtuais = (orgAtual.settings ?? {}) as Record<string, unknown>;
-  const llmAtual = (settingsAtuais.llm ?? {}) as Record<string, unknown>;
-  const settings = {
-    ...settingsAtuais,
-    llm: { ...llmAtual, provider: p.provider, default_model: escolha.modelId },
-  };
-
-  const { data: gravado, error: escritaErr } = await p.admin
-    .from("organizations")
-    .update({ settings })
-    .eq("id", p.orgId)
-    .select("settings")
-    .maybeSingle();
-  // Zero linhas volta como SUCESSO no PostgREST: sem esta conferência, o passo
-  // diria "gravado" para uma escrita que não aconteceu.
-  if (escritaErr || !gravado) return { ok: false, motivo: "escrita_recusada" };
+  // As duas chaves de `llm` são gravadas pelo banco (D-132), uma a uma: o resto
+  // de `settings` e os demais campos de `llm` (params, enabled_models) nunca
+  // passam pelo Node, então nenhuma escrita concorrente é apagada. A organização
+  // inexistente (0 linhas, que o PostgREST devolveria como sucesso) vira
+  // `escrita_recusada`.
+  for (const [chave, valor] of [
+    ["provider", p.provider],
+    ["default_model", escolha.modelId],
+  ] as const) {
+    const gravou = await atualizarSettingDaOrganizacao(p.admin, p.orgId, ["llm", chave], valor);
+    if (!gravou.ok) return { ok: false, motivo: "escrita_recusada" };
+  }
 
   // Mesma ação de auditoria do PATCH da tela de provedores: é a MESMA mutação
   // (o padrão de IA da organização), vista de outra porta. `origem` é o que

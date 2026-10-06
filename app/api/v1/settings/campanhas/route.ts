@@ -22,6 +22,7 @@ import {
 import { traduzir } from "@/lib/i18n/dicionario";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 
 export const dynamic = "force-dynamic";
 
@@ -72,20 +73,10 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   }
 
   const admin = createAdminClient();
-  const { data: atual, error: erroLeitura } = await admin
-    .from("organizations")
-    .select("settings")
-    .eq("id", authz.org.orgId)
-    .maybeSingle();
-  if (erroLeitura) return fail("internal_error", erroLeitura.message, 500, { requestId });
-
-  const settings = ((atual as { settings?: Record<string, unknown> } | null)?.settings ??
-    {}) as Record<string, unknown>;
-  const { error } = await admin
-    .from("organizations")
-    .update({ settings: { ...settings, campanhas: nova } })
-    .eq("id", authz.org.orgId);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  // D-132: só a chave `campanhas`, gravada pelo banco (sem ler nem regravar o
+  // `settings` inteiro).
+  const gravou = await atualizarSettingDaOrganizacao(admin, authz.org.orgId, ["campanhas"], nova);
+  if (!gravou.ok) return fail("internal_error", gravou.detalhe ?? gravou.motivo, 500, { requestId });
 
   void audit({
     action: "campaign.settings_updated",

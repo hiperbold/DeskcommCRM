@@ -28,6 +28,7 @@
  * anterior, que não conhece `tarefas`, lê o `modo` e descarta o resto sem erro.
  */
 import { z } from "zod";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 
 import type { createAdminClient } from "@/lib/supabase/admin";
 
@@ -223,15 +224,10 @@ export async function gravarConfigDoJev(p: PedidoDeGravarConfig): Promise<Result
       ? proxima.data
       : { ...proxima.data, tarefas: { ...alheias, ...proxima.data.tarefas } };
 
-  const { data: gravado, error: escritaErr } = await p.admin
-    .from("organizations")
-    .update({ settings: { ...settingsAtuais, jev } })
-    .eq("id", p.orgId)
-    .select("settings")
-    .maybeSingle();
-  // Zero linhas volta como SUCESSO no PostgREST: sem esta conferência, a tela
-  // diria "ligado" para uma escrita que não aconteceu.
-  if (escritaErr || !gravado) return { ok: false, motivo: "escrita_recusada" };
+  // Só a chave `jev`, gravada pelo banco (D-132). Organização inexistente (0
+  // linhas, que o PostgREST devolveria como sucesso) vira `escrita_recusada`.
+  const gravou = await atualizarSettingDaOrganizacao(p.admin, p.orgId, ["jev"], jev);
+  if (!gravou.ok) return { ok: false, motivo: "escrita_recusada" };
 
   return { ok: true, config: proxima.data };
 }

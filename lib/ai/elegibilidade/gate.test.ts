@@ -162,6 +162,60 @@ describe("decidirElegibilidade — pré-go-live", () => {
   });
 });
 
+describe("decidirElegibilidade, dois robôs conversando (D-158)", () => {
+  it("remetente que é número de canal da instalação: NÃO permite, no gate aberto e no allowlist", () => {
+    for (const modo of ["open", "allowlist"] as const) {
+      const d = decidirElegibilidade({
+        ...base,
+        modo,
+        aiAuthorizedAt: AGORA,
+        remetenteEhCanalDaInstalacao: true,
+      });
+      expect(d).toEqual({
+        permite: false,
+        motivo: "remetente_e_canal_da_instalacao",
+        bloqueioPorAllowlist: false,
+      });
+    }
+  });
+
+  it("sem a informação do canal (consumidor que não lê) o comportamento de antes não muda", () => {
+    expect(decidirElegibilidade({ ...base, modo: "open" }).permite).toBe(true);
+  });
+
+  it("disjuntor: abaixo do teto permite, no teto e acima NÃO permite", () => {
+    const teto = 20;
+    expect(decidirElegibilidade({ ...base, turnosDeIaNaUltimaHora: 19, tetoDeTurnosPorHora: teto }).permite).toBe(
+      true,
+    );
+    expect(decidirElegibilidade({ ...base, turnosDeIaNaUltimaHora: 20, tetoDeTurnosPorHora: teto })).toMatchObject({
+      permite: false,
+      motivo: "disjuntor_de_turnos",
+      bloqueioPorAllowlist: false,
+    });
+    expect(decidirElegibilidade({ ...base, turnosDeIaNaUltimaHora: 55, tetoDeTurnosPorHora: teto }).permite).toBe(
+      false,
+    );
+  });
+
+  it("disjuntor desligado (teto 0 ou ausente) ou sem contagem nunca abre", () => {
+    expect(decidirElegibilidade({ ...base, turnosDeIaNaUltimaHora: 999, tetoDeTurnosPorHora: 0 }).permite).toBe(true);
+    expect(decidirElegibilidade({ ...base, turnosDeIaNaUltimaHora: 999 }).permite).toBe(true);
+    expect(decidirElegibilidade({ ...base, tetoDeTurnosPorHora: 20 }).permite).toBe(true);
+  });
+
+  it("vetos humanos continuam na frente (force_human diz o motivo, não o disjuntor)", () => {
+    const d = decidirElegibilidade({
+      ...base,
+      forceHuman: true,
+      remetenteEhCanalDaInstalacao: true,
+      turnosDeIaNaUltimaHora: 50,
+      tetoDeTurnosPorHora: 20,
+    });
+    expect(d.motivo).toBe("force_human");
+  });
+});
+
 describe("ttlDaAutorizacaoMs", () => {
   it("default quando ausente/vazio/inválido/zero/negativo", () => {
     const esperado = AI_ALLOWLIST_TTL_DAYS_DEFAULT * DIA;

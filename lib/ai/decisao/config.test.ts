@@ -52,6 +52,18 @@ function adminFalso(linha: Linha, gravaLinhas = true) {
   const filtros: Array<[string, unknown]> = [];
   const updates: Array<Record<string, unknown>> = [];
   const admin = {
+    // A escrita é a RPC `fn_atualizar_setting_da_organizacao` (D-132): o banco troca só
+    // o caminho pedido. O dublê reproduz esse efeito sobre a linha lida e o registra
+    // em `updates` como o `settings` resultante, para as asserções olharem o que ficaria.
+    rpc: async (nome: string, args: { p_org: string; p_caminho: string[]; p_valor: unknown }) => {
+      expect(nome).toBe("fn_atualizar_setting_da_organizacao");
+      filtros.push(["id", args.p_org]);
+      if (!gravaLinhas || linha === null) return { data: 0, error: null };
+      const novo: Record<string, unknown> = { ...linha.settings };
+      novo[args.p_caminho[0]!] = args.p_valor;
+      updates.push({ settings: novo });
+      return { data: 1, error: null };
+    },
     from: (tabela: string) => {
       expect(tabela).toBe("organizations");
       let op: "select" | "update" = "select";

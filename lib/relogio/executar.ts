@@ -65,15 +65,40 @@ async function enfileirarFollowup(job: FollowupJobRequest): Promise<void> {
  * batido. Aqui lemos a última inbound (gêmeos de telefone inclusive) e
  * avançamos quem já respondeu.
  */
+/** Tamanho da página e teto de linhas por tick do relógio HTTP (D-131). */
+export const PAGINA_DE_AGUARDANDO_RESPOSTA = 200;
+export const TETO_DE_AGUARDANDO_RESPOSTA = 2000;
+
+/**
+ * Todos os `waiting_reply`, em páginas por id (ordem estável). Antes lia só 40
+ * sem ordem: com mais de 40 aguardando, os mesmos 40 podiam ocupar a janela e o
+ * resto nunca era visto por este relógio. O teto evita um tick sem fim; passar
+ * dele fica no log, e o worker do follow-up cobre o resto.
+ */
+export async function lerAguardandoResposta(admin: SupabaseClient): Promise<unknown[]> {
+  const linhas: unknown[] = [];
+  for (let de = 0; de < TETO_DE_AGUARDANDO_RESPOSTA; de += PAGINA_DE_AGUARDANDO_RESPOSTA) {
+    const { data, error } = await admin
+      .from("followup_enrollments")
+      .select("*")
+      .in("status", ["waiting_reply"])
+      .order("id", { ascending: true })
+      .range(de, de + PAGINA_DE_AGUARDANDO_RESPOSTA - 1);
+    if (error) throw new Error(error.message);
+    const pagina = data ?? [];
+    linhas.push(...pagina);
+    if (pagina.length < PAGINA_DE_AGUARDANDO_RESPOSTA) return linhas;
+  }
+  logger.warn("[relogio] mais aguardando resposta do que o teto por tick", {
+    teto: TETO_DE_AGUARDANDO_RESPOSTA,
+  });
+  return linhas;
+}
+
 async function aplicarRespostasQueChegaram(admin: SupabaseClient, deps: TickDeps): Promise<number> {
-  const { data, error } = await admin
-    .from("followup_enrollments")
-    .select("*")
-    .in("status", ["waiting_reply"])
-    .limit(40);
-  if (error) throw new Error(error.message);
+  const aguardando = await lerAguardandoResposta(admin);
   let n = 0;
-  for (const row of data ?? []) {
+  for (const row of aguardando) {
     const enrollment = row as EnrollmentRow;
     const ids = await idsDoContatoEGemeos(admin, enrollment.organization_id, enrollment.contact_id);
     const { data: msg, error: msgErr } = await admin

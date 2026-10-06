@@ -28,6 +28,7 @@ import {
   montarEstadoDeElegibilidade,
   type DecisaoDeElegibilidade,
 } from "./gate";
+import { numeroEhDeCanalDaInstalacaoViaSupabase } from "./laco-de-robos";
 
 interface ConversaEmbed {
   bot_silenced_until: string | null;
@@ -63,6 +64,12 @@ export async function decidirElegibilidadeDaConversaViaSupabase(
   if (data == null) return null;
 
   const row = data as unknown as ConversaEmbed;
+  // D-158: o remetente que é número de canal da instalação nunca recebe resposta
+  // de IA. Erro de leitura lança, como o resto desta função (fail-closed).
+  const remetenteEhCanal = await numeroEhDeCanalDaInstalacaoViaSupabase(
+    admin,
+    row.contacts?.phone_number ?? null,
+  );
   return decidirElegibilidade(
     montarEstadoDeElegibilidade({
       aiGate: row.channel_sessions?.metadata?.["ai_gate"] ?? null,
@@ -75,6 +82,7 @@ export async function decidirElegibilidadeDaConversaViaSupabase(
       aiAuthorizedAt: row.contacts?.ai_authorized_at ?? null,
       agora: input.agora,
       ttlMs: input.ttlMs,
+      remetenteEhCanalDaInstalacao: remetenteEhCanal,
     }),
   );
 }

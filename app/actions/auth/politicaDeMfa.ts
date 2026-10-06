@@ -21,6 +21,7 @@ import { loadAuthUser, resolveActiveOrg, sessionAal, isMfaEnrolled, mfaEmDivida 
 import { empresaExigeMfa, exigeCadastroDeMfa } from "@/lib/auth/politica-mfa";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 
 export type ResultadoDaPolitica = { ok: true } | { ok: false; erro: string };
 
@@ -51,22 +52,11 @@ export async function definirExigenciaDeMfa(exigir: boolean): Promise<ResultadoD
   }
 
   const admin = createAdminClient();
-  const { data: atual, error: erroLeitura } = await admin
-    .from("organizations")
-    .select("settings")
-    .eq("id", org.orgId)
-    .maybeSingle();
-  if (erroLeitura) return { ok: false, erro: "Não consegui ler a configuração agora." };
-
-  // `settings` é jsonb livre e compartilhado (o provedor de IA mora nele): ler,
-  // mesclar e gravar preserva o que não é nosso. Um UPDATE com o objeto montado
-  // do zero apagaria a escolha de IA da instalação.
-  const settings = (atual?.settings ?? {}) as Record<string, unknown>;
-  const security = (settings.security ?? {}) as Record<string, unknown>;
-  const novo = { ...settings, security: { ...security, mfa_required: exigir } };
-
-  const { error } = await admin.from("organizations").update({ settings: novo }).eq("id", org.orgId);
-  if (error) return { ok: false, erro: "Não consegui salvar essa mudança agora." };
+  // `settings` é jsonb compartilhado (o provedor de IA mora nele). A chave é
+  // gravada pelo banco, sem ler o objeto inteiro (D-132): outro escritor salvando
+  // ao mesmo tempo não apaga esta flag, nem esta apaga a dele.
+  const gravou = await atualizarSettingDaOrganizacao(admin, org.orgId, ["security", "mfa_required"], exigir);
+  if (!gravou.ok) return { ok: false, erro: "Não consegui salvar essa mudança agora." };
 
   await audit({
     action: exigir ? "security.mfa_exigida" : "security.mfa_dispensada",

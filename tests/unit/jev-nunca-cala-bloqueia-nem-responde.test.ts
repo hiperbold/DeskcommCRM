@@ -189,6 +189,15 @@ function modulosImportados(texto: string): string[] {
   return modulos;
 }
 
+/**
+ * As funções do banco que a cerca CONHECE e sabe que não tocam na conversa. Entra
+ * só quem tem o corpo conferido abaixo (`fn_atualizar_setting_da_organizacao` só
+ * escreve em `organizations.settings`: é como o interruptor do Jev se grava sem
+ * apagar a chave de outro escritor, D-132). Qualquer outra `.rpc()`, ou uma com
+ * o nome que não é texto fixo, continua reprovando.
+ */
+const RPCS_QUE_NAO_ESCREVEM_NA_CONVERSA: ReadonlySet<string> = new Set(["fn_atualizar_setting_da_organizacao"]);
+
 /** A tabela da cadeia não é um texto fixo: pode ser qualquer uma, a da conversa inclusive. */
 const TABELA_DESCONHECIDA = "<tabela que não é texto fixo>";
 
@@ -236,7 +245,10 @@ function escritasNaConversa(texto: string): string[] {
   const visitar = (no: ts.Node): void => {
     if (ts.isCallExpression(no) && ts.isPropertyAccessExpression(no.expression)) {
       const metodo = no.expression.name.text;
-      if (metodo === "rpc") {
+      const primeiro = no.arguments[0];
+      const rpcConhecida =
+        metodo === "rpc" && primeiro !== undefined && ts.isStringLiteralLike(primeiro) && RPCS_QUE_NAO_ESCREVEM_NA_CONVERSA.has(primeiro.text);
+      if (metodo === "rpc" && !rpcConhecida) {
         achadas.push(`rpc (linha ${linhaDe(no)}): a cerca não vê o que a função escreve`);
       } else if (ESCRITAS.has(metodo)) {
         const tabela = tabelaDaCadeia(no.expression.expression, new Set());
@@ -336,6 +348,9 @@ describe("o Jev nunca cala, bloqueia nem responde o cliente", () => {
     expect(escritasNaConversa(`const q = admin.from("contacts");\nawait q.update({ x: 1 });`)).toHaveLength(1);
     expect(escritasNaConversa(`const t = "messages";\nawait admin.from(t).insert({ body });`)).toHaveLength(1);
     expect(escritasNaConversa(`await admin.rpc("fn_qualquer", { p: 1 });`)).toHaveLength(1);
+    // A conhecida passa; o mesmo nome vindo de uma variável não (não se sabe qual é).
+    expect(escritasNaConversa(`await admin.rpc("fn_atualizar_setting_da_organizacao", { p: 1 });`)).toEqual([]);
+    expect(escritasNaConversa(`await admin.rpc(nome, { p: 1 });`)).toHaveLength(1);
     // Um `Set.delete` não é escrita no banco (o aviso tem um).
     expect(escritasNaConversa(`const vistos = new Set<string>();\nvistos.delete(id);`)).toEqual([]);
 
@@ -409,6 +424,16 @@ describe("o Jev nunca cala, bloqueia nem responde o cliente", () => {
 
   it("nada que o Jev executa importa quem envia mensagem ou passa a conversa", () => {
     expect(violacoesDeEnvio(alcanceDoJev), "o Jev nunca fala com o cliente nem chama uma pessoa por conta própria").toEqual([]);
+  });
+
+  it("a função do banco liberada na cerca só escreve em organizations", () => {
+    const sql = readFileSync("supabase/migrations/20260930191000_0936_atualizar_setting_da_organizacao.sql", "utf8")
+      .split("\n")
+      .filter((l) => !l.trim().startsWith("--"))
+      .join("\n");
+    const escritas = [...sql.matchAll(/\b(insert\s+into|update|delete\s+from)\s+(public\.\w+)/gi)].map((m) => m[2]);
+    expect(escritas).toEqual(["public.organizations"]);
+    expect(sql).not.toMatch(/\bexecute\s+(format|')/i);
   });
 
   it("nada que o Jev executa escreve na mensagem, na conversa ou no contato", () => {

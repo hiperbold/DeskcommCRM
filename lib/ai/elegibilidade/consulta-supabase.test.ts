@@ -10,15 +10,30 @@ const TTL = 21 * DIA;
 
 /**
  * Dublê mínimo do supabase-js: `.from().select().eq().eq().maybeSingle()`.
- * `resposta` é o que `maybeSingle` devolve.
+ * `resposta` é o que `maybeSingle` devolve. A leitura dos canais da instalação
+ * (D-158, `.from("channel_sessions").select().is().in()`) devolve `canais`
+ * (quantos canais batem com o telefone) e guarda o que foi perguntado em
+ * `perguntouPorCanais`.
  */
-function adminStub(resposta: { data: unknown; error: { message: string } | null }) {
+function adminStub(
+  resposta: { data: unknown; error: { message: string } | null },
+  canais = 0,
+  perguntouPorCanais: unknown[][] = [],
+) {
   const chain = {
     select: () => chain,
     eq: () => chain,
     maybeSingle: () => Promise.resolve(resposta),
   };
-  return { from: vi.fn(() => chain) } as never;
+  const canaisChain = {
+    select: () => canaisChain,
+    is: () => canaisChain,
+    in: (_coluna: string, grafias: unknown[]) => {
+      perguntouPorCanais.push(grafias);
+      return Promise.resolve({ count: canais, error: null });
+    },
+  };
+  return { from: vi.fn((tabela: string) => (tabela === "channel_sessions" ? canaisChain : chain)) } as never;
 }
 
 function linha(over: Record<string, unknown> = {}) {
@@ -145,6 +160,37 @@ describe("decidirElegibilidadeDaConversaViaSupabase", () => {
 
     expect(permitido?.motivo).toBe("numero_de_teste");
     expect(bloqueado).toMatchObject({ permite: false, motivo: "fora_da_lista_de_teste" });
+  });
+
+  it("remetente é número de canal da instalação: NÃO permite, mesmo com o gate aberto (D-158)", async () => {
+    const perguntou: unknown[][] = [];
+    const d = await decidirElegibilidadeDaConversaViaSupabase(
+      adminStub(
+        {
+          data: linha({ contacts: { force_human: false, ai_authorized_at: null, phone_number: "+5585987654321" } }),
+          error: null,
+        },
+        1,
+        perguntou,
+      ),
+      { organizationId: ORG, conversationId: CONV, agora: AGORA, ttlMs: TTL },
+    );
+    expect(d).toMatchObject({ permite: false, motivo: "remetente_e_canal_da_instalacao" });
+    expect(perguntou[0]).toEqual(expect.arrayContaining(["5585987654321", "+5585987654321"]));
+  });
+
+  it("telefone que não é de canal nenhum segue o gate normal (controle positivo do D-158)", async () => {
+    const d = await decidirElegibilidadeDaConversaViaSupabase(
+      adminStub(
+        {
+          data: linha({ contacts: { force_human: false, ai_authorized_at: null, phone_number: "+5585987654321" } }),
+          error: null,
+        },
+        0,
+      ),
+      { organizationId: ORG, conversationId: CONV, agora: AGORA, ttlMs: TTL },
+    );
+    expect(d).toMatchObject({ permite: true, motivo: "gate_aberto" });
   });
 
   it("conversa inexistente → null", async () => {

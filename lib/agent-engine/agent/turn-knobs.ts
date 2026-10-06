@@ -62,5 +62,6 @@ export function turnKnobsFromEnv(env: Env): InboundTurnKnobs {
       ...(env.FOLLOWUP_AI_MODEL !== undefined ? { model: env.FOLLOWUP_AI_MODEL } : {}),
     },
     allowlistTtlMs: env.AI_ALLOWLIST_TTL_DAYS * 24 * 60 * 60 * 1000,
+    maxAiTurnsPerContactPerHour: env.AI_MAX_TURNS_PER_CONTACT_PER_HOUR,
   };
 }

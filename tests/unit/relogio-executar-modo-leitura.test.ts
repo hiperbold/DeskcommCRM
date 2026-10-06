@@ -67,7 +67,7 @@ function fakeAdmin(opts: { modo: string | null; modoLeitura: boolean }) {
       if (tabela === "followup_enrollments") {
         // aplicarRespostasQueChegaram (lib/relogio/executar.ts): sem
         // enrollment nenhum esperando resposta, o passo fica vazio.
-        return { select: () => ({ in: () => ({ limit: async () => ({ data: [], error: null }) }) }) };
+        return { select: () => ({ in: () => ({ order: () => ({ range: async () => ({ data: [], error: null }) }) }) }) };
       }
       if (tabela === "job_queue") {
         return { insert: async () => ({ error: null }) };
@@ -101,7 +101,7 @@ describe("executarTickDoRelogio × conta suspensa (modo leitura, correção segu
     const admin = {
       from: (tabela: string) => {
         if (tabela === "billing_settings") return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { modo: "bloquear" }, error: null }) }) }) };
-        if (tabela === "followup_enrollments") return { select: () => ({ in: () => ({ limit: async () => ({ data: [], error: null }) }) }), update };
+        if (tabela === "followup_enrollments") return { select: () => ({ in: () => ({ order: () => ({ range: async () => ({ data: [], error: null }) }) }) }), update };
         if (tabela === "job_queue") return { insert };
         throw new Error(`tabela não esperada: ${tabela}`);
       },
@@ -132,7 +132,7 @@ describe("executarTickDoRelogio × conta suspensa (modo leitura, correção segu
     const admin = {
       from: (tabela: string) => {
         if (tabela === "billing_settings") return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { modo: "avisar" }, error: null }) }) }) };
-        if (tabela === "followup_enrollments") return { select: () => ({ in: () => ({ limit: async () => ({ data: [], error: null }) }) }) };
+        if (tabela === "followup_enrollments") return { select: () => ({ in: () => ({ order: () => ({ range: async () => ({ data: [], error: null }) }) }) }) };
         if (tabela === "job_queue") return { insert };
         throw new Error(`tabela não esperada: ${tabela}`);
       },

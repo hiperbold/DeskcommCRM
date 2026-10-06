@@ -74,3 +74,24 @@ export async function hashesExcluidos(
     (data ?? []).map((l) => (l as { recipient_address_hash: string }).recipient_address_hash),
   );
 }
+
+/**
+ * Este endereço está na lista de exclusão da organização? Uma consulta só, para
+ * quem manda UMA mensagem fora da fila (o envio de teste) e não tem o `Set` da
+ * audiência. Lança em erro de banco: erro NÃO é "não está na lista", e quem
+ * chama recusa o envio.
+ */
+export async function enderecoEstaExcluido(
+  admin: SupabaseClient,
+  organizationId: string,
+  endereco: string,
+): Promise<boolean> {
+  const { data, error } = await admin
+    .from("campaign_suppressions")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("recipient_address_hash", hashDoEndereco(endereco))
+    .limit(1);
+  if (error) throw new Error(`exclusões: consulta do endereço, ${error.message}`);
+  return (data ?? []).length > 0;
+}

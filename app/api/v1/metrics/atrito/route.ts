@@ -40,6 +40,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { normalizarIdioma } from "@/lib/i18n/idiomas";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 
 export const dynamic = "force-dynamic";
 
@@ -222,27 +223,15 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   }
 
   const admin = createAdminClient();
-  const { data: orgRow, error: readErr } = await admin
-    .from("organizations")
-    .select("settings")
-    .eq("id", activeOrg.orgId)
-    .maybeSingle();
-  if (readErr) return fail("internal_error", readErr.message, 500, { requestId });
-
-  // Merge não-destrutivo em dois níveis: preserva as demais chaves de `settings`
-  // e as demais chaves de `atrito` (a Fase 3 vai acrescentar réguas aqui).
-  const atuais = (orgRow?.settings as Record<string, unknown> | null) ?? {};
-  const atritoAtual = (atuais.atrito as Record<string, unknown> | null) ?? {};
-  const próximas = {
-    ...atuais,
-    atrito: { ...atritoAtual, abandono_horas: parsed.data.abandono_horas },
-  };
-
-  const { error: updErr } = await admin
-    .from("organizations")
-    .update({ settings: próximas })
-    .eq("id", activeOrg.orgId);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  // D-132: grava só `atrito.abandono_horas`, pelo banco. Preserva as demais
+  // chaves de `settings` e as demais réguas de `atrito` sem ler o objeto inteiro.
+  const gravou = await atualizarSettingDaOrganizacao(
+    admin,
+    activeOrg.orgId,
+    ["atrito", "abandono_horas"],
+    parsed.data.abandono_horas,
+  );
+  if (!gravou.ok) return fail("internal_error", gravou.detalhe ?? gravou.motivo, 500, { requestId });
 
   // Mudar a régua muda a leitura histórica do índice — é mutação relevante e
   // vai para o audit (invariante 3).

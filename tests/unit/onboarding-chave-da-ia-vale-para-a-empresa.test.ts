@@ -49,6 +49,7 @@ const OUTRA_ORG = "99999999-9999-4999-8999-999999999999";
 const USER = "11111111-1111-4111-8111-111111111111";
 
 let responder: (c: Consulta) => Resposta;
+let responderRpc: (args: { p_org: string; p_caminho: string[]; p_valor: unknown }) => Resposta;
 /** Toda UPDATE que o passo mandou — é sobre isto que as asserções falam. */
 let escritas: { orgId: string; settings: Record<string, unknown> }[] = [];
 /** O org id que o `.eq("id", …)` do UPDATE recebeu. */
@@ -86,6 +87,24 @@ vi.mock("@/lib/ai/credenciais/guardar", () => ({
 import { salvarChaveDaIa } from "@/app/actions/onboarding/chaveDaIa";
 import { guardarCredencial } from "@/lib/ai/credenciais/guardar";
 
+/**
+ * O efeito de `fn_atualizar_setting_da_organizacao` (0936) sobre um objeto: troca só o
+ * caminho pedido, cria os pais que faltam, valor nulo remove a chave. A função real é
+ * provada no Postgres (`tests/invariants/lote12-sobras-de-banco.test.ts`); aqui o dublê
+ * só deixa a rota ser exercitada.
+ */
+function aplicarCaminho(settings: Record<string, unknown>, caminho: string[], valor: unknown): Record<string, unknown> {
+  const [chave, ...resto] = caminho;
+  const novo = { ...settings };
+  if (resto.length === 0) {
+    if (valor === null) delete novo[chave!];
+    else novo[chave!] = valor;
+    return novo;
+  }
+  novo[chave!] = aplicarCaminho((novo[chave!] ?? {}) as Record<string, unknown>, resto, valor);
+  return novo;
+}
+
 /** Construtor de consulta no formato do PostgREST: encadeável, thenable. */
 function clienteFalso() {
   const abrir = (table: string) => {
@@ -116,7 +135,14 @@ function clienteFalso() {
     };
     return b;
   };
-  return { from: abrir } as never;
+  // A escrita é a RPC `fn_atualizar_setting_da_organizacao` (D-132), uma chave por vez; o
+  // dublê acumula o efeito num único registro em `escritas`, como a UPDATE de antes.
+  const rpc = async (nome: string, args: { p_org: string; p_caminho: string[]; p_valor: unknown }) => {
+    expect(nome).toBe("fn_atualizar_setting_da_organizacao");
+    const r = responderRpc(args);
+    return r;
+  };
+  return { from: abrir, rpc } as never;
 }
 
 interface Mundo {
@@ -133,6 +159,17 @@ interface Mundo {
 function montarBanco(mundo: Mundo = {}) {
   const modelos = mundo.modelosPorProvedor ?? { anthropic: "claude-sonnet-5" };
   const settingsAtuais = mundo.settings === undefined ? { llm: { provider: "anthropic", default_model: "claude-sonnet-5" } } : mundo.settings;
+
+  responderRpc = (args) => {
+    orgIdAtualizado = args.p_org;
+    if (mundo.escritaCasaZeroLinhas) return { data: 0, error: null };
+    const anterior = escritas[0];
+    const base = anterior ? anterior.settings : ((settingsAtuais ?? {}) as Record<string, unknown>);
+    const settings = aplicarCaminho(base, args.p_caminho, args.p_valor);
+    if (anterior) anterior.settings = settings;
+    else escritas.push({ orgId: args.p_org, settings });
+    return { data: 1, error: null };
+  };
 
   responder = (c) => {
     if (c.table === "ai_models") {

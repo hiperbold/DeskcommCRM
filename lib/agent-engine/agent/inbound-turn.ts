@@ -205,6 +205,7 @@ import type { DependenciasDoPonto } from '@/lib/ai/decisao/ponto';
 import { fusoDaOrganizacao } from './fuso-da-org';
 import { renderAgora } from '@/lib/tempo/agora';
 import { decidirElegibilidadeDaConversa } from '@/lib/ai/elegibilidade/consulta-pg';
+import { TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO } from '@/lib/ai/elegibilidade/laco-de-robos';
 import { anotarUltimaInboundVista, ultimaInboundJaRespondida } from './turno-ja-respondido';
 
 /**
@@ -1317,6 +1318,11 @@ export interface InboundTurnKnobs {
    * de 21 dias é aplicado.
    */
   allowlistTtlMs?: number;
+  /**
+   * Teto de turnos de IA por contato por hora (disjuntor de dois robôs, D-158).
+   * Ausente = o padrão conservador (20); 0 = desligado.
+   */
+  maxAiTurnsPerContactPerHour?: number;
 }
 
 /** Default de `allowlistTtlMs` (21 dias) para testes que omitem o knob. */
@@ -2332,6 +2338,8 @@ async function executarTurnoDoAgente(
         conversationId: input.conversationId,
         agora: clock(),
         ttlMs: deps.knobs.allowlistTtlMs ?? ALLOWLIST_TTL_MS_PADRAO,
+        tetoDeTurnosPorHora:
+          deps.knobs.maxAiTurnsPerContactPerHour ?? TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO,
       });
       if (elegib !== null && !elegib.permite) {
         runLog.info('turno pulado — conversa não elegível para IA', {
@@ -5193,6 +5201,8 @@ export function createInboundTurnHandler(deps: InboundTurnDeps) {
         conversationId: payload.conversation_id,
         agora: deps.clock?.() ?? new Date(),
         ttlMs: deps.knobs.allowlistTtlMs ?? ALLOWLIST_TTL_MS_PADRAO,
+        tetoDeTurnosPorHora:
+          deps.knobs.maxAiTurnsPerContactPerHour ?? TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO,
       });
       if (elegib !== null && !elegib.permite) {
         deps.log.info('turno pulado — conversa não elegível para IA', {

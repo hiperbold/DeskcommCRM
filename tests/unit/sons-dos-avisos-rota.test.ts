@@ -7,9 +7,9 @@
  *   - o arquivo é aceito pelos BYTES, nunca pela extensão;
  *   - corpo declarado grande demais é recusado ANTES de bufferizar;
  *   - o caminho é gerado no servidor, sob a pasta da organização da SESSÃO;
- *   - gravar preserva o resto de `organizations.settings` — e uma LEITURA que
- *     falhou não pode virar `settings` vazio (o update apagaria toda a
- *     configuração da organização);
+ *   - gravar preserva o resto de `organizations.settings`: a escrita é UMA chave
+ *     pela RPC `fn_atualizar_setting_da_organizacao` (D-132), nunca o objeto
+ *     inteiro de volta; e uma LEITURA que falhou não grava nada;
  *   - caminho gravado de OUTRA organização nunca é assinado.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ interface Banco {
   settings: Record<string, unknown> | null;
   erroNaLeitura?: boolean;
   updates: Array<Record<string, unknown>>;
+  rpcs: Array<{ nome: string; args: Record<string, unknown> }>;
   subidos: string[];
   removidos: string[];
   assinados: string[];
@@ -38,6 +39,10 @@ interface Banco {
 
 function fakeAdmin(b: Banco) {
   return {
+    rpc: async (nome: string, args: Record<string, unknown>) => {
+      b.rpcs.push({ nome, args });
+      return { data: 1, error: null };
+    },
     from(tabela: string) {
       expect(tabela).toBe("organizations");
       const chain = {
@@ -77,7 +82,7 @@ function fakeAdmin(b: Banco) {
 }
 
 function banco(settings: Record<string, unknown> | null, extra: Partial<Banco> = {}): Banco {
-  const b: Banco = { settings, updates: [], subidos: [], removidos: [], assinados: [], ...extra };
+  const b: Banco = { settings, updates: [], rpcs: [], subidos: [], removidos: [], assinados: [], ...extra };
   vi.mocked(createAdminClient).mockReturnValue(fakeAdmin(b) as never);
   return b;
 }
@@ -117,16 +122,21 @@ describe("POST /api/v1/settings/sons", () => {
     expect(r.status).toBe(201);
     expect(b.subidos).toHaveLength(1);
     expect(b.subidos[0]).toMatch(new RegExp(`^${ORG}/venda-[0-9a-f-]{36}\\.wav$`));
-    // Merge não-destrutivo: o resto da configuração e o outro som sobrevivem.
-    expect(b.updates[0]).toEqual({
-      settings: { outra_chave: 1, sons_de_aviso: { pessoa: `${ORG}/pessoa-x.ogg`, venda: b.subidos[0] } },
-    });
+    // Só a chave deste som é gravada, pelo banco: o resto da configuração e o outro
+    // som nunca passam pelo Node, então nenhum escritor concorrente é apagado.
+    expect(b.updates).toHaveLength(0);
+    expect(b.rpcs).toEqual([
+      {
+        nome: "fn_atualizar_setting_da_organizacao",
+        args: { p_org: ORG, p_caminho: ["sons_de_aviso", "venda"], p_valor: b.subidos[0] },
+      },
+    ]);
   });
 
   it("o som anterior sai DEPOIS de o novo estar gravado", async () => {
     const b = banco({ sons_de_aviso: { venda: `${ORG}/venda-velho.mp3` } });
     await POST(upload("venda", WAV));
-    expect(b.updates).toHaveLength(1);
+    expect(b.rpcs).toHaveLength(1);
     expect(b.removidos).toEqual([`${ORG}/venda-velho.mp3`]);
   });
 
@@ -168,7 +178,14 @@ describe("DELETE /api/v1/settings/sons", () => {
     const r = await DELETE(new NextRequest("http://localhost/api/v1/settings/sons?tipo=venda", { method: "DELETE" }));
     expect(r.status).toBe(200);
     expect(vi.mocked(requireRole).mock.calls[0]![0]).toBe("manager");
-    expect(b.updates[0]).toEqual({ settings: { outra_chave: 1, sons_de_aviso: { pessoa: `${ORG}/pessoa-b.mp3` } } });
+    // Valor nulo no caminho do som: o banco REMOVE só esta chave e mantém o resto.
+    expect(b.updates).toHaveLength(0);
+    expect(b.rpcs).toEqual([
+      {
+        nome: "fn_atualizar_setting_da_organizacao",
+        args: { p_org: ORG, p_caminho: ["sons_de_aviso", "venda"], p_valor: null },
+      },
+    ]);
     expect(b.removidos).toEqual([`${ORG}/venda-a.mp3`]);
   });
 

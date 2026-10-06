@@ -39,6 +39,7 @@ import { atendimentoConfigPatchSchema, routingConfigSchema, validateRequest } fr
 import { mesclarSettingsDeAtendimento } from "@/lib/schemas/routing";
 import { DEFAULT_VISIBILITY_MODE, type VisibilityMode } from "@/lib/auth/types";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -124,11 +125,24 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   // onde o teste a lê pela mesma função.
   const { settings: nextSettings, routing } = mesclarSettingsDeAtendimento(currentSettings, input);
 
-  const { error: updErr } = await supabase
-    .from("organizations")
-    .update({ settings: nextSettings })
-    .eq("id", activeOrg.orgId);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  // D-132: só as chaves que este PATCH mexe, gravadas pelo banco. Gravar o
+  // `settings` inteiro apagaria o que outro escritor (MFA, marca, IA) salvou
+  // entre a leitura acima e esta escrita.
+  const gravouRouting = await atualizarSettingDaOrganizacao(supabase, activeOrg.orgId, ["routing"], nextSettings.routing);
+  if (!gravouRouting.ok) {
+    return fail("internal_error", gravouRouting.detalhe ?? gravouRouting.motivo, 500, { requestId });
+  }
+  if (visibility_mode !== undefined) {
+    const gravouVisibilidade = await atualizarSettingDaOrganizacao(
+      supabase,
+      activeOrg.orgId,
+      ["visibility_mode"],
+      visibility_mode,
+    );
+    if (!gravouVisibilidade.ok) {
+      return fail("internal_error", gravouVisibilidade.detalhe ?? gravouVisibilidade.motivo, 500, { requestId });
+    }
+  }
 
   void audit({
     action: "routing.config_changed",

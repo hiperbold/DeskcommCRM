@@ -65,8 +65,32 @@ interface EstadoDoBanco {
   catalogo: string[];
 }
 
+/**
+ * O efeito de `fn_atualizar_setting_da_organizacao` (0936) sobre um objeto: troca só o
+ * caminho pedido, cria os pais que faltam, valor nulo remove a chave. A função real é
+ * provada no Postgres (`tests/invariants/lote12-sobras-de-banco.test.ts`); aqui o dublê
+ * só deixa a rota ser exercitada.
+ */
+function aplicarCaminho(settings: Record<string, unknown>, caminho: string[], valor: unknown): Record<string, unknown> {
+  const [chave, ...resto] = caminho;
+  const novo = { ...settings };
+  if (resto.length === 0) {
+    if (valor === null) delete novo[chave!];
+    else novo[chave!] = valor;
+    return novo;
+  }
+  novo[chave!] = aplicarCaminho((novo[chave!] ?? {}) as Record<string, unknown>, resto, valor);
+  return novo;
+}
+
 function stubDoBanco(estado: EstadoDoBanco) {
   return {
+    rpc: async (nome: string, args: { p_org: string; p_caminho: string[]; p_valor: unknown }) => {
+      expect(nome).toBe("fn_atualizar_setting_da_organizacao");
+      const base = (estado.atualizacao?.settings ?? SETTINGS_EXISTENTES) as Record<string, unknown>;
+      estado.atualizacao = { settings: aplicarCaminho(base, args.p_caminho, args.p_valor) };
+      return { data: 1, error: null };
+    },
     from(tabela: string) {
       if (tabela === "organizations") {
         return {

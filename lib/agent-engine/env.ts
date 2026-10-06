@@ -252,6 +252,10 @@ const envSchema = z.object({
   // está viva. Só tem efeito nos canais com o gate ligado — canal 'open' (o
   // default) nunca consulta autorização.
   AI_ALLOWLIST_TTL_DAYS: z.coerce.number().int().positive().default(21),
+  // Disjuntor de dois robôs conversando (D-158): teto de turnos de IA por contato
+  // por hora. Ao estourar, a IA para naquela conversa e abre um aviso na Central;
+  // a mensagem continua sendo recebida. 0 = desligado.
+  AI_MAX_TURNS_PER_CONTACT_PER_HOUR: z.coerce.number().int().min(0).default(20),
 });
 
 export type Env = z.infer<typeof envSchema>;

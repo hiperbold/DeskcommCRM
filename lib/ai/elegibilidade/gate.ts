@@ -73,6 +73,18 @@ export interface EstadoDeElegibilidade {
   agora: Date;
   /** Janela de validade da autorização (`AI_ALLOWLIST_TTL_DAYS` em ms). */
   ttlMs: number;
+  /**
+   * O telefone do contato é o número de um canal da instalação (desta
+   * organização ou de outra): quem escreve é o OUTRO robô, e responder abre o
+   * laço de dois agentes (D-158). Ausente = não sabe, trata como `false`
+   * (consumidores que não leem o canal, como a entrega do Meet, seguem como
+   * antes).
+   */
+  remetenteEhCanalDaInstalacao?: boolean;
+  /** Turnos de IA do contato na última hora (D-158). Ausente = não contado. */
+  turnosDeIaNaUltimaHora?: number;
+  /** Teto de turnos por contato por hora. Ausente ou 0 = disjuntor desligado. */
+  tetoDeTurnosPorHora?: number;
 }
 
 export type MotivoDeElegibilidade =
@@ -80,6 +92,8 @@ export type MotivoDeElegibilidade =
   | "force_human"
   | "conversa_silenciada"
   | "conversa_de_humano"
+  | "remetente_e_canal_da_instalacao"
+  | "disjuntor_de_turnos"
   | "fora_da_lista_de_teste"
   | "numero_de_teste"
   | "sem_autorizacao"
@@ -104,6 +118,17 @@ function silenciadoAgora(until: Date | number | null, agora: Date): boolean {
 }
 
 /**
+ * O disjuntor de turnos de IA por contato por hora (D-158). Só abre com a
+ * contagem E o teto informados: quem não leu o histórico não derruba a IA.
+ */
+function disjuntorDeTurnosAberto(e: EstadoDeElegibilidade): boolean {
+  const teto = e.tetoDeTurnosPorHora;
+  const turnos = e.turnosDeIaNaUltimaHora;
+  if (teto === undefined || teto <= 0 || turnos === undefined) return false;
+  return turnos >= teto;
+}
+
+/**
  * A decisão. Vetos que valem SEMPRE (mesmo com o gate aberto) vêm primeiro —
  * eles já eram lidos pelo motor (`isLeadInHandoff`, `skip("assigned_to_human")`)
  * e continuam valendo. O gate 'allowlist' só ACRESCENTA a exigência de
@@ -118,6 +143,16 @@ export function decidirElegibilidade(e: EstadoDeElegibilidade): DecisaoDeElegibi
   }
   if (e.assigneeKind === "user") {
     return { permite: false, motivo: "conversa_de_humano", bloqueioPorAllowlist: false };
+  }
+  // Dois robôs conversando (D-158): vale em QUALQUER modo do gate, como os
+  // vetos acima. O primeiro é a causa (o remetente é um canal nosso); o
+  // segundo é a rede para o laço que a primeira checagem não enxerga (a
+  // resposta automática de outra empresa).
+  if (e.remetenteEhCanalDaInstalacao === true) {
+    return { permite: false, motivo: "remetente_e_canal_da_instalacao", bloqueioPorAllowlist: false };
+  }
+  if (disjuntorDeTurnosAberto(e)) {
+    return { permite: false, motivo: "disjuntor_de_turnos", bloqueioPorAllowlist: false };
   }
 
   if (e.modo === "open") {
@@ -188,6 +223,9 @@ export function montarEstadoDeElegibilidade(raw: {
   aiAuthorizedAt: Date | string | null | undefined;
   agora: Date;
   ttlMs: number;
+  remetenteEhCanalDaInstalacao?: boolean;
+  turnosDeIaNaUltimaHora?: number;
+  tetoDeTurnosPorHora?: number;
 }): EstadoDeElegibilidade {
   const autorizadoEm = normalizarInstante(raw.aiAuthorizedAt);
   const modo = lerModoDoGate(raw.aiGate);
@@ -204,5 +242,12 @@ export function montarEstadoDeElegibilidade(raw: {
       preGoLive && numeroPodeTestar(raw.contactPhoneNumber, numerosDeTeste),
     agora: raw.agora,
     ttlMs: raw.ttlMs,
+    ...(raw.remetenteEhCanalDaInstalacao !== undefined
+      ? { remetenteEhCanalDaInstalacao: raw.remetenteEhCanalDaInstalacao }
+      : {}),
+    ...(raw.turnosDeIaNaUltimaHora !== undefined
+      ? { turnosDeIaNaUltimaHora: raw.turnosDeIaNaUltimaHora }
+      : {}),
+    ...(raw.tetoDeTurnosPorHora !== undefined ? { tetoDeTurnosPorHora: raw.tetoDeTurnosPorHora } : {}),
   };
 }

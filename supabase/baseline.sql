@@ -57371,6 +57371,176 @@ begin
 end
 $g_crm_leads_etapa$;
 
+-- ---- o ack de entregue/lido de campanha não se perde antes do vínculo (migration 0935, fork Hiperbold, D-131) ----
+-- 0935, o ack de entregue/lido que chega antes do vínculo não se perde mais (D-131, resto) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- `fn_campanha_sincroniza_ack` (0375) achava o destinatário por `campaign_recipients.message_id`, e
+-- esse vínculo só é gravado DEPOIS do envio (a coluna tem FK para `messages`, a linha da mensagem só
+-- existe depois). Quando o canal devolvia o `delivered` ou o `read` antes de o vínculo ser gravado, o
+-- UPDATE não achava ninguém: o destinatário ficava em `sent` para sempre se nenhum ack seguinte
+-- chegasse, e as métricas de entrega e leitura da campanha saíam abaixo da realidade.
+--
+-- A mensagem de campanha já nasce com `metadata.campaign_recipient_id`; agora o ack também acha o
+-- destinatário por ele quando o vínculo ainda não existe (`message_id is null`). O uuid do metadata
+-- é validado por regex dentro de um CASE (o planner não garante a ordem de um AND) para que um
+-- metadata torto nunca derrube o UPDATE de status da mensagem. A organização é conferida. O resto da
+-- regra (status analítico nunca retrocede) fica exatamente como na 0375.
+-- Reaplicável com o app no ar: `create or replace` e o grant idempotente. A função já tem o gatilho
+-- da 0375 apontando para ela. Cria função: entra ANTES da VARREDURA anon.
+
+create or replace function public.fn_campanha_sincroniza_ack() returns trigger
+  language plpgsql
+  security definer
+  set search_path to 'public'
+as $$
+begin
+  if new.status is not distinct from old.status then
+    return new;
+  end if;
+
+  update public.campaign_recipients r
+     set delivered_at = case
+           when new.status in ('delivered', 'read')
+             then coalesce(r.delivered_at, new.delivered_at, now())
+           else r.delivered_at end,
+         read_at = case
+           when new.status = 'read' then coalesce(r.read_at, new.read_at, now())
+           else r.read_at end,
+         sent_at = case
+           when new.status in ('sent', 'delivered', 'read')
+             then coalesce(r.sent_at, new.sent_at, now())
+           else r.sent_at end,
+         status = case
+           when r.status in ('replied', 'opted_out', 'cancelled') then r.status
+           when new.status = 'read' then 'read'
+           when new.status = 'delivered' and r.status in ('queued', 'sending', 'sent') then 'delivered'
+           when new.status = 'sent' and r.status in ('queued', 'sending') then 'sent'
+           when new.status = 'failed' and r.status in ('queued', 'sending', 'sent') then 'failed'
+           else r.status end,
+         last_error_code = case
+           when new.status = 'failed' then coalesce(new.error_code, r.last_error_code)
+           else r.last_error_code end,
+         last_error_detail = case
+           when new.status = 'failed' then coalesce(new.error_message, r.last_error_detail)
+           else r.last_error_detail end,
+         updated_at = now()
+   where r.message_id = new.id
+      or (r.message_id is null
+          and r.organization_id = new.organization_id
+          and r.id = case
+                when new.metadata ->> 'campaign_recipient_id'
+                     ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                  then (new.metadata ->> 'campaign_recipient_id')::uuid
+              end);
+
+  return new;
+end
+$$;
+
+comment on function public.fn_campanha_sincroniza_ack() is
+  'Trigger de messages: leva o ack do canal (sent/delivered/read/failed) ao campaign_recipients daquela mensagem, pelo message_id ou, enquanto o vínculo não existe, pelo metadata.campaign_recipient_id. Status analítico nunca retrocede.';
+
+revoke execute on function public.fn_campanha_sincroniza_ack() from public, anon, authenticated;
+grant execute on function public.fn_campanha_sincroniza_ack() to service_role;
+
+-- ---- uma chave de organizations.settings por vez, atômica (migration 0936, fork Hiperbold, D-132) ----
+-- 0936, uma chave de `organizations.settings` por vez, atômica (D-132, resto) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- `organizations.settings` é um jsonb compartilhado por vários escritores (política de MFA, atendimento,
+-- campanhas, sons, régua de atrito, IA padrão, configuração do Jev). Cada um lia o objeto INTEIRO,
+-- espalhava em memória e regravava o objeto inteiro em outro round-trip: o último apagava o que o
+-- outro tinha acabado de gravar (a política de MFA gravada pelo admin sumia quando o gerente salvava a
+-- régua de atrito). A 0157 fechou isso só para a marca.
+--
+-- `fn_atualizar_setting_da_organizacao(p_org, p_caminho, p_valor)` grava UMA chave (ou um caminho
+-- aninhado) com `jsonb_set` sobre a linha travada, dentro da mesma transação, e nunca toca nas demais.
+--   * `p_caminho` é a lista de chaves (`'{security,mfa_required}'`), de 1 a 4 níveis, sem item vazio;
+--   * os níveis intermediários que faltam são criados como objeto; se um nível existente não for
+--     objeto, a função recusa (22023) em vez de apagar um valor que não é dela;
+--   * `p_valor` nulo (SQL NULL ou jsonb 'null') REMOVE a chave do caminho;
+--   * devolve as linhas afetadas (0 = a organização não existe), como a 0157.
+-- Autorização: servidor (`fn_billing_e_servidor`, o service_role dos handlers que já passaram pelo
+-- gate de papel) ou admin da própria organização ou admin de plataforma; senão 42501. O EXECUTE vai só
+-- para service_role, então o segundo ramo é a defesa para o dia em que o grant escapar.
+-- Reaplicável com o app no ar: `create or replace` e grants idempotentes.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+create or replace function public.fn_atualizar_setting_da_organizacao(
+  p_org     uuid,
+  p_caminho text[],
+  p_valor   jsonb
+) returns integer
+    language plpgsql
+    volatile
+    security definer
+    set search_path to 'public', 'pg_temp'
+as $$
+declare
+  v_settings jsonb;
+  v_nivel    integer;
+  v_pai      jsonb;
+  v_linhas   integer;
+begin
+  if p_org is null or p_caminho is null then
+    raise exception 'setting_da_organizacao_argumento_nulo' using errcode = '22023';
+  end if;
+  if coalesce(array_length(p_caminho, 1), 0) not between 1 and 4
+     or exists (select 1 from unnest(p_caminho) as c(k) where c.k is null or btrim(c.k) = '')
+  then
+    raise exception 'setting_da_organizacao_caminho_invalido' using errcode = '22023';
+  end if;
+
+  if not public.fn_billing_e_servidor()
+     and not public.fn_role_at_least(p_org, 'admin')
+     and not public.fn_is_platform_admin()
+  then
+    raise exception 'setting_da_organizacao_sem_permissao' using errcode = '42501';
+  end if;
+
+  -- A linha fica travada até o fim da transação: dois escritores de chaves diferentes se enfileiram
+  -- aqui e cada um parte do estado que o outro acabou de gravar.
+  select coalesce(o.settings, '{}'::jsonb) into v_settings
+    from public.organizations o
+   where o.id = p_org
+     for update;
+  if not found then
+    return 0;
+  end if;
+
+  if p_valor is null or jsonb_typeof(p_valor) = 'null' then
+    v_settings := v_settings #- p_caminho;
+  else
+    -- jsonb_set só cria a ÚLTIMA chave; os pais que faltam são criados aqui.
+    for v_nivel in 1 .. array_length(p_caminho, 1) - 1 loop
+      v_pai := v_settings #> p_caminho[1:v_nivel];
+      if v_pai is null or jsonb_typeof(v_pai) = 'null' then
+        v_settings := jsonb_set(v_settings, p_caminho[1:v_nivel], '{}'::jsonb, true);
+      elsif jsonb_typeof(v_pai) <> 'object' then
+        raise exception 'setting_da_organizacao_caminho_atravessa_valor_que_nao_e_objeto'
+          using errcode = '22023';
+      end if;
+    end loop;
+    v_settings := jsonb_set(v_settings, p_caminho, p_valor, true);
+  end if;
+
+  update public.organizations o set settings = v_settings where o.id = p_org;
+  get diagnostics v_linhas = row_count;
+  return v_linhas;
+end;
+$$;
+
+comment on function public.fn_atualizar_setting_da_organizacao(uuid, text[], jsonb) is
+  'Grava UMA chave (ou caminho aninhado) de organizations.settings com a linha travada e jsonb_set, sem tocar nas demais. valor nulo remove a chave. Devolve linhas afetadas (0 = organização inexistente). Servidor, admin da organização ou admin de plataforma; senão 42501.';
+
+revoke execute on function public.fn_atualizar_setting_da_organizacao(uuid, text[], jsonb)
+  from public, anon, authenticated;
+grant execute on function public.fn_atualizar_setting_da_organizacao(uuid, text[], jsonb)
+  to service_role;
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

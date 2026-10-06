@@ -22,6 +22,7 @@ import { decidirRajada } from './debounce';
 import { avisoDeEventoMorto, IA_QUE_NAO_RESPONDEU } from '@/lib/event-log/aviso-de-evento-morto';
 import { TIPOS_DERIVAVEIS, DERIVACAO_TERMINADA } from '@/lib/messaging/media/derivable';
 import { decidirElegibilidadeDaConversa } from '@/lib/ai/elegibilidade/consulta-pg';
+import { TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO } from '@/lib/ai/elegibilidade/laco-de-robos';
 import { deveCederTurnoAoRetorno } from '@/lib/followup/ceder-turno-ao-retorno';
 
 const DRAIN_CONSUMER = 'agent-engine';
@@ -57,6 +58,11 @@ export interface DrainKnobs {
    * testes que não exercitam o gate — o default de 21 dias em ms é aplicado.
    */
   allowlistTtlMs?: number;
+  /**
+   * Teto de turnos de IA por contato por hora (disjuntor de dois robôs, D-158).
+   * Ausente = o padrão conservador (20); 0 = desligado.
+   */
+  maxAiTurnsPerContactPerHour?: number;
 }
 
 /** Default de `allowlistTtlMs` (21 dias) para testes que omitem o knob. */
@@ -390,6 +396,7 @@ async function processEvent(
       conversationId: p.conversation_id,
       agora: new Date(),
       ttlMs: knobs.allowlistTtlMs ?? ALLOWLIST_TTL_MS_PADRAO,
+      tetoDeTurnosPorHora: knobs.maxAiTurnsPerContactPerHour ?? TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO,
     });
     if (!canAssist && elegib !== null && !elegib.permite) {
       log.info('drain: conversa não elegível para IA — turno pulado (sem gasto)', {

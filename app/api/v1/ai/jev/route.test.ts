@@ -70,8 +70,44 @@ let papel: Role;
 /** O teto do PostgREST sem `range` (`supabase/config.toml`, `max_rows`). */
 const MAX_ROWS = 1000;
 
+/**
+ * O efeito de `fn_atualizar_setting_da_organizacao` (0936) sobre um objeto: troca só o
+ * caminho pedido, cria os pais que faltam, valor nulo remove a chave. A função real é
+ * provada no Postgres (`tests/invariants/lote12-sobras-de-banco.test.ts`); aqui o dublê
+ * só deixa a rota ser exercitada.
+ */
+function aplicarCaminho(settings: Record<string, unknown>, caminho: string[], valor: unknown): Record<string, unknown> {
+  const [chave, ...resto] = caminho;
+  const novo = { ...settings };
+  if (resto.length === 0) {
+    if (valor === null) delete novo[chave!];
+    else novo[chave!] = valor;
+    return novo;
+  }
+  novo[chave!] = aplicarCaminho((novo[chave!] ?? {}) as Record<string, unknown>, resto, valor);
+  return novo;
+}
+
 function cliente(tipo: Consulta["cliente"]) {
   return {
+    // A escrita de `settings` é a RPC (D-132): registra o efeito como a escrita em `organizations`
+    // que as asserções já conhecem (cliente, filtro de organização, `settings` resultante).
+    rpc: async (nome: string, args: { p_org: string; p_caminho: string[]; p_valor: unknown }) => {
+      expect(nome).toBe("fn_atualizar_setting_da_organizacao");
+      const novo = aplicarCaminho(estado.settings, args.p_caminho, args.p_valor);
+      estado.settings = novo;
+      estado.consultas.push({
+        cliente: tipo,
+        tabela: "organizations",
+        eq: [["id", args.p_org]],
+        nao: [],
+        neq: [],
+        gte: [],
+        range: null,
+        patch: { settings: novo },
+      });
+      return { data: 1, error: null };
+    },
     from(tabela: string) {
       const c: Consulta = { cliente: tipo, tabela, eq: [], nao: [], neq: [], gte: [], range: null, patch: null };
       estado.consultas.push(c);

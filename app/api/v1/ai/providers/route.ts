@@ -37,6 +37,7 @@ import { modeloDeTranscricaoEmVigor } from "@/lib/messaging/media/transcription"
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 
 export const dynamic = "force-dynamic";
 
@@ -509,31 +510,16 @@ export async function PATCH(req: NextRequest): Promise<Response> {
   // JWT), nunca do corpo.
   const admin = createAdminClient();
 
-  // MERGE, nunca sobrescrita. `organizations.settings` é um jsonb compartilhado
-  // — `branding` (a marca da instalação) e `security` (a política de MFA) moram
-  // nele. Um `update({ settings: { llm } })` ingênuo apaga os dois em silêncio, e
-  // o sintoma aparece dias depois, longe daqui.
-  const { data: orgAtual } = await admin
-    .from("organizations")
-    .select("settings")
-    .eq("id", org.orgId)
-    .maybeSingle();
-
-  const settingsAtuais = ((orgAtual?.settings ?? {}) as Record<string, unknown>) || {};
-  const settings = {
-    ...settingsAtuais,
-    llm: { provider: corpo.provider, default_model: corpo.default_model },
-  };
-
-  const { data: gravado, error } = await admin
-    .from("organizations")
-    .update({ settings })
-    .eq("id", org.orgId)
-    .select("settings")
-    .maybeSingle();
-
-  if (error) return fail("save_failed", error.message, 500);
-  if (!gravado) {
+  // Só a chave `llm`, gravada pelo banco (D-132). `organizations.settings` é um
+  // jsonb compartilhado: `branding` (a marca) e `security` (a política de MFA)
+  // moram nele, e regravar o objeto inteiro apagaria o que outro escritor salvou
+  // entre a leitura e a escrita.
+  const gravou = await atualizarSettingDaOrganizacao(admin, org.orgId, ["llm"], {
+    provider: corpo.provider,
+    default_model: corpo.default_model,
+  });
+  if (!gravou.ok && gravou.motivo === "banco") return fail("save_failed", gravou.detalhe ?? "banco", 500);
+  if (!gravou.ok) {
     // Mesma armadilha do PUT: no PostgREST, update que casa zero linhas volta
     // como sucesso, e a tela diria "salvo" sem nada ter sido gravado.
     return fail("save_failed", t("nada foi gravado — verifique as permissões da organização"), 500);

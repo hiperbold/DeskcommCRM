@@ -27,6 +27,7 @@ import {
   type TipoDeSom,
 } from "@/lib/notifications/sons-da-org";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { atualizarSettingDaOrganizacao } from "@/lib/organizations/atualizar-setting";
 
 export const dynamic = "force-dynamic";
 
@@ -68,15 +69,15 @@ async function lerConfiguracao(
   return { settings, sons };
 }
 
-async function gravarSons(orgId: string, settings: Record<string, unknown>, sons: Sons): Promise<boolean> {
-  // Cliente admin: a RLS de `organizations` só deixa platform admin escrever, e
-  // com o cliente de sessão isto casaria zero linhas dizendo "sucesso".
-  const admin = createAdminClient();
-  const { error } = await admin
-    .from("organizations")
-    .update({ settings: { ...settings, sons_de_aviso: sons } })
-    .eq("id", orgId);
-  return !error;
+/**
+ * Grava (ou, com `caminho` nulo, remove) o som de UM aviso, pelo banco (D-132):
+ * só `sons_de_aviso.<tipo>` muda, e o resto de `settings` nunca passa pelo Node.
+ * Cliente admin: a RLS de `organizations` só deixa platform admin escrever, e
+ * com o cliente de sessão isto casaria zero linhas dizendo "sucesso".
+ */
+async function gravarSom(orgId: string, tipo: TipoDeSom, caminho: string | null): Promise<boolean> {
+  const r = await atualizarSettingDaOrganizacao(createAdminClient(), orgId, ["sons_de_aviso", tipo], caminho);
+  return r.ok;
 }
 
 export async function GET(): Promise<Response> {
@@ -143,9 +144,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     return fail("internal_error", t("Erro ao subir o som."), 500, { requestId });
   }
 
-  const { settings, sons } = atual;
-  const anterior = sons[tipo];
-  if (!(await gravarSons(orgId, settings, { ...sons, [tipo]: caminho }))) {
+  const anterior = atual.sons[tipo];
+  if (!(await gravarSom(orgId, tipo, caminho))) {
     await admin.storage.from(BUCKET_DOS_SONS).remove([caminho]);
     return fail("internal_error", t("Erro ao salvar o som."), 500, { requestId });
   }
@@ -180,11 +180,8 @@ export async function DELETE(req: NextRequest): Promise<Response> {
 
   const atual = await lerConfiguracao(orgId);
   if (!atual) return fail("internal_error", t("Erro ao salvar o som."), 500, { requestId });
-  const { settings, sons } = atual;
-  const caminho = sons[tipo];
-  const resto = { ...sons };
-  delete resto[tipo];
-  if (!(await gravarSons(orgId, settings, resto))) {
+  const caminho = atual.sons[tipo];
+  if (!(await gravarSom(orgId, tipo, null))) {
     return fail("internal_error", t("Erro ao salvar o som."), 500, { requestId });
   }
   if (caminho) await createAdminClient().storage.from(BUCKET_DOS_SONS).remove([caminho]);

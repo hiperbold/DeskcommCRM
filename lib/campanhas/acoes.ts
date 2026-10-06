@@ -21,6 +21,7 @@ import { sendMessageHandler } from "@/app/api/v1/messages/_handler";
 import { beginServiceAtOrigin } from "@/lib/atendimento/origem";
 
 import { baseLegalValida, motivoParaExcluir, recusouMarketing } from "./elegibilidade";
+import { enderecoEstaExcluido } from "./exclusoes";
 import { ehStatusDaCampanha, podeTransitar } from "./maquina-de-estados";
 import { prepararCampanha } from "./preparacao";
 import { nomeDoContato } from "@/lib/contacts/rotulo-do-contato";
@@ -432,6 +433,33 @@ export async function testarAcao(
       mensagem: `Este contato não pode receber: ${motivo}.`,
       status: 422,
     };
+  }
+
+  // D-131: a lista de exclusão da operação vale para o teste também. Sem isto o
+  // teste furava a lista que a rodada oficial respeita ("este número é do
+  // contador", "este cliente a gente fala por telefone"). Erro na consulta
+  // recusa o envio: não saber não é o mesmo que "não está na lista".
+  const endereco = (linha.phone_number ?? "").trim();
+  if (endereco !== "") {
+    let excluido: boolean;
+    try {
+      excluido = await enderecoEstaExcluido(admin, c.organization_id, endereco);
+    } catch {
+      return {
+        ok: false,
+        codigo: "unavailable",
+        mensagem: "Não foi possível conferir a lista de exclusão agora. Tente o teste de novo em instantes.",
+        status: 503,
+      };
+    }
+    if (excluido) {
+      return {
+        ok: false,
+        codigo: "campanha_conteudo_invalido",
+        mensagem: "Este contato está na lista de exclusão de campanhas: escolha outro para o teste.",
+        status: 422,
+      };
+    }
   }
 
   const render = renderizar(

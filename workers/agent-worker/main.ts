@@ -356,6 +356,7 @@ export async function startWorker(
       debounceMs: env.INBOUND_DEBOUNCE_MS,
       reapTimeoutMs: env.CRM_EVENT_REAP_TIMEOUT_MS,
       allowlistTtlMs: env.AI_ALLOWLIST_TTL_DAYS * 24 * 60 * 60 * 1000,
+      maxAiTurnsPerContactPerHour: env.AI_MAX_TURNS_PER_CONTACT_PER_HOUR,
     },
     log,
     loopsAbort.signal,
