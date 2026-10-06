@@ -5409,5 +5409,21 @@
   "Com o Supabase separado, o cadastro direto não acompanha a troca sozinho: o CRM já segue o modo novo, mas o Supabase continua com o modo anterior. Esta tela só avisa — nada é corrigido aqui.": "使用独立的 Supabase 时，直接注册不会自动跟随此次更改：CRM 已按新模式运行，但 Supabase 仍是原来的模式。本页面只提醒，不做任何修正。",
   "No painel do Supabase, em Authentication → Sign In / Up, desligue \"Allow new users to sign up\".": "在 Supabase 控制台的 Authentication → Sign In / Up 中，关闭 \"Allow new users to sign up\"。",
   "No painel do Supabase, em Authentication → Sign In / Up, ligue \"Allow new users to sign up\".": "在 Supabase 控制台的 Authentication → Sign In / Up 中，开启 \"Allow new users to sign up\"。",
-  "Em GoTrue próprio, a chave equivalente é:": "如使用自建 GoTrue，对应的配置项是："
+  "Em GoTrue próprio, a chave equivalente é:": "如使用自建 GoTrue，对应的配置项是：",
+  "Exclusão de dados": "数据删除",
+  "Como pedir a exclusão dos dados tratados por esta instalação do": "如何申请删除此安装所处理的数据：",
+  "1. O que esta página explica": "1. 本页面说明的内容",
+  "Esta página explica como pedir a exclusão dos dados pessoais tratados por esta instalação, inclusive os que chegam pelo WhatsApp, pela API oficial da Meta. Quem responde por esses dados é": "本页面说明如何申请删除此安装所处理的个人数据，包括通过 Meta 官方 API 经 WhatsApp 收到的数据。对这些数据负责的是",
+  "2. Como pedir": "2. 如何申请",
+  "Escreva para o encarregado de dados:": "请写信给数据保护负责人：",
+  "Informe o telefone ou o e-mail usado na conversa, para confirmarmos que o pedido é do titular dos dados. A resposta vem em até 15 dias, como determina a LGPD.": "请提供对话中使用的电话号码或电子邮箱，以便我们确认申请人为数据主体本人。按照 LGPD 的规定，我们将在 15 天内回复。",
+  "3. O que acontece com os seus dados": "3. 您的数据会如何处理",
+  "O pedido é atendido por anonimização: ela remove a identificação (nome, telefone, e-mail, conteúdo das conversas e arquivos) e preserva apenas o registro sem identificação. A anonimização": "申请将通过匿名化处理：移除身份识别信息（姓名、电话、电子邮箱、对话内容和文件），仅保留不含身份信息的记录。匿名化",
+  "Se quiser guardar uma cópia antes, peça também a exportação dos seus dados: ela reúne o que existe sobre você.": "如果希望事先留存一份副本，请同时申请导出您的数据：导出会汇总系统中与您有关的全部内容。",
+  "4. O que pode ficar": "4. 可能保留的内容",
+  "Podem permanecer os registros que a lei obriga a guardar, como os de natureza fiscal e a prova de auditoria, pelo prazo legal.": "法律要求保存的记录可能会保留，例如税务性质的记录和审计证明，保存期限以法律规定为准。",
+  "5. Empresas que conectaram um número": "5. 已连接号码的企业",
+  "A empresa que conectou um número do WhatsApp pode desconectá-lo em Conexões, excluindo o canal. Isso apaga do sistema o token de acesso da Meta daquele número.": "已连接 WhatsApp 号码的企业可以在“连接”中删除该渠道以断开号码。这会从系统中删除该号码的 Meta 访问令牌。",
+  "6. Saiba mais": "6. 了解更多",
+  "O tratamento dos dados é descrito na": "数据的处理方式详见"
 }
