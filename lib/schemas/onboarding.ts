@@ -62,6 +62,8 @@ export const onboardingStateSchema = z.object({
   welcome: z
     .object({
       accepted_at: z.string(),
+      /** D-133: a versão dos Termos de Uso aceita (`lib/legal/versao-dos-termos.ts`). */
+      terms_version: z.string().optional(),
       timezone: z.string(),
       display_name: z.string(),
       /** O ramo, na palavra do dono. Alimenta o prompt e o quadro de clientes. */

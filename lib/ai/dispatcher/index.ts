@@ -52,6 +52,7 @@ export type DispatchOutcome =
   | "skipped_invalid_payload"
   | "skipped_missing_message"
   | "skipped_external_dispatch"
+  | "skipped_org_inativa"
   | "error";
 
 export interface DispatchSummary {
@@ -95,6 +96,7 @@ const EMPTY_OUTCOMES = (): Record<DispatchOutcome, number> => ({
   skipped_invalid_payload: 0,
   skipped_missing_message: 0,
   skipped_external_dispatch: 0,
+  skipped_org_inativa: 0,
   error: 0,
 });
 
@@ -137,7 +139,7 @@ export async function dispatchAgents(opts: DispatchOptions = {}): Promise<Dispat
   // 1b. Resolve organizations.settings.ai_dispatch_mode for the batch's orgs in
   //     one query (G6-02). 'external' orgs delegate dispatch to the Vendaval
   //     runtime; the native dispatcher must leave their events untouched.
-  const dispatchModeByOrg = await loadDispatchModes(candidateEvents);
+  const { modes: dispatchModeByOrg, inativas: orgsInativas } = await loadDispatchModes(candidateEvents);
 
   // 2. Claim each event optimistically (CAS on status='pending'). Skip when
   //    another worker already processed/claimed it in this tick.
@@ -148,6 +150,15 @@ export async function dispatchAgents(opts: DispatchOptions = {}): Promise<Dispat
     // the external dispatcher (Vendaval) still picks it up as pending.
     if (dispatchModeByOrg.get(event.organization_id) === "external") {
       summary.outcomes.skipped_external_dispatch += 1;
+      continue;
+    }
+
+    // D-091: organização suspensa (ou arquivada) não gasta IA. O status vem da MESMA leitura de
+    // organizations do modo de despacho, sem consulta a mais. O evento é consumido: reativar a
+    // conta não responde mensagem velha.
+    if (orgsInativas.has(event.organization_id)) {
+      await markEventProcessed(event, "skipped_org_inativa");
+      summary.outcomes.skipped_org_inativa += 1;
       continue;
     }
 
@@ -340,25 +351,34 @@ async function processEvent(event: EventRow): Promise<DispatchOutcome> {
  * absent/invalid key) resolve to the default 'native' via the schema's
  * `.catch("native")`, i.e. they are processed as today.
  */
-async function loadDispatchModes(events: EventRow[]): Promise<Map<string, string>> {
+async function loadDispatchModes(
+  events: EventRow[],
+): Promise<{ modes: Map<string, string>; inativas: Set<string> }> {
   const modes = new Map<string, string>();
+  const inativas = new Set<string>();
   const orgIds = [...new Set(events.map((e) => e.organization_id))];
-  if (orgIds.length === 0) return modes;
+  if (orgIds.length === 0) return { modes, inativas };
 
   const admin = createAdminClient();
-  const { data, error } = await admin.from("organizations").select("id, settings").in("id", orgIds);
+  const { data, error } = await admin.from("organizations").select("id, settings, status").in("id", orgIds);
   if (error) {
     logger.warn("[agent-dispatcher] loadDispatchModes failed — defaulting to native", {
       error: error.message,
     });
-    return modes;
+    return { modes, inativas };
   }
 
-  for (const row of (data ?? []) as Array<{ id: string; settings: Record<string, unknown> | null }>) {
+  for (const row of (data ?? []) as Array<{
+    id: string;
+    settings: Record<string, unknown> | null;
+    status?: string | null;
+  }>) {
     const raw = row.settings?.ai_dispatch_mode;
     modes.set(row.id, aiDispatchModeSchema.parse(raw));
+    // D-091: só um status explícito diferente de 'active' barra (a coluna é NOT NULL no banco).
+    if (typeof row.status === "string" && row.status !== "active") inativas.add(row.id);
   }
-  return modes;
+  return { modes, inativas };
 }
 
 // ---------------------------------------------------------------------------

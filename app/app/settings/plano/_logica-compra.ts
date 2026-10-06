@@ -38,6 +38,42 @@ export function urlDeRedirecionamentoEhSegura(url: string): boolean {
   return PREFIXOS_DE_REDIRECIONAMENTO_PERMITIDOS.some((prefixo) => url.startsWith(prefixo));
 }
 
+// ─── Cancelar assinatura (tela Plano e uso) ────────────────────────────────
+
+/**
+ * Quando a tela mostra "Cancelar assinatura". Duas situações têm assinatura a cancelar no
+ * Asaas: a viva no contrato (id gravado, sem marcador de encerramento) e a AGENDADA de quem tem
+ * período pago a frente (Pix) e assinou no cartão: o contrato ainda não guarda o id dela, só o
+ * pedido de cartão em `aguardando_pagamento` o carrega. O segundo caso espelha, de propósito, o
+ * que `cancelarAssinaturaDoCliente` (`lib/billing/asaas/compra.ts`) aceita cancelar: pedido de
+ * assinatura, cartão, aguardando pagamento, com id da assinatura, no ambiente configurado.
+ * Mostrar o botão onde o servidor recusaria só levaria a uma frase de erro.
+ */
+export function podeCancelarAssinatura(args: {
+  habilitado: boolean;
+  erroConfiguracao: string | null;
+  ambiente: "sandbox" | "producao";
+  assinaturaDoContrato: { asaasSubscriptionId: string; encerradaEm: string | null } | null;
+  pedidos: ReadonlyArray<{
+    tipo: string;
+    metodo: string;
+    status: string;
+    ambiente: "sandbox" | "producao";
+    asaasSubscriptionId: string | null;
+  }>;
+}): boolean {
+  if (!args.habilitado || args.erroConfiguracao !== null) return false;
+  if (args.assinaturaDoContrato !== null && args.assinaturaDoContrato.encerradaEm === null) return true;
+  return args.pedidos.some(
+    (p) =>
+      p.tipo === "assinatura" &&
+      p.metodo === "CREDIT_CARD" &&
+      p.status === "aguardando_pagamento" &&
+      p.asaasSubscriptionId !== null &&
+      p.ambiente === args.ambiente,
+  );
+}
+
 // ─── Polling do pedido (tarefas 20 e 21) ───────────────────────────────────
 
 /** A cada 5 segundos, como o briefing pede. */

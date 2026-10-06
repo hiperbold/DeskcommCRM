@@ -64,6 +64,7 @@ import {
   estadoDasChavesAsaas,
   type AssinaturaAsaasDaOrganizacao,
   type EstadoDasChavesAsaas,
+  type PedidoAsaas,
 } from "@/lib/billing/asaas/leitura";
 import { estadoDoBloqueio, type EstadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
 import {
@@ -85,6 +86,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BotaoCancelarAssinatura } from "./_botao-cancelar-assinatura";
+import { podeCancelarAssinatura } from "./_logica-compra";
 import {
   Table,
   TableBody,
@@ -203,7 +205,12 @@ export default async function PlanoEUsoPage() {
       <CartaoDaAssinatura assinatura={assinatura} t={t} tagDoIdioma={tagDoIdioma} />
 
       {souAdminDaOrganizacao && chavesAsaas && asaasOrg && !asaasOrg.leituraFalhou && (
-        <CartaoDeAssinaturaEPagamento chaves={chavesAsaas} assinaturaAsaas={asaasOrg.assinatura} t={t} />
+        <CartaoDeAssinaturaEPagamento
+          chaves={chavesAsaas}
+          assinaturaAsaas={asaasOrg.assinatura}
+          pedidos={asaasOrg.pedidos}
+          t={t}
+        />
       )}
 
       <BannerDoBloqueio bloqueio={bloqueio} t={t} tagDoIdioma={tagDoIdioma} />
@@ -379,15 +386,24 @@ function CartaoDaAssinatura({
 function CartaoDeAssinaturaEPagamento({
   chaves,
   assinaturaAsaas,
+  pedidos,
   t,
 }: {
   chaves: EstadoDasChavesAsaas;
   assinaturaAsaas: AssinaturaAsaasDaOrganizacao | null;
+  pedidos: PedidoAsaas[];
   t: (texto: string) => string;
 }) {
   const podeComprar = chaves.habilitado && chaves.erroConfiguracao === null && chaves.compraPeloCliente;
-  const podeCancelar =
-    chaves.habilitado && chaves.erroConfiguracao === null && assinaturaAsaas !== null && assinaturaAsaas.encerradaEm === null;
+  // Também com assinatura AGENDADA em pedido de cartão aguardando pagamento (o contrato ainda não
+  // guarda o id dela): ver `podeCancelarAssinatura`.
+  const podeCancelar = podeCancelarAssinatura({
+    habilitado: chaves.habilitado,
+    erroConfiguracao: chaves.erroConfiguracao,
+    ambiente: chaves.ambiente,
+    assinaturaDoContrato: assinaturaAsaas,
+    pedidos,
+  });
 
   return (
     <Card>

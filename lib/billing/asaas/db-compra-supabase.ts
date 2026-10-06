@@ -151,6 +151,7 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
         p_ambiente: args.ambiente,
         p_chave: args.chave,
         p_actor: args.actor,
+        p_termos_versao: args.termosVersao,
       } as never);
       if (error) return { data: null, error: error as RpcErro };
       const d = data as {

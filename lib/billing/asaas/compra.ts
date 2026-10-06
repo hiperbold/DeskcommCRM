@@ -194,6 +194,8 @@ export interface EntradaIniciarCompra {
   /** uuid do formulário, a chave de idempotência (decisão 13). */
   chave: string;
   pagador?: DadosPagador;
+  /** D-133: a versão dos Termos de Uso que o cliente aceitou (`lib/legal/versao-dos-termos.ts`). Sem ela a compra é recusada. */
+  termosVersao: string;
 }
 
 export interface QrPixResposta {
@@ -301,6 +303,7 @@ export interface DbCompra {
     ambiente: AmbienteAsaas;
     chave: string;
     actor: string;
+    termosVersao: string | null;
   }): Promise<RpcResultado<PedidoCriado>>;
 
   /** Leitura pura: pedido aberto (`criado`/`aguardando_pagamento`/`inconclusivo`/`processando`) do mesmo tipo, se houver (M9). */
@@ -383,6 +386,8 @@ export const MENSAGEM_TROCA_DE_CICLO =
 /** 0942: `billing_troca_de_plano_indisponivel`. A tela passa esta frase por `t()` (es e zh-CN em `lib/i18n`). */
 export const MENSAGEM_TROCA_DE_PLANO =
   "Sua assinatura atual ainda está no período pago de outro plano. A troca de plano ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.";
+/** D-133: compra sem o aceite dos Termos de Uso. */
+export const MENSAGEM_TERMOS_NAO_ACEITOS = "Aceite os Termos de Uso para continuar.";
 export const MENSAGEM_OUTRA_OFERTA_ABERTA =
   "Há um pedido em aberto de outra opção. Conclua ou peça para cancelar antes de escolher outra.";
 
@@ -426,6 +431,9 @@ function mensagemDoErroDoPedido(erro: RpcErro): string {
   }
   if (contemCodigo(erro, "billing_troca_de_plano_indisponivel")) {
     return MENSAGEM_TROCA_DE_PLANO;
+  }
+  if (contemCodigo(erro, "billing_termos_nao_aceitos") || contemCodigo(erro, "billing_termos_invalidos")) {
+    return MENSAGEM_TERMOS_NAO_ACEITOS;
   }
   if (contemCodigo(erro, "billing_ja_tem_assinatura_asaas")) {
     return "Sua organização já tem uma assinatura ativa.";
@@ -499,6 +507,7 @@ async function resolverPedido(
     ambiente,
     chave: entrada.chave,
     actor: entrada.actorId,
+    termosVersao: entrada.termosVersao,
   });
 
   if (!criado.error) {
@@ -1004,6 +1013,12 @@ async function criarCobrancaOuAssinatura(
 
 export async function iniciarCompra(deps: DepsCompra, entrada: EntradaIniciarCompra): Promise<ResultadoIniciarCompra> {
   const ambiente = deps.config.ambiente;
+
+  // D-133: sem o aceite dos Termos nada é criado, nem pedido nem chamada ao Asaas. O banco recusa de
+  // novo (billing_termos_nao_aceitos) quando a compra tem ator.
+  if (typeof entrada.termosVersao !== "string" || entrada.termosVersao.trim() === "") {
+    return { tipo: "erro", mensagem: MENSAGEM_TERMOS_NAO_ACEITOS };
+  }
 
   const resolucao = await resolverPedido(deps, entrada, ambiente);
   if (resolucao.tipo === "erro") return resolucao;

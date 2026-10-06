@@ -64,6 +64,8 @@ function job(payload: Record<string, unknown> = {}): JobRow {
 interface PoolOpts {
   modo: string | null;
   modoLeitura?: boolean;
+  /** `organizations.status` que a leitura da conversa traz (D-091). Ausente = como os dublês antigos. */
+  orgStatus?: string;
 }
 
 /**
@@ -91,7 +93,9 @@ function fakePool(opts: PoolOpts) {
     if (sql.includes("d.fechada_em::text")) {
       return { rows: [{ ...boundary, status: "open", demanda_fechada_em: null }] };
     }
-    return { rows: [{ id: CONVERSA, channel_session_id: CANAL, archived_at: null }] };
+    return {
+      rows: [{ id: CONVERSA, channel_session_id: CANAL, archived_at: null, ...(opts.orgStatus ? { org_status: opts.orgStatus } : {}) }],
+    };
   });
   return { pool: { query } as never, query, consultas };
 }
@@ -154,5 +158,38 @@ describe("followup_turn × conta suspensa (modo leitura, correção segunda roda
 
     expect(runAgentTurn).toHaveBeenCalledTimes(1);
     expect(query.mock.calls.some(([sql]) => /fn_billing_modo_leitura/.test(sql as string))).toBe(false);
+  });
+});
+
+describe("followup_turn × organização suspensa ou arquivada (D-091)", () => {
+  it.each(["suspended", "archived"])(
+    "organização %s, mesmo no modo avisar: nada é enviado, o enrollment é encerrado (organizacao_inativa) e o RPC do modo leitura nunca é chamado",
+    async (orgStatus) => {
+      runAgentTurn.mockClear();
+      const { pool, query } = fakePool({ modo: "avisar", orgStatus });
+      const run = handler();
+
+      await run(job({ followup_enrollment_id: ENROLLMENT }), pool, ctx);
+
+      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(
+        query.mock.calls.some(
+          ([sql, params]) =>
+            /update followup_enrollments/.test(sql as string) &&
+            /cancel_reason = 'organizacao_inativa'/.test(sql as string) &&
+            Array.isArray(params) &&
+            params[0] === ORG &&
+            params[1] === ENROLLMENT,
+        ),
+      ).toBe(true);
+      expect(query.mock.calls.some(([sql]) => /fn_billing_modo_leitura/.test(sql as string))).toBe(false);
+    },
+  );
+
+  it("organização ativa: o turno segue normal", async () => {
+    runAgentTurn.mockClear();
+    const { pool } = fakePool({ modo: "avisar", orgStatus: "active" });
+    await handler()(job(), pool, ctx);
+    expect(runAgentTurn).toHaveBeenCalledTimes(1);
   });
 });

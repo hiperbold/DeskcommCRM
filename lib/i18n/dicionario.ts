@@ -12852,6 +12852,13 @@ export const DICIONARIO: Traducoes = {
   "Sua assinatura atual ainda está no período pago de outro plano. A troca de plano ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.": {
     es: "Tu suscripción actual aún está en el período pagado de otro plan. El cambio de plan todavía no está disponible: habla con soporte o contrata de nuevo después del fin del período.",
   },
+  "Sua assinatura atual ainda está no período pago em outro ciclo. A troca de ciclo ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.": {
+    es: "Tu suscripción actual aún está en el período pagado en otro ciclo. El cambio de ciclo todavía no está disponible: habla con soporte o contrata de nuevo después del fin del período.",
+  },
+  "Aceite os Termos de Uso para continuar.": { es: "Acepta los Términos de Uso para continuar." },
+  "Os Termos de Uso foram atualizados. Recarregue a página e aceite de novo para continuar.": {
+    es: "Los Términos de Uso fueron actualizados. Recarga la página y acepta de nuevo para continuar.",
+  },
   Limites: { es: "Límites" },
   "O que o plano contratado prevê, o que o ajuste desta organização define por cima, e o que vale hoje.": {
     es: "Lo que prevé el plan contratado, lo que define por encima el ajuste de esta organización, y lo que vale hoy.",

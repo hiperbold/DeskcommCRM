@@ -886,6 +886,18 @@ describe("processarEventosAsaas", () => {
       expect(auditar).not.toHaveBeenCalled();
     });
 
+    it("estorno_encurtou_periodo: loga o alarme (o período encolheu, o acesso segue), não remove a assinatura e não audita corte", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_REFUNDED", "estorno_confirmado,estorno_encurtou_periodo");
+      const logger = loggerFalso();
+
+      await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.warn).toHaveBeenCalledWith("alarme_asaas_estorno_encurtou_periodo", expect.objectContaining({ eventoId: "evt-60" }));
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+      expect(auditar).not.toHaveBeenCalled();
+    });
+
     it("sem o auditar injetado o corte segue igual", async () => {
       const { db, asaas } = cenario(
         "PAYMENT_REFUNDED",

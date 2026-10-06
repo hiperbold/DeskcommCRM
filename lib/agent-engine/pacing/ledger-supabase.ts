@@ -152,6 +152,34 @@ export async function registrarEnvioNoLedger(
 }
 
 /**
+ * O teto de envios do dia deste número: o menor entre o degrau do warm-up (pela idade do número) e o
+ * `daily_message_limit` do canal; `null` = sem teto. Fonte única: `decidirEspacamento` e a reserva de
+ * vaga do envio por token (`criarPacingDoCanal().reserva`, D-167) usam esta mesma conta.
+ */
+export function tetoDoDia(entrada: {
+  agora: Date;
+  numberActivatedAt: Date | null;
+  warmupDailyCaps: Parameters<typeof warmupCapFor>[1];
+  crmDailyLimit: number | null;
+}): number | null {
+  // Idade do número em dias. `Math.max(0, ...)` porque `number_activated_at` no futuro (typo do
+  // admin, relógio torto) tem de cair no degrau MAIS conservador: o warm-up falha fechado.
+  const idadeDias = entrada.numberActivatedAt
+    ? Math.max(0, (entrada.agora.getTime() - entrada.numberActivatedAt.getTime()) / 86_400_000)
+    : 0;
+  const capDoWarmup = warmupCapFor(idadeDias, entrada.warmupDailyCaps);
+  const caps = [capDoWarmup, entrada.crmDailyLimit].filter(
+    (c): c is number => typeof c === "number" && Number.isFinite(c),
+  );
+  return caps.length > 0 ? Math.min(...caps) : null;
+}
+
+/** O que a reserva de vaga (`fn_pacing_reservar_vaga`, migration 0944) responde. */
+export type ResultadoDaReserva =
+  | { liberado: true; vagaId: string; liberaEm: Date }
+  | { liberado: false; motivo: "espacamento" | "teto_diario"; liberaEm: Date };
+
+/**
  * A decisão PURA: dá para mandar agora, e se não dá, quando dá?
  *
  * Só as duas regras que protegem o NÚMERO. A ordem importa: o teto diário é
@@ -176,14 +204,12 @@ export function decidirEspacamento(entrada: {
   // Idade do número em dias. `Math.max(0, …)` porque `number_activated_at` no
   // futuro (typo do admin, relógio torto) tem de cair no degrau MAIS
   // conservador — o warm-up falha fechado, nunca aberto.
-  const idadeDias = estado.numberActivatedAt
-    ? Math.max(0, (agora.getTime() - estado.numberActivatedAt.getTime()) / 86_400_000)
-    : 0;
-  const capDoWarmup = warmupCapFor(idadeDias, entrada.warmupDailyCaps);
-  const caps = [capDoWarmup, entrada.crmDailyLimit].filter(
-    (c): c is number => typeof c === "number" && Number.isFinite(c),
-  );
-  const cap = caps.length > 0 ? Math.min(...caps) : null;
+  const cap = tetoDoDia({
+    agora,
+    numberActivatedAt: estado.numberActivatedAt,
+    warmupDailyCaps: entrada.warmupDailyCaps,
+    crmDailyLimit: entrada.crmDailyLimit,
+  });
 
   if (cap !== null && estado.sentToday >= cap) {
     // O contador zera na meia-noite LOCAL do tenant — é exatamente esse o
@@ -239,6 +265,85 @@ export async function criarPacingDoCanal(admin: SupabaseClient) {
     },
     async registraEnvio(organizationId: string, channelSessionId: string, quando: Date) {
       await registrarEnvioNoLedger(admin, organizationId, channelSessionId, quando);
+    },
+    /**
+     * D-167: decide E reserva a vaga numa transação só, no banco (`fn_pacing_reservar_vaga`, advisory
+     * lock por canal). A regra (teto do dia e espaçamento com jitter) é calculada aqui, a mesma de
+     * `decidirEspacamento`; o banco só compara e grava a linha do ledger. Qualquer falha LANÇA: quem
+     * chama trata como recusa, nunca como "sem freio".
+     */
+    async reserva(
+      organizationId: string,
+      channelSessionId: string,
+      agora: Date,
+      esperaMaximaMs: number,
+    ): Promise<ResultadoDaReserva> {
+      const knobs = await knobsDoCanal(admin, organizationId, channelSessionId);
+      const [sessao, ativacao] = await Promise.all([
+        admin
+          .from("channel_sessions")
+          .select("daily_message_limit")
+          .eq("organization_id", organizationId)
+          .eq("id", channelSessionId)
+          .maybeSingle(),
+        admin
+          .from("channel_knobs")
+          .select("number_activated_at")
+          .eq("organization_id", organizationId)
+          .eq("channel_session_id", channelSessionId)
+          .maybeSingle(),
+      ]);
+      if (sessao.error) throw new Error(`ler channel_sessions: ${sessao.error.message}`);
+      // Sem a data de ativação a idade é 0, o degrau mais conservador (nunca abre o teto).
+      const ativado = (ativacao.data as { number_activated_at?: string | null } | null)?.number_activated_at;
+      const teto = tetoDoDia({
+        agora,
+        numberActivatedAt: ativado ? new Date(ativado) : null,
+        warmupDailyCaps: knobs.warmupDailyCaps,
+        crmDailyLimit: (sessao.data as { daily_message_limit?: number | null } | null)?.daily_message_limit ?? null,
+      });
+      const esperaMs = knobs.throttleMs + Math.floor(Math.random() * Math.max(0, knobs.jitterMaxMs));
+      const { data, error } = await admin.rpc("fn_pacing_reservar_vaga" as never, {
+        p_org: organizationId,
+        p_canal: channelSessionId,
+        p_agora: agora.toISOString(),
+        p_inicio_do_dia: dayStartInTz(agora, knobs.timezone).toISOString(),
+        p_teto: teto,
+        p_espera_ms: esperaMs,
+        p_espera_maxima_ms: esperaMaximaMs,
+      } as never);
+      if (error || !data) throw new Error(`fn_pacing_reservar_vaga: ${error?.message ?? "sem resposta"}`);
+      const r = data as { liberado: boolean; motivo?: string; vaga_id?: string; libera_em?: string };
+      if (r.liberado && r.vaga_id) {
+        return { liberado: true, vagaId: r.vaga_id, liberaEm: r.libera_em ? new Date(r.libera_em) : agora };
+      }
+      if (r.motivo === "teto_diario") {
+        // O contador zera na meia-noite LOCAL do tenant: é quando o número volta a enviar.
+        return {
+          liberado: false,
+          motivo: "teto_diario",
+          liberaEm: dayStartInTz(new Date(agora.getTime() + 86_400_000), knobs.timezone),
+        };
+      }
+      if (r.motivo === "espacamento" && r.libera_em) {
+        return { liberado: false, motivo: "espacamento", liberaEm: new Date(r.libera_em) };
+      }
+      throw new Error("fn_pacing_reservar_vaga: resposta fora do contrato");
+    },
+    /** Devolve a vaga reservada quando o envio falhou (`fn_pacing_liberar_vaga`). Nunca lança. */
+    async libera(organizationId: string, channelSessionId: string, vagaId: string): Promise<void> {
+      const { error } = await admin.rpc("fn_pacing_liberar_vaga" as never, {
+        p_org: organizationId,
+        p_canal: channelSessionId,
+        p_vaga: vagaId,
+      } as never);
+      if (error) {
+        logger.warn("[pacing] vaga reservada não foi devolvida (o envio falhou)", {
+          organizationId,
+          channelSessionId,
+          causa: error.message,
+        });
+      }
     },
   };
 }

@@ -10,7 +10,7 @@ import { z } from "zod";
 
 import { sendMessageHandler } from "@/app/api/v1/messages/_handler";
 import { sendMessageSchema } from "@/lib/schemas/messaging";
-import { depsDoRitmo, registrarEnvioPorToken, segurarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
+import { concluirEnvioPorToken, depsDoRitmo, reservarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { McpToolDefinition } from "../types";
 
@@ -77,22 +77,29 @@ export const crmSendWhatsappMessage: McpToolDefinition<typeof inputShape> = {
     // Freio anti-ban do número: o MCP é sempre token, e o teto de chamadas
     // (`lib/mcp/rate-limit.ts`) não sabe de warm-up nem de teto diário do número.
     const ritmo = await depsDoRitmo(createAdminClient());
-    const segurado = await segurarEnvioPorToken(ritmo, {
+    const segurado = await reservarEnvioPorToken(ritmo, {
       organizationId: ctx.organizationId,
       conversationId: parsed.conversation_id,
       requestId: ctx.requestId,
     });
 
-    const message = await sendMessageHandler(
-      ctx.supabase,
-      {
-        organization_id: ctx.organizationId,
-        actor: ctx.actor,
-        requestId: ctx.requestId,
-      },
-      parsed,
-    );
-    await registrarEnvioPorToken(ritmo, ctx.organizationId, segurado, message.status);
+    let message;
+    try {
+      message = await sendMessageHandler(
+        ctx.supabase,
+        {
+          organization_id: ctx.organizationId,
+          actor: ctx.actor,
+          requestId: ctx.requestId,
+        },
+        parsed,
+      );
+    } catch (err) {
+      // D-167: o envio falhou com a vaga reservada: devolve.
+      if (segurado) await concluirEnvioPorToken(ritmo, ctx.organizationId, segurado, "failed");
+      throw err;
+    }
+    await concluirEnvioPorToken(ritmo, ctx.organizationId, segurado, message.status);
 
     const response = {
       message_id: message.id,

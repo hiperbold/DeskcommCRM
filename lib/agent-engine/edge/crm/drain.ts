@@ -222,10 +222,20 @@ async function processEvent(
 
   // Spec 14: org em modo 'external' tem agente EXTERNO como dono da conversa —
   // o engine não responde por cima. Evento é consumido (done) sem job.
-  const { rows: modeRows } = await pool.query<{ mode: string | null }>(
-    `select settings->>'ai_dispatch_mode' as mode from organizations where id = $1`,
+  const { rows: modeRows } = await pool.query<{ mode: string | null; status?: string | null }>(
+    `select settings->>'ai_dispatch_mode' as mode, status from organizations where id = $1`,
     [event.organization_id],
   );
+  // D-091: organização suspensa (ou arquivada) não gasta IA. A leitura da organização já existia
+  // aqui, o status vem de carona: zero consulta a mais. O evento é consumido sem job.
+  const statusDaOrg = modeRows[0]?.status;
+  if (typeof statusDaOrg === 'string' && statusDaOrg !== 'active') {
+    log.info('drain: organização não está ativa (D-091), evento pulado', {
+      event_id: event.id,
+      status: statusDaOrg,
+    });
+    return 'processado';
+  }
   if (modeRows[0]?.mode === 'external') {
     log.info('drain: org em modo external (spec 14) — evento pulado', { event_id: event.id });
     return 'processado';

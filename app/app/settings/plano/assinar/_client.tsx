@@ -23,6 +23,7 @@
  * terminal (erro de validação do formulário, pedido `falhou`/`cancelado`,
  * ou qualquer outra recusa), gera uma chave nova.
  */
+import Link from "next/link";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -36,6 +37,7 @@ import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { cn } from "@/lib/utils";
 import { randomId } from "@/lib/random-id";
+import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
 
 import type { PlanoParaVenda } from "@/lib/billing/asaas/leitura";
 import type { ResultadoIniciarCompra } from "@/lib/billing/asaas/compra";
@@ -61,6 +63,30 @@ const CAMPOS_VAZIOS: CamposDoFormularioDoPagador = { nome: "", documento: "", em
 
 function formatarReais(centavos: number, tagDoIdioma: string): string {
   return (centavos / 100).toLocaleString(tagDoIdioma, { style: "currency", currency: "BRL" });
+}
+
+/** D-133: o aceite obrigatório dos Termos de Uso, em cada cartão de compra. */
+function AceiteDosTermos({ id, aceito, onChange }: { id: string; aceito: boolean; onChange: (v: boolean) => void }) {
+  const t = useT();
+  return (
+    <label htmlFor={id} className="flex items-start gap-2 text-sm">
+      <input
+        id={id}
+        type="checkbox"
+        checked={aceito}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1"
+        required
+      />
+      <span>
+        {t("Li e aceito os")}{" "}
+        <Link className="underline" href="/legal/terms" target="_blank" rel="noreferrer">
+          {t("Termos de Uso")}
+        </Link>
+        .
+      </span>
+    </label>
+  );
 }
 
 function classeDoToggle(ativo: boolean): string {
@@ -136,6 +162,7 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
   const [metodo, setMetodo] = useState<"CREDIT_CARD" | "PIX">("CREDIT_CARD");
   const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
   const [pendente, setPendente] = useState(false);
+  const [aceitouTermos, setAceitouTermos] = useState(false);
   const [resultado, setResultado] = useState<ResultadoIniciarCompra | null>(null);
   // Chave de idempotência (decisão 13 do plano da fase): estável entre
   // repetições da MESMA escolha depois de "aguarde"; nova a cada mudança de
@@ -188,6 +215,7 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
         metodo,
         chave: chaveDestaTentativa,
         pagador: entradaDoPagador,
+        termosVersao: VERSAO_DOS_TERMOS,
       });
       tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: classificarDesfechoDaTentativa(r) };
 
@@ -296,7 +324,9 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
           <FormularioDoPagador pagador={pagador} onChange={setPagador} idPrefixo={`pagador-plano-${plano.code}`} />
         )}
 
-        <Button data-testid={`assinar-${plano.code}`} disabled={pendente} onClick={() => void assinar()}>
+        <AceiteDosTermos id={`termos-plano-${plano.code}`} aceito={aceitouTermos} onChange={setAceitouTermos} />
+
+        <Button data-testid={`assinar-${plano.code}`} disabled={pendente || !aceitouTermos} onClick={() => void assinar()}>
           {pendente ? t("Enviando...") : t("Assinar")}
         </Button>
       </CardContent>
@@ -312,6 +342,7 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
   const [metodo, setMetodo] = useState<"CREDIT_CARD" | "PIX">("PIX");
   const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
   const [pendente, setPendente] = useState(false);
+  const [aceitouTermos, setAceitouTermos] = useState(false);
   const [resultado, setResultado] = useState<ResultadoIniciarCompra | null>(null);
   const [chave, setChave] = useState<string>(() => randomId());
   const tentativaAnteriorRef = useRef<{ escolha: EscolhaDeCompra; desfecho: DesfechoDaTentativaDeCompra } | null>(null);
@@ -339,7 +370,13 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
 
     setPendente(true);
     try {
-      const r = await comprarPacote({ pacote: pacote.codigo, metodo, chave: chaveDestaTentativa, pagador: entradaDoPagador });
+      const r = await comprarPacote({
+        pacote: pacote.codigo,
+        metodo,
+        chave: chaveDestaTentativa,
+        pagador: entradaDoPagador,
+        termosVersao: VERSAO_DOS_TERMOS,
+      });
       tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: classificarDesfechoDaTentativa(r) };
 
       if (r.tipo === "erro") {
@@ -410,7 +447,9 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
           <FormularioDoPagador pagador={pagador} onChange={setPagador} idPrefixo={`pagador-pacote-${pacote.codigo}`} />
         )}
 
-        <Button data-testid={`comprar-${pacote.codigo}`} disabled={pendente} onClick={() => void comprar()}>
+        <AceiteDosTermos id={`termos-pacote-${pacote.codigo}`} aceito={aceitouTermos} onChange={setAceitouTermos} />
+
+        <Button data-testid={`comprar-${pacote.codigo}`} disabled={pendente || !aceitouTermos} onClick={() => void comprar()}>
           {pendente ? t("Enviando...") : t("Comprar")}
         </Button>
       </CardContent>

@@ -77,6 +77,7 @@ import {
 import { dbCompraSupabase } from "@/lib/billing/asaas/db-compra-supabase";
 import { supportWriteError } from "@/lib/impersonate/support";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
+import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -92,6 +93,9 @@ const MENSAGEM_CANCELAMENTO_DESLIGADO =
 const MENSAGEM_ERRO_CONFIGURACAO =
   "Não foi possível concluir a operação agora. Tente novamente em instantes ou fale com o suporte.";
 const MENSAGEM_MFA = "Confirme a verificação em duas etapas.";
+const MENSAGEM_TERMOS_NAO_ACEITOS = "Aceite os Termos de Uso para continuar.";
+const MENSAGEM_TERMOS_ATUALIZADOS =
+  "Os Termos de Uso foram atualizados. Recarregue a página e aceite de novo para continuar.";
 
 // ─── Entrada (zod): nunca organizationId, nunca preço/plano resolvido ─────
 
@@ -116,6 +120,9 @@ const entradaIniciarAssinatura = z.object({
   metodo: z.enum(["CREDIT_CARD", "PIX"]),
   chave: CHAVE,
   pagador: PAGADOR.optional(),
+  // D-133: a versão dos Termos que a tela mostrou ao aceite. Opcional no schema só para a recusa ter
+  // frase própria (`conferirAceiteDosTermos`).
+  termosVersao: z.string().max(40).optional(),
 });
 
 const entradaComprarPacote = z.object({
@@ -125,6 +132,7 @@ const entradaComprarPacote = z.object({
   metodo: z.enum(["CREDIT_CARD", "PIX"]),
   chave: CHAVE,
   pagador: PAGADOR.optional(),
+  termosVersao: z.string().max(40).optional(),
 });
 
 export type EntradaAcaoIniciarAssinatura = z.infer<typeof entradaIniciarAssinatura>;
@@ -207,6 +215,17 @@ function montarDeps(config: ConfigAsaas, admin: ReturnType<typeof createAdminCli
   };
 }
 
+/**
+ * D-133: a compra só segue com o aceite da versão VIGENTE dos Termos. Sem versão: pede o aceite. Versão
+ * diferente da vigente (a página ficou aberta enquanto o texto mudou): pede para recarregar e aceitar o
+ * texto novo. A versão gravada é sempre a constante do servidor, nunca texto vindo do navegador.
+ */
+function conferirAceiteDosTermos(versaoEnviada: string | undefined): string | null {
+  if (!versaoEnviada) return MENSAGEM_TERMOS_NAO_ACEITOS;
+  if (versaoEnviada !== VERSAO_DOS_TERMOS) return MENSAGEM_TERMOS_ATUALIZADOS;
+  return null;
+}
+
 async function auditarPedido(
   actorId: string,
   orgId: string,
@@ -234,12 +253,15 @@ export async function iniciarAssinatura(input: {
   metodo: "CREDIT_CARD" | "PIX";
   chave: string;
   pagador?: { nome: string; documento: string; email?: string; celular?: string };
+  termosVersao?: string;
 }): Promise<ResultadoIniciarCompra> {
   const auth = await autorizarAdminDaOrganizacao(MENSAGEM_SEM_PERMISSAO_COMPRAR);
   if (!auth.ok) return { tipo: "erro", mensagem: auth.mensagem };
 
   const parsed = entradaIniciarAssinatura.safeParse(input);
   if (!parsed.success) return { tipo: "erro", mensagem: MENSAGEM_DADOS_INVALIDOS };
+  const recusaDosTermos = conferirAceiteDosTermos(parsed.data.termosVersao);
+  if (recusaDosTermos) return { tipo: "erro", mensagem: recusaDosTermos };
 
   const config = configAsaasOuNulo();
   if (!config) return { tipo: "erro", mensagem: MENSAGEM_ERRO_CONFIGURACAO };
@@ -259,12 +281,14 @@ export async function iniciarAssinatura(input: {
     metodo: parsed.data.metodo,
     chave: parsed.data.chave,
     pagador: parsed.data.pagador,
+    termosVersao: VERSAO_DOS_TERMOS,
   };
 
   const resultado = await iniciarCompra(montarDeps(config, admin), entrada);
 
   if (resultado.tipo !== "erro") {
     await auditarPedido(auth.userId, auth.orgId, {
+      termos_versao: VERSAO_DOS_TERMOS,
       tipo: "assinatura",
       plan_code: parsed.data.planCode,
       ciclo: parsed.data.ciclo,
@@ -283,12 +307,15 @@ export async function comprarPacote(input: {
   metodo: "CREDIT_CARD" | "PIX";
   chave: string;
   pagador?: { nome: string; documento: string; email?: string; celular?: string };
+  termosVersao?: string;
 }): Promise<ResultadoIniciarCompra> {
   const auth = await autorizarAdminDaOrganizacao(MENSAGEM_SEM_PERMISSAO_COMPRAR);
   if (!auth.ok) return { tipo: "erro", mensagem: auth.mensagem };
 
   const parsed = entradaComprarPacote.safeParse(input);
   if (!parsed.success) return { tipo: "erro", mensagem: MENSAGEM_DADOS_INVALIDOS };
+  const recusaDosTermos = conferirAceiteDosTermos(parsed.data.termosVersao);
+  if (recusaDosTermos) return { tipo: "erro", mensagem: recusaDosTermos };
 
   const config = configAsaasOuNulo();
   if (!config) return { tipo: "erro", mensagem: MENSAGEM_ERRO_CONFIGURACAO };
@@ -307,12 +334,14 @@ export async function comprarPacote(input: {
     metodo: parsed.data.metodo,
     chave: parsed.data.chave,
     pagador: parsed.data.pagador,
+    termosVersao: VERSAO_DOS_TERMOS,
   };
 
   const resultado = await iniciarCompra(montarDeps(config, admin), entrada);
 
   if (resultado.tipo !== "erro") {
     await auditarPedido(auth.userId, auth.orgId, {
+      termos_versao: VERSAO_DOS_TERMOS,
       tipo: "pacote_tokens",
       pacote: parsed.data.pacote,
       metodo: parsed.data.metodo,

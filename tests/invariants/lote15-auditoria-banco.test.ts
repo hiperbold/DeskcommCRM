@@ -330,7 +330,7 @@ describe("0942: forma", () => {
   it("fn_billing_criar_pedido segue só do servidor e as internas seguem deny-all", () => {
     const acl = (funcao: string) =>
       sql(`select has_function_privilege('anon', '${funcao}', 'execute')::text || '|' || has_function_privilege('authenticated', '${funcao}', 'execute')::text || '|' || has_function_privilege('service_role', '${funcao}', 'execute')::text;`);
-    expect(acl("public.fn_billing_criar_pedido(uuid, text, text, text, text, text, text, uuid, uuid)")).toBe("false|false|true");
+    expect(acl("public.fn_billing_criar_pedido(uuid, text, text, text, text, text, text, uuid, uuid, text)")).toBe("false|false|true");
     expect(acl("public.fn_billing_asaas_aplicar_pagamento(jsonb, text)")).toBe("false|false|false");
     expect(acl("public.fn_billing_asaas_rotear_pagamento(text, text, text, text)")).toBe("false|false|false");
     expect(acl("public.fn_billing_asaas_cortar_por_estorno_total(uuid, text, text, uuid, timestamptz, timestamptz, boolean)")).toBe("false|false|false");

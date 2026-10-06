@@ -19,8 +19,8 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { JANELA_SEGUNDOS, TETO_DE_ESCRITA, TETO_POR_ORGANIZACAO } from "@/lib/mcp/rate-limit";
 import {
   depsDoRitmo,
-  registrarEnvioPorToken,
-  segurarEnvioPorToken,
+  concluirEnvioPorToken,
+  reservarEnvioPorToken,
   type EnvioSegurado,
 } from "@/lib/messaging/ritmo-do-envio-por-token";
 import { sendMessageSchema, validateRequest, type SendMessageInput } from "@/lib/schemas";
@@ -222,26 +222,33 @@ export async function POST(req: NextRequest): Promise<Response> {
     // ver o cabeçalho de `lib/messaging/ritmo-do-envio-por-token.ts`.
     const ritmo = authz.via === "token" ? await depsDoRitmo(createAdminClient()) : null;
     const segurado: EnvioSegurado = ritmo
-      ? await segurarEnvioPorToken(ritmo, {
+      ? await reservarEnvioPorToken(ritmo, {
           organizationId,
           conversationId: (input as SendMessageInput).conversation_id,
           requestId,
         })
       : null;
 
-    const message = await sendMessageHandler(
-      supabase,
-      {
-        organization_id: organizationId,
-        actor,
-        requestId,
-        idioma,
-        // Só chega aqui com o escopo e o membership já validados acima; o
-        // handler recusa se `on_behalf_of_user_id` vier sem este ctx (#1613).
-        ...(onBehalf ? { onBehalfOf: onBehalf } : {}),
-      },
-      input as SendMessageInput,
-    );
+    let message;
+    try {
+      message = await sendMessageHandler(
+        supabase,
+        {
+          organization_id: organizationId,
+          actor,
+          requestId,
+          idioma,
+          // Só chega aqui com o escopo e o membership já validados acima; o
+          // handler recusa se `on_behalf_of_user_id` vier sem este ctx (#1613).
+          ...(onBehalf ? { onBehalfOf: onBehalf } : {}),
+        },
+        input as SendMessageInput,
+      );
+    } catch (err) {
+      // D-167: o envio falhou com a vaga reservada: devolve.
+      if (ritmo && segurado) await concluirEnvioPorToken(ritmo, organizationId, segurado, "failed");
+      throw err;
+    }
     // Uma resposta humana pelo inbox assume uma conversa livre — SÓ quando a
     // empresa ligou "a conversa fica com quem atendeu" (settings.routing,
     // desligado por padrão). A RPC faz o claim condicional e registra a troca
@@ -302,7 +309,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         console.error("[messages.send] claim after reply failed", claimError);
       }
     }
-    if (ritmo) await registrarEnvioPorToken(ritmo, organizationId, segurado, message.status);
+    if (ritmo) await concluirEnvioPorToken(ritmo, organizationId, segurado, message.status);
     return message;
   };
 

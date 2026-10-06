@@ -93,18 +93,21 @@ vi.mock("@/lib/billing/asaas/compra", () => ({
 }));
 
 import { cancelarAssinatura, comprarPacote, iniciarAssinatura } from "@/app/actions/settings/compraDoPlano";
+import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
 
 const ENTRADA_ASSINATURA = {
   planCode: "pro",
   ciclo: "monthly" as const,
   metodo: "CREDIT_CARD" as const,
   chave: CHAVE,
+  termosVersao: VERSAO_DOS_TERMOS,
 };
 
 const ENTRADA_PACOTE = {
   pacote: "mil_tokens",
   metodo: "PIX" as const,
   chave: CHAVE,
+  termosVersao: VERSAO_DOS_TERMOS,
 };
 
 const PAGADOR = {
@@ -350,5 +353,30 @@ describe("compraDoPlano: auditoria sem dado sensível", () => {
     resultadoCancelar = { tipo: "erro", mensagem: "Esta organização não tem uma assinatura Asaas ativa para cancelar." };
     await cancelarAssinatura();
     expect(auditadas).toEqual([]);
+  });
+});
+
+describe("D-133: o servidor recusa a compra sem o aceite da versão vigente dos Termos", () => {
+  it("sem versão: pede o aceite e nunca chama iniciarCompra", async () => {
+    const { termosVersao: _ignorada, ...semAceite } = ENTRADA_ASSINATURA;
+    const r = await iniciarAssinatura(semAceite);
+    expect(r).toEqual({ tipo: "erro", mensagem: "Aceite os Termos de Uso para continuar." });
+    const p = await comprarPacote({ pacote: "mil_tokens", metodo: "PIX", chave: CHAVE });
+    expect(p).toEqual({ tipo: "erro", mensagem: "Aceite os Termos de Uso para continuar." });
+    expect(chamadasIniciar).toHaveLength(0);
+  });
+
+  it("versão velha: pede para recarregar e nunca chama iniciarCompra", async () => {
+    const r = await iniciarAssinatura({ ...ENTRADA_ASSINATURA, termosVersao: "2020-01-01" });
+    expect(r.tipo).toBe("erro");
+    expect((r as { mensagem: string }).mensagem).toMatch(/atualizados/);
+    expect(chamadasIniciar).toHaveLength(0);
+  });
+
+  it("versão vigente: a entrada de iniciarCompra leva a versão do SERVIDOR e a auditoria também", async () => {
+    await iniciarAssinatura(ENTRADA_ASSINATURA);
+    await comprarPacote(ENTRADA_PACOTE);
+    expect(chamadasIniciar.map((e) => e.termosVersao)).toEqual([VERSAO_DOS_TERMOS, VERSAO_DOS_TERMOS]);
+    expect(auditadas.map((a) => (a.metadata as Record<string, unknown>).termos_versao)).toEqual([VERSAO_DOS_TERMOS, VERSAO_DOS_TERMOS]);
   });
 });

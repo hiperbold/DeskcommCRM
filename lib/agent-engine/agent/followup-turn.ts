@@ -311,12 +311,39 @@ export function createFollowupTurnHandler(deps: FollowupTurnDeps) {
 
     const boundary = parseServiceBoundary(job.payload.service_boundary);
     await requireCurrentServiceBoundary(pool, boundary);
-    const { rows: targetRows } = await pool.query<{ channel_session_id: string; archived_at: string | null }>(
-      `select c.channel_session_id, to_jsonb(cs)->>'archived_at' as archived_at from conversations c
+    const { rows: targetRows } = await pool.query<{
+      channel_session_id: string;
+      archived_at: string | null;
+      org_status?: string | null;
+    }>(
+      `select c.channel_session_id, to_jsonb(cs)->>'archived_at' as archived_at, o.status as org_status
+       from conversations c
        join channel_sessions cs on cs.id=c.channel_session_id and cs.organization_id=c.organization_id
+       join organizations o on o.id=c.organization_id
        where c.organization_id=$1 and c.id=$2 and c.contact_id=$3`,
       [tenantId, boundary!.conversation_id, leadId]);
     if (!targetRows[0]) throw new Error('conversa de origem indisponível');
+    // D-091: organização suspensa (ou arquivada) não manda follow-up. O status vem da leitura da
+    // conversa que já acontecia aqui (zero consulta a mais, e o modo `avisar` do plano segue sem
+    // consulta nenhuma). Mesmo desfecho do modo leitura: o enrollment é encerrado.
+    const statusDaOrg = targetRows[0].org_status;
+    if (typeof statusDaOrg === 'string' && statusDaOrg !== 'active') {
+      withFields(deps.log, { job_id: job.id, tenant_id: tenantId, lead_id: leadId }).info(
+        'followup_turn não processado: organização não está ativa (D-091)',
+        { enrollment_id: payload.followup_enrollment_id ?? null, status: statusDaOrg },
+      );
+      if (payload.followup_enrollment_id !== undefined) {
+        await pool.query(
+          `update followup_enrollments
+           set status = 'cancelled', cancel_reason = 'organizacao_inativa',
+               next_eval_at = null, claimed_until = null, completed_at = now()
+           where organization_id = $1 and id = $2
+             and status not in ('completed','cancelled','dead')`,
+          [tenantId, payload.followup_enrollment_id],
+        );
+      }
+      return;
+    }
     if (targetRows[0].archived_at) throw new Error('canal arquivado');
     const target: ReentrySendTarget = { tenantId, leadId, conversationId: boundary!.conversation_id, channelSessionId: targetRows[0]!.channel_session_id };
 

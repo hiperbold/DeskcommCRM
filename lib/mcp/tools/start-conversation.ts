@@ -35,7 +35,7 @@ import { z } from "zod";
 import { sendMessageHandler } from "@/app/api/v1/messages/_handler";
 import { openSharedContactConversation } from "@/lib/messaging/open-shared-contact-conversation";
 import { sendMessageSchema } from "@/lib/schemas/messaging";
-import { depsDoRitmo, registrarEnvioPorToken, segurarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
+import { concluirEnvioPorToken, depsDoRitmo, reservarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { McpToolDefinition } from "../types";
 
@@ -119,38 +119,46 @@ export const crmStartConversationAndSend: McpToolDefinition<typeof inputShape> =
     // Se o freio segurar o envio por teto diário ou espaçamento, recusa com 429
     // sem deixar uma conversa vazia pendente no CRM.
     const ritmo = await depsDoRitmo(createAdminClient());
-    const segurado = await segurarEnvioPorToken(ritmo, {
+    const segurado = await reservarEnvioPorToken(ritmo, {
       organizationId: ctx.organizationId,
       channelSessionId: input.channel_session_id,
       requestId: ctx.requestId,
     });
 
-    // Referencia a mesma origem autorizada que `open-with-contact` usa —
-    // fn_service_begin decide reaproveitar a conversa aberta ou criar uma.
-    const opened = await openSharedContactConversation(ctx.supabase, ctx.organizationId, {
-      channel_session_id: input.channel_session_id,
-      contact_id: input.contact_id,
-      phone_number: input.phone_number,
-      name: input.name,
-    });
+    // D-167: da reserva da vaga até o fim do envio, qualquer falha devolve a vaga.
+    let opened;
+    let message;
+    try {
+      // Referencia a mesma origem autorizada que `open-with-contact` usa:
+      // fn_service_begin decide reaproveitar a conversa aberta ou criar uma.
+      opened = await openSharedContactConversation(ctx.supabase, ctx.organizationId, {
+        channel_session_id: input.channel_session_id,
+        contact_id: input.contact_id,
+        phone_number: input.phone_number,
+        name: input.name,
+      });
 
-    const parsed = sendMessageSchema.parse({
-      conversation_id: opened.conversation_id,
-      type: input.type,
-      body: input.body,
-      media_mime: input.media_mime,
-    });
+      const parsed = sendMessageSchema.parse({
+        conversation_id: opened.conversation_id,
+        type: input.type,
+        body: input.body,
+        media_mime: input.media_mime,
+      });
 
-    const message = await sendMessageHandler(
-      ctx.supabase,
-      {
-        organization_id: ctx.organizationId,
-        actor: ctx.actor,
-        requestId: ctx.requestId,
-      },
-      parsed,
-    );
-    await registrarEnvioPorToken(ritmo, ctx.organizationId, segurado, message.status);
+      message = await sendMessageHandler(
+        ctx.supabase,
+        {
+          organization_id: ctx.organizationId,
+          actor: ctx.actor,
+          requestId: ctx.requestId,
+        },
+        parsed,
+      );
+    } catch (err) {
+      if (segurado) await concluirEnvioPorToken(ritmo, ctx.organizationId, segurado, "failed");
+      throw err;
+    }
+    await concluirEnvioPorToken(ritmo, ctx.organizationId, segurado, message.status);
 
     const response = {
       contact_id: opened.contact_id,

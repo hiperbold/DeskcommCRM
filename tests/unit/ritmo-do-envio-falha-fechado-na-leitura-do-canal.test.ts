@@ -2,12 +2,12 @@
  * D-167: erro ao ler o canal NÃO libera o envio sem espaçamento.
  *
  * Antes, o erro do banco virava `data = null`, o canal saía como inexistente e
- * `segurarEnvioPorToken` devolvia `null` (nada a frear): o envio seguia sem o
+ * `reservarEnvioPorToken` devolvia `null` (nada a frear): o envio seguia sem o
  * freio num número que pode ser banido.
  */
 import { describe, expect, it } from "vitest";
 
-import { depsDoRitmo, segurarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
+import { depsDoRitmo, reservarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
 
 const ORG = "22222222-2222-4222-8222-222222222222";
 const CONVERSA = "33333333-3333-4333-8333-333333333333";
@@ -26,7 +26,7 @@ describe("freio de envio por token: leitura do canal que falha", () => {
   it("vira recusa 503, e não 'sem freio'", async () => {
     const deps = await depsDoRitmo(adminComErro() as never);
     await expect(
-      segurarEnvioPorToken(deps, { organizationId: ORG, conversationId: CONVERSA, requestId: "r" }),
+      reservarEnvioPorToken(deps, { organizationId: ORG, conversationId: CONVERSA, requestId: "r" }),
     ).rejects.toMatchObject({ status: 503 });
   });
 });

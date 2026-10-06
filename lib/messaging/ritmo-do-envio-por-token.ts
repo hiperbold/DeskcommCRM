@@ -22,19 +22,19 @@
  * A janela de horário (7h-22h) também fica de fora: integração legítima manda
  * confirmação de pedido às 23h, e represá-la até as 7h quebraria o caso de uso.
  *
- * ## Limite conhecido
+ * ## Atomicidade (D-167)
  *
- * Não há lock por número (o agente usa `pg_advisory_xact_lock`, que o PostgREST
- * não oferece). Duas chamadas CONCORRENTES leem o mesmo ledger e passam juntas.
- * O que segura a rajada paralela é o teto de chamadas por token (REST: nesta
- * rota; MCP: `lib/mcp/rate-limit.ts`), não este freio.
+ * Decidir e registrar eram dois passos (ler o ledger, enviar, gravar depois): duas chamadas
+ * concorrentes no mesmo número liam o mesmo estado e passavam juntas. Agora `reservarEnvioPorToken`
+ * pede ao banco uma VAGA (`fn_pacing_reservar_vaga`, migration 0944): sob advisory lock do canal, a
+ * mesma chave do agente, o banco confere o teto do dia e o espaçamento e grava a linha no ledger na
+ * mesma transação. Espaçamento curto reserva a vaga para o instante em que o número libera e quem
+ * chamou espera até lá, então a rajada vira fila. Se o envio falha, `concluirEnvioPorToken` devolve
+ * a vaga (`fn_pacing_liberar_vaga`). Erro ao reservar é RECUSA (503), nunca "sem freio".
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import {
-  criarPacingDoCanal,
-  type DecisaoDeEspacamento,
-} from "@/lib/agent-engine/pacing/ledger-supabase";
+import { criarPacingDoCanal, type ResultadoDaReserva } from "@/lib/agent-engine/pacing/ledger-supabase";
 import { ApiError } from "@/lib/api/types";
 import { capabilitiesOf, DEFAULT_CHANNEL_PROVIDER } from "@/lib/channels/capabilities";
 import type { ChannelProvider } from "@/lib/channels/types";
@@ -54,20 +54,25 @@ export interface DepsDoRitmo {
   lerCanalDaConversa(organizationId: string, conversationId: string): Promise<CanalDaConversa | null>;
   lerCanalDaSessao?(organizationId: string, channelSessionId: string): Promise<CanalDaConversa | null>;
   pacing: {
-    decide(organizationId: string, channelSessionId: string, agora: Date): Promise<DecisaoDeEspacamento>;
-    registraEnvio(organizationId: string, channelSessionId: string, quando: Date): Promise<void>;
+    reserva(
+      organizationId: string,
+      channelSessionId: string,
+      agora: Date,
+      esperaMaximaMs: number,
+    ): Promise<ResultadoDaReserva>;
+    libera(organizationId: string, channelSessionId: string, vagaId: string): Promise<void>;
   };
   sleep(ms: number): Promise<void>;
   agora(): Date;
 }
 
-/** Entrada aceita por `segurarEnvioPorToken`: por conversa existente ou direto pela sessão do canal. */
+/** Entrada aceita por `reservarEnvioPorToken`: por conversa existente ou direto pela sessão do canal. */
 export type EntradaDoFreio =
   | { organizationId: string; conversationId: string; requestId: string }
   | { organizationId: string; channelSessionId: string; requestId: string };
 
-/** O que `segurarEnvioPorToken` devolve e `registrarEnvioPorToken` consome. */
-export type EnvioSegurado = { channelSessionId: string } | null;
+/** O que `reservarEnvioPorToken` devolve e `concluirEnvioPorToken` consome: a vaga reservada no ledger. */
+export type EnvioSegurado = { channelSessionId: string; vagaId: string } | null;
 
 function temRiscoDeBan(provider: string | null): boolean {
   try {
@@ -80,12 +85,12 @@ function temRiscoDeBan(provider: string | null): boolean {
 }
 
 /**
- * Segura o envio até o número poder mandar, ou recusa com 429.
+ * Reserva a vaga do envio, esperando o espaçamento curto dentro da requisição, ou recusa com 429.
  *
- * Devolve `null` quando não há o que frear (canal sem risco de ban, ou conversa
- * que não é desta organização — aí quem responde é o handler, com o 404 dele).
+ * Devolve `null` quando não há o que frear (canal sem risco de ban, ou conversa que não é desta
+ * organização: aí quem responde é o handler, com o 404 dele).
  */
-export async function segurarEnvioPorToken(
+export async function reservarEnvioPorToken(
   deps: DepsDoRitmo,
   entrada: EntradaDoFreio,
 ): Promise<EnvioSegurado> {
@@ -98,39 +103,54 @@ export async function segurarEnvioPorToken(
   if (!canal || !temRiscoDeBan(canal.provider)) return null;
 
   const agora = deps.agora();
-  const decisao = await deps.pacing.decide(entrada.organizationId, canal.channelSessionId, agora);
-  if (decisao.liberado) return { channelSessionId: canal.channelSessionId };
-
-  const esperaMs = Math.max(0, decisao.liberaEm.getTime() - agora.getTime());
-  if (decisao.motivo === "espacamento" && esperaMs <= ESPERA_MAXIMA_MS) {
-    await deps.sleep(esperaMs);
-    return { channelSessionId: canal.channelSessionId };
+  let reserva: ResultadoDaReserva;
+  try {
+    reserva = await deps.pacing.reserva(entrada.organizationId, canal.channelSessionId, agora, ESPERA_MAXIMA_MS);
+  } catch {
+    // Falha ao reservar (banco, trava) é recusa: o envio nunca sai sem o freio.
+    throw falhaDeLeituraDoCanal();
   }
 
+  if (reserva.liberado) {
+    const esperaMs = Math.max(0, reserva.liberaEm.getTime() - agora.getTime());
+    if (esperaMs > 0) await deps.sleep(esperaMs);
+    return { channelSessionId: canal.channelSessionId, vagaId: reserva.vagaId };
+  }
+
+  const esperaMs = Math.max(0, reserva.liberaEm.getTime() - agora.getTime());
   const retryAfterSeconds = Math.max(1, Math.ceil(esperaMs / 1000));
-  const liberaEm = decisao.liberaEm.toISOString();
+  const liberaEm = reserva.liberaEm.toISOString();
   // O valor vai no texto, não só em `details`: o servidor MCP devolve ao cliente apenas a
   // mensagem do erro (lib/mcp/server.ts), e um modelo sem o horário não sabe quando voltar.
   throw new ApiError(
     429,
     "rate_limited",
-    { motivo: decisao.motivo, libera_em: liberaEm, retry_after_seconds: retryAfterSeconds },
+    { motivo: reserva.motivo, libera_em: liberaEm, retry_after_seconds: retryAfterSeconds },
     entrada.requestId,
-    decisao.motivo === "teto_diario"
+    reserva.motivo === "teto_diario"
       ? `Este número atingiu o limite de envios de hoje. Tente de novo depois de ${liberaEm} (em ${retryAfterSeconds}s).`
       : `Envios rápidos demais para este número. Tente de novo em ${retryAfterSeconds}s.`,
   );
 }
 
-/** Conta no `pacing_ledger` o envio que passou pelo freio e não falhou. Nunca lança. */
-export async function registrarEnvioPorToken(
-  deps: Pick<DepsDoRitmo, "pacing" | "agora">,
+/**
+ * Fecha o envio que passou pelo freio: a vaga já está no `pacing_ledger` (reservada antes), então
+ * envio que saiu não faz nada; envio que FALHOU (status `failed` ou exceção do handler) devolve a
+ * vaga. Nunca lança.
+ */
+export async function concluirEnvioPorToken(
+  deps: Pick<DepsDoRitmo, "pacing">,
   organizationId: string,
   segurado: EnvioSegurado,
   status: string,
 ): Promise<void> {
-  if (!segurado || status === "failed") return;
-  await deps.pacing.registraEnvio(organizationId, segurado.channelSessionId, deps.agora());
+  if (!segurado || status !== "failed") return;
+  try {
+    await deps.pacing.libera(organizationId, segurado.channelSessionId, segurado.vagaId);
+  } catch {
+    // A devolução da vaga é melhor esforço: vaga não devolvida só deixa o número um envio mais
+    // conservador, nunca menos.
+  }
 }
 
 /**

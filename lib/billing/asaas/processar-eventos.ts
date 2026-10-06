@@ -632,6 +632,12 @@ function registrarAlarmesDoEstorno(
   if (alarmes.includes("estorno_de_periodo_antigo")) {
     deps.logger.warn("alarme_asaas_estorno_de_periodo_antigo", { eventoId: evento.id, organizationId });
   }
+  // Estorno total de um dos pagamentos EMPILHADOS (0942): o período do contrato encolheu para o fim
+  // do maior pagamento que sobrou, mas ainda cobre o futuro. O acesso e a assinatura seguem, o admin
+  // confere.
+  if (alarmes.includes("estorno_encurtou_periodo")) {
+    deps.logger.warn("alarme_asaas_estorno_encurtou_periodo", { eventoId: evento.id, organizationId });
+  }
 }
 
 async function auditarCorteDeEstorno(

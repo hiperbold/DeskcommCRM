@@ -18,6 +18,7 @@ vi.mock("@/app/actions/settings/compraDoPlano", () => ({
 }));
 
 import { AssinarOuComprarClient } from "@/app/app/settings/plano/assinar/_client";
+import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
 import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
 import type { PlanoParaVenda } from "@/lib/billing/asaas/leitura";
 
@@ -48,6 +49,8 @@ function tela(planos: PlanoParaVenda[], locale = "pt-BR") {
     </IdiomaProvider>,
   );
 }
+
+const aceitarTermos = (code = "pro") => fireEvent.click(document.getElementById(`termos-plano-${code}`) as HTMLElement);
 
 const reais = (valor: string) => new RegExp(`R\\$\\s*${valor.replace(/\./g, "\\.")}`);
 
@@ -123,6 +126,7 @@ describe("a tela de assinar oferece os três ciclos", () => {
     fireEvent.click(screen.getByTestId("ciclo-pro-monthly"));
 
     expect(screen.queryByTestId("resumo-pro")).toBeNull();
+    aceitarTermos();
     fireEvent.click(screen.getByTestId("assinar-pro"));
     await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
     expect(iniciarAssinatura.mock.calls[0]![0]).toMatchObject({ planCode: "pro", ciclo: "monthly", metodo: "CREDIT_CARD" });
@@ -134,6 +138,7 @@ describe("a tela pede ao servidor o ciclo e o método escolhidos", () => {
     tela([PRO]);
 
     fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    aceitarTermos();
     fireEvent.click(screen.getByTestId("assinar-pro"));
 
     await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
@@ -145,6 +150,7 @@ describe("a tela pede ao servidor o ciclo e o método escolhidos", () => {
 
     fireEvent.click(screen.getByTestId("ciclo-pro-yearly"));
     fireEvent.click(screen.getByRole("button", { name: "Pix" }));
+    aceitarTermos();
     fireEvent.click(screen.getByTestId("assinar-pro"));
 
     await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
@@ -155,10 +161,11 @@ describe("a tela pede ao servidor o ciclo e o método escolhidos", () => {
     tela([PRO]);
 
     fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    aceitarTermos();
     fireEvent.click(screen.getByTestId("assinar-pro"));
 
     await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
-    expect(Object.keys(iniciarAssinatura.mock.calls[0]![0] as object).sort()).toEqual(["chave", "ciclo", "metodo", "pagador", "planCode"]);
+    expect(Object.keys(iniciarAssinatura.mock.calls[0]![0] as object).sort()).toEqual(["chave", "ciclo", "metodo", "pagador", "planCode", "termosVersao"]);
   });
 });
 
@@ -173,5 +180,49 @@ describe("os textos novos aparecem em espanhol", () => {
     expect(resumo.textContent).toContain("Total del período");
     expect(resumo.textContent).toContain("Ahorro de");
     expect(resumo.textContent).toContain("frente al plan mensual");
+  });
+});
+
+describe("D-133: aceite dos Termos de Uso na tela de compra", () => {
+  it("sem marcar o aceite o botão Assinar fica desligado e nada é enviado", () => {
+    tela([PRO]);
+
+    expect(screen.getByTestId("assinar-pro")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("assinar-pro"));
+    expect(iniciarAssinatura).not.toHaveBeenCalled();
+  });
+
+  it("o aceite tem o link para /legal/terms e, marcado, libera o botão e manda a versão vigente", async () => {
+    tela([PRO]);
+
+    const link = screen.getByRole("link", { name: "Termos de Uso" });
+    expect(link).toHaveAttribute("href", "/legal/terms");
+    aceitarTermos();
+    expect(screen.getByTestId("assinar-pro")).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId("assinar-pro"));
+
+    await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
+    expect(iniciarAssinatura.mock.calls[0]![0]).toMatchObject({ termosVersao: VERSAO_DOS_TERMOS });
+  });
+
+  it("o pacote de tokens também exige o aceite e manda a versão", async () => {
+    comprarPacote.mockReset();
+    comprarPacote.mockResolvedValue({ tipo: "erro", mensagem: "parou aqui" });
+    render(
+      <IdiomaProvider locale="pt-BR">
+        <AssinarOuComprarClient
+          planos={[]}
+          pacotes={[{ codigo: "mil", nome: "Mil", tokens: 1000, precoCents: 5000 } as never]}
+          precisaPagador={false}
+          leituraFalhou={false}
+        />
+      </IdiomaProvider>,
+    );
+
+    expect(screen.getByTestId("comprar-mil")).toBeDisabled();
+    fireEvent.click(document.getElementById("termos-pacote-mil") as HTMLElement);
+    fireEvent.click(screen.getByTestId("comprar-mil"));
+    await waitFor(() => expect(comprarPacote).toHaveBeenCalledTimes(1));
+    expect(comprarPacote.mock.calls[0]![0]).toMatchObject({ pacote: "mil", termosVersao: VERSAO_DOS_TERMOS });
   });
 });

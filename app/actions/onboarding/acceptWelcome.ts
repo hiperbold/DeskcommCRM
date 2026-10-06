@@ -9,6 +9,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
+import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
 import { welcomeSchema } from "@/lib/schemas/onboarding";
 import { requireOnboardingCtx, patchOnboardingState, OnboardingError } from "./_shared";
 
@@ -48,6 +49,7 @@ export async function acceptWelcome(formData: FormData): Promise<AcceptWelcomeRe
       {
         welcome: {
           accepted_at: input.accepted_terms_at ?? new Date().toISOString(),
+          terms_version: VERSAO_DOS_TERMOS,
           timezone: input.timezone,
           display_name: input.display_name,
           ...(input.o_que_faz ? { o_que_faz: input.o_que_faz } : {}),
@@ -81,7 +83,7 @@ export async function acceptWelcome(formData: FormData): Promise<AcceptWelcomeRe
     // O ramo NÃO entra no audit: é texto livre que o dono escreveu, e o audit
     // é append-only com retenção de 5 anos — nada que a anonimização da LGPD
     // não alcance depois deve cair lá por conveniência de diagnóstico.
-    metadata: { display_name: input.display_name, timezone: input.timezone },
+    metadata: { display_name: input.display_name, timezone: input.timezone, terms_version: VERSAO_DOS_TERMOS },
   });
 
   redirect("/onboarding");

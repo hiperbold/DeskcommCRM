@@ -16,6 +16,7 @@ import {
   MENSAGEM_AGUARDE,
   MENSAGEM_DOCUMENTO_INVALIDO,
   MENSAGEM_SEM_ASSINATURA_ASAAS,
+  MENSAGEM_TERMOS_NAO_ACEITOS,
   MENSAGEM_VALIDACAO,
   type DbCompra,
   type DepsCompra,
@@ -47,6 +48,7 @@ const ENTRADA_BASE: EntradaIniciarCompra = {
   ciclo: "monthly",
   metodo: "CREDIT_CARD",
   chave: "11111111-1111-1111-1111-111111111111",
+  termosVersao: "2026-09-23",
   pagador: {
     nome: "Fulano de Tal",
     documento: CPF_VALIDO,
@@ -1080,5 +1082,25 @@ describe("cancelarAssinaturaDoCliente: assinatura AGENDADA de quem tem período 
     expect(cancelamento).toEqual({ tipo: "ok", cancelAtPeriodEnd: false });
     expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_agendada_e2e");
     expect(getPedido().status).toBe("cancelado");
+  });
+});
+
+describe("D-133: iniciarCompra sem o aceite dos Termos", () => {
+  it("recusa antes de criar pedido ou falar com o Asaas", async () => {
+    const criarPedido = vi.fn();
+    const asaas = { criarCobranca: vi.fn(), criarAssinatura: vi.fn(), criarCliente: vi.fn() };
+    const deps = {
+      db: { criarPedido },
+      asaas,
+      config: { ambiente: "sandbox" },
+      logger: { warn: vi.fn(), error: vi.fn() },
+    } as never;
+    for (const termosVersao of ["", "   "]) {
+      const r = await iniciarCompra(deps, { ...ENTRADA_BASE, termosVersao });
+      expect(r).toEqual({ tipo: "erro", mensagem: MENSAGEM_TERMOS_NAO_ACEITOS });
+    }
+    expect(criarPedido).not.toHaveBeenCalled();
+    expect(asaas.criarCobranca).not.toHaveBeenCalled();
+    expect(asaas.criarAssinatura).not.toHaveBeenCalled();
   });
 });

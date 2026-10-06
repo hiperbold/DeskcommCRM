@@ -336,10 +336,15 @@ export async function sendNextCandidate(
   }
 }
 
+/**
+ * D-091: as organizações que o tick de prospecção atende. Organização suspensa (ou arquivada) não
+ * prospecta: sai da lista na mesma consulta, sem leitura a mais.
+ */
+export const SQL_ORGANIZACOES_DO_TICK =
+  "select organization_id from prospecting_campaigns where (status='running' or search_status in ('starting','running')) and not exists (select 1 from organizations o where o.id=prospecting_campaigns.organization_id and o.status<>'active') group by organization_id order by min(updated_at) limit 20";
+
 export async function tickProspecting(pool: pg.Pool, admin: SupabaseClient) {
-  const { rows: organizations } = await pool.query<{ organization_id: string }>(
-    "select organization_id from prospecting_campaigns where status='running' or search_status in ('starting','running') group by organization_id order by min(updated_at) limit 20",
-  );
+  const { rows: organizations } = await pool.query<{ organization_id: string }>(SQL_ORGANIZACOES_DO_TICK);
   const deadline = Date.now() + 180000;
   let processed = 0;
   for (const { organization_id: org } of organizations) {

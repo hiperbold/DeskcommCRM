@@ -12,15 +12,15 @@ vi.mock("@/lib/ai/dispatcher/rate-limit", () => ({ checkRateLimit: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn(() => ({})) }));
 vi.mock("@/lib/messaging/ritmo-do-envio-por-token", () => ({
   depsDoRitmo: vi.fn(async () => ({})),
-  segurarEnvioPorToken: vi.fn(async () => null),
-  registrarEnvioPorToken: vi.fn(async () => {}),
+  reservarEnvioPorToken: vi.fn(async () => null),
+  concluirEnvioPorToken: vi.fn(async () => {}),
 }));
 vi.mock("./_handler", () => ({ sendMessageHandler: vi.fn() }));
 
 import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { resolveAuthDual } from "@/lib/api/auth-dual";
 import { ApiError } from "@/lib/api/types";
-import { registrarEnvioPorToken, segurarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
+import { concluirEnvioPorToken, reservarEnvioPorToken } from "@/lib/messaging/ritmo-do-envio-por-token";
 
 import { sendMessageHandler } from "./_handler";
 import { POST } from "./route";
@@ -31,8 +31,8 @@ const SESSION_ID = "22222222-2222-4222-8222-222222222222";
 
 const mockedAuth = vi.mocked(resolveAuthDual);
 const mockedTeto = vi.mocked(checkRateLimit);
-const mockedSegurar = vi.mocked(segurarEnvioPorToken);
-const mockedRegistrar = vi.mocked(registrarEnvioPorToken);
+const mockedSegurar = vi.mocked(reservarEnvioPorToken);
+const mockedRegistrar = vi.mocked(concluirEnvioPorToken);
 const mockedSend = vi.mocked(sendMessageHandler);
 
 // ─── Banco falso de estado (#1613) ────────────────────────────────────────────
@@ -306,7 +306,7 @@ describe("POST /api/v1/messages — ritmo por token", () => {
 
   it("por token, passa pelo freio antes de enviar e conta o envio", async () => {
     autenticado("token");
-    const segurado = { channelSessionId: SESSION_ID };
+    const segurado = { channelSessionId: SESSION_ID, vagaId: "vaga-1" };
     mockedSegurar.mockResolvedValue(segurado);
 
     const res = await POST(pedido());
@@ -318,6 +318,17 @@ describe("POST /api/v1/messages — ritmo por token", () => {
       mockedSend.mock.invocationCallOrder[0]!,
     );
     expect(mockedRegistrar).toHaveBeenCalledWith(expect.anything(), ORG_ID, segurado, "sent");
+  });
+
+  it("por token, se o envio lança, devolve a vaga reservada e o erro segue", async () => {
+    autenticado("token");
+    const segurado = { channelSessionId: SESSION_ID, vagaId: "vaga-1" };
+    mockedSegurar.mockResolvedValue(segurado);
+    mockedSend.mockRejectedValueOnce(new Error("canal caiu"));
+
+    await expect(POST(pedido())).rejects.toThrow("canal caiu");
+
+    expect(mockedRegistrar).toHaveBeenCalledWith(expect.anything(), ORG_ID, segurado, "failed");
   });
 
   it("por token, acima do teto de chamadas por token devolve 429 sem enviar", async () => {

@@ -303,6 +303,7 @@ const imp = (p: string) => import(pathToFileURL(join(RAIZ, p)).href);
 const { criarClienteAsaas } = (await imp("lib/billing/asaas/cliente.ts")) as typeof import("../../lib/billing/asaas/cliente");
 const { iniciarCompra, cancelarAssinaturaDoCliente, MENSAGEM_TROCA_DE_CICLO } = (await imp("lib/billing/asaas/compra.ts")) as typeof import("../../lib/billing/asaas/compra");
 const { dbCompraSupabase } = (await imp("lib/billing/asaas/db-compra-supabase.ts")) as typeof import("../../lib/billing/asaas/db-compra-supabase");
+const { VERSAO_DOS_TERMOS } = (await imp("lib/legal/versao-dos-termos.ts")) as typeof import("../../lib/legal/versao-dos-termos");
 const { criarDbEventosAsaasSobre, processarEventosAsaas } = (await imp("lib/billing/asaas/processar-eventos.ts")) as typeof import("../../lib/billing/asaas/processar-eventos");
 const { createAdminClient } = (await imp("lib/supabase/admin.ts")) as typeof import("../../lib/supabase/admin");
 const rotaWebhook = (await imp("app/api/v1/webhooks/asaas/route.ts")) as typeof import("../../app/api/v1/webhooks/asaas/route");
@@ -549,6 +550,7 @@ async function comprar(l: Letra, rotulo: string, vencimentoEsperado: string, ofe
     metodo: "CREDIT_CARD",
     chave,
     pagador: pagadorDeTeste(ts),
+    termosVersao: VERSAO_DOS_TERMOS,
   });
   const http = [...httpLog];
   const chamadas = [...chamadasCliente];
@@ -1062,7 +1064,7 @@ async function etapaTrocaDeCiclo(): Promise<void> {
   for (const ciclo of ["monthly", "semiannual", "yearly"] as const) {
     httpLog.length = 0;
     chamadasCliente.length = 0;
-    const r = await iniciarCompra(depsCompra, { organizationId, actorId: ATOR, tipo: "assinatura", planCode: "pro", ciclo, metodo: "CREDIT_CARD", chave: randomUUID(), pagador: pagadorDeTeste(Date.now()) });
+    const r = await iniciarCompra(depsCompra, { organizationId, actorId: ATOR, tipo: "assinatura", planCode: "pro", ciclo, metodo: "CREDIT_CARD", chave: randomUUID(), pagador: pagadorDeTeste(Date.now()), termosVersao: VERSAO_DOS_TERMOS });
     tentativas.push({ ciclo, resultado: r, chamadasAoAsaas: [...httpLog] });
     if (ciclo === "yearly") {
       checar("troca-de-ciclo: o mesmo anual de novo é recusado por já haver assinatura ativa (mensagem de assinatura ativa, não a de troca)", r.tipo === "erro" && r.mensagem === "Sua organização já tem uma assinatura ativa." && httpLog.length === 0, { r, http: [...httpLog] });

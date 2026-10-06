@@ -7,6 +7,7 @@ import {
   MENSAGEM_AGUARDE_ESPELHO,
   montarPagadorDoFormulario,
   pedidoEmEstadoFinal,
+  podeCancelarAssinatura,
   TETO_DE_POLLING_MS,
   urlDeRedirecionamentoEhSegura,
   type EscolhaDeCompra,
@@ -257,5 +258,53 @@ describe("chaveParaProximaTentativaDeCompra: correção 6, decisão 13 do lado d
       tentativaAnterior: { escolha: ASSINATURA_PRO_MENSAL_CARTAO, desfecho: "aguarde" },
     });
     expect(chave).not.toBe("chave-anterior");
+  });
+});
+
+describe("podeCancelarAssinatura: o botão de cancelar da tela Plano e uso", () => {
+  const LIGADO = { habilitado: true, erroConfiguracao: null, ambiente: "sandbox" as const };
+  const PEDIDO_AGENDADO = {
+    tipo: "assinatura",
+    metodo: "CREDIT_CARD",
+    status: "aguardando_pagamento",
+    ambiente: "sandbox" as const,
+    asaasSubscriptionId: "sub_agendada",
+  };
+
+  it("assinatura viva no contrato: mostra", () => {
+    expect(
+      podeCancelarAssinatura({ ...LIGADO, assinaturaDoContrato: { asaasSubscriptionId: "sub_1", encerradaEm: null }, pedidos: [] }),
+    ).toBe(true);
+  });
+
+  it("assinatura já encerrada e nenhum pedido agendado: esconde", () => {
+    expect(
+      podeCancelarAssinatura({
+        ...LIGADO,
+        assinaturaDoContrato: { asaasSubscriptionId: "sub_1", encerradaEm: "2026-10-01T00:00:00Z" },
+        pedidos: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("sem assinatura no contrato, com assinatura AGENDADA em pedido de cartão aguardando pagamento: mostra", () => {
+    expect(podeCancelarAssinatura({ ...LIGADO, assinaturaDoContrato: null, pedidos: [PEDIDO_AGENDADO] })).toBe(true);
+  });
+
+  it("pedido que o backend não cancelaria não mostra o botão (Pix, outro estado, outro ambiente, sem id da assinatura, avulso de pacote)", () => {
+    const sem = (parcial: Record<string, unknown>) =>
+      podeCancelarAssinatura({ ...LIGADO, assinaturaDoContrato: null, pedidos: [{ ...PEDIDO_AGENDADO, ...parcial }] });
+    expect(sem({ metodo: "PIX" })).toBe(false);
+    expect(sem({ status: "criado" })).toBe(false);
+    expect(sem({ status: "pago" })).toBe(false);
+    expect(sem({ ambiente: "producao" })).toBe(false);
+    expect(sem({ asaasSubscriptionId: null })).toBe(false);
+    expect(sem({ tipo: "pacote_tokens" })).toBe(false);
+  });
+
+  it("com o Asaas desligado ou com erro de configuração, nunca mostra", () => {
+    const entrada = { assinaturaDoContrato: { asaasSubscriptionId: "sub_1", encerradaEm: null }, pedidos: [PEDIDO_AGENDADO] };
+    expect(podeCancelarAssinatura({ ...entrada, ...LIGADO, habilitado: false })).toBe(false);
+    expect(podeCancelarAssinatura({ ...entrada, ...LIGADO, erroConfiguracao: "base e chave incoerentes" })).toBe(false);
   });
 });

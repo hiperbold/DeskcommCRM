@@ -109,6 +109,7 @@ const ENTRADA: EntradaIniciarCompra = {
   ciclo: "semiannual",
   metodo: "CREDIT_CARD",
   chave: "11111111-1111-1111-1111-111111111111",
+  termosVersao: "2026-09-23",
 };
 
 function pedidoDe(ciclo: "monthly" | "semiannual" | "yearly", amountCents: number, metodo: "CREDIT_CARD" | "PIX"): PedidoLinha {
@@ -315,6 +316,12 @@ describe("iniciarCompra: troca de ciclo e preço do ciclo", () => {
     expect(DICIONARIO[MENSAGEM_TROCA_DE_PLANO]?.es).toMatch(/cambio de plan/i);
     const zh = JSON.parse(readFileSync(join(process.cwd(), "lib/i18n/traducoes/zh-CN.json"), "utf8")) as Record<string, string>;
     expect(zh[MENSAGEM_TROCA_DE_PLANO]).toMatch(/套餐/);
+  });
+
+  it("a frase da troca de ciclo tem tradução para es e zh-CN no dicionário", () => {
+    expect(DICIONARIO[MENSAGEM_TROCA_DE_CICLO]?.es).toMatch(/cambio de ciclo/i);
+    const zh = JSON.parse(readFileSync(join(process.cwd(), "lib/i18n/traducoes/zh-CN.json"), "utf8")) as Record<string, string>;
+    expect(zh[MENSAGEM_TROCA_DE_CICLO]).toMatch(/周期/);
   });
 
   it("plano sem preço no ciclo: a mensagem de preço não definido, nunca a genérica", async () => {
