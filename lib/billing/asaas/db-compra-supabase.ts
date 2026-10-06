@@ -51,7 +51,7 @@ import type {
 const ESTADOS_ABERTOS: StatusPedido[] = ["criado", "aguardando_pagamento", "inconclusivo", "processando"];
 
 const COLUNAS_PEDIDO =
-  "id, status, tipo, ambiente, metodo, amount_cents, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, ciclo, plan_id, pacote_id, updated_at";
+  "id, status, tipo, ambiente, metodo, amount_cents, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, ciclo, plan_id, pacote_id, updated_at, parcelas, asaas_installment_id";
 
 interface LinhaBillingOrders {
   id: string;
@@ -67,6 +67,8 @@ interface LinhaBillingOrders {
   ciclo: string | null;
   plan_id: string | null;
   pacote_id: string | null;
+  parcelas: number;
+  asaas_installment_id: string | null;
   /** Correção 10 (tarefa 17): `cancelarPedidoAberto` usa para o gate de 15 minutos em `processando`. */
   updated_at: string;
 }
@@ -124,6 +126,8 @@ function paraPedidoLinha(
     asaasPaymentId: row.asaas_payment_id,
     asaasSubscriptionId: row.asaas_subscription_id,
     invoiceUrl: row.invoice_url,
+    parcelas: row.parcelas ?? 1,
+    asaasInstallmentId: row.asaas_installment_id ?? null,
     ciclo: row.ciclo as CicloPedido | null,
     planoNome,
     pacoteNome,
@@ -152,12 +156,15 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
         p_chave: args.chave,
         p_actor: args.actor,
         p_termos_versao: args.termosVersao,
+        p_parcelas: args.parcelas,
+        p_total_cents: args.totalCents,
       } as never);
       if (error) return { data: null, error: error as RpcErro };
       const d = data as {
         pedido_id: string;
         external_reference: string;
         amount_cents: number;
+        parcelas?: number;
         ja_existia: boolean;
         proxima_cobranca_em: string | null;
       } | null;
@@ -166,10 +173,61 @@ export function dbCompraSupabase(admin: SupabaseClient): DbCompra {
         pedidoId: d.pedido_id,
         externalReference: d.external_reference,
         amountCents: d.amount_cents,
+        parcelas: d.parcelas ?? 1,
         jaExistia: d.ja_existia,
         proximaCobrancaEm: d.proxima_cobranca_em,
       };
       return { data: criado, error: null };
+    },
+
+    async lerParcelamentoDoPlano(planCode, ciclo) {
+      const [plano, config] = await Promise.all([
+        admin
+          .from("billing_plans")
+          .select("price_semiannual_cents, price_yearly_cents")
+          .eq("code", planCode)
+          .eq("active", true)
+          .limit(1)
+          .maybeSingle(),
+        admin
+          .from("billing_settings")
+          .select("parcelamento_taxa_mensal, parcelamento_sem_juros_ate, parcelamento_max_semestral, parcelamento_max_anual")
+          .eq("id", 1)
+          .maybeSingle(),
+      ]);
+      if (plano.error) return { data: null, error: plano.error as RpcErro };
+      if (config.error) return { data: null, error: config.error as RpcErro };
+      const p = plano.data as { price_semiannual_cents: number | null; price_yearly_cents: number | null } | null;
+      const c = config.data as {
+        parcelamento_taxa_mensal: number | string | null;
+        parcelamento_sem_juros_ate: number | null;
+        parcelamento_max_semestral: number | null;
+        parcelamento_max_anual: number | null;
+      } | null;
+      const preco = ciclo === "semiannual" ? p?.price_semiannual_cents : ciclo === "yearly" ? p?.price_yearly_cents : null;
+      return {
+        data: {
+          precoCents: preco ?? null,
+          parametros: {
+            taxaMensal: c?.parcelamento_taxa_mensal == null ? null : Number(c.parcelamento_taxa_mensal),
+            semJurosAte: c?.parcelamento_sem_juros_ate ?? null,
+            maxSemestral: c?.parcelamento_max_semestral ?? null,
+            maxAnual: c?.parcelamento_max_anual ?? null,
+          },
+        },
+        error: null,
+      };
+    },
+
+    async registrarParcelamento(org, pedidoId, asaasInstallmentId) {
+      const { data, error } = await admin.rpc("fn_billing_pedido_registrar_parcelamento" as never, {
+        p_org: org,
+        p_pedido: pedidoId,
+        p_asaas_installment_id: asaasInstallmentId,
+      } as never);
+      if (error) return { data: null, error: error as RpcErro };
+      const d = data as { ja_registrado: boolean } | null;
+      return { data: { jaRegistrado: d?.ja_registrado ?? false }, error: null };
     },
 
     async buscarPedidoAbertoPorTipo(org, tipo) {

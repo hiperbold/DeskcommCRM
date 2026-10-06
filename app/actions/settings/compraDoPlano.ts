@@ -119,6 +119,9 @@ const entradaIniciarAssinatura = z.object({
   ciclo: z.enum(["monthly", "semiannual", "yearly"]),
   metodo: z.enum(["CREDIT_CARD", "PIX"]),
   chave: CHAVE,
+  // D-177: em quantas parcelas pagar (só cartão, semestral e anual). O navegador manda só o número: o
+  // total com juros é calculado no servidor e conferido pelo banco.
+  parcelas: z.number().int().min(1).max(12).optional(),
   pagador: PAGADOR.optional(),
   // D-133: a versão dos Termos que a tela mostrou ao aceite. Opcional no schema só para a recusa ter
   // frase própria (`conferirAceiteDosTermos`).
@@ -252,6 +255,7 @@ export async function iniciarAssinatura(input: {
   ciclo: "monthly" | "semiannual" | "yearly";
   metodo: "CREDIT_CARD" | "PIX";
   chave: string;
+  parcelas?: number;
   pagador?: { nome: string; documento: string; email?: string; celular?: string };
   termosVersao?: string;
 }): Promise<ResultadoIniciarCompra> {
@@ -280,6 +284,7 @@ export async function iniciarAssinatura(input: {
     ciclo: parsed.data.ciclo,
     metodo: parsed.data.metodo,
     chave: parsed.data.chave,
+    parcelas: parsed.data.parcelas ?? 1,
     pagador: parsed.data.pagador,
     termosVersao: VERSAO_DOS_TERMOS,
   };
@@ -292,6 +297,7 @@ export async function iniciarAssinatura(input: {
       tipo: "assinatura",
       plan_code: parsed.data.planCode,
       ciclo: parsed.data.ciclo,
+      parcelas: parsed.data.parcelas ?? 1,
       metodo: parsed.data.metodo,
       resultado: resultado.tipo,
     });

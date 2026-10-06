@@ -190,6 +190,8 @@ export interface PedidoAsaas {
   asaasPaymentId: string | null;
   asaasSubscriptionId: string | null;
   invoiceUrl: string | null;
+  /** D-177: 1 = à vista; acima disso é cobrança parcelada (não renova sozinha). */
+  parcelas: number;
   criadoEm: string;
   atualizadoEm: string;
   pagoEm: string | null;
@@ -213,6 +215,7 @@ interface LinhaDoPedidoCru {
   asaas_payment_id: string | null;
   asaas_subscription_id: string | null;
   invoice_url: string | null;
+  parcelas: number | null;
   created_at: string;
   updated_at: string;
   pago_em: string | null;
@@ -221,7 +224,7 @@ interface LinhaDoPedidoCru {
 const LIMITE_PADRAO_DE_PEDIDOS = 200;
 
 const COLUNAS_DO_PEDIDO =
-  "id, organization_id, ambiente, tipo, ciclo, metodo, amount_cents, status, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, created_at, updated_at, pago_em";
+  "id, organization_id, ambiente, tipo, ciclo, metodo, amount_cents, status, external_reference, asaas_payment_id, asaas_subscription_id, invoice_url, parcelas, created_at, updated_at, pago_em";
 
 function linhaDoPedidoParaPedido(l: LinhaDoPedidoCru): PedidoAsaas {
   return {
@@ -237,6 +240,7 @@ function linhaDoPedidoParaPedido(l: LinhaDoPedidoCru): PedidoAsaas {
     asaasPaymentId: l.asaas_payment_id,
     asaasSubscriptionId: l.asaas_subscription_id,
     invoiceUrl: l.invoice_url,
+    parcelas: l.parcelas ?? 1,
     criadoEm: l.created_at,
     atualizadoEm: l.updated_at,
     pagoEm: l.pago_em,

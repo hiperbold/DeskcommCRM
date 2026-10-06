@@ -410,7 +410,11 @@ async function ehCandidatoAoGet(
  * que o `GET /payments/{id}` CONFIRMOU, mais `assinatura_status` (decisão
  * 10/M3) quando este processador também consultou `GET /subscriptions/{id}`.
  */
-function confirmacaoDoPagamento(cobranca: CobrancaAsaas, assinaturaStatus: string | null): Record<string, unknown> {
+function confirmacaoDoPagamento(
+  cobranca: CobrancaAsaas,
+  assinaturaStatus: string | null,
+  parcelamento: { total: number; parcelas: number } | null = null,
+): Record<string, unknown> {
   const confirmacao: Record<string, unknown> = {
     id: cobranca.id,
     status: cobranca.status,
@@ -425,6 +429,15 @@ function confirmacaoDoPagamento(cobranca: CobrancaAsaas, assinaturaStatus: strin
   };
   if (assinaturaStatus !== null) {
     confirmacao.assinatura_status = assinaturaStatus;
+  }
+  // D-177: parcela de um parcelamento. O banco confere o TOTAL do parcelamento (GET /installments/{id})
+  // contra o pedido, nunca o valor da parcela contra o preço do plano.
+  if (cobranca.installment) {
+    confirmacao.installment = cobranca.installment;
+    if (parcelamento) {
+      confirmacao.parcelamento_total = parcelamento.total;
+      confirmacao.parcelamento_parcelas = parcelamento.parcelas;
+    }
   }
   return confirmacao;
 }
@@ -474,6 +487,7 @@ function confirmacaoDoFimDoPagamento(
     removida: false,
     subscription: cobranca.subscription ?? null,
     externalReference: cobranca.externalReference ?? null,
+    installment: cobranca.installment ?? null,
   };
 }
 
@@ -682,6 +696,7 @@ async function finalizarAplicacao(
   evento: EventoReservado,
   aplicado: RpcResultado<AplicarEventoResultado>,
   subscriptionId: string | null,
+  installmentId: string | null = null,
 ): Promise<ResultadoDeUmEvento> {
   if (aplicado.error || !aplicado.data) {
     deps.logger.error("asaas_processar_aplicar_evento_falhou", {
@@ -711,7 +726,7 @@ async function finalizarAplicacao(
   registrarAlarmesDoEstorno(deps, evento, organizationId, alarmes);
   await auditarCorteDeEstorno(deps, evento, organizationId, alarmes);
   if (alarmes.includes("remover_cobranca_pendente")) {
-    await tentarRemoverCobranca(deps, evento);
+    await tentarRemoverCobranca(deps, evento, installmentId);
   }
   if (alarmes.includes("remover_assinatura_pendente")) {
     await tentarRemoverAssinatura(deps, evento, subscriptionId, organizationId);
@@ -726,10 +741,20 @@ async function finalizarAplicacao(
  * poder nascer sem cobrar a mais (decisão 10, decisão 11 do pedido aberto
  * único).
  */
-async function tentarRemoverCobranca(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<void> {
+async function tentarRemoverCobranca(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  installmentId: string | null = null,
+): Promise<void> {
   if (!evento.idDoRecurso) return;
   try {
-    await deps.asaas.removerCobranca(evento.idDoRecurso);
+    if (installmentId) {
+      // D-177: pedido parcelado vencido: remove o parcelamento INTEIRO. Remover só esta parcela deixaria as
+      // outras pendentes, cobrando mês a mês.
+      await deps.asaas.removerParcelamento(installmentId);
+    } else {
+      await deps.asaas.removerCobranca(evento.idDoRecurso);
+    }
   } catch (err) {
     // Falha aqui só loga (decisão 10): a conciliação diária (Tarefa 16) refaz.
     deps.logger.warn("asaas_processar_remover_cobranca_falhou", {
@@ -823,7 +848,20 @@ async function processarEventoDeDinheiro(
     }
   }
 
-  const confirmacao = confirmacaoDoPagamento(cobranca, assinaturaStatus);
+  // D-177: parcela de parcelamento. O total vem de GET /installments/{id}; sem ele o evento volta a tentar
+  // (nunca confere o valor da parcela contra o preço).
+  let parcelamento: { total: number; parcelas: number } | null = null;
+  if (cobranca.installment) {
+    try {
+      const r = await deps.asaas.buscarParcelamento(cobranca.installment);
+      if ("removido" in r) return aplicarSemConfirmacao(deps, evento);
+      parcelamento = { total: r.value, parcelas: r.installmentCount };
+    } catch (err) {
+      return tratarErroDeChamada(deps, evento, err);
+    }
+  }
+
+  const confirmacao = confirmacaoDoPagamento(cobranca, assinaturaStatus, parcelamento);
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
   return finalizarAplicacao(deps, evento, aplicado, cobranca.subscription ?? null);
 }
@@ -872,7 +910,8 @@ async function processarEventoDeCobranca(
 
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
   const subscriptionId = "removido" in cobranca ? null : (cobranca.subscription ?? null);
-  return finalizarAplicacao(deps, evento, aplicado, subscriptionId);
+  const installmentId = "removido" in cobranca ? null : (cobranca.installment ?? null);
+  return finalizarAplicacao(deps, evento, aplicado, subscriptionId, installmentId);
 }
 
 /**

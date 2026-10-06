@@ -74,6 +74,12 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     buscarCobranca: vi.fn(async () => cobrancaFake()),
     buscarCobrancaPorReferencia: vi.fn(async () => null),
     removerCobranca: vi.fn(async () => undefined),
+    criarCobrancaParcelada: vi.fn(async () => {
+      throw new Error("criarCobrancaParcelada não deveria ser chamado neste teste");
+    }),
+    buscarParcelamento: vi.fn(async () => ({ removido: true as const })),
+    removerParcelamento: vi.fn(async () => undefined),
+    listarCobrancasDoParcelamento: vi.fn(async () => []),
     qrPix: vi.fn(async () => {
       throw new Error("qrPix não deveria ser chamado pelo processador");
     }),
@@ -906,5 +912,87 @@ describe("processarEventosAsaas", () => {
       await processarEventosAsaas(deps({ db, asaas }));
       expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_est");
     });
+  });
+});
+
+describe("D-177: parcela de um parcelamento no cartão", () => {
+  const INSTALLMENT = "7315c152-a55f-4727-aa6c-d48249df28d4";
+
+  function dbDaParcela(aplicar = vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null }))) {
+    const evento = eventoDinheiro({ eventType: "PAYMENT_CONFIRMED", idDoRecurso: "pay_parcela2" });
+    const payload = payloadDePagamento({ id: "pay_parcela2", installment: INSTALLMENT });
+    payload.event = "PAYMENT_CONFIRMED";
+    return dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-1", payload }], error: null })),
+      aplicarEvento: aplicar,
+    });
+  }
+
+  it("lê o total do parcelamento (GET /installments) e manda ao banco, nunca só o valor da parcela", async () => {
+    const db = dbDaParcela();
+    const cobranca = cobrancaFake({ id: "pay_parcela2", status: "CONFIRMED", value: 275.43, installment: INSTALLMENT } as Partial<CobrancaAsaas>);
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => cobranca),
+      buscarParcelamento: vi.fn(async () => ({ id: INSTALLMENT, value: 1101.72, installmentCount: 4 })),
+    });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(asaas.buscarParcelamento).toHaveBeenCalledWith(INSTALLMENT);
+    expect(db.aplicarEvento).toHaveBeenCalledWith(
+      "evt-1",
+      "lease-1",
+      expect.objectContaining({ id: "pay_parcela2", value: 275.43, installment: INSTALLMENT, parcelamento_total: 1101.72, parcelamento_parcelas: 4 }),
+    );
+  });
+
+  it("GET do parcelamento falhou: não aplica nada e registra a falha para tentar de novo", async () => {
+    const db = dbDaParcela();
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => cobrancaFake({ id: "pay_parcela2", status: "CONFIRMED", installment: INSTALLMENT } as Partial<CobrancaAsaas>)),
+      buscarParcelamento: vi.fn(async () => {
+        throw erroIndisponivel(503);
+      }),
+    });
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).not.toHaveBeenCalled();
+    expect(db.registrarFalha).toHaveBeenCalled();
+    expect(resumo.falhas).toBe(1);
+  });
+
+  it("pagamento sem parcelamento não consulta /installments", async () => {
+    const evento = eventoDinheiro();
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-1", payload: payloadDePagamento() }], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null })),
+    });
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => cobrancaFake()) });
+    await processarEventosAsaas(deps({ db, asaas }));
+    expect(asaas.buscarParcelamento).not.toHaveBeenCalled();
+  });
+
+  it("parcela vencida de pedido parcelado: remove o parcelamento INTEIRO, não só a parcela", async () => {
+    const evento: EventoReservado = { id: "evt-9", eventType: "PAYMENT_OVERDUE", idDoRecurso: "pay_parcela1", leaseToken: "lease-9" };
+    const payload = payloadDePagamento({ id: "pay_parcela1", installment: INSTALLMENT });
+    payload.id = "evt-9";
+    payload.event = "PAYMENT_OVERDUE";
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: [evento], error: null })),
+      lerPayloads: vi.fn(async () => ({ data: [{ id: "evt-9", payload }], error: null })),
+      aplicarEvento: vi.fn(async () => ({ data: { resultado: "aplicado", organizationId: "org-1", alarme: "remover_cobranca_pendente" }, error: null })),
+    });
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => cobrancaFake({ id: "pay_parcela1", status: "OVERDUE", installment: INSTALLMENT } as Partial<CobrancaAsaas>)),
+    });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(db.aplicarEvento).toHaveBeenCalledWith("evt-9", "lease-9", expect.objectContaining({ installment: INSTALLMENT }));
+    expect(asaas.removerParcelamento).toHaveBeenCalledWith(INSTALLMENT);
+    expect(asaas.removerCobranca).not.toHaveBeenCalled();
   });
 });

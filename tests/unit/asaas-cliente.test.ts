@@ -384,3 +384,61 @@ describe("cliente Asaas: nada sensível vai para o log nem para o erro", () => {
     expect(serializado).not.toContain(CHAVE_DE_TESTE);
   });
 });
+
+describe("cliente Asaas: cobrança parcelada (D-177)", () => {
+  it("criarCobrancaParcelada faz POST /payments com installmentCount e totalValue e devolve a primeira parcela com o id do parcelamento", async () => {
+    const { deps, chamadas } = montarDeps([
+      respostaJson(200, {
+        id: "pay_p1",
+        customer: "cus_123",
+        status: "PENDING",
+        billingType: "CREDIT_CARD",
+        value: 275.43,
+        dueDate: "2026-10-06",
+        installment: "7315c152-a55f-4727-aa6c-d48249df28d4",
+        installmentNumber: 1,
+      }),
+    ]);
+    const cliente = criarClienteAsaas(deps);
+    const r = await cliente.criarCobrancaParcelada({
+      customer: "cus_123",
+      billingType: "CREDIT_CARD",
+      installmentCount: 4,
+      totalValue: 1101.72,
+      dueDate: "2026-10-06",
+      externalReference: "HC:ord:abc",
+    });
+    expect(r.installment).toBe("7315c152-a55f-4727-aa6c-d48249df28d4");
+    expect(chamadas[0]!.init.method).toBe("POST");
+    expect(chamadas[0]!.url).toMatch(/\/payments$/);
+    expect(JSON.parse(String(chamadas[0]!.init.body))).toMatchObject({ installmentCount: 4, totalValue: 1101.72 });
+  });
+
+  it("recusa parcelamento de 1x ou de mais de 12x antes de chamar o Asaas", async () => {
+    const { deps, chamadas } = montarDeps([]);
+    const cliente = criarClienteAsaas(deps);
+    const base = { customer: "cus_123", billingType: "CREDIT_CARD" as const, totalValue: 100, dueDate: "2026-10-06" };
+    await expect(cliente.criarCobrancaParcelada({ ...base, installmentCount: 1 })).rejects.toThrow();
+    await expect(cliente.criarCobrancaParcelada({ ...base, installmentCount: 13 })).rejects.toThrow();
+    expect(chamadas).toHaveLength(0);
+  });
+
+  it("buscarParcelamento lê o total (value) e 404 vira { removido: true }", async () => {
+    const { deps, chamadas } = montarDeps([
+      respostaJson(200, { id: "7315c152-a55f-4727-aa6c-d48249df28d4", value: 1101.72, paymentValue: 275.43, installmentCount: 4 }),
+      respostaJson(404, {}),
+    ]);
+    const cliente = criarClienteAsaas(deps);
+    await expect(cliente.buscarParcelamento("7315c152")).resolves.toMatchObject({ value: 1101.72, installmentCount: 4 });
+    expect(chamadas[0]!.url).toContain("/installments/7315c152");
+    await expect(cliente.buscarParcelamento("x")).resolves.toEqual({ removido: true });
+  });
+
+  it("removerParcelamento faz DELETE /installments/{id} e não lança em 404", async () => {
+    const { deps, chamadas } = montarDeps([respostaJson(404, {})]);
+    const cliente = criarClienteAsaas(deps);
+    await expect(cliente.removerParcelamento("7315c152")).resolves.toBeUndefined();
+    expect(chamadas[0]!.init.method).toBe("DELETE");
+    expect(chamadas[0]!.url).toContain("/installments/7315c152");
+  });
+});

@@ -35,7 +35,9 @@ import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-import { pacotesParaVenda, precisaDeFormularioDoPagador } from "./_dados";
+import { opcoesDeParcelamento, type OpcaoDeParcelas } from "@/lib/billing/asaas/parcelamento";
+
+import { pacotesParaVenda, parametrosDeParcelamento, precisaDeFormularioDoPagador } from "./_dados";
 import { AssinarOuComprarClient } from "./_client";
 
 export const metadata = { title: "Assinar" };
@@ -89,17 +91,31 @@ export default async function AssinarPage() {
     );
   }
 
-  const [planosResultado, pacotesResultado, precisaPagador] = await Promise.all([
+  const [planosResultado, pacotesResultado, precisaPagador, parametros] = await Promise.all([
     planosParaVenda(admin, logger),
     pacotesParaVenda(admin, logger),
     precisaDeFormularioDoPagador(admin, activeOrg.orgId, ambiente, logger),
+    parametrosDeParcelamento(admin, logger),
   ]);
 
   const planos = planosResultado.planos.filter((p) => p.forSale && p.priceMonthlyCents > 0);
   const leituraFalhou = planosResultado.leituraFalhou || pacotesResultado.leituraFalhou;
 
+  // D-177: as opções de parcelamento são calculadas AQUI, no servidor (a conta e os parâmetros nunca vão
+  // para o navegador); o cliente só mostra e escolhe o número de parcelas.
+  const opcoesDeParcelas: Record<string, { semiannual: OpcaoDeParcelas[]; yearly: OpcaoDeParcelas[] }> = {};
+  for (const plano of planos) {
+    opcoesDeParcelas[plano.code] = {
+      semiannual: plano.priceSemiannualCents ? opcoesDeParcelamento(plano.priceSemiannualCents, "semiannual", parametros) : [],
+      yearly: plano.priceYearlyCents ? opcoesDeParcelamento(plano.priceYearlyCents, "yearly", parametros) : [],
+    };
+  }
+  const taxaMensalPercentual = parametros.taxaMensal === null ? null : Math.round(parametros.taxaMensal * 10000) / 100;
+
   return (
     <AssinarOuComprarClient
+      opcoesDeParcelas={opcoesDeParcelas}
+      taxaMensalPercentual={taxaMensalPercentual}
       planos={planos}
       pacotes={pacotesResultado.pacotes}
       precisaPagador={precisaPagador}

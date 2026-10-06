@@ -46,14 +46,18 @@ import {
   type ClienteAsaas,
   type CriarAssinaturaRequest,
   type CriarClienteRequest,
+  type CriarCobrancaParceladaRequest,
   type CriarCobrancaRequest,
+  type ParcelamentoAsaas,
   type QrPixAsaas,
   assinaturaAsaasSchema,
   clienteAsaasSchema,
   cobrancaAsaasSchema,
   criarAssinaturaRequestSchema,
   criarClienteRequestSchema,
+  criarCobrancaParceladaRequestSchema,
   criarCobrancaRequestSchema,
+  parcelamentoAsaasSchema,
   listaAssinaturasSchema,
   listaClientesSchema,
   listaCobrancasSchema,
@@ -274,6 +278,14 @@ export interface ClienteAsaasHttp {
   buscarCobrancaPorReferencia(externalReference: string): Promise<CobrancaAsaas | null>;
   removerCobranca(id: string): Promise<void>;
   qrPix(id: string): Promise<QrPixAsaas>;
+  /** D-177: cobrança parcelada no cartão (`installmentCount` + `totalValue`); devolve a PRIMEIRA parcela, com `installment`. */
+  criarCobrancaParcelada(dados: CriarCobrancaParceladaRequest): Promise<CobrancaAsaas>;
+  /** D-177: `GET /installments/{id}`, o total do parcelamento que se confere contra o pedido. */
+  buscarParcelamento(id: string): Promise<ParcelamentoAsaas | Removido>;
+  /** D-177: `DELETE /installments/{id}` remove o parcelamento pendente inteiro (idempotente em 404). */
+  removerParcelamento(id: string): Promise<void>;
+  /** D-177: as cobranças (parcelas) do parcelamento. */
+  listarCobrancasDoParcelamento(id: string): Promise<CobrancaAsaas[]>;
   /** `GET /webhooks/{id}` (Tarefa 16, decisão 21): a conciliação diária confere `interrupted`. */
   buscarWebhook(id: string): Promise<WebhookAsaas>;
 }
@@ -350,6 +362,44 @@ export function criarClienteAsaas(deps: DepsClienteAsaas): ClienteAsaasHttp {
     async criarCobranca(dados) {
       const corpo = criarCobrancaRequestSchema.parse(dados);
       return chamarComSchema(deps, { metodo: "POST", caminho: "/payments", corpo }, cobrancaAsaasSchema);
+    },
+
+    async criarCobrancaParcelada(dados) {
+      const corpo = criarCobrancaParceladaRequestSchema.parse(dados);
+      return chamarComSchema(deps, { metodo: "POST", caminho: "/payments", corpo }, cobrancaAsaasSchema);
+    },
+
+    async buscarParcelamento(id) {
+      try {
+        const parcelamento = await chamarComSchema(
+          deps,
+          { metodo: "GET", caminho: `/installments/${encodeURIComponent(id)}` },
+          parcelamentoAsaasSchema,
+        );
+        if (parcelamento.deleted) return { removido: true };
+        return parcelamento;
+      } catch (err) {
+        if (ehRemovido(err)) return { removido: true };
+        throw err;
+      }
+    },
+
+    async removerParcelamento(id) {
+      try {
+        await chamar(deps, { metodo: "DELETE", caminho: `/installments/${encodeURIComponent(id)}` });
+      } catch (err) {
+        if (ehRemovido(err)) return;
+        throw err;
+      }
+    },
+
+    async listarCobrancasDoParcelamento(id) {
+      const lista = await chamarComSchema(
+        deps,
+        { metodo: "GET", caminho: `/installments/${encodeURIComponent(id)}/payments` },
+        listaCobrancasSchema,
+      );
+      return lista.data;
     },
 
     async buscarCobranca(id) {

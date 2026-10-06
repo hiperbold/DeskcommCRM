@@ -109,6 +109,8 @@ export interface PedidoVencidoParaRemocao {
   tipo: string;
   asaasPaymentId: string | null;
   asaasSubscriptionId: string | null;
+  /** D-177: pedido parcelado vencido remove o parcelamento inteiro, nunca só a primeira parcela. */
+  asaasInstallmentId?: string | null;
 }
 
 /** Uma assinatura Asaas ainda ativa localmente (decisão 21). */
@@ -543,11 +545,13 @@ async function refazerRemocaoDeCobrancaVencida(
     // cobrança avulsa do ciclo (decisão 4/10, correção item 4): removerCobranca
     // deixaria a assinatura viva no Asaas, cobrando de novo no ciclo seguinte.
     const usaAssinatura = pedido.tipo === "assinatura" && Boolean(pedido.asaasSubscriptionId);
-    if (!usaAssinatura && !pedido.asaasPaymentId) continue;
+    if (!usaAssinatura && !pedido.asaasPaymentId && !pedido.asaasInstallmentId) continue;
 
     try {
       if (usaAssinatura) {
         await deps.asaas.removerAssinatura(pedido.asaasSubscriptionId as string);
+      } else if (pedido.asaasInstallmentId) {
+        await deps.asaas.removerParcelamento(pedido.asaasInstallmentId);
       } else {
         await deps.asaas.removerCobranca(pedido.asaasPaymentId as string);
       }
@@ -770,7 +774,7 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
     async listarPedidosVencidosParaRemocao(limite) {
       const { data, error } = await admin
         .from("billing_orders")
-        .select("id, organization_id, tipo, asaas_payment_id, asaas_subscription_id")
+        .select("id, organization_id, tipo, asaas_payment_id, asaas_subscription_id, asaas_installment_id")
         .eq("status", "vencido")
         .or("asaas_payment_id.not.is.null,asaas_subscription_id.not.is.null")
         .limit(limite);
@@ -781,6 +785,7 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
         tipo: string;
         asaas_payment_id: string | null;
         asaas_subscription_id: string | null;
+        asaas_installment_id: string | null;
       }>;
       return {
         data: linhas.map((l) => ({
@@ -789,6 +794,7 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
           tipo: l.tipo,
           asaasPaymentId: l.asaas_payment_id,
           asaasSubscriptionId: l.asaas_subscription_id,
+          asaasInstallmentId: l.asaas_installment_id,
         })),
         error: null,
       };

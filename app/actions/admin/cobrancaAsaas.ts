@@ -454,11 +454,14 @@ export async function cancelarPedidoAberto(input: {
 
   let assinaturaParaRemover: string | null = null;
   let cobrancaParaRemover: string | null = null;
+  let parcelamentoParaRemover: string | null = null;
   try {
     const assinatura = await cliente.buscarAssinaturaPorReferencia(pedido.externalReference);
     assinaturaParaRemover = assinatura?.id ?? null;
     const cobranca = await cliente.buscarCobrancaPorReferencia(pedido.externalReference);
-    cobrancaParaRemover = cobranca?.id ?? null;
+    // D-177: cobrança de um parcelamento remove o parcelamento inteiro, nunca só a parcela achada.
+    parcelamentoParaRemover = cobranca?.installment ?? null;
+    cobrancaParaRemover = parcelamentoParaRemover ? null : (cobranca?.id ?? null);
   } catch (err) {
     logger.error("[cobrancaAsaas] procurar cobranca/assinatura por referencia antes de cancelar falhou", {
       pedidoId,
@@ -470,6 +473,9 @@ export async function cancelarPedidoAberto(input: {
   try {
     if (assinaturaParaRemover) {
       await cliente.removerAssinatura(assinaturaParaRemover);
+    }
+    if (parcelamentoParaRemover) {
+      await cliente.removerParcelamento(parcelamentoParaRemover);
     }
     if (cobrancaParaRemover) {
       await cliente.removerCobranca(cobrancaParaRemover);

@@ -131,6 +131,7 @@ import type { AmbienteAsaas, ConfigAsaas } from "./config";
 import type { AssinaturaAsaas, CicloAsaas, CobrancaAsaas } from "./contratos";
 import { centavosParaReais, dataSaoPaulo } from "./dinheiro";
 import { documentoValido } from "./documento";
+import { calcularParcelamento, parcelasValidas, type ParametrosDeParcelamento } from "./parcelamento";
 import { ErroAsaasException } from "./erros";
 
 // ─── Tipos de entrada/saída ─────────────────────────────────────────────
@@ -194,6 +195,12 @@ export interface EntradaIniciarCompra {
   /** uuid do formulário, a chave de idempotência (decisão 13). */
   chave: string;
   pagador?: DadosPagador;
+  /**
+   * D-177: em quantas parcelas pagar no cartão (só semestral e anual). Ausente ou 1 = à vista. O
+   * número é a ÚNICA coisa que vem do navegador: o total (com juros de 4x em diante) é calculado aqui, no
+   * servidor, e o banco confere de novo ao criar o pedido.
+   */
+  parcelas?: number;
   /** D-133: a versão dos Termos de Uso que o cliente aceitou (`lib/legal/versao-dos-termos.ts`). Sem ela a compra é recusada. */
   termosVersao: string;
 }
@@ -230,6 +237,7 @@ export interface PedidoCriado {
   pedidoId: string;
   externalReference: string;
   amountCents: number;
+  parcelas?: number;
   jaExistia: boolean;
   /** `AAAA-MM-DD`, só quando o período do contrato ainda está no futuro (decisão 26). */
   proximaCobrancaEm: string | null;
@@ -260,6 +268,9 @@ export interface PedidoLinha {
   asaasPaymentId: string | null;
   asaasSubscriptionId: string | null;
   invoiceUrl: string | null;
+  /** D-177: 1 = à vista; de 2 em diante é cobrança parcelada avulsa (`amountCents` é o total com juros). */
+  parcelas?: number;
+  asaasInstallmentId?: string | null;
   ciclo: CicloPedido | null;
   planoNome: string | null;
   pacoteNome: string | null;
@@ -304,7 +315,23 @@ export interface DbCompra {
     chave: string;
     actor: string;
     termosVersao: string | null;
+    parcelas: number;
+    /** D-177: o total que o servidor calculou, só para o banco conferir (nulo à vista). */
+    totalCents: number | null;
   }): Promise<RpcResultado<PedidoCriado>>;
+
+  /** D-177: o preço do ciclo do plano e os parâmetros de parcelamento de `billing_settings` (leitura pura). */
+  lerParcelamentoDoPlano(
+    planCode: string,
+    ciclo: CicloPedido,
+  ): Promise<RpcResultado<{ precoCents: number | null; parametros: ParametrosDeParcelamento }>>;
+
+  /** D-177: `fn_billing_pedido_registrar_parcelamento`. */
+  registrarParcelamento(
+    org: string,
+    pedidoId: string,
+    asaasInstallmentId: string,
+  ): Promise<RpcResultado<{ jaRegistrado: boolean }>>;
 
   /** Leitura pura: pedido aberto (`criado`/`aguardando_pagamento`/`inconclusivo`/`processando`) do mesmo tipo, se houver (M9). */
   buscarPedidoAbertoPorTipo(org: string, tipo: TipoPedido): Promise<RpcResultado<PedidoLinha | null>>;
@@ -388,6 +415,9 @@ export const MENSAGEM_TROCA_DE_PLANO =
   "Sua assinatura atual ainda está no período pago de outro plano. A troca de plano ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.";
 /** D-133: compra sem o aceite dos Termos de Uso. */
 export const MENSAGEM_TERMOS_NAO_ACEITOS = "Aceite os Termos de Uso para continuar.";
+/** D-177: parcelamento fora da regra (ciclo, método, teto). */
+export const MENSAGEM_PARCELAMENTO_INDISPONIVEL =
+  "O parcelamento só está disponível no cartão de crédito, no plano semestral (até 6x) e no anual (até 12x).";
 export const MENSAGEM_OUTRA_OFERTA_ABERTA =
   "Há um pedido em aberto de outra opção. Conclua ou peça para cancelar antes de escolher outra.";
 
@@ -435,6 +465,9 @@ function mensagemDoErroDoPedido(erro: RpcErro): string {
   if (contemCodigo(erro, "billing_termos_nao_aceitos") || contemCodigo(erro, "billing_termos_invalidos")) {
     return MENSAGEM_TERMOS_NAO_ACEITOS;
   }
+  if (contemCodigo(erro, "billing_parcelamento_") || contemCodigo(erro, "billing_parcelas_")) {
+    return MENSAGEM_PARCELAMENTO_INDISPONIVEL;
+  }
   if (contemCodigo(erro, "billing_ja_tem_assinatura_asaas")) {
     return "Sua organização já tem uma assinatura ativa.";
   }
@@ -451,7 +484,8 @@ function montarDescricao(pedido: PedidoLinha): string {
   if (pedido.tipo === "assinatura") {
     const periodo = pedido.ciclo ? ROTULO_DO_CICLO_NA_DESCRICAO[pedido.ciclo] : "mensal";
     const plano = pedido.planoNome ?? "assinatura";
-    return `HiperCRM, plano ${plano} ${periodo}`;
+    const parcelas = (pedido.parcelas ?? 1) > 1 ? ` em ${pedido.parcelas}x` : "";
+    return `HiperCRM, plano ${plano} ${periodo}${parcelas}`;
   }
   const pacote = pedido.pacoteNome ?? "pacote de tokens";
   return `HiperCRM, ${pacote}`;
@@ -487,6 +521,7 @@ type ResolucaoPedido =
 function mesmaOfertaDoPedidoAberto(pedido: PedidoLinha, entrada: EntradaIniciarCompra): boolean {
   if (pedido.metodo !== entrada.metodo) return false;
   if (pedido.tipo === "assinatura") {
+    if ((pedido.parcelas ?? 1) !== (entrada.parcelas ?? 1)) return false;
     return pedido.planCode === (entrada.planCode ?? null) && pedido.ciclo === (entrada.ciclo ?? null);
   }
   return pedido.pacoteCode === (entrada.pacote ?? null);
@@ -497,6 +532,30 @@ async function resolverPedido(
   entrada: EntradaIniciarCompra,
   ambiente: AmbienteAsaas,
 ): Promise<ResolucaoPedido> {
+  // D-177: o total do parcelamento é calculado AQUI, no servidor, com o preço e os parâmetros do banco; o
+  // navegador só escolheu o número de parcelas. O banco confere o total de novo ao criar o pedido.
+  const parcelas = entrada.parcelas ?? 1;
+  let totalCents: number | null = null;
+  if (parcelas !== 1) {
+    if (
+      entrada.tipo !== "assinatura" ||
+      entrada.metodo !== "CREDIT_CARD" ||
+      !entrada.planCode ||
+      (entrada.ciclo !== "semiannual" && entrada.ciclo !== "yearly")
+    ) {
+      return { tipo: "erro", mensagem: MENSAGEM_PARCELAMENTO_INDISPONIVEL };
+    }
+    const oferta = await deps.db.lerParcelamentoDoPlano(entrada.planCode, entrada.ciclo);
+    if (oferta.error || !oferta.data || oferta.data.precoCents === null) {
+      deps.logger.error("asaas_compra_ler_parcelamento_falhou", { org: entrada.organizationId, codigo: oferta.error?.code });
+      return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+    }
+    if (!parcelasValidas(entrada.ciclo, parcelas, oferta.data.parametros)) {
+      return { tipo: "erro", mensagem: MENSAGEM_PARCELAMENTO_INDISPONIVEL };
+    }
+    totalCents = calcularParcelamento(oferta.data.precoCents, parcelas, oferta.data.parametros).totalCents;
+  }
+
   const criado = await deps.db.criarPedido({
     org: entrada.organizationId,
     tipo: entrada.tipo,
@@ -508,6 +567,8 @@ async function resolverPedido(
     chave: entrada.chave,
     actor: entrada.actorId,
     termosVersao: entrada.termosVersao,
+    parcelas,
+    totalCents,
   });
 
   if (!criado.error) {
@@ -774,10 +835,14 @@ async function removerRecemCriadoOuMarcarInconclusivo(
   asaasSubscriptionId: string | null,
   asaasPaymentId: string | null,
   motivo: string,
+  asaasInstallmentId: string | null = null,
 ): Promise<void> {
   try {
     if (asaasSubscriptionId) {
       await deps.asaas.removerAssinatura(asaasSubscriptionId);
+    } else if (asaasInstallmentId) {
+      // D-177: remove o parcelamento INTEIRO, nunca só a primeira parcela (as outras seguiriam pendentes).
+      await deps.asaas.removerParcelamento(asaasInstallmentId);
     } else if (asaasPaymentId) {
       await deps.asaas.removerCobranca(asaasPaymentId);
     }
@@ -808,6 +873,22 @@ async function registrarEDevolverCartao(
 ): Promise<ResultadoIniciarCompra> {
   const asaasPaymentId = cobranca?.id ?? null;
   const invoiceUrl = cobranca?.invoiceUrl ?? null;
+  const asaasInstallmentId = (pedido.parcelas ?? 1) > 1 ? (cobranca?.installment ?? null) : null;
+
+  // D-177: o id do parcelamento vai para o pedido ANTES da cobrança ser registrada. Sem ele não dá para
+  // remover o parcelamento inteiro se o pedido vencer; falhar aqui deixa o pedido em `processando` e a
+  // retomada acha o parcelamento pela referência.
+  if ((pedido.parcelas ?? 1) > 1) {
+    if (!asaasInstallmentId) {
+      deps.logger.error("asaas_compra_parcelamento_sem_id", { pedidoId: pedido.id });
+      return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
+    }
+    const reg = await deps.db.registrarParcelamento(org, pedido.id, asaasInstallmentId);
+    if (reg.error) {
+      deps.logger.error("asaas_compra_registrar_parcelamento_falhou", { pedidoId: pedido.id, codigo: reg.error.code });
+      return { tipo: "erro", mensagem: MENSAGEM_AGUARDE };
+    }
+  }
 
   const registrado = await deps.db.registrarCobranca({ org, pedidoId: pedido.id, asaasPaymentId, asaasSubscriptionId, invoiceUrl });
   if (registrado.error) {
@@ -820,6 +901,7 @@ async function registrarEDevolverCartao(
         asaasSubscriptionId,
         asaasPaymentId,
         "invoice_url_fora_do_ambiente",
+        asaasInstallmentId,
       );
       return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
     }
@@ -855,6 +937,7 @@ async function registrarEDevolverCartao(
       asaasSubscriptionId,
       asaasPaymentId,
       "invoice_url_fora_da_lista_ts",
+      asaasInstallmentId,
     );
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
   }
@@ -923,6 +1006,36 @@ async function criarAssinaturaEDevolver(
   return registrarEDevolverCartao(deps, org, pedido, assinatura.id, primeiraCobranca);
 }
 
+/**
+ * D-177: cobrança PARCELADA no cartão (2x a 12x), sem assinatura: `installmentCount` + `totalValue` (o total
+ * do pedido, com juros de 4x em diante), vencimento hoje. O Asaas devolve a primeira parcela, com o id do
+ * parcelamento. Não renova sozinha.
+ */
+async function criarCobrancaParceladaEDevolver(
+  deps: DepsCompra,
+  org: string,
+  pedido: PedidoLinha,
+  asaasCustomerId: string,
+  descricao: string,
+  agora: Date,
+): Promise<ResultadoIniciarCompra> {
+  let cobranca: CobrancaAsaas;
+  try {
+    cobranca = await deps.asaas.criarCobrancaParcelada({
+      customer: asaasCustomerId,
+      billingType: "CREDIT_CARD",
+      installmentCount: pedido.parcelas ?? 1,
+      totalValue: centavosParaReais(pedido.amountCents),
+      dueDate: dataSaoPaulo(agora),
+      description: descricao,
+      externalReference: pedido.externalReference,
+    });
+  } catch (err) {
+    return tratarErroDoPost(deps, org, pedido.id, err);
+  }
+  return registrarEDevolverCartao(deps, org, pedido, null, cobranca);
+}
+
 async function criarCobrancaAvulsaEDevolver(
   deps: DepsCompra,
   org: string,
@@ -958,7 +1071,8 @@ async function criarCobrancaOuAssinatura(
 ): Promise<ResultadoIniciarCompra> {
   const agora = relogio(deps);
   const descricao = montarDescricao(pedido);
-  const ehAssinaturaCartao = pedido.tipo === "assinatura" && pedido.metodo === "CREDIT_CARD";
+  // D-177: de 2x em diante o cartão é cobrança parcelada avulsa, nunca assinatura (não renova sozinha).
+  const ehAssinaturaCartao = pedido.tipo === "assinatura" && pedido.metodo === "CREDIT_CARD" && (pedido.parcelas ?? 1) <= 1;
 
   if (tentarRecuperarPorReferencia) {
     try {
@@ -1005,6 +1119,9 @@ async function criarCobrancaOuAssinatura(
 
   if (ehAssinaturaCartao) {
     return criarAssinaturaEDevolver(deps, org, pedido, asaasCustomerId, descricao, proximaCobrancaEm, agora);
+  }
+  if ((pedido.parcelas ?? 1) > 1) {
+    return criarCobrancaParceladaEDevolver(deps, org, pedido, asaasCustomerId, descricao, agora);
   }
   return criarCobrancaAvulsaEDevolver(deps, org, pedido, asaasCustomerId, descricao, agora);
 }

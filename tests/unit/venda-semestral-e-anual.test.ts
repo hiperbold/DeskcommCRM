@@ -180,6 +180,11 @@ function montar(pedido: PedidoLinha, opcoes: { erroDoPedido?: string } = {}) {
           },
     ),
     buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: null, error: null })),
+    lerParcelamentoDoPlano: vi.fn(async () => ({
+      data: { precoCents: 104900, parametros: { taxaMensal: 0.0199, semJurosAte: 3, maxSemestral: 6, maxAnual: 12 } },
+      error: null,
+    })),
+    registrarParcelamento: vi.fn(async () => ({ data: { jaRegistrado: false }, error: null })),
     tomarPedido: vi.fn(async () => {
       atual = { ...atual, status: "processando" };
       return { data: { tomado: true, pedidoId: atual.id, status: atual.status }, error: null };

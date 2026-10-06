@@ -91,6 +91,12 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     buscarCobranca: vi.fn(async () => cobrancaFake()),
     buscarCobrancaPorReferencia: vi.fn(async () => null),
     removerCobranca: vi.fn(async () => undefined),
+    criarCobrancaParcelada: vi.fn(async () => {
+      throw new Error("criarCobrancaParcelada não deveria ser chamado neste teste");
+    }),
+    buscarParcelamento: vi.fn(async () => ({ removido: true as const })),
+    removerParcelamento: vi.fn(async () => undefined),
+    listarCobrancasDoParcelamento: vi.fn(async () => []),
     qrPix: vi.fn(async () => {
       throw new Error("qrPix não deveria ser chamado pela conciliação");
     }),

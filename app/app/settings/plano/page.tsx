@@ -86,7 +86,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BotaoCancelarAssinatura } from "./_botao-cancelar-assinatura";
-import { podeCancelarAssinatura } from "./_logica-compra";
+import { parcelasDoPlanoSemRenovacao, podeCancelarAssinatura } from "./_logica-compra";
 import {
   Table,
   TableBody,
@@ -209,6 +209,8 @@ export default async function PlanoEUsoPage() {
           chaves={chavesAsaas}
           assinaturaAsaas={asaasOrg.assinatura}
           pedidos={asaasOrg.pedidos}
+          fimDoPeriodo={assinatura.contrato?.currentPeriodEnd ?? null}
+          tagDoIdioma={tagDoIdioma}
           t={t}
         />
       )}
@@ -387,13 +389,23 @@ function CartaoDeAssinaturaEPagamento({
   chaves,
   assinaturaAsaas,
   pedidos,
+  fimDoPeriodo,
+  tagDoIdioma,
   t,
 }: {
   chaves: EstadoDasChavesAsaas;
   assinaturaAsaas: AssinaturaAsaasDaOrganizacao | null;
   pedidos: PedidoAsaas[];
+  /** `current_period_end` do contrato (D-177: a data em que o plano parcelado acaba). */
+  fimDoPeriodo: string | null;
+  tagDoIdioma: string;
   t: (texto: string) => string;
 }) {
+  // D-177: plano pago em parcelas no cartão não renova sozinho (cobrança parcelada avulsa, sem assinatura).
+  const parcelasSemRenovacao = parcelasDoPlanoSemRenovacao({
+    assinaturaDoContrato: assinaturaAsaas,
+    pedidos: pedidos.map((p) => ({ tipo: p.tipo, status: p.status, parcelas: p.parcelas, pagoEm: p.pagoEm })),
+  });
   const podeComprar = chaves.habilitado && chaves.erroConfiguracao === null && chaves.compraPeloCliente;
   // Também com assinatura AGENDADA em pedido de cartão aguardando pagamento (o contrato ainda não
   // guarda o id dela): ver `podeCancelarAssinatura`.
@@ -424,6 +436,21 @@ function CartaoDeAssinaturaEPagamento({
           <p className="text-sm text-muted-foreground">
             {t("A compra pela tela ainda não está disponível. Fale com o suporte.")}
           </p>
+        )}
+
+        {parcelasSemRenovacao !== null && fimDoPeriodo && (
+          <div className="space-y-1 rounded-md border border-border p-3 text-sm" data-testid="plano-parcelado-sem-renovacao">
+            <p>
+              {t("Pago parcelado no cartão. Este plano não renova sozinho: o acesso vai até")}{" "}
+              <span className="font-medium">
+                {ultimoDiaDoPeriodo(fimDoPeriodo).toLocaleDateString(tagDoIdioma, { timeZone: FUSO_SP })}
+              </span>
+              . ({parcelasSemRenovacao}x)
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t("Para continuar depois dessa data, faça uma nova compra antes do fim do período.")}
+            </p>
+          </div>
         )}
 
         {podeCancelar && <BotaoCancelarAssinatura />}

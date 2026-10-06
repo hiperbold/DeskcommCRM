@@ -41,6 +41,7 @@ import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
 
 import type { PlanoParaVenda } from "@/lib/billing/asaas/leitura";
 import type { ResultadoIniciarCompra } from "@/lib/billing/asaas/compra";
+import type { OpcaoDeParcelas } from "@/lib/billing/asaas/parcelamento";
 
 import {
   chaveParaProximaTentativaDeCompra,
@@ -96,12 +97,19 @@ function classeDoToggle(ativo: boolean): string {
   );
 }
 
+export type OpcoesDeParcelasPorPlano = Record<string, { semiannual: OpcaoDeParcelas[]; yearly: OpcaoDeParcelas[] }>;
+
 export function AssinarOuComprarClient({
+  opcoesDeParcelas = {},
+  taxaMensalPercentual = null,
   planos,
   pacotes,
   precisaPagador,
   leituraFalhou,
 }: {
+  /** D-177: calculadas no servidor (parâmetros de `billing_settings`); o cliente só escolhe o número de parcelas. */
+  opcoesDeParcelas?: OpcoesDeParcelasPorPlano;
+  taxaMensalPercentual?: number | null;
   planos: PlanoParaVenda[];
   pacotes: PacoteParaVenda[];
   precisaPagador: boolean;
@@ -133,7 +141,13 @@ export function AssinarOuComprarClient({
           <h2 className="text-lg font-medium">{t("Planos disponíveis")}</h2>
           <div className="grid gap-4 md:grid-cols-2">
             {planos.map((plano) => (
-              <PlanoParaAssinar key={plano.code} plano={plano} precisaPagador={precisaPagador} />
+              <PlanoParaAssinar
+                key={plano.code}
+                plano={plano}
+                precisaPagador={precisaPagador}
+                opcoesDeParcelas={opcoesDeParcelas[plano.code] ?? { semiannual: [], yearly: [] }}
+                taxaMensalPercentual={taxaMensalPercentual}
+              />
             ))}
           </div>
         </section>
@@ -155,11 +169,22 @@ export function AssinarOuComprarClient({
 
 // ─── Um plano, com ciclo, método e o desfecho da tentativa ─────────────────
 
-function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; precisaPagador: boolean }) {
+function PlanoParaAssinar({
+  plano,
+  precisaPagador,
+  opcoesDeParcelas,
+  taxaMensalPercentual,
+}: {
+  plano: PlanoParaVenda;
+  precisaPagador: boolean;
+  opcoesDeParcelas: { semiannual: OpcaoDeParcelas[]; yearly: OpcaoDeParcelas[] };
+  taxaMensalPercentual: number | null;
+}) {
   const t = useT();
   const tagDoIdioma = useTagDeIdioma();
   const [ciclo, setCiclo] = useState<CicloDeCompra>("monthly");
   const [metodo, setMetodo] = useState<"CREDIT_CARD" | "PIX">("CREDIT_CARD");
+  const [parcelas, setParcelas] = useState(1);
   const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
   const [pendente, setPendente] = useState(false);
   const [aceitouTermos, setAceitouTermos] = useState(false);
@@ -177,8 +202,14 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
 
   function escolherCiclo(novo: CicloDeCompra) {
     setCiclo(novo);
+    setParcelas(1);
     if (novo === "monthly") setMetodo("CREDIT_CARD");
   }
+
+  // D-177: só o cartão no semestral e no anual parcela; o mensal e o Pix ficam à vista.
+  const opcoesDoCiclo = ciclo === "semiannual" ? opcoesDeParcelas.semiannual : ciclo === "yearly" ? opcoesDeParcelas.yearly : [];
+  const mostraParcelas = metodo === "CREDIT_CARD" && opcoesDoCiclo.length > 1;
+  const parcelasEfetivas = mostraParcelas ? parcelas : 1;
 
   const rotuloDoCiclo: Record<CicloDeCompra, string> = {
     monthly: t("Mensal"),
@@ -187,7 +218,7 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
   };
 
   async function assinar() {
-    const escolhaAtual: EscolhaDeCompra = { tipo: "assinatura", planCode: plano.code, ciclo, metodo };
+    const escolhaAtual: EscolhaDeCompra = { tipo: "assinatura", planCode: plano.code, ciclo, metodo, parcelas: parcelasEfetivas };
     const chaveDestaTentativa = chaveParaProximaTentativaDeCompra({
       chaveAtual: chave,
       escolhaAtual,
@@ -213,6 +244,8 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
         planCode: plano.code,
         ciclo,
         metodo,
+        // D-177: só vai quando parcela; à vista a entrada segue exatamente como antes.
+        ...(parcelasEfetivas > 1 ? { parcelas: parcelasEfetivas } : {}),
         chave: chaveDestaTentativa,
         pagador: entradaDoPagador,
         termosVersao: VERSAO_DOS_TERMOS,
@@ -312,10 +345,57 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
                 type="button"
                 aria-pressed={metodo === "PIX"}
                 className={classeDoToggle(metodo === "PIX")}
-                onClick={() => setMetodo("PIX")}
+                onClick={() => {
+                  setMetodo("PIX");
+                  setParcelas(1);
+                }}
               >
                 {t("Pix")}
               </button>
+            </div>
+          </div>
+        )}
+
+        {mostraParcelas && (
+          <div className="space-y-1.5" data-testid={`parcelas-${plano.code}`}>
+            <span className="text-sm font-medium">{t("Parcelamento")}</span>
+            <div className="space-y-1">
+              {opcoesDoCiclo.map((opcao) => {
+                const ultimaDiferente = opcao.ultimaParcelaCents !== opcao.parcelaCents;
+                return (
+                  <label
+                    key={opcao.parcelas}
+                    className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm"
+                    data-testid={`parcelas-${plano.code}-${opcao.parcelas}`}
+                  >
+                    <input
+                      type="radio"
+                      name={`parcelas-${plano.code}`}
+                      checked={parcelas === opcao.parcelas}
+                      onChange={() => setParcelas(opcao.parcelas)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="font-medium">
+                        {opcao.parcelas}x {formatarReais(opcao.parcelaCents, tagDoIdioma)}
+                      </span>{" "}
+                      <span className="text-muted-foreground">
+                        {opcao.comJuros
+                          ? `${t("com juros de")} ${taxaMensalPercentual === null ? "" : taxaMensalPercentual.toLocaleString(tagDoIdioma)}% ${t("ao mês")}`
+                          : t("sem juros")}
+                      </span>
+                      {ultimaDiferente && (
+                        <span className="block text-xs text-muted-foreground">
+                          {t("última parcela")}: {formatarReais(opcao.ultimaParcelaCents, tagDoIdioma)}
+                        </span>
+                      )}
+                      <span className="block text-xs text-muted-foreground">
+                        {t("Total a pagar")}: {formatarReais(opcao.totalCents, tagDoIdioma)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </div>
         )}

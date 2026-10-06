@@ -129,6 +129,12 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     }),
     buscarCobrancaPorReferencia: vi.fn(async () => null),
     removerCobranca: vi.fn(async () => undefined),
+    criarCobrancaParcelada: vi.fn(async () => {
+      throw new Error("criarCobrancaParcelada não deveria ser chamado neste teste");
+    }),
+    buscarParcelamento: vi.fn(async () => ({ removido: true as const })),
+    removerParcelamento: vi.fn(async () => undefined),
+    listarCobrancasDoParcelamento: vi.fn(async () => []),
     qrPix: vi.fn(async () => ({ encodedImage: "img-base64", payload: "00020126...", expirationDate: "2026-10-02T00:00:00Z" })),
     buscarWebhook: vi.fn(async () => {
       throw new Error("buscarWebhook não deveria ser chamado por compra.ts");
@@ -165,6 +171,11 @@ function dbFalso(pedidoInicial: PedidoLinha, opts: { vinculo?: string | null } =
       error: null,
     })),
     buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: { ...pedido }, error: null })),
+    lerParcelamentoDoPlano: vi.fn(async () => ({
+      data: { precoCents: 104900, parametros: { taxaMensal: 0.0199, semJurosAte: 3, maxSemestral: 6, maxAnual: 12 } },
+      error: null,
+    })),
+    registrarParcelamento: vi.fn(async () => ({ data: { jaRegistrado: false }, error: null })),
     tomarPedido: vi.fn(async () => {
       if (pedido.status === "criado" || pedido.status === "inconclusivo") {
         pedido = { ...pedido, status: "processando" };
@@ -252,6 +263,8 @@ function dbStubVazio(): DbCompra {
     marcarPedido: naoDeveriaSerChamado("marcarPedido") as DbCompra["marcarPedido"],
     lerContrato: naoDeveriaSerChamado("lerContrato") as DbCompra["lerContrato"],
     marcarAssinaturaEncerrada: naoDeveriaSerChamado("marcarAssinaturaEncerrada") as DbCompra["marcarAssinaturaEncerrada"],
+    lerParcelamentoDoPlano: naoDeveriaSerChamado("lerParcelamentoDoPlano") as DbCompra["lerParcelamentoDoPlano"],
+    registrarParcelamento: naoDeveriaSerChamado("registrarParcelamento") as DbCompra["registrarParcelamento"],
   };
 }
 

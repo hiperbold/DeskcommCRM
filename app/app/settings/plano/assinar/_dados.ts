@@ -19,6 +19,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Logger } from "@/lib/agent-engine/obs/logger";
 import type { AmbienteAsaas } from "@/lib/billing/asaas/config";
+import type { ParametrosDeParcelamento } from "@/lib/billing/asaas/parcelamento";
 
 export interface PacoteParaVenda {
   codigo: string;
@@ -111,5 +112,38 @@ export async function precisaDeFormularioDoPagador(
       erro: mensagemDeErro(err),
     });
     return true;
+  }
+}
+
+/**
+ * Os parâmetros de parcelamento de `billing_settings` (D-177): taxa mensal, até quantas parcelas sem
+ * juros e os tetos do semestral e do anual. Fail-closed: se a leitura falhar, nenhum parâmetro (só o 1x
+ * aparece). Nunca lança.
+ */
+export async function parametrosDeParcelamento(admin: SupabaseClient, log?: Logger): Promise<ParametrosDeParcelamento> {
+  const vazio: ParametrosDeParcelamento = { taxaMensal: null, semJurosAte: null, maxSemestral: null, maxAnual: null };
+  try {
+    const { data, error } = await admin
+      .from("billing_settings")
+      .select("parcelamento_taxa_mensal, parcelamento_sem_juros_ate, parcelamento_max_semestral, parcelamento_max_anual")
+      .eq("id", 1)
+      .maybeSingle();
+    if (error) throw new Error(`ler billing_settings: ${error.message}`);
+    const c = data as {
+      parcelamento_taxa_mensal: number | string | null;
+      parcelamento_sem_juros_ate: number | null;
+      parcelamento_max_semestral: number | null;
+      parcelamento_max_anual: number | null;
+    } | null;
+    if (!c) return vazio;
+    return {
+      taxaMensal: c.parcelamento_taxa_mensal == null ? null : Number(c.parcelamento_taxa_mensal),
+      semJurosAte: c.parcelamento_sem_juros_ate,
+      maxSemestral: c.parcelamento_max_semestral,
+      maxAnual: c.parcelamento_max_anual,
+    };
+  } catch (err) {
+    log?.error("alarme_asaas_leitura", { etapa: "parametros_de_parcelamento", erro: mensagemDeErro(err) });
+    return vazio;
   }
 }

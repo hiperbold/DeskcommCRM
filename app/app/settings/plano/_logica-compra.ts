@@ -206,6 +206,8 @@ export interface EscolhaDeAssinatura {
   planCode: string;
   ciclo: CicloDeCompra;
   metodo: "CREDIT_CARD" | "PIX";
+  /** D-177: parcelas no cartão (1 = à vista). */
+  parcelas?: number;
 }
 
 export interface EscolhaDePacote {
@@ -252,7 +254,9 @@ export function classificarDesfechoDaTentativa(resultado: {
 
 function mesmaEscolhaDeCompra(a: EscolhaDeCompra, b: EscolhaDeCompra): boolean {
   if (a.tipo === "assinatura" && b.tipo === "assinatura") {
-    return a.planCode === b.planCode && a.ciclo === b.ciclo && a.metodo === b.metodo;
+    return (
+      a.planCode === b.planCode && a.ciclo === b.ciclo && a.metodo === b.metodo && (a.parcelas ?? 1) === (b.parcelas ?? 1)
+    );
   }
   if (a.tipo === "pacote_tokens" && b.tipo === "pacote_tokens") {
     return a.pacote === b.pacote && a.metodo === b.metodo;
@@ -313,4 +317,23 @@ export function montarPagadorDoFormulario(
   if (celular.length > 0) pagador.celular = celular;
 
   return { ok: true, pagador };
+}
+
+// ─── Plano parcelado não renova sozinho (D-177) ────────────────────────────
+
+/**
+ * O período corrente foi pago em parcelas no cartão? Contrato SEM assinatura viva no Asaas (nunca teve, ou
+ * já encerrada) cujo último pedido de assinatura pago tem `parcelas` acima de 1. É o mesmo "não renova
+ * sozinho" do Pix, derivado: não existe coluna para isso. Devolve o número de parcelas, ou `null`.
+ */
+export function parcelasDoPlanoSemRenovacao(args: {
+  assinaturaDoContrato: { asaasSubscriptionId: string; encerradaEm: string | null } | null;
+  pedidos: ReadonlyArray<{ tipo: string; status: string; parcelas: number; pagoEm: string | null }>;
+}): number | null {
+  if (args.assinaturaDoContrato !== null && args.assinaturaDoContrato.encerradaEm === null) return null;
+  const pagos = args.pedidos
+    .filter((p) => p.tipo === "assinatura" && p.status === "pago" && p.pagoEm !== null)
+    .sort((a, b) => Date.parse(b.pagoEm as string) - Date.parse(a.pagoEm as string));
+  const ultimo = pagos[0];
+  return ultimo && ultimo.parcelas > 1 ? ultimo.parcelas : null;
 }

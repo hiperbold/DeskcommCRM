@@ -61,7 +61,14 @@
  *                    por assinatura ativa.
  *   estornar-c       estorno total da cobrança do semestral: corta o contrato e zera os tokens do mês.
  *   cancelar-d       cancelamento do anual pelo cliente (DELETE da assinatura, acesso até o fim do período).
- *   limpar           o mesmo do roteiro mensal, agora para A, B, C e D.
+ *   parcelado-semestral-e  D-177: Pro semestral em 4x (com juros) na organização E: cobrança PARCELADA avulsa
+ *                    (sem assinatura) de R$ 1.101,72, paga pela API (payWithCreditCard na primeira parcela), os
+ *                    PAYMENT_CONFIRMED de TODAS as parcelas entregues ao handler; confere período concedido uma
+ *                    vez, total, tokens e que nada renova (contrato sem assinatura do Asaas).
+ *   parcelado-anual-f  D-177: Pro anual em 3x (sem juros) na organização F, mesma conferência (3 x R$ 633,00).
+ *                    Se a API do sandbox não pagar o parcelamento, a etapa imprime a fatura para pagar à mão
+ *                    (como a `fatura-manual` do roteiro mensal) e para; rodar de novo a etapa depois de pagar.
+ *   limpar           o mesmo do roteiro mensal, agora para A, B, C, D, E e F (e remove parcelamentos pendentes).
  * A renovação do semestral e do anual (cobrança nova daqui a 6 e 12 meses) não dá para observar no sandbox:
  * ela é coberta pelos testes de banco (tests/invariants/venda-semestral-e-anual-banco.test.ts).
  *
@@ -173,8 +180,8 @@ function log(msg: string): void {
 
 // ─── Estado e resultados ──────────────────────────────────────────────────
 type Dict = Record<string, unknown>;
-/** A, B: roteiro original (mensal). C, D: etapas de ciclo (semestral e anual, D-176). */
-type Letra = "A" | "B" | "C" | "D";
+/** A, B: roteiro original (mensal). C, D: etapas de ciclo (semestral e anual, D-176). E, F: parcelado (D-177). */
+type Letra = "A" | "B" | "C" | "D" | "E" | "F";
 type CicloDeTeste = "monthly" | "semiannual" | "yearly";
 interface OfertaDeTeste {
   ciclo: CicloDeTeste;
@@ -1015,7 +1022,7 @@ async function etapaPrepararCiclos(): Promise<void> {
 
   const data = hojeBR();
   const criadas: Dict = {};
-  for (const [l, nome] of [["C", `Homologação Asaas ${data} (semestral)`], ["D", `Homologação Asaas ${data} (anual)`]] as Array<[Letra, string]>) {
+  for (const [l, nome] of [["C", `Homologação Asaas ${data} (semestral)`], ["D", `Homologação Asaas ${data} (anual)`], ["E", `Homologação Asaas ${data} (semestral parcelado)`], ["F", `Homologação Asaas ${data} (anual parcelado)`]] as Array<[Letra, string]>) {
     if (estado[`org${l}`]) {
       criadas[l] = { jaExistia: estado[`org${l}`] };
       continue;
@@ -1029,7 +1036,10 @@ async function etapaPrepararCiclos(): Promise<void> {
   }
   salvarEstado();
   registrar("ciclos_preparar", { backup: { arquivo: BACKUP, bytes: BACKUP_BYTES }, ligadoNoBancoLocal: ligou, organizacoes: criadas, precos: linhas });
-  checar("ciclos: organizações C e D criadas com contrato inicial", (await Promise.all((["C", "D"] as const).map((l) => sel("billing_contracts", org(l))))).every((c) => c.length === 1));
+  checar("ciclos: organizações C, D, E e F criadas com contrato inicial", (await Promise.all((["C", "D", "E", "F"] as const).map((l) => sel("billing_contracts", org(l))))).every((c) => c.length === 1));
+  const cfgParcelas = await admin.from("billing_settings").select("parcelamento_taxa_mensal, parcelamento_sem_juros_ate, parcelamento_max_semestral, parcelamento_max_anual").eq("id", 1).maybeSingle();
+  const pc = cfgParcelas.data as Dict | null;
+  checar("ciclos: parâmetros de parcelamento semeados (1,99% ao mês, 3x sem juros, semestral até 6x, anual até 12x)", Number(pc?.parcelamento_taxa_mensal) === 0.0199 && pc?.parcelamento_sem_juros_ate === 3 && pc?.parcelamento_max_semestral === 6 && pc?.parcelamento_max_anual === 12, pc);
 }
 
 /** PAYMENT_CONFIRMED da primeira cobrança no handler real, processador, e conferência de período e tokens. */
@@ -1092,13 +1102,156 @@ async function etapaCancelarD(): Promise<void> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// D-177: compra parcelada no cartão (organizações E e F)
+// ═══════════════════════════════════════════════════════════════════════════
+const { calcularParcelamento } = (await imp("lib/billing/asaas/parcelamento.ts")) as typeof import("../../lib/billing/asaas/parcelamento");
+
+/**
+ * Compra (iniciarCompra com `parcelas`), paga pela API e entrega ao handler o PAYMENT_CONFIRMED de TODAS as
+ * parcelas. Confere o total, o período concedido uma vez, as linhas de billing_payments, os tokens e que o
+ * contrato fica sem assinatura (não renova sozinho). Roda em duas passadas se o pagamento por API não existir:
+ * a primeira imprime a fatura; depois de pagar à mão, a mesma etapa continua do pagamento.
+ */
+async function parcelado(l: Letra, rotulo: string, oferta: OfertaDeTeste, parcelas: number): Promise<void> {
+  const organizationId = org(l);
+  const cfg = await admin.from("billing_settings").select("parcelamento_taxa_mensal, parcelamento_sem_juros_ate, parcelamento_max_semestral, parcelamento_max_anual").eq("id", 1).maybeSingle();
+  const c = cfg.data as { parcelamento_taxa_mensal: number | string; parcelamento_sem_juros_ate: number; parcelamento_max_semestral: number; parcelamento_max_anual: number };
+  const esperado = calcularParcelamento(oferta.valorCents, parcelas, {
+    taxaMensal: Number(c.parcelamento_taxa_mensal),
+    semJurosAte: c.parcelamento_sem_juros_ate,
+    maxSemestral: c.parcelamento_max_semestral,
+    maxAnual: c.parcelamento_max_anual,
+  });
+
+  if (!estado[`pedido${l}`]) {
+    chamadasCliente.length = 0;
+    httpLog.length = 0;
+    avisos.length = 0;
+    const resultado = await iniciarCompra(depsCompra, {
+      organizationId,
+      actorId: ATOR,
+      tipo: "assinatura",
+      planCode: "pro",
+      ciclo: oferta.ciclo,
+      metodo: "CREDIT_CARD",
+      parcelas,
+      chave: randomUUID(),
+      pagador: pagadorDeTeste(Date.now()),
+      termosVersao: VERSAO_DOS_TERMOS,
+    });
+    const f = await foto(organizationId);
+    const pedido = (f.pedidos as Dict[])[0] ?? {};
+    const vinculo = (f.clientes as Dict[])[0] ?? {};
+    estado[`pedido${l}`] = pedido.id;
+    estado[`clienteAsaas${l}`] = vinculo.asaas_customer_id;
+    estado[`parcelamento${l}`] = pedido.asaas_installment_id;
+    estado[`cobranca${l}`] = pedido.asaas_payment_id;
+    salvarEstado();
+    const inst = pedido.asaas_installment_id ? await direto("GET", `/installments/${pedido.asaas_installment_id as string}`) : null;
+    const parcs = pedido.asaas_installment_id ? await direto("GET", `/installments/${pedido.asaas_installment_id as string}/payments`) : null;
+    const lista = ((parcs?.corpo.data as Dict[] | undefined) ?? []).slice().sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+    registrar(`${rotulo}_compra`, {
+      resultadoDoIniciarCompra: resultado,
+      chamadasDoClienteAsaas: [...chamadasCliente],
+      pedido: { id: pedido.id, status: pedido.status, ciclo: pedido.ciclo, metodo: pedido.metodo, parcelas: pedido.parcelas, amount_cents: pedido.amount_cents, asaas_payment_id: pedido.asaas_payment_id, asaas_subscription_id: pedido.asaas_subscription_id, asaas_installment_id: pedido.asaas_installment_id },
+      parcelamentoNoAsaas: inst && { value: inst.corpo.value, paymentValue: inst.corpo.paymentValue, installmentCount: inst.corpo.installmentCount },
+      parcelasNoAsaas: lista.map((p) => ({ id: p.id, installmentNumber: p.installmentNumber, value: p.value, dueDate: p.dueDate, status: p.status, externalReference: p.externalReference })),
+      avisosDoLogger: avisos,
+    });
+    checar(`${rotulo}: iniciarCompra devolve redirecionar para a fatura do sandbox`, resultado.tipo === "redirecionar" && /^https:\/\/sandbox\.asaas\.com\//.test(resultado.url), resultado);
+    checar(`${rotulo}: pedido aguardando_pagamento, ${parcelas}x, total ${reais(esperado.totalCents)} do cálculo do servidor, sem assinatura`, pedido.status === "aguardando_pagamento" && pedido.parcelas === parcelas && pedido.amount_cents === esperado.totalCents && pedido.asaas_subscription_id === null && Boolean(pedido.asaas_installment_id), pedido);
+    checar(`${rotulo}: o Asaas criou ${parcelas} cobranças que somam o total (${reais(esperado.totalCents)}) e levam o externalReference do pedido`, lista.length === parcelas && Math.round(lista.reduce((t, p) => t + Number(p.value) * 100, 0)) === esperado.totalCents && lista.every((p) => p.externalReference === pedido.external_reference), lista.map((p) => p.value));
+    // A regra de arredondamento assumida (parcela ao centavo mais próximo, sobra na última) contra o que o Asaas fez.
+    checar(`${rotulo}: arredondamento do Asaas = parcelas de ${reais(esperado.parcelaCents)} e última de ${reais(esperado.ultimaParcelaCents)}`, lista.every((p, i) => Math.round(Number(p.value) * 100) === (i === lista.length - 1 ? esperado.ultimaParcelaCents : esperado.parcelaCents)), lista.map((p) => p.value));
+    checar(`${rotulo}: o total do parcelamento no Asaas (GET /installments) é ${reais(esperado.totalCents)}`, Math.round(Number(inst?.corpo.value) * 100) === esperado.totalCents && inst?.corpo.installmentCount === parcelas, inst?.corpo);
+    if (resultado.tipo === "redirecionar") estado[`faturaParcelado${l}`] = resultado.url;
+    salvarEstado();
+  }
+
+  // Pagamento: pela API na primeira parcela. Se não pagar o parcelamento inteiro, imprime a fatura e para.
+  const instId = estado[`parcelamento${l}`] as string;
+  let parcs = await direto("GET", `/installments/${instId}/payments`);
+  let lista = ((parcs.corpo.data as Dict[]) ?? []).slice().sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+  if (!lista.every((p) => p.status === "CONFIRMED" || p.status === "RECEIVED")) {
+    const primeira = estado[`cobranca${l}`] as string;
+    const r = await direto("POST", `/payments/${primeira}/payWithCreditCard`, {
+      creditCard: { holderName: "HOMOLOGACAO HIPERCRM", number: "4444444444444444", expiryMonth: "12", expiryYear: "2030", ccv: "123" },
+      creditCardHolderInfo: { name: "Homologação HiperCRM", email: `homolog-e2e-${Date.now()}@example.com`, cpfCnpj: cpfGerado(), postalCode: "01001000", addressNumber: "1", phone: "1133334444", mobilePhone: "11988887777" },
+      remoteIp: "203.0.113.10",
+    });
+    await dormir(2000);
+    parcs = await direto("GET", `/installments/${instId}/payments`);
+    lista = ((parcs.corpo.data as Dict[]) ?? []).slice().sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+    registrar(`${rotulo}_pagamento`, { payWithCreditCard: { status: r.status, erros: r.status === 200 ? undefined : r.corpo.errors }, parcelasDepois: lista.map((p) => ({ id: p.id, status: p.status, netValue: p.netValue, creditDate: p.creditDate })) });
+    if (!lista.every((p) => p.status === "CONFIRMED" || p.status === "RECEIVED")) {
+      log(`\n[PAGAR A MÃO] A API do sandbox não pagou o parcelamento inteiro (payWithCreditCard respondeu ${r.status}).`);
+      log(`Fatura (cartão de teste 4444 4444 4444 4444, qualquer validade futura, CCV 123): ${String(estado[`faturaParcelado${l}`])}`);
+      log(`Depois de pagar, rode de novo a mesma etapa: ela continua daqui (não cria outra compra).`);
+      checar(`${rotulo}: parcelamento pago (pela API ou à mão)`, false, { status: r.status, parcelas: lista.map((p) => p.status) });
+      return;
+    }
+  }
+  checar(`${rotulo}: as ${parcelas} parcelas ficaram CONFIRMED`, lista.length === parcelas && lista.every((p) => p.status === "CONFIRMED" || p.status === "RECEIVED"), lista.map((p) => p.status));
+
+  // Webhook: o PAYMENT_CONFIRMED de CADA parcela, no handler real, e o processador.
+  const ids: string[] = [];
+  for (const parcela of lista) {
+    const evt = montarEvento("PAYMENT_CONFIRMED", parcela, "payment");
+    guardarEvento(evt.id as string);
+    ids.push(evt.id as string);
+    const entrega = await entregar(evt);
+    checar(`${rotulo}: handler 200 para a parcela ${String(parcela.installmentNumber)}`, entrega.status === 200, entrega);
+  }
+  salvarEstado();
+  const proc = await processar();
+  const linhas = await Promise.all(ids.map((id) => evento(id)));
+  registrar(`${rotulo}_webhook`, { rodada: proc, eventos: linhas.map((e) => resumoEvento(e)) });
+  checar(`${rotulo}: todos os eventos aplicados`, linhas.every((e) => e?.resultado === "aplicado"), linhas.map((e) => e?.resultado));
+  checar(`${rotulo}: o processador consultou /installments/{id} para conferir o total e só fez GET`, proc.http.some((h) => h.startsWith("GET /installments/")) && proc.http.every((h) => h.startsWith("GET ")), proc.http);
+
+  const f = await foto(organizationId);
+  const ct = f.contrato as Dict;
+  const pedido = (f.pedidos as Dict[])[0] ?? {};
+  const pags = (f.pagamentos as Dict[]).filter((p) => p.origem === "asaas");
+  const due = String(lista[0]!.paymentDate ?? lista[0]!.dueDate);
+  const esp = esperadoDoPeriodo(due, oferta.meses);
+  checar(`${rotulo}: pedido pago, ${parcelas}x, total ${reais(esperado.totalCents)}`, pedido.status === "pago" && pedido.parcelas === parcelas && pedido.amount_cents === esperado.totalCents, { status: pedido.status, amount: pedido.amount_cents });
+  checar(`${rotulo}: ${parcelas} linhas em billing_payments ligadas ao pedido, somando ${reais(esperado.totalCents)}`, pags.length === parcelas && pags.every((p) => p.order_id === pedido.id) && pags.reduce((t, p) => t + Number(p.gross_cents), 0) === esperado.totalCents, pags.map((p) => p.gross_cents));
+  checar(`${rotulo}: o período foi concedido UMA vez (só uma linha com período)`, pags.filter((p) => p.billing_period_end !== null).length === 1, pags.map((p) => iso(p.billing_period_end)));
+  checar(`${rotulo}: contrato Pro ${oferta.nome}, ativa, período de ${oferta.meses} meses mais 1 dia (${esp.fimData})`, ct.status === "ativa" && ct.cycle === oferta.ciclo && ms(ct.current_period_end) === esp.fim, { status: ct.status, cycle: ct.cycle, fim: iso(ct.current_period_end), esperado: new Date(esp.fim).toISOString() });
+  checar(`${rotulo}: NADA renova sozinho (contrato sem assinatura do Asaas, gateway asaas)`, ct.asaas_subscription_id === null && ct.gateway === "asaas", { sub: ct.asaas_subscription_id, gateway: ct.gateway });
+  const subs = await direto("GET", `/subscriptions?customer=${estado[`clienteAsaas${l}`] as string}`);
+  checar(`${rotulo}: nenhuma assinatura existe no Asaas para o cliente`, ((subs.corpo.data as Dict[]) ?? []).filter((s) => s.deleted !== true).length === 0, subs.corpo.data);
+  const saldo = await admin.rpc("fn_billing_saldo_da_carteira" as never, { p_org: organizationId } as never);
+  const conc = (await sel("billing_token_ledger", organizationId)).filter((e) => String(e.chave).startsWith("plano:"));
+  registrar(`${rotulo}_tokens`, { saldo: saldo.error ? saldo.error.message : "ok", concessoesDoPlano: conc.length });
+  checar(`${rotulo}: tokens do plano concedidos uma vez, não por parcela`, conc.length === 1, conc.map((e) => e.chave));
+}
+
+async function etapaParceladoSemestralE(): Promise<void> {
+  await parcelado("E", "parcelado_semestral", OFERTAS.semiannual, 4);
+}
+
+async function etapaParceladoAnualF(): Promise<void> {
+  await parcelado("F", "parcelado_anual", OFERTAS.yearly, 3);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Passo 9: limpeza no Asaas
 // ═══════════════════════════════════════════════════════════════════════════
 async function etapaLimpar(): Promise<void> {
   const saida: Dict = {};
-  for (const l of ["A", "B", "C", "D"] as const) {
+  for (const l of ["A", "B", "C", "D", "E", "F"] as const) {
     const cid = estado[`clienteAsaas${l}`] as string | undefined;
     if (!cid) continue;
+    // D-177: parcelamento ainda pendente é removido INTEIRO (DELETE /installments/{id}); parcela já paga fica.
+    const pagsAntes = await direto("GET", `/payments?customer=${cid}&limit=100`);
+    const parcelamentosPendentes = [...new Set(((pagsAntes.corpo.data as Dict[]) ?? []).filter((p) => p.installment && p.deleted !== true && p.status === "PENDING").map((p) => p.installment as string))];
+    const parcelamentosRemovidos: Dict[] = [];
+    for (const inst of parcelamentosPendentes) {
+      const d = await direto("DELETE", `/installments/${inst}`);
+      parcelamentosRemovidos.push({ id: inst, delete: d.status, corpo: d.corpo });
+    }
     const lista = await direto("GET", `/subscriptions?customer=${cid}`);
     const subs = ((lista.corpo.data as Dict[]) ?? []).filter((s) => s.deleted !== true);
     const removidas: Dict[] = [];
@@ -1112,12 +1265,13 @@ async function etapaLimpar(): Promise<void> {
       cliente: cid,
       assinaturasAbertasAntes: subs.map((s) => s.id),
       removidas,
+      parcelamentosRemovidos,
       assinaturasAposLimpeza: ((depois.corpo.data as Dict[]) ?? []).map((s) => ({ id: s.id, status: s.status, deleted: s.deleted })),
       cobrancasQueFicam: ((pags.corpo.data as Dict[]) ?? []).map((p) => ({ id: p.id, status: p.status, value: p.value, deleted: p.deleted })),
     };
     checar(`passo9: nenhuma assinatura aberta sobrou no Asaas para o cliente ${l}`, ((depois.corpo.data as Dict[]) ?? []).every((s) => s.deleted === true || s.status === "INACTIVE"), saida[l]);
   }
-  saida.bancoLocal = { organizacoesDeTesteMantidas: { A: estado.orgA, B: estado.orgB, C: estado.orgC, D: estado.orgD }, observacao: "nada foi apagado no banco local" };
+  saida.bancoLocal = { organizacoesDeTesteMantidas: { A: estado.orgA, B: estado.orgB, C: estado.orgC, D: estado.orgD, E: estado.orgE, F: estado.orgF }, observacao: "nada foi apagado no banco local" };
   registrar("passo9_limpeza", saida);
 }
 
@@ -1138,9 +1292,11 @@ const etapas: Record<string, () => Promise<void>> = {
   "troca-de-ciclo": etapaTrocaDeCiclo,
   "estornar-c": etapaEstornarC,
   "cancelar-d": etapaCancelarD,
+  "parcelado-semestral-e": etapaParceladoSemestralE,
+  "parcelado-anual-f": etapaParceladoAnualF,
 };
 const ORDEM = ["preparar", "compra-a", "pagar-a", "webhook-a", "dia31-b", "estornar-a", "recompra-a", "cancelar-b", "limpar"];
-const ORDEM_CICLOS = ["preparar-ciclos", "semestral-c", "anual-d", "troca-de-ciclo", "estornar-c", "cancelar-d", "limpar"];
+const ORDEM_CICLOS = ["preparar-ciclos", "semestral-c", "anual-d", "troca-de-ciclo", "estornar-c", "cancelar-d", "parcelado-semestral-e", "parcelado-anual-f", "limpar"];
 
 const pedida = process.argv[2];
 if (!pedida || (pedida !== "tudo" && pedida !== "ciclos" && !etapas[pedida])) {

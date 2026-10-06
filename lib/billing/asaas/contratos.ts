@@ -96,6 +96,9 @@ export const cobrancaAsaasSchema = z
     confirmedDate: z.string().regex(DATA_ISO).nullable().optional(),
     externalReference: z.string().nullable().optional(),
     invoiceUrl: z.string().nullable().optional(),
+    /** D-177: id do parcelamento (UUID, sem prefixo) quando a cobrança é uma parcela. */
+    installment: z.string().nullable().optional(),
+    installmentNumber: z.number().nullable().optional(),
     deleted: z.boolean().optional(),
   })
   .passthrough()
@@ -114,6 +117,35 @@ export const criarCobrancaRequestSchema = z.object({
   externalReference: z.string().min(1).max(200).optional(),
 });
 export type CriarCobrancaRequest = z.infer<typeof criarCobrancaRequestSchema>;
+
+// ─── Cobrança parcelada (D-177) ───────────────────────────────────────────
+
+/**
+ * `POST /payments` com `installmentCount` e `totalValue` cria N cobranças e devolve a PRIMEIRA (com
+ * `installment`). O Asaas divide o `totalValue` e joga a diferença de arredondamento na última parcela.
+ */
+export const criarCobrancaParceladaRequestSchema = z.object({
+  customer: z.string().regex(/^cus_[A-Za-z0-9]+$/),
+  billingType: z.literal("CREDIT_CARD"),
+  installmentCount: z.number().int().min(2).max(12),
+  totalValue: z.number().positive(),
+  dueDate: z.string().regex(DATA_ISO),
+  description: z.string().max(500).optional(),
+  externalReference: z.string().min(1).max(200).optional(),
+});
+export type CriarCobrancaParceladaRequest = z.infer<typeof criarCobrancaParceladaRequestSchema>;
+
+/** `GET /installments/{id}`: `value` é o total do parcelamento e `paymentValue` o de cada parcela. */
+export const parcelamentoAsaasSchema = z
+  .object({
+    id: z.string().min(8),
+    value: z.number(),
+    paymentValue: z.number().nullable().optional(),
+    installmentCount: z.number().int(),
+    deleted: z.boolean().optional(),
+  })
+  .passthrough();
+export type ParcelamentoAsaas = z.infer<typeof parcelamentoAsaasSchema>;
 
 // ─── QR Pix ───────────────────────────────────────────────────────────────
 
