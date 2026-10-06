@@ -92,7 +92,7 @@ export async function PATCH(req: NextRequest, ctx: Contexto): Promise<Response> 
       return fail("not_found", t("Tarefa não encontrada."), 404, { requestId });
     }
     if (error.code === "23503") {
-      return fail("validation_failed", t("O negócio ou contato vinculado não existe."), 422, {
+      return fail("validation_failed", t("O negócio, o contato ou o responsável vinculado não existe."), 422, {
         requestId,
       });
     }

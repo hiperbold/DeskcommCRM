@@ -171,6 +171,19 @@ async function colegasPodemMexerNaAgenda(supabase: SB, ctx: HandlerCtx): Promise
   return data !== false;
 }
 
+/**
+ * A corrida que a conferência da rota não viu: dois pedidos leram a mesma grade livre e o gatilho
+ * `fn_agenda_sem_sobreposicao` (migration 0937) recusou o segundo com 23P01. É a mesma recusa de
+ * horário ocupado que `exigeHorarioLivre` devolve, só que vinda do banco.
+ */
+const SQLSTATE_HORARIO_TOMADO = "23P01";
+const RECUSA_HORARIO_TOMADO =
+  "Este horário acabou de ser ocupado por outro compromisso. Consulte os horários livres e escolha outro.";
+
+function recusaDeHorarioTomado(requestId: string): ApiError {
+  return new ApiError(422, "agenda_horario_indisponivel", undefined, requestId, RECUSA_HORARIO_TOMADO);
+}
+
 /** A recusa de mexer na agenda alheia com a opção desligada — uma frase só. */
 const RECUSA_DO_COLEGA =
   "Esta empresa está com “Atendentes podem mexer na agenda dos colegas” desligado: " +
@@ -432,6 +445,7 @@ async function executarCriacaoDeAgendamento(
     .select("id, starts_at, ends_at, status, time_zone, revision, meeting_state, meeting_url")
     .single();
   if (erroInsert) {
+    if (erroInsert.code === SQLSTATE_HORARIO_TOMADO) throw recusaDeHorarioTomado(ctx.requestId);
     throw new ApiError(500, "internal_error", undefined, ctx.requestId, erroInsert.message);
   }
 
@@ -888,8 +902,9 @@ async function exigeHorarioLivre(
  * encaixe existe para passar por cima delas. Ignorar a ocupação, ao contrário,
  * produz duas pessoas na mesma cadeira.
  *
- * Existe porque não há nada no schema que impeça a sobreposição: sem `exclude`
- * com `tstzrange` nem índice, a única guarda do produto é esta leitura.
+ * Esta leitura é a guarda que explica a recusa e que enxerga o Google. A corrida entre ela e o
+ * INSERT é do gatilho `fn_agenda_sem_sobreposicao` (migration 0937), que só conhece os
+ * compromissos do CRM; o 23P01 dele volta como o mesmo 422 (`recusaDeHorarioTomado`).
  *
  * O GOOGLE QUE ELA VÊ NÃO DEPENDE DE QUEM PERGUNTA (issue #879, PR #883). Até
  * aqui dependia: a coleta chegava aos eventos pelo embed
@@ -1228,6 +1243,7 @@ async function leadAtivoDoContato(
 
 async function alteraComRevisao(supabase:SB,ctx:HandlerCtx,id:string,revision:number,patch:Record<string,unknown>):Promise<Record<string,unknown>> {
   const {data,error}=await supabase.rpc("fn_appointment_change",{p_org:ctx.organization_id,p_id:id,p_revision:revision,p_patch:patch});
+  if(error?.code === SQLSTATE_HORARIO_TOMADO) throw recusaDeHorarioTomado(ctx.requestId);
   if(error) throw new ApiError(error.code === "40001" ? 409 : error.code === "42501" ? 403 : error.code === "P0002" ? 404 : 422,
     error.code === "40001" ? "conflict" : error.code === "42501" ? "forbidden" : error.code === "P0002" ? "not_found" : "validation_failed",undefined,ctx.requestId,
     error.code === "40001" ? "Este compromisso mudou. Atualize os dados antes de confirmar novamente." : "Não foi possível alterar este compromisso. Confira a presença, o horário e a mensagem vinculada.");

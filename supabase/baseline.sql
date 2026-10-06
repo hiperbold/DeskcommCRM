@@ -57541,6 +57541,408 @@ revoke execute on function public.fn_atualizar_setting_da_organizacao(uuid, text
 grant execute on function public.fn_atualizar_setting_da_organizacao(uuid, text[], jsonb)
   to service_role;
 
+-- ---- compromissos do mesmo dono não se sobrepõem (migration 0937, fork Hiperbold, D-160) ----
+-- 0937, dois compromissos ativos do mesmo dono não se sobrepõem, nem numa corrida (D-160) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- A conferência de ocupação mora na rota (`exigeHorarioLivre` e `exigeSemSobreposicao`): ela lê a
+-- grade, decide e só depois grava. Entre a leitura e o INSERT há uma janela: dois turnos de IA, ou a
+-- IA e um atendente, leem a mesma grade livre e os dois gravam. A idempotência só protege a mesma
+-- chave e o índice único `calendar_appointments_sem_duplicata_idx` (0182) só cobre o MESMO início
+-- exato do mesmo dono; um compromisso das 14h30 em cima do das 14h entrava.
+--
+-- A 0182 deixou a sobreposição de propósito (o encaixe de 14h-15h contra 14h30-15h30) e recusou
+-- `exclude using gist`, que pediria `btree_gist`, ausente deste baseline. Desde então a rota passou
+-- a recusar a sobreposição para TODOS, inclusive o encaixe de quem atende (a ocupação real não é
+-- dispensada: 422 `agenda_horario_indisponivel`). O banco ainda não dizia o mesmo, e é isso que
+-- esta migration alinha, sem extensão nova e sem tocar na tabela.
+--
+-- Gatilho BEFORE INSERT OR UPDATE OF starts_at, ends_at, owner_user_id, organization_id em
+-- `calendar_appointments`:
+--   1. só confere compromisso que OCUPA (pending ou confirmed) e tem dono. Os mesmos dois estados do
+--      índice da 0182 e da conferência de sobreposição do espelho do Google (`fn_google_appointment`):
+--      cancelado e falta liberam o horário, e realizado já aconteceu (a rota ainda o conta, mas ele
+--      só colide com marcação retroativa, e esta rede existe para a corrida de quem marca à frente);
+--   2. só confere a linha NOVA ou ALTERADA (horário ou dono). Dado antigo já sobreposto em produção
+--      não é varrido e continua editável nas outras colunas e no desfecho;
+--   3. pega `pg_advisory_xact_lock` por (organização, dono) ANTES de olhar: duas transações que
+--      chegam juntas se enfileiram, a segunda enxerga o commit da primeira (cada comando do corpo
+--      toma um snapshot novo em READ COMMITTED) e é recusada. A trava solta no fim da transação;
+--      donos diferentes não esperam um pelo outro;
+--   4. recusa com SQLSTATE `23P01` (exclusion_violation) e mensagem fixa, sem dizer de quem é o
+--      compromisso que atrapalha. A rota traduz para 422 `agenda_horario_indisponivel`.
+-- O gatilho se chama `trg_zzz_...` de propósito: os BEFORE rodam em ordem alfabética e este tem de ser
+-- o último, depois da autoria, do carimbo do Google e da entrega do Meet, que recusam o que é deles com
+-- mensagem própria; a sobreposição é a última pergunta antes de gravar.
+-- Sobreposição estrita: 14h-15h e 15h-16h convivem. O compromisso não se vê como conflito de si
+-- mesmo (`id <> new.id`) e remarcar para o mesmo horário é no-op.
+--
+-- O que NÃO entra aqui: o Google Agenda (`calendar_external_events`). O evento do Google é de
+-- outra pessoa e de outro sistema, entra e sai por sincronização, e recusar a ESCRITA do CRM por
+-- causa dele faria o sync do próprio espelho falhar em loop. A rota segue conferindo o Google na
+-- hora de marcar (`coletaOQueOcupa`), que é onde a recusa é útil. Também não entra a regra de
+-- "atendentes podem mexer na agenda dos colegas" (`fn_colegas_podem_mexer_na_agenda`): ela é de
+-- PERMISSÃO e já é cobrada antes, na rota (criação) e em `fn_appointment_change_core` (alteração e
+-- cancelamento); este gatilho só pergunta se o horário está livre, igual para todo escritor.
+--
+-- Security definer com search_path fixo: precisa ver os compromissos de todos os donos por cima da
+-- RLS (o atendente só mexe na própria agenda quando a opção está desligada, mas a ocupação do
+-- colega é fato do banco). Não é RPC: revoga EXECUTE de todos. Custo: uma leitura por
+-- `calendar_appointments_org_dono_idx` (organização, dono, início) só quando o horário ou o dono mudam.
+-- Reaplicável com o app no ar: `create or replace` e um DO com lock_timeout curto.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+create or replace function public.fn_agenda_sem_sobreposicao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.owner_user_id is null or new.status not in ('pending', 'confirmed') then
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE'
+     and new.starts_at is not distinct from old.starts_at
+     and new.ends_at is not distinct from old.ends_at
+     and new.owner_user_id is not distinct from old.owner_user_id
+     and new.organization_id is not distinct from old.organization_id
+  then
+    return new;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('agenda_dono:' || new.organization_id::text || ':' || new.owner_user_id::text, 0));
+
+  if exists (
+    select 1 from public.calendar_appointments o
+     where o.organization_id = new.organization_id
+       and o.owner_user_id = new.owner_user_id
+       and o.id <> new.id
+       and o.status in ('pending', 'confirmed')
+       and o.starts_at < new.ends_at
+       and o.ends_at > new.starts_at
+  )
+  then
+    raise exception 'Horário indisponível: o responsável já tem um compromisso nesse período.' using errcode = '23P01';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_agenda_sem_sobreposicao() from public, anon, authenticated;
+
+do $g_agenda_sem_sobreposicao$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_zzz_agenda_sem_sobreposicao on public.calendar_appointments;
+ create trigger trg_zzz_agenda_sem_sobreposicao
+   before insert or update of starts_at, ends_at, owner_user_id, organization_id on public.calendar_appointments
+   for each row execute function public.fn_agenda_sem_sobreposicao();
+end
+$g_agenda_sem_sobreposicao$;
+
+-- ---- a tarefa só liga a negócio, contato e responsável da própria organização (migration 0938, fork Hiperbold, D-165) ----
+-- 0938, a tarefa só se liga a negócio, contato e responsável da própria organização (D-165, FK de crm_tasks) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- As FKs de `crm_tasks` (0210) só garantem que o pai existe, não de QUAL organização ele é, e a de
+-- `assigned_to` aponta para `auth.users`, sem pergunta nenhuma de pertencimento. O comentário da rota
+-- diz que o 23503 cobre o negócio e o contato de outra organização, e não cobre: o id existe, a FK
+-- passa. Membro de A criava tarefa de A presa ao negócio, ao contato ou ao responsável de B, que
+-- aparecia no quadro de B (e na timeline do negócio de B). Mesma classe da 0403 (negócio) e da 0933
+-- (conversa e mensagem): gatilho na tabela, onde todo escritor passa (sessão, serviço, função).
+--
+-- Só confere o campo que MUDOU (ou tudo, no insert): tarefa antiga não é varrida e reenviar o que a
+-- linha já tem não é ligar de novo. O responsável tem de ser membro ativo da organização da tarefa
+-- (vínculo não revogado, qualquer papel: quem escreve tarefa é `agent`, mas a tarefa pode ser dada a
+-- quem só acompanha). Negócio ou contato inexistente fica para a FK (23503 do mesmo jeito).
+-- O erro é o 23503 genérico, sem dizer se o id existe noutra organização; a rota o traduz para 422.
+-- Security definer com search_path fixo: precisa ver o pai e o vínculo por cima da RLS (o pai de
+-- outra organização é invisível para quem escreve). Não é RPC: revoga EXECUTE de todos.
+-- Reaplicável com o app no ar: `create or replace` e um DO com lock_timeout curto.
+-- Cria função: entra ANTES da VARREDURA anon.
+
+create or replace function public.fn_crm_tasks_vinculos_da_organizacao()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if new.lead_id is not null
+     and (tg_op = 'INSERT' or new.lead_id is distinct from old.lead_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.crm_leads p
+        where p.id = new.lead_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+
+  if new.contact_id is not null
+     and (tg_op = 'INSERT' or new.contact_id is distinct from old.contact_id or new.organization_id is distinct from old.organization_id)
+     and exists (
+       select 1 from public.contacts p
+        where p.id = new.contact_id
+          and p.organization_id is distinct from new.organization_id
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+
+  if new.assigned_to is not null
+     and (tg_op = 'INSERT' or new.assigned_to is distinct from old.assigned_to or new.organization_id is distinct from old.organization_id)
+     and not exists (
+       select 1 from public.user_organizations uo
+        where uo.user_id = new.assigned_to
+          and uo.organization_id = new.organization_id
+          and uo.revoked_at is null
+     )
+  then
+    raise exception 'Registro vinculado não encontrado.' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.fn_crm_tasks_vinculos_da_organizacao() from public, anon, authenticated;
+
+do $g_crm_tasks$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop trigger if exists trg_crm_tasks_vinculos_da_organizacao on public.crm_tasks;
+ create trigger trg_crm_tasks_vinculos_da_organizacao
+   before insert or update of lead_id, contact_id, assigned_to, organization_id on public.crm_tasks
+   for each row execute function public.fn_crm_tasks_vinculos_da_organizacao();
+end
+$g_crm_tasks$;
+
+-- ---- a visibilidade por atendente vale nas tabelas filhas (migration 0939, fork Hiperbold, D-147) ----
+-- 0939, a visibilidade por atendente vale nas tabelas filhas (D-147) (fork Hiperbold).
+--
+-- Faixa 09xx reservada ao fork (ver 0901).
+--
+-- `visibility_mode` (0035 e 0036) restringe conversas, mensagens e negócios só para o papel `agent`:
+-- no modo `own` ele lê o que é dele, em `own_and_unassigned` (o padrão) o que é dele e a fila, em
+-- `all` tudo. As tabelas que apontam para uma conversa ou para um negócio seguiram lendo a
+-- organização inteira: com o próprio JWT no PostgREST, um agent lia a transcrição e o `peer_phone`
+-- das ligações, a nota interna, o resumo (`rolling_summary`, compromissos e objeções) e as execuções
+-- da IA das conversas dos colegas, e pelo Realtime recebia `voice_calls` e `ai_agent_runs` da
+-- organização toda. `conversation_drafts` e `ai_reply_drafts` já herdam a visibilidade da conversa
+-- (join em `conversations` com `fn_can_view_conversation`); esta migration leva a mesma regra ao
+-- SELECT de mais 16 tabelas.
+--
+-- `fn_registro_filho_visivel(p_org, p_conversation_id, p_lead_id)` é a regra em um lugar só:
+--   - viewer, manager e admin leem a organização toda, como nas duas funções que a 0035 e a 0036
+--     criaram; a conta do suporte da plataforma entra por elas também;
+--   - para o `agent`, com conversa na linha vale `fn_can_view_conversation` sobre a conversa; sem
+--     conversa e com negócio vale `fn_can_view_lead` sobre o negócio; quando a linha tem os dois,
+--     vale a conversa (é o que a mensagem e a nota dizem, e o negócio sozinho abriria o resumo da
+--     conversa de outro atendente);
+--   - linha sem conversa nem negócio (checkpoint antigo só com contato, execução de IA sem conversa,
+--     ligação só com contato) segue legível pela organização: não existe visibilidade por contato
+--     (`contacts_select` é da organização toda), então o comportamento antigo se mantém. Quem preencher
+--     `conversation_id` ou `lead_id` na gravação passa a ser coberto;
+--   - pai que não existe mais (as colunas de `golden_candidates` e `jev_observacoes` não têm FK)
+--     some para o agent: na dúvida, esconde.
+-- O pai é lido pela chave primária (`conversations_pkey`, `crm_leads_pkey`) por dentro da função, que
+-- é `security definer`: o agent não precisa enxergar o pai para a pergunta ter resposta, e a decisão
+-- é a das duas funções existentes. Ela confere pertencimento por `fn_user_role_in_org` e devolve
+-- falso para quem não é da organização.
+--
+-- A regra entra como policy RESTRITIVA de SELECT, uma por tabela (`visibilidade_por_atendente`), e não
+-- trocando as policies permissivas que cada tabela já tem. Restritiva soma por AND com todas as
+-- permissivas (é o desenho das `support_write_*`), então vale também sobre as policies `for all`
+-- (`conversation_notes_write` e `voice_calls_write` dão SELECT ao agent pelo USING, e continuam
+-- existindo: a escrita não muda) e sobre qualquer permissiva que alguém acrescente depois. Também
+-- evita a janela que trocar as permissivas abriria: o baseline recria em cada passada as policies
+-- antigas das migrations anteriores, e entre a recriação delas e a troca a regra larga voltaria a
+-- valer; a restritiva já está de pé e não é derrubada (tests/unit/baseline-nao-constroi-o-que-derruba).
+-- Como UPDATE e DELETE leem a linha antes, o agent deixa de editar e apagar nota e ligação de conversa
+-- que não enxerga; o INSERT não muda. Em `voice_calls` quem fez ou atendeu a chamada
+-- (`owner_user_id`, `created_by`) continua vendo a própria ligação mesmo quando o negócio é de outro.
+--
+-- Não entram: `crm_tasks` e `calendar_appointments` (decisão de produto: tarefa e compromisso são
+-- da equipe, e a regra de agenda de colegas já tem opção própria) e `lead_notes` (só tem contato).
+-- Reaplicável com o app no ar: `create or replace` e `drop policy if exists`, um DO por tabela com
+-- lock_timeout curto, nada que reescreva linha. Cria função: entra ANTES da VARREDURA anon.
+
+create or replace function public.fn_registro_filho_visivel(p_org uuid, p_conversation_id uuid, p_lead_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_papel text := public.fn_user_role_in_org(p_org);
+begin
+  if v_papel in ('viewer', 'manager', 'admin') then
+    return true;
+  end if;
+  if v_papel is null then
+    return public.fn_is_platform_admin();
+  end if;
+
+  if p_conversation_id is not null then
+    return exists (
+      select 1 from public.conversations c
+       where c.id = p_conversation_id
+         and c.organization_id = p_org
+         and public.fn_can_view_conversation(c.organization_id, c.assigned_to_user_id)
+    );
+  end if;
+  if p_lead_id is not null then
+    return exists (
+      select 1 from public.crm_leads l
+       where l.id = p_lead_id
+         and l.organization_id = p_org
+         and public.fn_can_view_lead(l.organization_id, l.owner_user_id)
+    );
+  end if;
+  return true;
+end;
+$$;
+
+revoke execute on function public.fn_registro_filho_visivel(uuid, uuid, uuid) from public, anon;
+grant execute on function public.fn_registro_filho_visivel(uuid, uuid, uuid) to authenticated, service_role;
+
+comment on function public.fn_registro_filho_visivel(uuid, uuid, uuid) is
+  'Migration 0939 (D-147): a linha de uma tabela filha de conversa ou de negócio é visível para o chamador? viewer, manager e admin sim; agent pela fn_can_view_conversation (conversa primeiro) ou fn_can_view_lead; sem vínculo, vale a organização.';
+
+do $t_agent_cases$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.agent_cases;
+ create policy visibilidade_por_atendente on public.agent_cases as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, lead_id));
+end
+$t_agent_cases$;
+
+do $t_ai_agent_runs$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.ai_agent_runs;
+ create policy visibilidade_por_atendente on public.ai_agent_runs as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_ai_agent_runs$;
+
+do $t_ai_invocations$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.ai_invocations;
+ create policy visibilidade_por_atendente on public.ai_invocations as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_ai_invocations$;
+
+do $t_ai_router_decisions$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.ai_router_decisions;
+ create policy visibilidade_por_atendente on public.ai_router_decisions as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_ai_router_decisions$;
+
+do $t_contact_field_proposals$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.contact_field_proposals;
+ create policy visibilidade_por_atendente on public.contact_field_proposals as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_contact_field_proposals$;
+
+do $t_conversation_notes$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.conversation_notes;
+ create policy visibilidade_por_atendente on public.conversation_notes as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_conversation_notes$;
+
+do $t_crm_lead_reactivations$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.crm_lead_reactivations;
+ create policy visibilidade_por_atendente on public.crm_lead_reactivations as restrictive for select using (public.fn_registro_filho_visivel(organization_id, null, lead_id));
+end
+$t_crm_lead_reactivations$;
+
+do $t_crm_lead_risk_states$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.crm_lead_risk_states;
+ create policy visibilidade_por_atendente on public.crm_lead_risk_states as restrictive for select using (public.fn_registro_filho_visivel(organization_id, null, lead_id));
+end
+$t_crm_lead_risk_states$;
+
+do $t_crm_lead_scores$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.crm_lead_scores;
+ create policy visibilidade_por_atendente on public.crm_lead_scores as restrictive for select using (public.fn_registro_filho_visivel(organization_id, null, lead_id));
+end
+$t_crm_lead_scores$;
+
+do $t_demanda_conversas$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.demanda_conversas;
+ create policy visibilidade_por_atendente on public.demanda_conversas as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_demanda_conversas$;
+
+do $t_demandas$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.demandas;
+ create policy visibilidade_por_atendente on public.demandas as restrictive for select using (public.fn_registro_filho_visivel(organization_id, null, lead_id));
+end
+$t_demandas$;
+
+do $t_followup_enrollments$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.followup_enrollments;
+ create policy visibilidade_por_atendente on public.followup_enrollments as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_followup_enrollments$;
+
+do $t_golden_candidates$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.golden_candidates;
+ create policy visibilidade_por_atendente on public.golden_candidates as restrictive for select using (public.fn_registro_filho_visivel(organization_id, null, lead_id));
+end
+$t_golden_candidates$;
+
+do $t_jev_observacoes$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.jev_observacoes;
+ create policy visibilidade_por_atendente on public.jev_observacoes as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_jev_observacoes$;
+
+do $t_lead_checkpoints$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.lead_checkpoints;
+ create policy visibilidade_por_atendente on public.lead_checkpoints as restrictive for select using (public.fn_registro_filho_visivel(organization_id, conversation_id, null));
+end
+$t_lead_checkpoints$;
+
+do $t_voice_calls$
+begin
+ perform set_config('lock_timeout','3s',true);
+ drop policy if exists visibilidade_por_atendente on public.voice_calls;
+ create policy visibilidade_por_atendente on public.voice_calls as restrictive for select using ((public.fn_registro_filho_visivel(organization_id, null, lead_id) or owner_user_id = (select auth.uid()) or created_by = (select auth.uid())));
+end
+$t_voice_calls$;
+
 -- ---- VARREDURA anon: função nova nasce exposta em quem ATUALIZA (migration 0116) ----
 --
 -- ⚠️ DE PROPÓSITO, NENHUMA FUNÇÃO É CRIADA DEPOIS DESTE BLOCO. Apêndice que cria

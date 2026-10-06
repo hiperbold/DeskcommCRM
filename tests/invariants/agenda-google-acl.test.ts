@@ -9,6 +9,8 @@ const pool = new pg.Pool({
 });
 const orgA = randomUUID(),
   orgB = randomUUID();
+// Um dia diferente por fixture: o mesmo dono não tem dois compromissos ativos sobrepostos (gatilho da 0937).
+let diaDoCompromisso = 3;
 async function fixture(org: string, owner: string | null) {
   const id = randomUUID(),
     conn = randomUUID(),
@@ -24,8 +26,8 @@ async function fixture(org: string, owner: string | null) {
     );
   }
   await pool.query(
-    "insert into calendar_appointments(id,organization_id,owner_user_id,title,starts_at,ends_at,google_next_attempt_at) values($1,$2,$3,'Local',now()+interval '3 days',now()+interval '3 days 1 hour',now()+interval '1 day')",
-    [id, org, owner],
+    "insert into calendar_appointments(id,organization_id,owner_user_id,title,starts_at,ends_at,google_next_attempt_at) values($1,$2,$3,'Local',now()+($4::int*interval '1 day'),now()+($4::int*interval '1 day')+interval '1 hour',now()+interval '1 day')",
+    [id, org, owner, diaDoCompromisso++],
   );
   return { id, conn, cal, org, owner };
 }

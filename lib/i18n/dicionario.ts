@@ -10121,6 +10121,12 @@ export const DICIONARIO: Traducoes = {
   "O negócio ou contato vinculado não existe.": {
     es: "El negocio o contacto vinculado no existe.",
   },
+  "O negócio, o contato ou o responsável vinculado não existe.": {
+    es: "El negocio, el contacto o el responsable vinculado no existe.",
+  },
+  "Este horário acabou de ser ocupado por outro compromisso. Consulte os horários livres e escolha outro.": {
+    es: "Este horario acaba de ser ocupado por otro compromiso. Consulta los horarios libres y elige otro.",
+  },
   "Erro ao salvar a tarefa.": { es: "Error al guardar la tarea." },
   "Erro ao listar as tarefas.": { es: "Error al listar las tareas." },
   "Erro ao apagar a tarefa.": { es: "Error al eliminar la tarea." },

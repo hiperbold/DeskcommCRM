@@ -11,6 +11,8 @@ const pool = new pg.Pool({
 });
 beforeAll(() => seedGov());
 afterAll(() => pool.end());
+// Um dia diferente por fixture: o mesmo dono não tem dois compromissos ativos sobrepostos (gatilho da 0937).
+let diaDoCompromisso = 5;
 async function fixture(owner = GOV_AGENT_A) {
   const conn = randomUUID(),
     cal = randomUUID(),
@@ -33,8 +35,8 @@ async function fixture(owner = GOV_AGENT_A) {
     [cal, GOV_ORG, conn],
   );
   await pool.query(
-    "insert into calendar_appointments(id,organization_id,contact_id,owner_user_id,title,starts_at,ends_at,status) values($1,$2,$3,$4,'Consulta',now()+interval '5 days',now()+interval '5 days 1 hour','confirmed')",
-    [id, GOV_ORG, contact, owner],
+    "insert into calendar_appointments(id,organization_id,contact_id,owner_user_id,title,starts_at,ends_at,status) values($1,$2,$3,$4,'Consulta',now()+($5::int*interval '1 day'),now()+($5::int*interval '1 day')+interval '1 hour','confirmed')",
+    [id, GOV_ORG, contact, owner, diaDoCompromisso++],
   );
   return { conn, cal, id, contact };
 }

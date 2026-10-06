@@ -138,10 +138,10 @@ export async function POST(req: NextRequest): Promise<Response> {
     .single();
 
   if (error) {
-    // 23503 = lead ou contato de outra organização (ou apagado no meio). A
-    // recusa nomeia o campo porque quem lê é quem escolheu na tela.
+    // 23503 = lead, contato ou responsável de outra organização (gatilho da 0938) ou
+    // apagado no meio. O erro é genérico de propósito: a recusa nomeia os três campos.
     if (error.code === "23503") {
-      return fail("validation_failed", t("O negócio ou contato vinculado não existe."), 422, {
+      return fail("validation_failed", t("O negócio, o contato ou o responsável vinculado não existe."), 422, {
         requestId,
       });
     }

@@ -98,13 +98,17 @@ describe("a guarda barra o duplo clique", () => {
   });
 });
 
-describe("o que a guarda NÃO barra — e é aqui que ela se distingue da que foi recusada", () => {
-  it("o ENCAIXE por sobreposição continua permitido: 14h-15h e 14h30-15h30, mesmo dono", () => {
-    // Se alguém trocar este índice por `exclude using gist`, os testes de barrar
-    // acima continuam verdes e SÓ este fica vermelho. Ele é a régua.
+describe("o que a guarda do índice NÃO barra (a sobreposição passou ao gatilho da 0937)", () => {
+  it("a SOBREPOSIÇÃO parcial (14h-15h contra 14h30-15h30, mesmo dono) é recusada desde a 0937", () => {
+    // Era a régua do encaixe permitido pelo índice (0182). A rota já recusava a
+    // sobreposição para todos, inclusive para quem encaixa fora da grade
+    // (`exigeSemSobreposicao`), e o gatilho da 0937 (D-160) leva a mesma regra ao
+    // banco, que é o que fecha a corrida entre dois pedidos. O comportamento
+    // fino do gatilho (adjacência, cancelado, remarcação, corrida) está em
+    // `lote13a-banco.test.ts`.
     expect(
       marca(base(DONO, "2026-11-10 14:30:00+00", "2026-11-10 15:30:00+00")),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("dois atendentes DIFERENTES no mesmo instante: os dois entram", () => {
