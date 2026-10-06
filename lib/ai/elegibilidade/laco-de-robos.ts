@@ -28,8 +28,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { insertInboxItem } from "@/lib/agent-engine/db/repository";
 import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 
-/** Padrão conservador: 20 turnos de IA por contato por hora. */
-export const TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO = 20;
+/**
+ * Padrão: 60 turnos de IA por contato por hora. Conversa humana intensa não pode cair no
+ * disjuntor; laço entre robôs passa disso em minutos.
+ */
+export const TETO_DE_TURNOS_POR_CONTATO_POR_HORA_PADRAO = 60;
 
 export const JANELA_DO_DISJUNTOR_MS = 60 * 60 * 1000;
 

@@ -1344,8 +1344,11 @@ describe("35. Item 1 da revisão (23/09/2026): as quatro RPCs agregam NO BANCO, 
 
   it("fn_billing_livro_caixa_do_ciclo trunca em 500 linhas não-consumo e agrupa 1500 linhas de consumo por dia/fonte", () => {
     comoServico(`
-      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo, nota)
-      select '${ORG_RPC_MIL_LINHAS}'::uuid, 'avulso', 1, 'ajuste:' || ('dddddddd-3500-4000-8000-' || lpad(g::text, 12, '0'))::uuid, null, 'caso 35'
+      -- created_at fixo dentro do ciclo consultado (2026-09-01): linha sem ciclo gravado entra no
+      -- livro-caixa pelo mês de created_at, e o default now() a empurrava para o mês corrente do
+      -- relógio (o caso passou a falhar em 01/10/2026, quando now() virou outubro).
+      insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo, nota, created_at)
+      select '${ORG_RPC_MIL_LINHAS}'::uuid, 'avulso', 1, 'ajuste:' || ('dddddddd-3500-4000-8000-' || lpad(g::text, 12, '0'))::uuid, null, 'caso 35', '2026-09-15 12:00:00-03'::timestamptz
       from generate_series(1, 600) as g;
       insert into public.billing_token_ledger (organization_id, fonte, tokens, chave, ciclo)
       select '${ORG_RPC_MIL_LINHAS}'::uuid, 'plano', -1, 'consumo:' || ('eeeeeeee-3500-4000-8000-' || lpad(g::text, 12, '0'))::uuid || ':plano', '2026-09-01'::date

@@ -253,9 +253,10 @@ const envSchema = z.object({
   // default) nunca consulta autorização.
   AI_ALLOWLIST_TTL_DAYS: z.coerce.number().int().positive().default(21),
   // Disjuntor de dois robôs conversando (D-158): teto de turnos de IA por contato
-  // por hora. Ao estourar, a IA para naquela conversa e abre um aviso na Central;
-  // a mensagem continua sendo recebida. 0 = desligado.
-  AI_MAX_TURNS_PER_CONTACT_PER_HOUR: z.coerce.number().int().min(0).default(20),
+  // por hora (padrão 60: conversa humana intensa não cai no disjuntor, laço entre
+  // robôs passa disso em minutos). Ao estourar, a IA para naquela conversa e abre
+  // um aviso na Central; a mensagem continua sendo recebida. 0 = desligado.
+  AI_MAX_TURNS_PER_CONTACT_PER_HOUR: z.coerce.number().int().min(0).default(60),
 });
 
 export type Env = z.infer<typeof envSchema>;

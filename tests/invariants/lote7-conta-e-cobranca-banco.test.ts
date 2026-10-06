@@ -73,16 +73,17 @@ describe("D-094: organização nova", () => {
   const nova = (id: string, slug: string, settings: string) =>
     `insert into public.organizations (id, slug, legal_name, display_name, settings)
        values ('${id}', '${slug}', 'X', 'X', '${settings}'::jsonb);`;
+  // Revisto em 06/10/2026 (0940): sem período gratuito. O cadastro do próprio visitante nasce
+  // suspenso, sem período e sem ciclo (o antigo caso de "avaliação de um mês no Pro" saiu).
   const lerContrato = (id: string) => `
-    select 'SONDA|' || bc.status || '|' || bp.code || '|' || coalesce((bc.current_period_end > now() + interval '27 days'
-      and bc.current_period_end < now() + interval '33 days')::text, 'sem')
-      || '|' || coalesce(((bc.current_period_end at time zone 'America/Sao_Paulo')::time = '00:00')::text, 'sem')
+    select 'SONDA|' || bc.status || '|' || bp.code || '|' || (bc.current_period_end is null)::text
+      || '|' || (bc.cycle is null)::text
       from public.billing_contracts bc join public.billing_plans bp on bp.id = bc.plan_id
       where bc.organization_id = '${id}';`;
 
-  it("o cadastro do próprio visitante nasce em avaliação no plano pro, com um mês, fim à meia-noite de São Paulo", () => {
-    const [linha] = sonda(`${nova(U(201), "l7b-aval", '{"billing_inicio":"avaliacao"}')} ${lerContrato(U(201))}`);
-    expect(linha).toBe("avaliacao|pro|true|true");
+  it("o cadastro do próprio visitante nasce suspenso, sem período e sem ciclo (sem avaliação gratuita)", () => {
+    const [linha] = sonda(`${nova(U(201), "l7b-aval", '{"billing_inicio":"sem_plano"}')} ${lerContrato(U(201))}`);
+    expect(linha).toBe("suspensa|pro|true|true");
   });
 
   it("sem o marcador (admin da plataforma, provisionamento externo, instalação) segue ativa no Ilimitado, sem período", () => {
@@ -90,7 +91,7 @@ describe("D-094: organização nova", () => {
       ${nova(U(202), "l7b-ilim-1", "{}")} ${lerContrato(U(202))}
       ${nova(U(203), "l7b-ilim-2", '{"provisioning":{"integration":"x","external_id":"1"}}')} ${lerContrato(U(203))}
       ${nova(U(204), "l7b-ilim-3", '{"plan":"standard"}')} ${lerContrato(U(204))}`);
-    expect(linhas).toEqual(["ativa|ilimitado|sem|sem", "ativa|ilimitado|sem|sem", "ativa|ilimitado|sem|sem"]);
+    expect(linhas).toEqual(["ativa|ilimitado|true|true", "ativa|ilimitado|true|true", "ativa|ilimitado|true|true"]);
   });
 
   it("a criação pelo admin da plataforma (fn_create_tenant_with_owner) segue no Ilimitado", () => {
@@ -104,22 +105,22 @@ describe("D-094: organização nova", () => {
     expect(linha).toBe("ativa|ilimitado");
   });
 
-  it("com o billing desligado, ou sem o plano de entrada ativo, cai no Ilimitado e a criação não falha", () => {
+  it("com o billing desligado cai no Ilimitado; sem o plano de entrada ativo segue suspensa (a linha usa o Ilimitado só como chave) e a criação não falha", () => {
     const linhas = sonda(`
       update public.billing_settings set modo = 'desligado' where id = 1;
-      ${nova(U(205), "l7b-desl", '{"billing_inicio":"avaliacao"}')} ${lerContrato(U(205))}
+      ${nova(U(205), "l7b-desl", '{"billing_inicio":"sem_plano"}')} ${lerContrato(U(205))}
       update public.billing_settings set modo = 'avisar' where id = 1;
       update public.billing_plans set active = false where code = 'pro';
-      ${nova(U(206), "l7b-sempro", '{"billing_inicio":"avaliacao"}')} ${lerContrato(U(206))}`);
-    expect(linhas).toEqual(["ativa|ilimitado|sem|sem", "ativa|ilimitado|sem|sem"]);
+      ${nova(U(206), "l7b-sempro", '{"billing_inicio":"sem_plano"}')} ${lerContrato(U(206))}`);
+    expect(linhas).toEqual(["ativa|ilimitado|true|true", "suspensa|ilimitado|true|true"]);
   });
 
-  it("vencida a avaliação, o conferidor a leva a atrasada", () => {
+  it("o conferidor de vencimento nunca mexe em contrato sem período: a organização sem plano segue suspensa", () => {
     const [linha] = sonda(`
-      ${nova(U(207), "l7b-venc", '{"billing_inicio":"avaliacao"}')}
-      update public.billing_contracts set current_period_end = now() - interval '1 hour' where organization_id = '${U(207)}';
-      select 'SONDA|' || public.fn_billing_conferir_vencimento('${U(207)}');`);
-    expect(linha).toBe("atrasada");
+      ${nova(U(207), "l7b-venc", '{"billing_inicio":"sem_plano"}')}
+      select 'SONDA|' || coalesce(public.fn_billing_conferir_vencimento('${U(207)}'), 'nada') || '|'
+        || (select status from public.billing_contracts where organization_id = '${U(207)}');`);
+    expect(linha).toBe("nada|suspensa");
   });
 });
 

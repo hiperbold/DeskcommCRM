@@ -1,6 +1,6 @@
 import { InterfaceRefresh } from "@/hooks/auth/InterfaceRefresh";
 import { redirect } from "next/navigation";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { isMfaEnrolled, loadAuthUser, requiresMfa, resolveActiveOrg } from "@/lib/auth/server";
 import { DEFAULT_VISIBILITY_MODE, roleAtLeast, type VisibilityMode } from "@/lib/auth/types";
 import { clientePelaAgendaLigado } from "@/lib/schemas/settings";
@@ -24,6 +24,20 @@ import { listarConexoesCaidas, type ConexaoCaida } from "@/lib/channels/health";
 import { VoiceCallProvider } from "@/components/voice/VoiceCallContext";
 import { ProvedorDaOcupacaoDoRodape } from "@/lib/ui/rodape-ocupado";
 import { acessoFoiRevogado } from "@/lib/auth/vinculo-revogado";
+import { destinoDaGuardaSemPlano } from "@/lib/billing/assinatura/sem-plano";
+
+/**
+ * O caminho desta requisição, do cabeçalho que o `proxy.ts` grava em toda rota. Vazio quando não há
+ * requisição (renderização estática) ou o cabeçalho não veio: a guarda de plano não decide nada
+ * sem ele.
+ */
+async function caminhoDaRequisicao(): Promise<string> {
+  try {
+    return (await headers()).get("x-pathname") ?? "";
+  } catch {
+    return "";
+  }
+}
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await loadAuthUser();
@@ -113,6 +127,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
     if (orgRow && !orgRow.onboarded_at && !user.support) redirect("/onboarding");
     if (orgRow?.status === "suspended") redirect("/account-suspended");
+    // D-094: a organização do cadastro próprio que ainda não assinou só alcança a tela de
+    // assinatura e as configurações básicas. Depois do onboarding (que ela precisa concluir para
+    // chegar a /app) e sem a conta de suporte, que observa. O destino é um caminho livre da
+    // própria guarda, então não há laço; só roda no modo `bloquear` e fora dos caminhos livres.
+    if (!user.support) {
+      const destino = await destinoDaGuardaSemPlano(admin, activeOrg.orgId, await caminhoDaRequisicao());
+      if (destino) redirect(destino);
+    }
     // G4-02: expõe visibility_mode ao client (inbox decide visões visíveis).
     // Fonte confiável (admin client, org do cookie validado) — nunca do body.
     const mode = (orgRow?.settings as { visibility_mode?: VisibilityMode } | null)

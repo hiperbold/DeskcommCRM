@@ -58,6 +58,7 @@ import {
   ultimoDiaDoPeriodo,
   type ResultadoEstadoDaAssinatura,
 } from "@/lib/billing/assinatura/estado-da-assinatura";
+import { contratoSemPlano } from "@/lib/billing/assinatura/sem-plano";
 import {
   asaasDaOrganizacao,
   estadoDasChavesAsaas,
@@ -191,7 +192,8 @@ export default async function PlanoEUsoPage() {
         <p className="max-w-2xl text-sm text-muted-foreground">
           {t("Quanto sua organização usa de cada item do plano contratado.")}
         </p>
-        {!leituraFalhou && (
+        {/* Sem plano (D-094 revisto), o contrato guarda um plano só como chave da linha: não o exibe. */}
+        {!leituraFalhou && !(assinatura.contrato && contratoSemPlano(assinatura.contrato)) && (
           <p className="text-sm text-muted-foreground">
             {t("Plano")}: <span className="font-medium text-text">{planoResultado.plano.name}</span>
           </p>
@@ -286,6 +288,9 @@ function CartaoDaAssinatura({
   if (!assinatura.contrato) return null;
 
   const { contrato, modoLeituraValendo } = assinatura;
+  // D-094 revisto: a organização que nunca assinou não está "suspensa por falta de pagamento",
+  // está sem plano. Mesmo bloqueio (modo leitura), outra frase.
+  const semPlano = contratoSemPlano(contrato);
 
   return (
     <Card>
@@ -295,7 +300,7 @@ function CartaoDaAssinatura({
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <Badge variant={ESTADO_DA_ASSINATURA_VARIANT[contrato.status] ?? "neutral"}>
-            {rotuloDoEstadoDaAssinatura(contrato.status, t)}
+            {semPlano ? t("Sem plano") : rotuloDoEstadoDaAssinatura(contrato.status, t)}
           </Badge>
           {contrato.status === "avaliacao" && contrato.currentPeriodEnd && (
             <span className="text-sm text-muted-foreground">
@@ -329,7 +334,18 @@ function CartaoDaAssinatura({
           </p>
         )}
 
-        {modoLeituraValendo && (
+        {modoLeituraValendo && semPlano && (
+          <div className="space-y-1.5 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            <p className="font-medium">
+              {t("Esta organização ainda não tem um plano. Assine um plano para liberar o uso.")}
+            </p>
+            <p>
+              {t("Ficam parados até lá: a IA, as automações, as campanhas, as importações e os follow-ups.")}
+            </p>
+          </div>
+        )}
+
+        {modoLeituraValendo && !semPlano && (
           <div className="space-y-1.5 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
             <p className="font-medium">
               {t("O acesso desta organização está em modo leitura por falta de pagamento.")}

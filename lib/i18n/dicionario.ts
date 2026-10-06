@@ -13161,6 +13161,9 @@ export const DICIONARIO: Traducoes = {
   "(a assinatura cancela no fim deste período)": { es: "(la suscripción se cancela al fin de este período)" },
   "O acesso desta organização está em modo leitura por falta de pagamento.": { es: "El acceso de esta organización está en modo lectura por falta de pago." },
   "Param: a IA, as automações, as campanhas de disparo, os follow-ups e a criação de funil, etapa, integração e convite.": { es: "Se detienen: la IA, las automatizaciones, las campañas de envío, los follow-ups y la creación de embudo, etapa, integración e invitación." },
+  "Sem plano": { es: "Sin plan" },
+  "Esta organização ainda não tem um plano. Assine um plano para liberar o uso.": { es: "Esta organización todavía no tiene un plan. Suscribe un plan para liberar el uso." },
+  "Ficam parados até lá: a IA, as automações, as campanhas, as importações e os follow-ups.": { es: "Quedan detenidos hasta entonces: la IA, las automatizaciones, las campañas, las importaciones y los follow-ups." },
   "Continuam: receber mensagem, responder à mão, ler tudo e criar lead.": { es: "Continúan: recibir mensaje, responder manualmente, leer todo y crear lead." },
   // Exemplo de formato do código do pacote (placeholder), não prosa: mesmo
   // valor nos dois idiomas.
