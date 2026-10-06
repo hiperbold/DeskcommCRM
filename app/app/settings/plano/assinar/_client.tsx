@@ -192,7 +192,10 @@ function PlanoParaAssinar({ plano, precisaPagador }: { plano: PlanoParaVenda; pr
       tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: classificarDesfechoDaTentativa(r) };
 
       if (r.tipo === "erro") {
-        toast.error(r.mensagem);
+        // A frase de recusa da troca de plano (0942) tem es e zh-CN no dicionário; as demais
+        // mensagens da ação seguem em português, como antes (t() devolve a própria frase quando
+        // não há tradução).
+        toast.error(t(r.mensagem));
         setPendente(false);
         return;
       }

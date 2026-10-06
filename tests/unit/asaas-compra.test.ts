@@ -898,6 +898,9 @@ describe("cancelarAssinaturaDoCliente", () => {
         data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
         error: null,
       })),
+      // 0942 (item 7): sem assinatura no contrato, o cancelamento procura a assinatura agendada no
+      // pedido aberto; aqui não há pedido nenhum.
+      buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: null, error: null })),
     };
     const { deps } = montarDeps(db, asaas);
 
@@ -915,6 +918,7 @@ describe("cancelarAssinaturaDoCliente", () => {
         data: { asaasSubscriptionId: "sub_ja_encerrada", asaasAssinaturaEncerradaEm: "2026-09-01T00:00:00Z", currentPeriodEnd: null },
         error: null,
       })),
+      buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: null, error: null })),
     };
     const { deps } = montarDeps(db, asaas);
 
@@ -922,5 +926,159 @@ describe("cancelarAssinaturaDoCliente", () => {
 
     expect(resultado).toEqual({ tipo: "erro", mensagem: MENSAGEM_SEM_ASSINATURA_ASAAS });
     expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancelarAssinaturaDoCliente: assinatura AGENDADA de quem tem período pago a frente (0942, item 7)", () => {
+  /** Contrato sem assinatura viva (o id só entra no primeiro pagamento) e o pedido aberto que a carrega. */
+  function cenario(pedido: PedidoLinha, overrides: Partial<DbCompra> = {}) {
+    const marcarPedido = vi.fn(async (_org: string, id: string, status: "inconclusivo" | "falhou" | "cancelado") => ({
+      data: { pedidoId: id, statusAnterior: pedido.status, statusNovo: status },
+      error: null,
+    }));
+    const db: DbCompra = {
+      ...dbStubVazio(),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null, currentPeriodEnd: "2026-11-15T03:00:00Z" },
+        error: null,
+      })),
+      buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: pedido, error: null })),
+      marcarPedido: marcarPedido as DbCompra["marcarPedido"],
+      ...overrides,
+    };
+    return { db, marcarPedido };
+  }
+  const agendado = (extra: Partial<PedidoLinha> = {}) =>
+    pedidoBase({ status: "aguardando_pagamento", asaasSubscriptionId: "sub_agendada123", ...extra });
+
+  it("apaga a assinatura agendada no Asaas e só depois cancela o pedido; o contrato não é tocado", async () => {
+    const ordem: string[] = [];
+    const asaas = asaasFalso({
+      removerAssinatura: vi.fn(async () => {
+        ordem.push("asaas_delete");
+      }),
+    });
+    const { db, marcarPedido } = cenario(agendado());
+    marcarPedido.mockImplementationOnce(async (_org, id, status) => {
+      ordem.push("marcar_pedido");
+      return { data: { pedidoId: id, statusAnterior: "aguardando_pagamento" as const, statusNovo: status }, error: null };
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: false });
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_agendada123");
+    expect(ordem).toEqual(["asaas_delete", "marcar_pedido"]);
+    expect(marcarPedido).toHaveBeenCalledWith("org-1", "pedido-1", "cancelado", "cancelado_pelo_cliente");
+    expect(db.marcarAssinaturaEncerrada).not.toHaveBeenCalled();
+  });
+
+  it("DELETE no Asaas falhando devolve erro e o pedido NÃO é cancelado (a assinatura ainda cobraria)", async () => {
+    const asaas = asaasFalso({
+      removerAssinatura: vi.fn(async () => {
+        throw erroIndisponivel(500, false);
+      }),
+    });
+    const { db, marcarPedido } = cenario(agendado());
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(resultado.tipo).toBe("erro");
+    expect(marcarPedido).not.toHaveBeenCalled();
+  });
+
+  it("falha ao cancelar o pedido depois do DELETE devolve erro (repetir é seguro: o DELETE é idempotente)", async () => {
+    const asaas = asaasFalso();
+    const { db } = cenario(agendado(), {
+      marcarPedido: vi.fn(async () => ({ data: null, error: { code: "22023", message: "falhou" } })) as DbCompra["marcarPedido"],
+    });
+    const { deps, linhas } = montarDeps(db, asaas);
+
+    const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(resultado.tipo).toBe("erro");
+    expect(linhas.some((l) => l.msg === "asaas_cancelar_marcar_pedido_agendado_falhou")).toBe(true);
+  });
+
+  it("pedido aberto que não é assinatura de cartão agendada não é tocado: Pix, pedido sem assinatura gravada, outro ambiente", async () => {
+    for (const pedido of [
+      agendado({ metodo: "PIX", asaasSubscriptionId: null, asaasPaymentId: "pay_pix123" }),
+      agendado({ status: "criado", asaasSubscriptionId: null }),
+      agendado({ ambiente: "producao" }),
+    ]) {
+      const asaas = asaasFalso();
+      const { db, marcarPedido } = cenario(pedido);
+      const { deps } = montarDeps(db, asaas);
+
+      const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+      expect(resultado).toEqual({ tipo: "erro", mensagem: MENSAGEM_SEM_ASSINATURA_ASAAS });
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(marcarPedido).not.toHaveBeenCalled();
+    }
+  });
+
+  it("falha ao ler o pedido aberto devolve o erro genérico, sem chamar o Asaas", async () => {
+    const asaas = asaasFalso();
+    const { db } = cenario(agendado(), {
+      buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: null, error: { code: "XX000", message: "falhou" } })),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(resultado.tipo).toBe("erro");
+    expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+  });
+
+  it("com assinatura viva no contrato o caminho é o de sempre: não lê o pedido aberto", async () => {
+    const asaas = asaasFalso();
+    const buscarPedidoAbertoPorTipo = vi.fn();
+    const db: DbCompra = {
+      ...dbStubVazio(),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: "sub_viva123", asaasAssinaturaEncerradaEm: null, currentPeriodEnd: null },
+        error: null,
+      })),
+      marcarAssinaturaEncerrada: vi.fn(async () => ({
+        data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
+        error: null,
+      })),
+      buscarPedidoAbertoPorTipo: buscarPedidoAbertoPorTipo as DbCompra["buscarPedidoAbertoPorTipo"],
+    };
+    const { deps } = montarDeps(db, asaas);
+
+    const resultado = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+    expect(buscarPedidoAbertoPorTipo).not.toHaveBeenCalled();
+  });
+
+  it("de ponta a ponta: a compra no cartão com período pago a frente grava o id da assinatura agendada no pedido, e o cancelamento o acha e o apaga", async () => {
+    const { db: dbBase, getPedido } = dbFalso(pedidoBase());
+    const db: DbCompra = {
+      ...dbBase,
+      criarPedido: vi.fn(async () => ({
+        data: { pedidoId: "pedido-1", externalReference: "HC:ord:pedido-1", amountCents: 189900, jaExistia: false, proximaCobrancaEm: "2027-10-15" },
+        error: null,
+      })),
+    };
+    const asaas = asaasFalso({ criarAssinatura: vi.fn(async () => assinaturaFake({ id: "sub_agendada_e2e" })) });
+    const { deps } = montarDeps(db, asaas, () => new Date("2026-09-24T12:00:00Z"));
+
+    const compra = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(compra.tipo).toBe("redirecionar");
+    expect((asaas.criarAssinatura as ReturnType<typeof vi.fn>).mock.calls[0]![0].nextDueDate).toBe("2027-10-15");
+    expect(getPedido().asaasSubscriptionId).toBe("sub_agendada_e2e");
+    expect(getPedido().status).toBe("aguardando_pagamento");
+
+    const cancelamento = await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1");
+
+    expect(cancelamento).toEqual({ tipo: "ok", cancelAtPeriodEnd: false });
+    expect(asaas.removerAssinatura).toHaveBeenCalledWith("sub_agendada_e2e");
+    expect(getPedido().status).toBe("cancelado");
   });
 });

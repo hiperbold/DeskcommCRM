@@ -46,8 +46,15 @@ describe("0941: posição, igualdade e registro", () => {
     expect(inicio).toBeLessThan(BASELINE.lastIndexOf("-- ---- VARREDURA anon:"));
   });
 
-  it("o SQL da migration e o do bloco são iguais, ignorando comentários", () => {
-    expect(codigo(extraiBloco("0941"))).toBe(c);
+  it("o SQL da migration e o do bloco são iguais, ignorando comentários, menos o DO da seção 1, que o baseline corrige (0942)", () => {
+    // A cadeia de migrations roda a 0941 uma vez; o baseline a repete a cada atualização. Por isso
+    // a 0942 (item 3 e item 5 da auditoria do lote 15) trocou, SÓ no bloco do baseline, a semeadura
+    // dos preços (agora uma vez, pela marca) e o ALTER (agora só quando a coluna falta). O
+    // restante do bloco segue idêntico ao da migration. tests/unit/lote15-auditoria-migration.test.ts
+    // cobre o DO corrigido.
+    const semSecao1 = (sql: string) => sql.replace(/do \$ciclos_semestral_e_anual\$[\s\S]*?\$ciclos_semestral_e_anual\$;/, "");
+    expect(semSecao1(migration)).not.toBe(migration);
+    expect(codigo(semSecao1(extraiBloco("0941")))).toBe(codigo(semSecao1(migration)));
   });
 
   it("registrada no MANIFEST", () => {

@@ -380,6 +380,9 @@ export const MENSAGEM_SEM_ASSINATURA_ASAAS =
   "Esta organização não tem uma assinatura Asaas ativa para cancelar.";
 export const MENSAGEM_TROCA_DE_CICLO =
   "Sua assinatura atual ainda está no período pago em outro ciclo. A troca de ciclo ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.";
+/** 0942: `billing_troca_de_plano_indisponivel`. A tela passa esta frase por `t()` (es e zh-CN em `lib/i18n`). */
+export const MENSAGEM_TROCA_DE_PLANO =
+  "Sua assinatura atual ainda está no período pago de outro plano. A troca de plano ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.";
 export const MENSAGEM_OUTRA_OFERTA_ABERTA =
   "Há um pedido em aberto de outra opção. Conclua ou peça para cancelar antes de escolher outra.";
 
@@ -420,6 +423,9 @@ function mensagemDoErroDoPedido(erro: RpcErro): string {
   }
   if (contemCodigo(erro, "billing_troca_de_ciclo_indisponivel")) {
     return MENSAGEM_TROCA_DE_CICLO;
+  }
+  if (contemCodigo(erro, "billing_troca_de_plano_indisponivel")) {
+    return MENSAGEM_TROCA_DE_PLANO;
   }
   if (contemCodigo(erro, "billing_ja_tem_assinatura_asaas")) {
     return "Sua organização já tem uma assinatura ativa.";
@@ -1056,6 +1062,54 @@ export async function iniciarCompra(deps: DepsCompra, entrada: EntradaIniciarCom
 }
 
 /**
+ * Quem tem período pago a frente (Pix) e assina no cartão tem a assinatura AGENDADA para o fim
+ * desse período (`nextDueDate` no futuro, decisão 26): enquanto o primeiro pagamento não chega,
+ * o contrato ainda não guarda o id dela (`aplicar_pagamento` grava no primeiro pagamento), e só
+ * o pedido aberto (`aguardando_pagamento`) o carrega desde a criação
+ * (`registrarEDevolverCartao`). Sem este caminho o cliente não conseguia cancelar: o contrato
+ * dizia "sem assinatura" e o Asaas cobrava o cartão na data agendada. Remove a assinatura no
+ * Asaas (idempotente em 404) e SÓ DEPOIS marca o pedido `cancelado`, a mesma ordem do
+ * cancelamento da assinatura viva: um erro no meio nunca deixa o pedido cancelado com a
+ * assinatura ainda cobrando, e repetir é seguro. O contrato não muda: o período pago a frente
+ * continua valendo e não há renovação agendada.
+ */
+async function cancelarAssinaturaAgendadaDoPedido(
+  deps: DepsCompra,
+  organizationId: string,
+): Promise<ResultadoCancelarAssinatura> {
+  const aberto = await deps.db.buscarPedidoAbertoPorTipo(organizationId, "assinatura");
+  if (aberto.error) {
+    deps.logger.error("asaas_cancelar_ler_pedido_agendado_falhou", { org: organizationId, codigo: aberto.error.code });
+    return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+  }
+  const pedido = aberto.data;
+  if (
+    !pedido ||
+    pedido.metodo !== "CREDIT_CARD" ||
+    pedido.status !== "aguardando_pagamento" ||
+    !pedido.asaasSubscriptionId ||
+    pedido.ambiente !== deps.config.ambiente
+  ) {
+    return { tipo: "erro", mensagem: MENSAGEM_SEM_ASSINATURA_ASAAS };
+  }
+
+  try {
+    await deps.asaas.removerAssinatura(pedido.asaasSubscriptionId);
+  } catch (err) {
+    deps.logger.error("asaas_cancelar_remover_assinatura_agendada_falhou", { org: organizationId, tipoErro: tipoDoErro(err) });
+    return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+  }
+
+  const marcado = await deps.db.marcarPedido(organizationId, pedido.id, "cancelado", "cancelado_pelo_cliente");
+  if (marcado.error || !marcado.data) {
+    deps.logger.error("asaas_cancelar_marcar_pedido_agendado_falhou", { org: organizationId, codigo: marcado.error?.code });
+    return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
+  }
+
+  return { tipo: "ok", cancelAtPeriodEnd: false };
+}
+
+/**
  * Cancela a assinatura Asaas da organização: primeiro `DELETE
  * /subscriptions/{id}` (idempotente: 404 já conta como sucesso, tratado
  * dentro de `deps.asaas.removerAssinatura`); só DEPOIS do sucesso chama
@@ -1077,7 +1131,7 @@ export async function cancelarAssinaturaDoCliente(
   }
   const { asaasSubscriptionId, asaasAssinaturaEncerradaEm } = contrato.data;
   if (!asaasSubscriptionId || asaasAssinaturaEncerradaEm) {
-    return { tipo: "erro", mensagem: MENSAGEM_SEM_ASSINATURA_ASAAS };
+    return cancelarAssinaturaAgendadaDoPedido(deps, organizationId);
   }
 
   try {

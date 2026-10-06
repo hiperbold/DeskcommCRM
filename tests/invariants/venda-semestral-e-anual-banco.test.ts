@@ -195,11 +195,13 @@ describe("0941: semestral no cartão, do primeiro pagamento à renovação", () 
     expect(sql(`select count(*) from public.billing_payments where organization_id = '${ORG_SEMESTRAL}' and origem = 'asaas';`)).toBe("2");
   });
 
-  it("renovação com valor diferente do preço do ciclo concede e alarma divergente_valor (nunca compara com o mensal)", () => {
+  it("renovação com valor diferente do preço do ciclo alarma (nunca compara com o mensal): abaixo é divergente (0942), acima concede com divergente_valor", () => {
     const due = `to_char(current_date + interval '12 months', 'YYYY-MM-DD')`;
-    const r = registrarEAplicar("evt-i941-s3", "PAYMENT_CONFIRMED", "pay_i941_s3", confirmacao("pay_i941_s3", "CONFIRMED", "199.00", due, `,'subscription','${SUB}'`));
-    expect(r).toContain('"resultado": "aplicado"');
-    expect(r).toContain("divergente_valor");
+    const abaixo = registrarEAplicar("evt-i941-s3", "PAYMENT_CONFIRMED", "pay_i941_s3", confirmacao("pay_i941_s3", "CONFIRMED", "199.00", due, `,'subscription','${SUB}'`));
+    expect(abaixo).toContain('"resultado": "divergente"');
+    const acima = registrarEAplicar("evt-i941-s3b", "PAYMENT_CONFIRMED", "pay_i941_s3b", confirmacao("pay_i941_s3b", "CONFIRMED", "1500.00", due, `,'subscription','${SUB}'`));
+    expect(acima).toContain('"resultado": "aplicado"');
+    expect(acima).toContain("divergente_valor");
   });
 
   it("a mesma confirmação de novo é ja_aplicado e nada duplica", () => {
@@ -258,12 +260,12 @@ describe("0941: Pix semestral e anual (cobrança avulsa, sem assinatura no Asaas
     expect(fimEh(ORG_PIX_ANUAL, HOJE, 12)).toBe("true");
   });
 
-  it("Pix semestral com período ainda pago soma ao fim atual, sem encurtar nem sobrepor", () => {
+  it("Pix semestral com período ainda pago soma seis meses exatos ao fim atual (0942: sem o dia extra), sem encurtar nem sobrepor", () => {
     const fimAntes = contrato(ORG_PIX_SEMESTRAL, "current_period_end");
     const pedido = abrirPedido(ORG_PIX_SEMESTRAL, "pro", "semiannual", "PIX", "pay_i941_px3", null);
     const r = registrarEAplicar("evt-i941-px3", "PAYMENT_RECEIVED", "pay_i941_px3", confirmacao("pay_i941_px3", "RECEIVED", "1049.00", HOJE, `,'paymentDate',${HOJE},'externalReference','HC:ord:${pedido}'`));
     expect(r).toContain('"resultado": "aplicado"');
-    expect(sql(`select ((current_period_end at time zone 'America/Sao_Paulo')::date = (('${fimAntes}'::timestamptz at time zone 'America/Sao_Paulo')::date + interval '6 months')::date + 1)::text from public.billing_contracts where organization_id = '${ORG_PIX_SEMESTRAL}';`)).toBe("true");
+    expect(sql(`select ((current_period_end at time zone 'America/Sao_Paulo')::date = (('${fimAntes}'::timestamptz at time zone 'America/Sao_Paulo')::date + interval '6 months')::date)::text from public.billing_contracts where organization_id = '${ORG_PIX_SEMESTRAL}';`)).toBe("true");
   });
 });
 
@@ -291,6 +293,9 @@ describe("0941: troca de ciclo de quem já tem contrato em andamento é recusada
   it("contrato sem ciclo (registro manual) ou com período vencido pode escolher qualquer ciclo", () => {
     sql(`select public.fn_billing_registrar_pagamento('${ORG_TROCA}'::uuid, (current_date + 40)::date, 1000, '${U(900)}'::uuid, 'manual', null);`);
     expect(contrato(ORG_TROCA, "coalesce(cycle, 'sem-ciclo')")).toBe("sem-ciclo");
+    // 0942: o pagamento manual é período pago, então outro PLANO fica recusado; este caso mede só o
+    // ciclo, por isso o contrato é posto no próprio Pro.
+    sql(`update public.billing_contracts set plan_id = (select id from public.billing_plans where code = 'pro' and active) where organization_id = '${ORG_TROCA}';`);
     expect(tentar(ORG_TROCA, "semiannual")).toBeNull();
     sql(`update public.billing_orders set status = 'cancelado' where organization_id = '${ORG_TROCA}';`);
 

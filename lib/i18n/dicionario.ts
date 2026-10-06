@@ -12849,6 +12849,9 @@ export const DICIONARIO: Traducoes = {
   "Economia de": { es: "Ahorro de" },
   "em relação ao mensal": { es: "frente al plan mensual" },
   "Preço semestral": { es: "Precio semestral" },
+  "Sua assinatura atual ainda está no período pago de outro plano. A troca de plano ainda não está disponível: fale com o suporte ou contrate de novo depois do fim do período.": {
+    es: "Tu suscripción actual aún está en el período pagado de otro plan. El cambio de plan todavía no está disponible: habla con soporte o contrata de nuevo después del fin del período.",
+  },
   Limites: { es: "Límites" },
   "O que o plano contratado prevê, o que o ajuste desta organização define por cima, e o que vale hoje.": {
     es: "Lo que prevé el plan contratado, lo que define por encima el ajuste de esta organización, y lo que vale hoy.",

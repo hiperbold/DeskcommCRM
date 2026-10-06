@@ -9,6 +9,8 @@
  * banco; a SQL (preço por ciclo, período, tokens, estorno) é provada em
  * `tests/invariants/venda-semestral-e-anual-banco.test.ts`.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -19,6 +21,7 @@ import {
   type PrecosDoPlano,
 } from "@/app/app/settings/plano/_logica-compra";
 import type { ClienteAsaasHttp } from "@/lib/billing/asaas/cliente";
+import { DICIONARIO } from "@/lib/i18n/dicionario";
 import type { ConfigAsaas } from "@/lib/billing/asaas/config";
 import {
   assinaturaAsaasSchema,
@@ -32,6 +35,7 @@ import {
   iniciarCompra,
   MENSAGEM_GENERICA,
   MENSAGEM_TROCA_DE_CICLO,
+  MENSAGEM_TROCA_DE_PLANO,
   type DbCompra,
   type EntradaIniciarCompra,
   type PedidoLinha,
@@ -290,6 +294,27 @@ describe("iniciarCompra: troca de ciclo e preço do ciclo", () => {
     expect(asaas.criarAssinatura).not.toHaveBeenCalled();
     expect(asaas.criarCobranca).not.toHaveBeenCalled();
     expect(db.tomarPedido).not.toHaveBeenCalled();
+  });
+
+  it("contrato ativo com período pago de OUTRO plano (0942): mensagem própria, nenhum POST ao Asaas e nenhum pedido tomado", async () => {
+    const { deps, asaas, db } = montar(pedidoDe("yearly", 189900, "PIX"), {
+      erroDoPedido: "billing_troca_de_plano_indisponivel",
+    });
+
+    const r = await iniciarCompra(deps, ENTRADA);
+
+    expect(r).toEqual({ tipo: "erro", mensagem: MENSAGEM_TROCA_DE_PLANO });
+    expect(MENSAGEM_TROCA_DE_PLANO).toMatch(/troca de plano/i);
+    expect(MENSAGEM_TROCA_DE_PLANO).not.toBe(MENSAGEM_TROCA_DE_CICLO);
+    expect(asaas.criarAssinatura).not.toHaveBeenCalled();
+    expect(asaas.criarCobranca).not.toHaveBeenCalled();
+    expect(db.tomarPedido).not.toHaveBeenCalled();
+  });
+
+  it("a frase da troca de plano tem tradução para es e zh-CN no dicionário", () => {
+    expect(DICIONARIO[MENSAGEM_TROCA_DE_PLANO]?.es).toMatch(/cambio de plan/i);
+    const zh = JSON.parse(readFileSync(join(process.cwd(), "lib/i18n/traducoes/zh-CN.json"), "utf8")) as Record<string, string>;
+    expect(zh[MENSAGEM_TROCA_DE_PLANO]).toMatch(/套餐/);
   });
 
   it("plano sem preço no ciclo: a mensagem de preço não definido, nunca a genérica", async () => {
