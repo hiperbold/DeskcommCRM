@@ -5451,5 +5451,11 @@
   "Não foi possível carregar a verificação de segurança. Recarregue a página.": "无法加载安全验证。请刷新页面。",
   "Não foi possível confirmar a verificação de segurança. Recarregue a página e envie de novo.": "无法确认安全验证。请刷新页面后重新提交。",
   "A verificação de segurança está indisponível agora. Tente novamente em instantes.": "安全验证暂时不可用。请稍后再试。",
-  "O envio não passou na verificação de segurança (Turnstile): faltou o token do widget no formulário, ele estava inválido ou a Cloudflare não respondeu.": "提交未通过安全验证（Turnstile）：表单中缺少组件令牌、令牌无效，或 Cloudflare 未响应。"
+  "O envio não passou na verificação de segurança (Turnstile): faltou o token do widget no formulário, ele estava inválido ou a Cloudflare não respondeu.": "提交未通过安全验证（Turnstile）：表单中缺少组件令牌、令牌无效，或 Cloudflare 未响应。",
+  "Hoje é o último dia do seu plano {plano}": "今天是您的 {plano} 套餐的最后一天",
+  "Falta 1 dia para o fim do seu plano {plano}": "距离您的 {plano} 套餐结束还剩 1 天",
+  "Faltam {dias} dias para o fim do seu plano {plano}": "距离您的 {plano} 套餐结束还剩 {dias} 天",
+  "O acesso vai até {data} e este plano não renova sozinho: nada é cobrado sem a sua confirmação. Para continuar sem interrupção, faça uma nova compra em Plano e uso. Você escolhe como pagar: à vista no cartão (com renovação automática) ou no Pix, e, nos planos semestral e anual, parcelado no cartão.": "您可以使用至 {data}，此套餐不会自动续订：未经您确认，不会产生任何扣款。如需不间断使用，请在“套餐与用量”中重新购买。您可以选择付款方式：信用卡一次性付款（自动续订）或 Pix；半年和年度套餐还可使用信用卡分期付款。",
+  "Renovar meu plano": "续订我的套餐",
+  "Ou copie e cole este link no navegador:": "或将此链接复制并粘贴到浏览器中："
 }

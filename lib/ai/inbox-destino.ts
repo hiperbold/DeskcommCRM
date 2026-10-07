@@ -33,7 +33,7 @@ export const REFERENCIAS_DE_AVISO = {
   ai_provider_credential: { tabela: "ai_provider_credentials", papel: "admin", rotulo: "Revisar credencial", href: () => "/app/ai/credentials" },
 } satisfies Record<string, Alvo>;
 
-export type InboxRefKind = keyof typeof REFERENCIAS_DE_AVISO | "organization" | "ai_budget" | "job_queue" | "cron_jobs" | "billing_limite" | "billing_carteira";
+export type InboxRefKind = keyof typeof REFERENCIAS_DE_AVISO | "organization" | "ai_budget" | "job_queue" | "cron_jobs" | "billing_limite" | "billing_carteira" | "billing_assinatura";
 type ContextoGeral = { papel: Role; href: string; rotulo: string };
 interface Politica { refs: readonly InboxRefKind[]; orientacao: string; geral?: ContextoGeral }
 const EVOLUCAO: ContextoGeral = { papel: "manager", href: "/app/ai/evolution", rotulo: "Abrir evolução do assistente" };
@@ -123,6 +123,7 @@ export const POLITICAS_DE_AVISO = {
       "agent_case",
       "billing_limite",
       "billing_carteira",
+      "billing_assinatura",
     ],
     orientacao: "Confira a situação descrita neste aviso com a pessoa responsável.",
   },
@@ -219,7 +220,7 @@ export async function resolverDestinosDosAvisos<T extends ReferenciaDoAviso>(
             : visiveis.get(item.ref_kind!)?.has(item.ref_id!)
               ? { estado: "disponivel", rotulo: ROTULO_POR_KIND[item.kind] ?? a.rotulo, href: a.href(item.ref_id!, funilPorLead.get(item.ref_id!)) }
               : INDISPONIVEL;
-        } else if (item.ref_kind === "ai_budget" || item.ref_kind === "organization" || item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira") {
+        } else if (item.ref_kind === "ai_budget" || item.ref_kind === "organization" || item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" || item.ref_kind === "billing_assinatura") {
           // `billing_limite` (F2/F2-B, fork Hiperbold) usa a MESMA régua de
           // `ai_budget`, gerente para cima, sem tabela própria: o aviso da
           // carteira de tokens sempre nasce com `ref_id = organization_id`
@@ -229,15 +230,19 @@ export async function resolverDestinosDosAvisos<T extends ReferenciaDoAviso>(
           // registrado aqui, então o aviso de teto do plano nunca abria a
           // tela "Plano e uso", sempre "Este contexto não está disponível").
           //
+          // `billing_assinatura` (aviso de estado da assinatura e, desde a 0946, a régua de
+          // renovação do plano que não renova sozinho) entra na MESMA régua: `ref_id` é a
+          // organização, destino Plano e uso, gerente para cima.
+          //
           // `billing_carteira` (fase F3, decisão 7, Tarefa 8) entra na MESMA
           // régua de `billing_limite`: mesmo destino (Plano e uso), mesmo
           // papel mínimo (manager para cima): é o gate de tokens ANTES de
           // responder, com `ref_id = organization_id` também.
-          const href = item.ref_kind === "ai_budget" ? "/app/ai/usage" : item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" ? "/app/settings/plano" : "/app/radar";
-          const rotulo = item.ref_kind === "ai_budget" ? "Abrir uso de IA" : item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" ? "Abrir Plano e uso" : "Abrir Radar";
+          const href = item.ref_kind === "ai_budget" ? "/app/ai/usage" : item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" || item.ref_kind === "billing_assinatura" ? "/app/settings/plano" : "/app/radar";
+          const rotulo = item.ref_kind === "ai_budget" ? "Abrir uso de IA" : item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" || item.ref_kind === "billing_assinatura" ? "Abrir Plano e uso" : "Abrir Radar";
           destination = item.ref_id !== organizationId ? INDISPONIVEL
             : item.kind === "contact_proposal_expired" ? { estado: "sem_destino", orientacao: p.orientacao }
-            : !permite(papel, item.ref_kind === "ai_budget" || item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" ? "manager" : "agent") ? semPermissao("manager")
+            : !permite(papel, item.ref_kind === "ai_budget" || item.ref_kind === "billing_limite" || item.ref_kind === "billing_carteira" || item.ref_kind === "billing_assinatura" ? "manager" : "agent") ? semPermissao("manager")
             : { estado: "disponivel", href, rotulo };
         } else destination = { estado: "sem_destino", orientacao: p.orientacao };
       }

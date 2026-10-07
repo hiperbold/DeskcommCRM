@@ -415,6 +415,17 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "NULLABLE e SEM chave estrangeira (de propósito: o roteamento do " +
       "webhook pode não achar organização nenhuma), mas o mesmo deny-all vale.",
   },
+  // ─── billing_avisos_de_renovacao (migration 0946, fork Hiperbold, D-177 parte 2) ───
+  //
+  // Mesmo desenho deny-all das tabelas de billing acima: RLS ligada, ZERO policy, privilégio NENHUM
+  // para anon e authenticated; service_role lê, insere e altera, sem delete nem truncate.
+  {
+    tabela: "billing_avisos_de_renovacao",
+    razao:
+      "tests/invariants/regua-de-renovacao-banco.test.ts, item 8 (fork Hiperbold, 0946): " +
+      "anon e authenticated barrados por permission denied ao SELECT, INSERT, UPDATE e DELETE " +
+      "(medido sob set role), RLS ligada sem nenhuma policy, service_role sem delete/truncate.",
+  },
   // ─── billing_trigger_alarmes (migration 0910, fork Hiperbold, fase F7, D-055) ───
   //
   // Mesmo desenho deny-all de billing_payments/billing_contract_eventos,

@@ -8,7 +8,9 @@
  *   - a IA passou a conversa para uma pessoa (aviso `handoff`);
  *   - a IA ficou sem saldo no provedor e as respostas estão esperando a
  *     recarga (`lib/agent-engine/queue/espera-de-saldo.ts`);
- *   - um negócio entrou numa etapa que avisa (migration 0440).
+ *   - um negócio entrou numa etapa que avisa (migration 0440);
+ *   - o plano que não renova sozinho está a 7 dias, 1 dia ou no último dia de acesso (régua de aviso de
+ *     renovação, migration 0946; os avisos de 30 e 15 dias ficam só na Central e no e-mail).
  *
  * São os MESMOS que têm som próprio: a regra de quais avisos pedem gente é uma
  * só (`somDoAviso`). Todos chegam pelo barramento como `central.aviso_criado`
@@ -43,7 +45,29 @@ type Aviso = {
   ref_id: string | null;
   title: string;
   body: string | null;
+  severity: string | null;
 };
+
+/** O plano é o destino do aviso de renovação, o mesmo botão «Abrir Plano e uso» da Central. */
+const PLANO_E_USO = "/app/settings/plano";
+
+/**
+ * O aviso da régua de renovação (`ref_kind` billing_assinatura, linha em `billing_avisos_de_renovacao`
+ * apontando para ele). O push sai só nos marcos de ação (severidade `warn`: 7 dias, 1 dia e o último dia);
+ * 30 e 15 dias (`info`) ficam na Central e no e-mail. O título e o corpo já nasceram no idioma da
+ * organização. Outro aviso `billing_assinatura` (o do modo leitura) segue sem push, como sempre foi.
+ */
+async function pushDaRenovacao(admin: SupabaseClient, orgId: string, item: Aviso): Promise<PushPayload | null> {
+  if (item.severity === "info") return null;
+  const { data } = await admin
+    .from("billing_avisos_de_renovacao")
+    .select("id")
+    .eq("organization_id", orgId)
+    .eq("inbox_item_id", item.id)
+    .maybeSingle();
+  if (!data) return null;
+  return { title: truncar(item.title), body: truncar(item.body ?? ""), tag: `aviso:${item.id}`, href: PLANO_E_USO };
+}
 
 function destinoDaPassagem(item: Aviso): string {
   if (!item.ref_id) return CENTRAL;
@@ -64,12 +88,16 @@ export async function pushDoAvisoDaCentral(
   // ⚠️ Organização junto do id: o client é service-role e ignora RLS.
   const { data } = await admin
     .from("agent_inbox_items")
-    .select("id, kind, ref_kind, ref_id, title, body")
+    .select("id, kind, ref_kind, ref_id, title, body, severity")
     .eq("organization_id", orgId)
     .eq("id", itemId)
     .maybeSingle();
   const item = data as Aviso | null;
   if (!item) return null;
+
+  if (item.kind === "other" && item.ref_kind === "billing_assinatura") {
+    return pushDaRenovacao(admin, orgId, item);
+  }
 
   const som = somDoAviso(item);
   if (som === null) return null;

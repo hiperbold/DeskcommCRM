@@ -13538,6 +13538,25 @@ export const DICIONARIO: Traducoes = {
   "O envio não passou na verificação de segurança (Turnstile): faltou o token do widget no formulário, ele estava inválido ou a Cloudflare não respondeu.": {
     es: "El envío no pasó la verificación de seguridad (Turnstile): faltó el token del widget en el formulario, era inválido o Cloudflare no respondió.",
   },
+  // ─── lib/billing/assinatura/renovacao-textos.ts (régua de aviso de renovação, migration 0946) ───
+  "Hoje é o último dia do seu plano {plano}": {
+    es: "Hoy es el último día de tu plan {plano}",
+  },
+  "Falta 1 dia para o fim do seu plano {plano}": {
+    es: "Falta 1 día para el fin de tu plan {plano}",
+  },
+  "Faltam {dias} dias para o fim do seu plano {plano}": {
+    es: "Faltan {dias} días para el fin de tu plan {plano}",
+  },
+  "O acesso vai até {data} e este plano não renova sozinho: nada é cobrado sem a sua confirmação. Para continuar sem interrupção, faça uma nova compra em Plano e uso. Você escolhe como pagar: à vista no cartão (com renovação automática) ou no Pix, e, nos planos semestral e anual, parcelado no cartão.": {
+    es: "El acceso llega hasta {data} y este plan no se renueva solo: no se cobra nada sin tu confirmación. Para continuar sin interrupción, haz una nueva compra en Plan y uso. Tú eliges cómo pagar: al contado con tarjeta (con renovación automática) o con Pix y, en los planes semestral y anual, en cuotas con tarjeta.",
+  },
+  "Renovar meu plano": {
+    es: "Renovar mi plan",
+  },
+  "Ou copie e cole este link no navegador:": {
+    es: "O copia y pega este enlace en el navegador:",
+  },
 };
 
 /**

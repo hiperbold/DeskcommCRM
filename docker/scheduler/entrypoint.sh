@@ -175,6 +175,14 @@ CRONS="
 # extra tipo o débito pendente da carteira: teto de 60s, igual ao irmão mais
 # simples (conferir-contadores-de-plano).
 40 5 * * *|60|api/v1/cron/conferir-vencimentos
+# A RÉGUA DE AVISO DE RENOVAÇÃO (D-177, parte 2). Uma vez ao dia, 11:00 UTC (este container roda com TZ:
+# UTC), que são 08:00 em América/São_Paulo: o aviso chega no começo do expediente do cliente, e os marcos
+# (30, 15, 7 e 1 dia antes do último dia de acesso e o próprio dia) são contados em datas de São Paulo,
+# então a hora do dia não muda o marco. Avisa quem tem plano que NÃO renova sozinho (parcelado ou Pix);
+# varredura de banco mais um e-mail por administrador, sem chamada ao Asaas. Teto de 180s: a rodada para
+# sozinha aos 150s e deixa o resto para o dia seguinte. Depois do conferir-vencimentos (05:40), para o
+# aviso olhar o contrato já conferido.
+0 11 * * *|180|api/v1/cron/avisar-renovacao
 # A RETENÇÃO DE MÍDIA (upstream). 05:20 UTC, janela própria, antes das rodadas
 # diárias de billing acima (05:25 e 05:40), para não disputar I/O com elas.
 20 5 * * *|120|api/v1/cron/media-retention
