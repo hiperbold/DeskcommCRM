@@ -441,4 +441,16 @@ describe("cliente Asaas: cobrança parcelada (D-177)", () => {
     expect(chamadas[0]!.init.method).toBe("DELETE");
     expect(chamadas[0]!.url).toContain("/installments/7315c152");
   });
+
+  it("listarCobrancasDoParcelamento pede as 100 primeiras (o padrão do Asaas é 10: um 12x perderia duas parcelas)", async () => {
+    const { deps, chamadas } = montarDeps([
+      respostaJson(200, { object: "list", hasMore: false, data: [{ id: "pay_1", customer: "cus_123", status: "CONFIRMED", billingType: "CREDIT_CARD", value: 100, dueDate: "2026-10-06", installment: "7315c152" }] }),
+    ]);
+    const cliente = criarClienteAsaas(deps);
+    const lista = await cliente.listarCobrancasDoParcelamento("7315c152");
+    expect(lista).toHaveLength(1);
+    expect(chamadas[0]!.init.method).toBe("GET");
+    expect(chamadas[0]!.url).toContain("/installments/7315c152/payments");
+    expect(chamadas[0]!.url).toContain("limit=100");
+  });
 });

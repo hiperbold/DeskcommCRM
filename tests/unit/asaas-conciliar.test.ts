@@ -124,6 +124,9 @@ function dbFalso(overrides: Partial<DbConciliarAsaas> = {}): DbConciliarAsaas {
         semVinculoUltimas24h: 0,
         estornoComCorteFalhouUltimas24h: 0,
         estornoDePeriodoAntigoUltimas24h: 0,
+        estornoParcialDoParcelamentoUltimas24h: 0,
+        chargebackConfirmadoUltimas24h: 0,
+        parcelamentoRemovidoComPagamentoUltimas24h: 0,
         semEventoHa3DiasComAssinaturaAtiva: 0,
       },
       leituraFalhou: false,
@@ -298,6 +301,25 @@ describe("conciliarAsaas", () => {
     expect(resumo.cobrancasRemovidas).toBe(1);
   });
 
+  it("B6: pedido vencido que só tem o id do parcelamento (a cobrança não chegou a ser registrada): remove o parcelamento inteiro", async () => {
+    const vencido: PedidoVencidoParaRemocao = {
+      id: "pedido-5",
+      organizationId: "org-5",
+      tipo: "assinatura",
+      asaasPaymentId: null,
+      asaasSubscriptionId: null,
+      asaasInstallmentId: "7315c152-a55f-4727-aa6c-d48249df28d4",
+    };
+    const db = dbFalso({ listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [vencido], error: null })) });
+    const asaas = asaasFalso({ removerParcelamento: vi.fn(async () => undefined) });
+    const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+    expect(asaas.removerParcelamento).toHaveBeenCalledWith("7315c152-a55f-4727-aa6c-d48249df28d4");
+    expect(asaas.removerCobranca).not.toHaveBeenCalled();
+    expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+    expect(resumo.cobrancasRemovidas).toBe(1);
+  });
+
   it("remoção de cobrança vencida falha de novo: alarme remover_cobranca_pendente", async () => {
     const vencido: PedidoVencidoParaRemocao = {
       id: "pedido-3",
@@ -373,6 +395,9 @@ describe("conciliarAsaas", () => {
       semVinculoUltimas24h: 4,
       estornoComCorteFalhouUltimas24h: 6,
       estornoDePeriodoAntigoUltimas24h: 7,
+      estornoParcialDoParcelamentoUltimas24h: 8,
+      chargebackConfirmadoUltimas24h: 9,
+      parcelamentoRemovidoComPagamentoUltimas24h: 10,
       semEventoHa3DiasComAssinaturaAtiva: 5,
     };
     const db = dbFalso({ contadoresDeAlarme: vi.fn(async () => ({ contadores, leituraFalhou: false })) });
@@ -385,6 +410,9 @@ describe("conciliarAsaas", () => {
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_evento_sem_vinculo_ultimas_24h", { quantidade: 4 });
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_estorno_corte_falhou_ultimas_24h", { quantidade: 6 });
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_estorno_de_periodo_antigo_ultimas_24h", { quantidade: 7 });
+    expect(logger.error).toHaveBeenCalledWith("alarme_asaas_estorno_parcial_do_parcelamento_ultimas_24h", { quantidade: 8 });
+    expect(logger.error).toHaveBeenCalledWith("alarme_asaas_chargeback_confirmado_ultimas_24h", { quantidade: 9 });
+    expect(logger.error).toHaveBeenCalledWith("alarme_asaas_parcelamento_removido_com_pagamento_ultimas_24h", { quantidade: 10 });
     expect(logger.error).toHaveBeenCalledWith("alarme_asaas_sem_evento_ha_3_dias_com_assinatura_ativa", {
       quantidade: 5,
     });
@@ -494,6 +522,52 @@ describe("conciliarAsaas", () => {
       await conciliarAsaas(deps({ asaas }));
       expect(asaas.removerAssinatura).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("B6 (D-177): a listagem dos pedidos vencidos inclui o que só tem o id do parcelamento", () => {
+  function adminFalso(linhas: unknown[]) {
+    const filtros: Array<[string, ...unknown[]]> = [];
+    const builder: Record<string, unknown> = {};
+    for (const metodo of ["select", "eq", "or", "limit"]) {
+      builder[metodo] = (...args: unknown[]) => {
+        filtros.push([metodo, ...args]);
+        return builder;
+      };
+    }
+    builder.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: linhas, error: null }).then(resolve, reject);
+    return { admin: { from: () => builder } as never, filtros };
+  }
+
+  it("o filtro aceita pedido com asaas_installment_id e o mapeamento devolve o id do parcelamento", async () => {
+    const { admin, filtros } = adminFalso([
+      {
+        id: "p-1",
+        organization_id: "org-1",
+        tipo: "assinatura",
+        asaas_payment_id: null,
+        asaas_subscription_id: null,
+        asaas_installment_id: "7315c152-a55f-4727-aa6c-d48249df28d4",
+      },
+    ]);
+    const r = await criarDbConciliarAsaasSobre(admin).listarPedidosVencidosParaRemocao(50);
+
+    expect(r.error).toBeNull();
+    expect(r.data).toEqual([
+      {
+        id: "p-1",
+        organizationId: "org-1",
+        tipo: "assinatura",
+        asaasPaymentId: null,
+        asaasSubscriptionId: null,
+        asaasInstallmentId: "7315c152-a55f-4727-aa6c-d48249df28d4",
+      },
+    ]);
+    const filtroOr = filtros.find((f) => f[0] === "or")?.[1] as string;
+    expect(filtroOr).toContain("asaas_payment_id.not.is.null");
+    expect(filtroOr).toContain("asaas_subscription_id.not.is.null");
+    expect(filtroOr).toContain("asaas_installment_id.not.is.null");
   });
 });
 

@@ -396,7 +396,8 @@ export function criarClienteAsaas(deps: DepsClienteAsaas): ClienteAsaasHttp {
     async listarCobrancasDoParcelamento(id) {
       const lista = await chamarComSchema(
         deps,
-        { metodo: "GET", caminho: `/installments/${encodeURIComponent(id)}/payments` },
+        // limit=100: o padrão do Asaas é 10 e um parcelamento de 12x perderia duas parcelas (o teto da API é 100).
+        { metodo: "GET", caminho: `/installments/${encodeURIComponent(id)}/payments?limit=100` },
         listaCobrancasSchema,
       );
       return lista.data;

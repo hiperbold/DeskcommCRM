@@ -413,7 +413,7 @@ async function ehCandidatoAoGet(
 function confirmacaoDoPagamento(
   cobranca: CobrancaAsaas,
   assinaturaStatus: string | null,
-  parcelamento: { total: number; parcelas: number } | null = null,
+  parcelamento: DadosDoParcelamento | null = null,
 ): Record<string, unknown> {
   const confirmacao: Record<string, unknown> = {
     id: cobranca.id,
@@ -434,12 +434,35 @@ function confirmacaoDoPagamento(
   // contra o pedido, nunca o valor da parcela contra o preço do plano.
   if (cobranca.installment) {
     confirmacao.installment = cobranca.installment;
-    if (parcelamento) {
+    if (parcelamento && "removido" in parcelamento) {
+      // D-177 B4: o parcelamento já não existe no Asaas. Sem total para conferir; o banco alarma em vez de ignorar.
+      confirmacao.parcelamento_removido = true;
+    } else if (parcelamento) {
       confirmacao.parcelamento_total = parcelamento.total;
       confirmacao.parcelamento_parcelas = parcelamento.parcelas;
+      confirmacao.parcelamento_confirmadas = parcelamento.confirmadas;
     }
   }
   return confirmacao;
+}
+
+/**
+ * D-177: o que o processador leu do parcelamento. `total` e `parcelas` vêm de GET /installments/{id};
+ * `confirmadas` é quantas parcelas distintas estão CONFIRMED, RECEIVED ou RECEIVED_IN_CASH em GET
+ * /installments/{id}/payments. O banco só concede o período quando `confirmadas` cobre todas as parcelas do
+ * pedido (M2); o processador só declara, quem decide é o banco.
+ */
+type DadosDoParcelamento = { total: number; parcelas: number; confirmadas: number } | { removido: true };
+
+const STATUS_DE_PARCELA_CONFIRMADA = new Set(["CONFIRMED", "RECEIVED", "RECEIVED_IN_CASH"]);
+
+function contarParcelasConfirmadas(parcelas: CobrancaAsaas[], installmentId: string): number {
+  const confirmadas = new Set<string>();
+  for (const p of parcelas) {
+    if ((p.installment ?? installmentId) !== installmentId) continue;
+    if (STATUS_DE_PARCELA_CONFIRMADA.has(p.status)) confirmadas.add(p.id);
+  }
+  return confirmadas.size;
 }
 
 /**
@@ -652,6 +675,20 @@ function registrarAlarmesDoEstorno(
   if (alarmes.includes("estorno_encurtou_periodo")) {
     deps.logger.warn("alarme_asaas_estorno_encurtou_periodo", { eventoId: evento.id, organizationId });
   }
+  // D-177: estorno de UMA parcela de um parcelamento que não cobre todas. O evento fecha aplicado, nada
+  // é cortado e o pedido segue pago: o admin decide (a tela de cobrança também conta).
+  if (alarmes.includes("estorno_parcial_do_parcelamento")) {
+    deps.logger.warn("alarme_asaas_estorno_parcial_do_parcelamento", { eventoId: evento.id, organizationId });
+  }
+  // Chargeback confirmado: só alarma (o pedido segue pago e o acesso não é cortado), o admin decide.
+  if (alarmes.includes("chargeback_confirmado")) {
+    deps.logger.warn("alarme_asaas_chargeback_confirmado", { eventoId: evento.id, organizationId });
+  }
+  // D-177 B4: parcela confirmada de um parcelamento que sumiu do Asaas. O dinheiro pode ter entrado e o
+  // banco não concedeu período por esse caminho: o admin confere.
+  if (alarmes.includes("parcelamento_removido_com_pagamento")) {
+    deps.logger.warn("alarme_asaas_parcelamento_removido_com_pagamento", { eventoId: evento.id, organizationId });
+  }
 }
 
 async function auditarCorteDeEstorno(
@@ -849,13 +886,23 @@ async function processarEventoDeDinheiro(
   }
 
   // D-177: parcela de parcelamento. O total vem de GET /installments/{id}; sem ele o evento volta a tentar
-  // (nunca confere o valor da parcela contra o preço).
-  let parcelamento: { total: number; parcelas: number } | null = null;
+  // (nunca confere o valor da parcela contra o preço). As parcelas vêm de GET /installments/{id}/payments:
+  // o banco só concede o período com todas confirmadas (M2). Parcelamento removido no Asaas não é mais
+  // ignorado em silêncio: o banco recebe o aviso e alarma (B4).
+  let parcelamento: DadosDoParcelamento | null = null;
   if (cobranca.installment) {
     try {
       const r = await deps.asaas.buscarParcelamento(cobranca.installment);
-      if ("removido" in r) return aplicarSemConfirmacao(deps, evento);
-      parcelamento = { total: r.value, parcelas: r.installmentCount };
+      if ("removido" in r) {
+        parcelamento = { removido: true };
+      } else {
+        const parcelas = await deps.asaas.listarCobrancasDoParcelamento(cobranca.installment);
+        parcelamento = {
+          total: r.value,
+          parcelas: r.installmentCount,
+          confirmadas: contarParcelasConfirmadas(parcelas, cobranca.installment),
+        };
+      }
     } catch (err) {
       return tratarErroDeChamada(deps, evento, err);
     }

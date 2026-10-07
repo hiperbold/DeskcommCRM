@@ -9,7 +9,10 @@
  *   3. cada parcela confirmada entra em billing_payments ligada ao pedido, o período é concedido UMA vez
  *      (a primeira parcela), a conferência de valor é pelo TOTAL do parcelamento e nada renova sozinho;
  *   4. estorno: parcela(s) estornada(s) só alarmam; estornadas todas, corta como o estorno total;
- *   5. os parâmetros são semeados uma vez (a reaplicação do bloco não desfaz o que o admin mudou).
+ *   5. os parâmetros são semeados uma vez (a reaplicação do bloco não desfaz o que o admin mudou);
+ *   6. (0947) o período só é concedido com TODAS as parcelas confirmadas (o processador declara N de N em
+ *      parcelamento_confirmadas); antes disso o evento fica aguardando. Parcelamento removido no Asaas com
+ *      parcela confirmada alarma (parcelamento_removido_com_pagamento) em vez de ser ignorado.
  *
  * Roda via `pnpm test:db tests/invariants/parcelamento-banco.test.ts`.
  */
@@ -32,9 +35,11 @@ const ORG_ESTORNO = U(6);
 const ORG_ESTORNO_ORDEM = U(7);
 const ORG_IDEMPOTENCIA = U(8);
 const ORG_REGISTRO = U(9);
+const ORG_PARCIAL = U(10);
+const ORG_REMOVIDO = U(11);
 const ORGS = [
   ORG_VALIDACAO, ORG_SEMESTRAL, ORG_ANUAL_3X, ORG_CONFERE_TOTAL, ORG_EMPILHA, ORG_ESTORNO,
-  ORG_ESTORNO_ORDEM, ORG_IDEMPOTENCIA, ORG_REGISTRO,
+  ORG_ESTORNO_ORDEM, ORG_IDEMPOTENCIA, ORG_REGISTRO, ORG_PARCIAL, ORG_REMOVIDO,
 ];
 
 /** Os parâmetros que a migration semeia (decisão do Filipe em 06/10/2026). */
@@ -62,7 +67,10 @@ function registrarEAplicar(eventId: string, tipo: string, pagamento: string, con
   return sql(`select public.fn_billing_asaas_aplicar_evento('${(id ?? "").trim()}'::uuid, '${(lease ?? "").trim()}'::uuid, ${confirmacao});`);
 }
 
-/** O objeto confirmado de UMA parcela, como o processador monta (com o total lido de GET /installments). */
+/**
+ * O objeto confirmado de UMA parcela, como o processador monta (com o total lido de GET /installments e a
+ * contagem de parcelas confirmadas lida de GET /installments/{id}/payments). Por padrão todas confirmadas.
+ */
 function confirmacaoDaParcela(
   pagamento: string,
   reaisDaParcela: string,
@@ -71,8 +79,10 @@ function confirmacaoDaParcela(
   totalReais: string,
   parcelas: number,
   extra = "",
+  confirmadas: number | null = parcelas,
 ): string {
-  return `jsonb_build_object('id','${pagamento}','status','CONFIRMED','value',${reaisDaParcela},'dueDate',${HOJE},'paymentDate',${HOJE},'externalReference','HC:ord:${pedido}','installment','${installment}','parcelamento_total',${totalReais},'parcelamento_parcelas',${parcelas}${extra})`;
+  const contagem = confirmadas === null ? "" : `,'parcelamento_confirmadas',${confirmadas}`;
+  return `jsonb_build_object('id','${pagamento}','status','CONFIRMED','value',${reaisDaParcela},'dueDate',${HOJE},'paymentDate',${HOJE},'externalReference','HC:ord:${pedido}','installment','${installment}','parcelamento_total',${totalReais},'parcelamento_parcelas',${parcelas}${contagem}${extra})`;
 }
 
 function confirmacaoDeEstorno(pagamento: string, reais: string): string {
@@ -508,5 +518,90 @@ describe("0945: forma", () => {
     expect(acl("fn_billing_criar_pedido")).toBe("false|false|true");
     expect(acl("fn_billing_pedido_registrar_parcelamento")).toBe("false|false|true");
     expect(acl("fn_billing_parcelamento_total")).toBe("false|false|false");
+  });
+});
+
+describe("0947 M2: o período só é concedido com todas as parcelas confirmadas", () => {
+  let pedido = "";
+  const parcela = (k: number, confirmadas: number | null, evento: string) =>
+    registrarEAplicar(evento, "PAYMENT_CONFIRMED", `pay_i947_p_${k}`, confirmacaoDaParcela(`pay_i947_p_${k}`, "179.46", pedido, INST(50), "2153.52", 12, "", confirmadas));
+  const eventoCol = (evento: string, coluna: string) => sql(`select ${coluna} from public.asaas_webhook_events where event_id = '${evento}';`);
+
+  it("1 de 12 confirmada: o evento fica aguardando, nada é gravado, o pedido não fecha e o contrato não ganha período", () => {
+    pedido = pedirParcelado(ORG_PARCIAL, "pro", "yearly", 12, 215352);
+    registrarCobrancaEParcelamento(ORG_PARCIAL, pedido, "pay_i947_p_1", INST(50));
+
+    const r = parcela(1, 1, "evt-i947-p-1a");
+    expect(r).toContain('"resultado": "aguardando"');
+    expect(eventoCol("evt-i947-p-1a", "resultado || '|' || erro_codigo || '|' || tentativas")).toBe("aguardando|billing_parcelamento_parcelas_pendentes|1");
+    expect(sql(`select count(*) from public.billing_payments where order_id = '${pedido}';`)).toBe("0");
+    expect(pedidoCol(pedido, "status")).not.toBe("pago");
+    expect(contrato(ORG_PARCIAL, "(current_period_end is null or current_period_end < now())::text")).toBe("true");
+  });
+
+  it("11 de 12, e a contagem ausente (processador antigo), também ficam aguardando", () => {
+    expect(parcela(1, 11, "evt-i947-p-1b")).toContain('"resultado": "aguardando"');
+    expect(parcela(1, null, "evt-i947-p-1c")).toContain('"resultado": "aguardando"');
+    expect(eventoCol("evt-i947-p-1c", "erro_codigo")).toBe("billing_parcelamento_parcelas_pendentes");
+    expect(sql(`select count(*) from public.billing_payments where order_id = '${pedido}';`)).toBe("0");
+    expect(pedidoCol(pedido, "status")).not.toBe("pago");
+  });
+
+  it("o total errado continua divergente mesmo com parcelas pendentes (a divergência vem antes)", () => {
+    const r = registrarEAplicar("evt-i947-p-1d", "PAYMENT_CONFIRMED", "pay_i947_p_1", confirmacaoDaParcela("pay_i947_p_1", "100.00", pedido, INST(50), "1200.00", 12, "", 1));
+    expect(r).toContain('"resultado": "divergente"');
+  });
+
+  it("12 de 12: concede o período uma vez e fecha o pedido", () => {
+    const r = parcela(1, 12, "evt-i947-p-1e");
+    expect(r).toContain('"resultado": "aplicado"');
+    expect(pedidoCol(pedido, "status")).toBe("pago");
+    expect(sql(`select count(*) from public.billing_payments where order_id = '${pedido}' and billing_period_end is not null;`)).toBe("1");
+    expect(contrato(ORG_PARCIAL, `((current_period_end at time zone ${SP})::date = (current_date + interval '1 year')::date + 1)::text`)).toBe("true");
+    expect(sql(`select count(*) from public.billing_contract_eventos where organization_id = '${ORG_PARCIAL}' and tipo = 'periodo' and motivo = 'pay_primeiro_pagamento';`)).toBe("1");
+  });
+
+  it("depois do pedido pago, as outras parcelas entram sem exigir a contagem e sem mexer no período", () => {
+    const fim = contrato(ORG_PARCIAL, "current_period_end");
+    const r2 = parcela(2, 3, "evt-i947-p-2");
+    expect(r2).toContain('"resultado": "aplicado"');
+    const r3 = parcela(3, null, "evt-i947-p-3");
+    expect(r3).toContain('"resultado": "aplicado"');
+    expect(sql(`select count(*) from public.billing_payments where order_id = '${pedido}';`)).toBe("3");
+    expect(sql(`select count(*) from public.billing_payments where order_id = '${pedido}' and billing_period_end is not null;`)).toBe("1");
+    expect(contrato(ORG_PARCIAL, "current_period_end")).toBe(fim);
+  });
+});
+
+describe("0947 B4: parcelamento removido no Asaas com parcela confirmada alarma", () => {
+  const removido = (pagamento: string, pedido: string, installment: string) =>
+    `jsonb_build_object('id','${pagamento}','status','CONFIRMED','value',100,'dueDate',${HOJE},'paymentDate',${HOJE},'externalReference','HC:ord:${pedido}','installment','${installment}','parcelamento_removido',true)`;
+
+  it("pedido ainda aberto: não concede, devolve divergente com o alarme e não grava nada", () => {
+    const pedido = pedirParcelado(ORG_REMOVIDO, "pro", "yearly", 4, 199440);
+    registrarCobrancaEParcelamento(ORG_REMOVIDO, pedido, "pay_i947_r_1", INST(60));
+
+    const r = registrarEAplicar("evt-i947-r-1", "PAYMENT_CONFIRMED", "pay_i947_r_1", removido("pay_i947_r_1", pedido, INST(60)));
+    expect(r).toContain('"resultado": "divergente"');
+    expect(r).toContain('"alarme": "parcelamento_removido_com_pagamento"');
+    expect(sql(`select resultado || '|' || alarme from public.asaas_webhook_events where event_id = 'evt-i947-r-1';`)).toBe("divergente|parcelamento_removido_com_pagamento");
+    expect(sql(`select count(*) from public.billing_payments where order_id = '${pedido}';`)).toBe("0");
+    expect(pedidoCol(pedido, "status")).not.toBe("pago");
+    expect(contrato(ORG_REMOVIDO, "(current_period_end is null or current_period_end < now())::text")).toBe("true");
+    cancelarAbertos(ORG_REMOVIDO);
+  });
+
+  it("pedido já pago: a parcela confirmada é registrada (o dinheiro entrou) e o alarme aparece, sem mexer no período", () => {
+    const pedido = pedirParcelado(ORG_REMOVIDO, "pro", "yearly", 3, 189900);
+    registrarCobrancaEParcelamento(ORG_REMOVIDO, pedido, "pay_i947_r2_1", INST(61));
+    const primeira = registrarEAplicar("evt-i947-r2-1", "PAYMENT_CONFIRMED", "pay_i947_r2_1", confirmacaoDaParcela("pay_i947_r2_1", "633.00", pedido, INST(61), "1899.00", 3));
+    expect(primeira).toContain('"resultado": "aplicado"');
+    const fim = contrato(ORG_REMOVIDO, "current_period_end");
+
+    const r = registrarEAplicar("evt-i947-r2-2", "PAYMENT_CONFIRMED", "pay_i947_r2_2", removido("pay_i947_r2_2", pedido, INST(61)));
+    expect(r).toContain('"resultado": "aplicado"');
+    expect(r).toContain('"alarme": "parcelamento_removido_com_pagamento"');
+    expect(sql(`select count(*) from public.billing_payments where asaas_payment_id = 'pay_i947_r2_2' and billing_period_end is null;`)).toBe("1");
+    expect(contrato(ORG_REMOVIDO, "current_period_end")).toBe(fim);
   });
 });

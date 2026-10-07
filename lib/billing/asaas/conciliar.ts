@@ -220,6 +220,9 @@ const CONTADORES_ZERADOS: ContadoresDeAlarmeAsaas = {
   semVinculoUltimas24h: 0,
   estornoComCorteFalhouUltimas24h: 0,
   estornoDePeriodoAntigoUltimas24h: 0,
+  estornoParcialDoParcelamentoUltimas24h: 0,
+  chargebackConfirmadoUltimas24h: 0,
+  parcelamentoRemovidoComPagamentoUltimas24h: 0,
   semEventoHa3DiasComAssinaturaAtiva: 0,
 };
 
@@ -658,6 +661,19 @@ function alarmarContadores(logger: LoggerAsaas, contadores: ContadoresDeAlarmeAs
       quantidade: contadores.estornoDePeriodoAntigoUltimas24h,
     });
   }
+  if (contadores.estornoParcialDoParcelamentoUltimas24h > 0) {
+    logger.error("alarme_asaas_estorno_parcial_do_parcelamento_ultimas_24h", {
+      quantidade: contadores.estornoParcialDoParcelamentoUltimas24h,
+    });
+  }
+  if (contadores.chargebackConfirmadoUltimas24h > 0) {
+    logger.error("alarme_asaas_chargeback_confirmado_ultimas_24h", { quantidade: contadores.chargebackConfirmadoUltimas24h });
+  }
+  if (contadores.parcelamentoRemovidoComPagamentoUltimas24h > 0) {
+    logger.error("alarme_asaas_parcelamento_removido_com_pagamento_ultimas_24h", {
+      quantidade: contadores.parcelamentoRemovidoComPagamentoUltimas24h,
+    });
+  }
   if (contadores.semEventoHa3DiasComAssinaturaAtiva > 0) {
     logger.error("alarme_asaas_sem_evento_ha_3_dias_com_assinatura_ativa", {
       quantidade: contadores.semEventoHa3DiasComAssinaturaAtiva,
@@ -776,7 +792,8 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
         .from("billing_orders")
         .select("id, organization_id, tipo, asaas_payment_id, asaas_subscription_id, asaas_installment_id")
         .eq("status", "vencido")
-        .or("asaas_payment_id.not.is.null,asaas_subscription_id.not.is.null")
+        // D-177 B6: pedido parcelado cuja cobrança não chegou a ser registrada só tem o id do parcelamento.
+        .or("asaas_payment_id.not.is.null,asaas_subscription_id.not.is.null,asaas_installment_id.not.is.null")
         .limit(limite);
       if (error) return { data: null, error: { code: error.code, message: error.message } };
       const linhas = (data ?? []) as unknown as Array<{

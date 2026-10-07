@@ -65,7 +65,12 @@
  *                    (sem assinatura) de R$ 1.101,72, paga pela API (payWithCreditCard na primeira parcela), os
  *                    PAYMENT_CONFIRMED de TODAS as parcelas entregues ao handler; confere período concedido uma
  *                    vez, total, tokens e que nada renova (contrato sem assinatura do Asaas).
- *   parcelado-anual-f  D-177: Pro anual em 3x (sem juros) na organização F, mesma conferência (3 x R$ 633,00).
+ *   parcelado-semestral-3x-f  D-177: Pro semestral em 3x (sem juros) na organização F, mesma conferência. O total de
+ *                    R$ 1.049,00 NÃO divide por 3 (o anual, R$ 1.899,00, dividia: 3 x R$ 633,00, e não provava
+ *                    nada): a etapa confere e registra o `value` de GET /installments contra o totalValue enviado
+ *                    (tem de ser o TOTAL, não a soma das parcelas arredondadas) e registra o estado de TODAS as
+ *                    parcelas logo depois de pagar a primeira por API (prova se o cartão autoriza o total de uma vez:
+ *                    a concessão do período exige todas as parcelas CONFIRMED ou RECEIVED, D-177 M2).
  *                    Se a API do sandbox não pagar o parcelamento, a etapa imprime a fatura para pagar à mão
  *                    (como a `fatura-manual` do roteiro mensal) e para; rodar de novo a etapa depois de pagar.
  *   limpar           o mesmo do roteiro mensal, agora para A, B, C, D, E e F (e remove parcelamentos pendentes).
@@ -1022,7 +1027,7 @@ async function etapaPrepararCiclos(): Promise<void> {
 
   const data = hojeBR();
   const criadas: Dict = {};
-  for (const [l, nome] of [["C", `Homologação Asaas ${data} (semestral)`], ["D", `Homologação Asaas ${data} (anual)`], ["E", `Homologação Asaas ${data} (semestral parcelado)`], ["F", `Homologação Asaas ${data} (anual parcelado)`]] as Array<[Letra, string]>) {
+  for (const [l, nome] of [["C", `Homologação Asaas ${data} (semestral)`], ["D", `Homologação Asaas ${data} (anual)`], ["E", `Homologação Asaas ${data} (semestral parcelado)`], ["F", `Homologação Asaas ${data} (semestral parcelado 3x)`]] as Array<[Letra, string]>) {
     if (estado[`org${l}`]) {
       criadas[l] = { jaExistia: estado[`org${l}`] };
       continue;
@@ -1164,13 +1169,27 @@ async function parcelado(l: Letra, rotulo: string, oferta: OfertaDeTeste, parcel
     // A regra de arredondamento assumida (parcela ao centavo mais próximo, sobra na última) contra o que o Asaas fez.
     checar(`${rotulo}: arredondamento do Asaas = parcelas de ${reais(esperado.parcelaCents)} e última de ${reais(esperado.ultimaParcelaCents)}`, lista.every((p, i) => Math.round(Number(p.value) * 100) === (i === lista.length - 1 ? esperado.ultimaParcelaCents : esperado.parcelaCents)), lista.map((p) => p.value));
     checar(`${rotulo}: o total do parcelamento no Asaas (GET /installments) é ${reais(esperado.totalCents)}`, Math.round(Number(inst?.corpo.value) * 100) === esperado.totalCents && inst?.corpo.installmentCount === parcelas, inst?.corpo);
+    // D-177 B5: o `value` de GET /installments contra o totalValue que o CRM enviou (amount_cents / 100). Só prova
+    // alguma coisa quando o total NÃO divide exato pelas parcelas (senão a soma das parcelas e o total coincidem).
+    const totalValueEnviado = Number(pedido.amount_cents) / 100;
+    const divideExato = esperado.totalCents % parcelas === 0;
+    registrar(`${rotulo}_total_do_parcelamento`, {
+      totalValueEnviado,
+      valueDoGetInstallments: inst?.corpo.value,
+      paymentValueDoGetInstallments: inst?.corpo.paymentValue,
+      valoresDasParcelas: lista.map((p) => p.value),
+      somaDasParcelas: lista.reduce((t, p) => t + Number(p.value), 0),
+      totalDivideExatoPelasParcelas: divideExato,
+    });
+    checar(`${rotulo}: o value de GET /installments (${String(inst?.corpo.value)}) é o totalValue enviado (${totalValueEnviado}), não o valor de uma parcela`, Number(inst?.corpo.value) === totalValueEnviado && Number(inst?.corpo.value) !== Number(lista[0]?.value), { enviado: totalValueEnviado, value: inst?.corpo.value, paymentValue: inst?.corpo.paymentValue });
+    checar(`${rotulo}: o total ${reais(esperado.totalCents)} NÃO divide exato por ${parcelas} (só assim a conferência prova a regra de arredondamento)`, !divideExato, { totalCents: esperado.totalCents, parcelas });
     if (resultado.tipo === "redirecionar") estado[`faturaParcelado${l}`] = resultado.url;
     salvarEstado();
   }
 
   // Pagamento: pela API na primeira parcela. Se não pagar o parcelamento inteiro, imprime a fatura e para.
   const instId = estado[`parcelamento${l}`] as string;
-  let parcs = await direto("GET", `/installments/${instId}/payments`);
+  const parcs = await direto("GET", `/installments/${instId}/payments`);
   let lista = ((parcs.corpo.data as Dict[]) ?? []).slice().sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
   if (!lista.every((p) => p.status === "CONFIRMED" || p.status === "RECEIVED")) {
     const primeira = estado[`cobranca${l}`] as string;
@@ -1179,11 +1198,30 @@ async function parcelado(l: Letra, rotulo: string, oferta: OfertaDeTeste, parcel
       creditCardHolderInfo: { name: "Homologação HiperCRM", email: `homolog-e2e-${Date.now()}@example.com`, cpfCnpj: cpfGerado(), postalCode: "01001000", addressNumber: "1", phone: "1133334444", mobilePhone: "11988887777" },
       remoteIp: "203.0.113.10",
     });
+    // O estado de TODAS as parcelas logo depois de pagar a primeira: prova se o cartão autoriza o total de uma vez
+    // (todas CONFIRMED) ou só a primeira parcela (as outras ficam PENDING até o vencimento). A concessão do período
+    // (D-177 M2) depende disso. Lido sem espera e de novo depois de 2 s, para separar atraso de comportamento.
+    const lerParcelas = async (): Promise<Dict[]> => {
+      const resp = await direto("GET", `/installments/${instId}/payments`);
+      return ((resp.corpo.data as Dict[]) ?? []).slice().sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+    };
+    const resumoDasParcelas = (ps: Dict[]) => ps.map((p) => ({ n: p.installmentNumber, id: p.id, status: p.status, dueDate: p.dueDate, netValue: p.netValue, creditDate: p.creditDate }));
+    const logoDepois = await lerParcelas();
     await dormir(2000);
-    parcs = await direto("GET", `/installments/${instId}/payments`);
-    lista = ((parcs.corpo.data as Dict[]) ?? []).slice().sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
-    registrar(`${rotulo}_pagamento`, { payWithCreditCard: { status: r.status, erros: r.status === 200 ? undefined : r.corpo.errors }, parcelasDepois: lista.map((p) => ({ id: p.id, status: p.status, netValue: p.netValue, creditDate: p.creditDate })) });
+    lista = await lerParcelas();
+    const confirmadas = (ps: Dict[]) => ps.filter((p) => p.status === "CONFIRMED" || p.status === "RECEIVED" || p.status === "RECEIVED_IN_CASH").length;
+    registrar(`${rotulo}_pagamento`, {
+      payWithCreditCard: { status: r.status, erros: r.status === 200 ? undefined : r.corpo.errors },
+      parcelasLogoDepoisDePagarAPrimeira: resumoDasParcelas(logoDepois),
+      parcelasDepoisDe2s: resumoDasParcelas(lista),
+      confirmadasLogoDepois: confirmadas(logoDepois),
+      confirmadasDepoisDe2s: confirmadas(lista),
+      totalDeParcelas: lista.length,
+      cartaoAutorizouOTotalDeUmaVez: lista.length === parcelas && confirmadas(lista) === parcelas,
+    });
+    log(`[${rotulo}] payWithCreditCard ${r.status}: ${confirmadas(logoDepois)}/${logoDepois.length} parcelas confirmadas logo depois, ${confirmadas(lista)}/${lista.length} depois de 2 s`);
     if (!lista.every((p) => p.status === "CONFIRMED" || p.status === "RECEIVED")) {
+      if (r.status === 200) log(`[${rotulo}] ATENÇÃO: o pagamento da primeira parcela foi aceito, mas só ${confirmadas(lista)} de ${lista.length} parcelas ficaram confirmadas. O cartão NÃO autorizou o total de uma vez; a concessão do período (D-177 M2) espera todas as parcelas confirmadas.`);
       log(`\n[PAGAR A MÃO] A API do sandbox não pagou o parcelamento inteiro (payWithCreditCard respondeu ${r.status}).`);
       log(`Fatura (cartão de teste 4444 4444 4444 4444, qualquer validade futura, CCV 123): ${String(estado[`faturaParcelado${l}`])}`);
       log(`Depois de pagar, rode de novo a mesma etapa: ela continua daqui (não cria outra compra).`);
@@ -1232,8 +1270,8 @@ async function etapaParceladoSemestralE(): Promise<void> {
   await parcelado("E", "parcelado_semestral", OFERTAS.semiannual, 4);
 }
 
-async function etapaParceladoAnualF(): Promise<void> {
-  await parcelado("F", "parcelado_anual", OFERTAS.yearly, 3);
+async function etapaParceladoSemestral3xF(): Promise<void> {
+  await parcelado("F", "parcelado_semestral_3x", OFERTAS.semiannual, 3);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1293,10 +1331,10 @@ const etapas: Record<string, () => Promise<void>> = {
   "estornar-c": etapaEstornarC,
   "cancelar-d": etapaCancelarD,
   "parcelado-semestral-e": etapaParceladoSemestralE,
-  "parcelado-anual-f": etapaParceladoAnualF,
+  "parcelado-semestral-3x-f": etapaParceladoSemestral3xF,
 };
 const ORDEM = ["preparar", "compra-a", "pagar-a", "webhook-a", "dia31-b", "estornar-a", "recompra-a", "cancelar-b", "limpar"];
-const ORDEM_CICLOS = ["preparar-ciclos", "semestral-c", "anual-d", "troca-de-ciclo", "estornar-c", "cancelar-d", "parcelado-semestral-e", "parcelado-anual-f", "limpar"];
+const ORDEM_CICLOS = ["preparar-ciclos", "semestral-c", "anual-d", "troca-de-ciclo", "estornar-c", "cancelar-d", "parcelado-semestral-e", "parcelado-semestral-3x-f", "limpar"];
 
 const pedida = process.argv[2];
 if (!pedida || (pedida !== "tudo" && pedida !== "ciclos" && !etapas[pedida])) {

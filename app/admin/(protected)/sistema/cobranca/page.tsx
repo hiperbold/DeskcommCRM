@@ -212,6 +212,18 @@ export default async function CobrancaPage({ searchParams }: CobrancaPageProps) 
                 valor={alarmesResultado.contadores.estornoDePeriodoAntigoUltimas24h}
               />
               <ContadorDeAlarme
+                rotulo={t("Estorno de parcela sem corte nas últimas 24h")}
+                valor={alarmesResultado.contadores.estornoParcialDoParcelamentoUltimas24h}
+              />
+              <ContadorDeAlarme
+                rotulo={t("Chargeback confirmado nas últimas 24h")}
+                valor={alarmesResultado.contadores.chargebackConfirmadoUltimas24h}
+              />
+              <ContadorDeAlarme
+                rotulo={t("Parcelamento removido com pagamento nas últimas 24h")}
+                valor={alarmesResultado.contadores.parcelamentoRemovidoComPagamentoUltimas24h}
+              />
+              <ContadorDeAlarme
                 rotulo={t("Sem evento há 3 dias, assinatura ativa")}
                 valor={alarmesResultado.contadores.semEventoHa3DiasComAssinaturaAtiva}
               />

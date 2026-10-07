@@ -334,8 +334,51 @@ describe("contadoresDeAlarmeAsaas", () => {
       semVinculoUltimas24h: 3,
       estornoComCorteFalhouUltimas24h: 0,
       estornoDePeriodoAntigoUltimas24h: 0,
+      estornoParcialDoParcelamentoUltimas24h: 0,
+      chargebackConfirmadoUltimas24h: 0,
+      parcelamentoRemovidoComPagamentoUltimas24h: 0,
       semEventoHa3DiasComAssinaturaAtiva: 1,
     });
+  });
+
+  it("D-177: conta pelo alarme do evento o estorno parcial do parcelamento, o chargeback confirmado e o parcelamento removido com pagamento", async () => {
+    const { contadoresDeAlarmeAsaas } = await importarComEnv({});
+    const db = dbFalso({
+      // A ordem é a das consultas: pendente, erro, divergente, sem_vinculo, evento recente,
+      // estorno_corte_falhou, estorno_de_periodo_antigo, estorno_parcial_do_parcelamento,
+      // chargeback_confirmado, parcelamento_removido_com_pagamento.
+      asaas_webhook_events: [
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 9 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 0 },
+        { data: null, error: null, count: 3 }, // alarme estorno_parcial_do_parcelamento
+        { data: null, error: null, count: 5 }, // alarme chargeback_confirmado
+        { data: null, error: null, count: 1 }, // alarme parcelamento_removido_com_pagamento
+      ],
+      billing_contracts: { data: null, error: null, count: 1 },
+    });
+    const resultado = await contadoresDeAlarmeAsaas(db);
+    expect(resultado.leituraFalhou).toBe(false);
+    expect(resultado.contadores.estornoParcialDoParcelamentoUltimas24h).toBe(3);
+    expect(resultado.contadores.chargebackConfirmadoUltimas24h).toBe(5);
+    expect(resultado.contadores.parcelamentoRemovidoComPagamentoUltimas24h).toBe(1);
+
+    // Cada um filtra pelo código do alarme (ilike) e pela janela de 24h.
+    const consultas = (db.from as unknown as { mock: { results: Array<{ value: Record<string, { mock: { calls: unknown[][] } }> }> } }).mock.results
+      .map((r) => r.value)
+      .filter((q) => q.ilike?.mock.calls.length);
+    const padroes = consultas.flatMap((q) => q.ilike!.mock.calls.map((c) => c[1]));
+    expect(padroes).toEqual(
+      expect.arrayContaining([
+        "%estorno_parcial_do_parcelamento%",
+        "%chargeback_confirmado%",
+        "%parcelamento_removido_com_pagamento%",
+      ]),
+    );
   });
 
   it("D-086: conta os estornos que não cortaram e os de cobrança antiga pelo alarme do evento, nas últimas 24h", async () => {
@@ -401,6 +444,9 @@ describe("contadoresDeAlarmeAsaas", () => {
       semVinculoUltimas24h: 0,
       estornoComCorteFalhouUltimas24h: 0,
       estornoDePeriodoAntigoUltimas24h: 0,
+      estornoParcialDoParcelamentoUltimas24h: 0,
+      chargebackConfirmadoUltimas24h: 0,
+      parcelamentoRemovidoComPagamentoUltimas24h: 0,
       semEventoHa3DiasComAssinaturaAtiva: 0,
     });
   });

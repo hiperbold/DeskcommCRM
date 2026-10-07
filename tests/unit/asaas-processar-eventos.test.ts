@@ -904,6 +904,37 @@ describe("processarEventosAsaas", () => {
       expect(auditar).not.toHaveBeenCalled();
     });
 
+    it("D-177 M1: estorno parcial do parcelamento loga o alarme (o evento fecha aplicado, sem corte)", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_REFUNDED", "estorno_confirmado,estorno_parcial_do_parcelamento");
+      const logger = loggerFalso();
+
+      await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.warn).toHaveBeenCalledWith("alarme_asaas_estorno_parcial_do_parcelamento", expect.objectContaining({ eventoId: "evt-60" }));
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(auditar).not.toHaveBeenCalled();
+    });
+
+    it("D-177 M1: chargeback confirmado loga o alarme (o pedido segue pago, o admin decide)", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_CHARGEBACK_REQUESTED", "chargeback_confirmado");
+      const logger = loggerFalso();
+
+      await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.warn).toHaveBeenCalledWith("alarme_asaas_chargeback_confirmado", expect.objectContaining({ eventoId: "evt-60" }));
+      expect(asaas.removerAssinatura).not.toHaveBeenCalled();
+      expect(auditar).not.toHaveBeenCalled();
+    });
+
+    it("D-177 B4: parcelamento removido com pagamento loga o alarme", async () => {
+      const { db, asaas, auditar } = cenario("PAYMENT_CONFIRMED", "parcelamento_removido_com_pagamento", "divergente");
+      const logger = loggerFalso();
+
+      await processarEventosAsaas(deps({ db, asaas, auditar, logger }));
+
+      expect(logger.warn).toHaveBeenCalledWith("alarme_asaas_parcelamento_removido_com_pagamento", expect.objectContaining({ eventoId: "evt-60" }));
+    });
+
     it("sem o auditar injetado o corte segue igual", async () => {
       const { db, asaas } = cenario(
         "PAYMENT_REFUNDED",
@@ -961,6 +992,108 @@ describe("D-177: parcela de um parcelamento no cartão", () => {
     expect(db.aplicarEvento).not.toHaveBeenCalled();
     expect(db.registrarFalha).toHaveBeenCalled();
     expect(resumo.falhas).toBe(1);
+  });
+
+  describe("M2: o banco só concede o período com todas as parcelas confirmadas", () => {
+    const cobrancaDaParcela = () =>
+      cobrancaFake({ id: "pay_parcela2", status: "CONFIRMED", value: 100, installment: INSTALLMENT } as Partial<CobrancaAsaas>);
+    const parcelas = (statuses: string[]): CobrancaAsaas[] =>
+      statuses.map((status, i) => cobrancaFake({ id: `pay_p${i + 1}`, status, installment: INSTALLMENT } as Partial<CobrancaAsaas>));
+
+    async function rodar(lista: CobrancaAsaas[], total = 12) {
+      const db = dbDaParcela();
+      const asaas = asaasFalso({
+        buscarCobranca: vi.fn(async () => cobrancaDaParcela()),
+        buscarParcelamento: vi.fn(async () => ({ id: INSTALLMENT, value: 1200, installmentCount: total })),
+        listarCobrancasDoParcelamento: vi.fn(async () => lista),
+      });
+      await processarEventosAsaas(deps({ db, asaas }));
+      return { db, asaas };
+    }
+
+    it("1 de 12 confirmada: lista as parcelas e declara 1 de 12 ao banco (o banco não concede, ver parcelamento-banco.test.ts)", async () => {
+      const { db, asaas } = await rodar(parcelas(["CONFIRMED", ...Array(11).fill("PENDING")]));
+
+      expect(asaas.listarCobrancasDoParcelamento).toHaveBeenCalledWith(INSTALLMENT);
+      expect(db.aplicarEvento).toHaveBeenCalledWith(
+        "evt-1",
+        "lease-1",
+        expect.objectContaining({ parcelamento_parcelas: 12, parcelamento_confirmadas: 1 }),
+      );
+    });
+
+    it("12 de 12 confirmadas: declara 12 de 12, contando CONFIRMED, RECEIVED e RECEIVED_IN_CASH", async () => {
+      const { db } = await rodar(parcelas([...Array(10).fill("CONFIRMED"), "RECEIVED", "RECEIVED_IN_CASH"]));
+
+      expect(db.aplicarEvento).toHaveBeenCalledTimes(1);
+      expect(db.aplicarEvento).toHaveBeenCalledWith(
+        "evt-1",
+        "lease-1",
+        expect.objectContaining({ parcelamento_parcelas: 12, parcelamento_confirmadas: 12 }),
+      );
+    });
+
+    it("estorno, vencida, pendente e chargeback não contam como confirmadas", async () => {
+      const { db } = await rodar(parcelas(["CONFIRMED", "REFUNDED", "OVERDUE", "PENDING", "CHARGEBACK_REQUESTED", "RECEIVED"]), 6);
+
+      expect(db.aplicarEvento).toHaveBeenCalledWith(
+        "evt-1",
+        "lease-1",
+        expect.objectContaining({ parcelamento_confirmadas: 2 }),
+      );
+    });
+
+    it("cobrança repetida na lista conta uma vez, e cobrança de outro parcelamento não conta", async () => {
+      const lista = [
+        ...parcelas(["CONFIRMED", "CONFIRMED"]),
+        cobrancaFake({ id: "pay_p1", status: "CONFIRMED", installment: INSTALLMENT } as Partial<CobrancaAsaas>),
+        cobrancaFake({ id: "pay_outra", status: "CONFIRMED", installment: "outro-parcelamento-0000" } as Partial<CobrancaAsaas>),
+      ];
+      const { db } = await rodar(lista, 4);
+
+      expect(db.aplicarEvento).toHaveBeenCalledWith(
+        "evt-1",
+        "lease-1",
+        expect.objectContaining({ parcelamento_confirmadas: 2 }),
+      );
+    });
+
+    it("a listagem das parcelas falhou: não aplica nada e registra a falha para tentar de novo", async () => {
+      const db = dbDaParcela();
+      const asaas = asaasFalso({
+        buscarCobranca: vi.fn(async () => cobrancaDaParcela()),
+        buscarParcelamento: vi.fn(async () => ({ id: INSTALLMENT, value: 1200, installmentCount: 12 })),
+        listarCobrancasDoParcelamento: vi.fn(async () => {
+          throw erroIndisponivel(503);
+        }),
+      });
+
+      const resumo = await processarEventosAsaas(deps({ db, asaas }));
+
+      expect(db.aplicarEvento).not.toHaveBeenCalled();
+      expect(db.registrarFalha).toHaveBeenCalled();
+      expect(resumo.falhas).toBe(1);
+    });
+  });
+
+  it("B4: parcelamento removido no Asaas com parcela CONFIRMED não é ignorado em silêncio: o banco recebe a confirmação com o aviso", async () => {
+    const db = dbDaParcela();
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async () => cobrancaFake({ id: "pay_parcela2", status: "CONFIRMED", value: 100, installment: INSTALLMENT } as Partial<CobrancaAsaas>)),
+      buscarParcelamento: vi.fn(async () => ({ removido: true as const })),
+    });
+
+    await processarEventosAsaas(deps({ db, asaas }));
+
+    expect(asaas.listarCobrancasDoParcelamento).not.toHaveBeenCalled();
+    expect(db.aplicarEvento).toHaveBeenCalledTimes(1);
+    expect(db.aplicarEvento).toHaveBeenCalledWith(
+      "evt-1",
+      "lease-1",
+      expect.objectContaining({ id: "pay_parcela2", status: "CONFIRMED", installment: INSTALLMENT, parcelamento_removido: true }),
+    );
+    const confirmacao = (db.aplicarEvento as ReturnType<typeof vi.fn>).mock.calls[0]![2] as Record<string, unknown>;
+    expect(confirmacao).not.toHaveProperty("parcelamento_total");
   });
 
   it("pagamento sem parcelamento não consulta /installments", async () => {

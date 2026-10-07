@@ -406,6 +406,23 @@ export interface ContadoresDeAlarmeAsaas {
    */
   estornoDePeriodoAntigoUltimas24h: number;
   /**
+   * Estorno de UMA parcela de um parcelamento que não cobre todas (alarme
+   * `estorno_parcial_do_parcelamento`, D-177) nas últimas 24 horas: o evento fecha
+   * `aplicado` sem cortar o acesso, o admin decide.
+   */
+  estornoParcialDoParcelamentoUltimas24h: number;
+  /**
+   * Chargeback confirmado (alarme `chargeback_confirmado`, D-177) nas últimas 24 horas: o
+   * pedido segue `pago` e o acesso não é cortado, o admin decide.
+   */
+  chargebackConfirmadoUltimas24h: number;
+  /**
+   * Parcela confirmada de um parcelamento que sumiu do Asaas (alarme
+   * `parcelamento_removido_com_pagamento`, D-177) nas últimas 24 horas: o dinheiro pode ter
+   * entrado e o período não foi concedido por esse caminho, o admin decide.
+   */
+  parcelamentoRemovidoComPagamentoUltimas24h: number;
+  /**
    * Alarme da INSTALAÇÃO (não por organização, correção da decisão 21): `1`
    * quando existe PELO MENOS UMA assinatura Asaas ativa (`asaas_
    * subscription_id` preenchido e `asaas_assinatura_encerrada_em` nulo, em
@@ -432,6 +449,9 @@ const CONTADORES_EM_FALHA: ContadoresDeAlarmeAsaas = {
   semVinculoUltimas24h: 0,
   estornoComCorteFalhouUltimas24h: 0,
   estornoDePeriodoAntigoUltimas24h: 0,
+  estornoParcialDoParcelamentoUltimas24h: 0,
+  chargebackConfirmadoUltimas24h: 0,
+  parcelamentoRemovidoComPagamentoUltimas24h: 0,
   semEventoHa3DiasComAssinaturaAtiva: 0,
 };
 
@@ -466,6 +486,9 @@ export async function contadoresDeAlarmeAsaas(
       eventoRecenteRes,
       corteFalhouRes,
       periodoAntigoRes,
+      estornoParcialRes,
+      chargebackRes,
+      parcelamentoRemovidoRes,
     ] = await Promise.all([
       admin
         .from("asaas_webhook_events")
@@ -503,6 +526,21 @@ export async function contadoresDeAlarmeAsaas(
         .select("id", { count: "exact", head: true })
         .ilike("alarme", "%estorno_de_periodo_antigo%")
         .gte("recebido_em", ha24Horas),
+      admin
+        .from("asaas_webhook_events")
+        .select("id", { count: "exact", head: true })
+        .ilike("alarme", "%estorno_parcial_do_parcelamento%")
+        .gte("recebido_em", ha24Horas),
+      admin
+        .from("asaas_webhook_events")
+        .select("id", { count: "exact", head: true })
+        .ilike("alarme", "%chargeback_confirmado%")
+        .gte("recebido_em", ha24Horas),
+      admin
+        .from("asaas_webhook_events")
+        .select("id", { count: "exact", head: true })
+        .ilike("alarme", "%parcelamento_removido_com_pagamento%")
+        .gte("recebido_em", ha24Horas),
     ]);
 
     for (const [etapa, r] of [
@@ -514,6 +552,9 @@ export async function contadoresDeAlarmeAsaas(
       ["evento_recente_instalacao", eventoRecenteRes],
       ["estorno_corte_falhou", corteFalhouRes],
       ["estorno_de_periodo_antigo", periodoAntigoRes],
+      ["estorno_parcial_do_parcelamento", estornoParcialRes],
+      ["chargeback_confirmado", chargebackRes],
+      ["parcelamento_removido_com_pagamento", parcelamentoRemovidoRes],
     ] as const) {
       if (r.error) throw new Error(`ler alarmes (${etapa}): ${r.error.message}`);
     }
@@ -530,6 +571,9 @@ export async function contadoresDeAlarmeAsaas(
         semVinculoUltimas24h: semVinculoRes.count ?? 0,
         estornoComCorteFalhouUltimas24h: corteFalhouRes.count ?? 0,
         estornoDePeriodoAntigoUltimas24h: periodoAntigoRes.count ?? 0,
+        estornoParcialDoParcelamentoUltimas24h: estornoParcialRes.count ?? 0,
+        chargebackConfirmadoUltimas24h: chargebackRes.count ?? 0,
+        parcelamentoRemovidoComPagamentoUltimas24h: parcelamentoRemovidoRes.count ?? 0,
         semEventoHa3DiasComAssinaturaAtiva: semEventoHa3Dias,
       },
       leituraFalhou: false,
