@@ -176,6 +176,41 @@ describe("deriveMessageMedia", () => {
     );
   });
 
+  it("⭐ organização suspensa não gasta IA na derivação (D-091): grava skipped e não chama o provedor", async () => {
+    vi.mocked(resolveOrgLlmConfig).mockResolvedValue(configResolvida({ statusDaOrg: "suspended" }));
+    const r = await deriveMessageMedia(eventRow());
+    expect(r.status).toBe("skipped");
+    expect(r.detail).toBe("organizacao_inativa");
+    expect(deriveMediaText).not.toHaveBeenCalled();
+    expect(updateEqMock).toHaveBeenCalledWith({ media_derived_status: "skipped" });
+  });
+
+  it("⭐ organização arquivada com binding de visão também é barrada (D-091)", async () => {
+    messageRow.type = "image";
+    messageRow.media_mime = "image/jpeg";
+    bindingDeVisao = { provider: "openai", model_id: "gpt-4o", credential_id: "cred-vision" };
+    vi.mocked(resolveOrgLlmConfig).mockResolvedValue(
+      configResolvida({ apiKey: "sk-vision", defaultModel: "gpt-4o", statusDaOrg: "archived" }),
+    );
+    const r = await deriveMessageMedia(eventRow());
+    expect(r.status).toBe("skipped");
+    expect(deriveMediaText).not.toHaveBeenCalled();
+  });
+
+  it("organização ativa segue derivando (D-091)", async () => {
+    vi.mocked(resolveOrgLlmConfig).mockResolvedValue(configResolvida({ statusDaOrg: "active" }));
+    const r = await deriveMessageMedia(eventRow());
+    expect(r.status).toBe("ok");
+    expect(deriveMediaText).toHaveBeenCalled();
+  });
+
+  it("leitura da config que falha segue fechando: erro, sem derivar (D-091)", async () => {
+    vi.mocked(resolveOrgLlmConfig).mockRejectedValue(new Error("db fora"));
+    const r = await deriveMessageMedia(eventRow());
+    expect(r.status).toBe("error");
+    expect(deriveMediaText).not.toHaveBeenCalled();
+  });
+
   it("baixa a mídia, deriva e grava ready", async () => {
     const r = await deriveMessageMedia(eventRow());
     expect(r.status).toBe("ok");

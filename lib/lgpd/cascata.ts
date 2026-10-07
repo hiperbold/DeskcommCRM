@@ -91,6 +91,9 @@ export function tituloRedigido(titulo: string | null): string {
 export interface Filtravel<T> extends PromiseLike<T> {
   eq(coluna: string, valor: string | boolean): Filtravel<T>;
   in(coluna: string, valores: string[]): Filtravel<T>;
+  /** Cursor da varredura: chave estritamente maior que a última vista. */
+  gt(coluna: string, valor: string): Filtravel<T>;
+  order(coluna: string): Filtravel<T>;
   limit(n: number): Filtravel<T>;
 }
 
@@ -254,7 +257,7 @@ export async function completarRedacaoDoContato(
 }
 
 /**
- * Quantos contatos anonimizados a rodada CHEGA A OLHAR. Alto de propósito: ele
+ * Quantos contatos anonimizados a rodada CHEGA A OLHAR, somando todas as páginas. Alto de propósito: ele
  * limita a leitura, não o trabalho.
  *
  * ⚠ O teto do trabalho e o teto da leitura precisam ser NÚMEROS DIFERENTES, e a
@@ -266,7 +269,23 @@ export async function completarRedacaoDoContato(
  * É a mesma classe que este PR inteiro combate: sucesso declarado sobre
  * trabalho não feito.
  */
-export const MAX_CONTATOS_EXAMINADOS = 5000;
+export const MAX_CONTATOS_EXAMINADOS = 20_000;
+
+/**
+ * Contatos por página da leitura. Não pode passar do `max_rows` do PostgREST (1000 em
+ * `supabase/config.toml`): ele corta a resposta em silêncio mesmo quando o `.limit()` pede mais, e a
+ * versão anterior (`.limit(5000)` sem ordem nem cursor) examinava sempre o mesmo recorte de 1000
+ * (D-161). A leitura agora anda por cursor de `id` (`order` + `gt`), página a página, até o fim.
+ */
+export const CONTATOS_POR_PAGINA = 1000;
+
+/**
+ * Quanto tempo a LEITURA pode gastar numa rodada. O cron roda com timeout de 120 s no crontab e
+ * divide o relógio com a poda; passado o orçamento a varredura para de ler, conserta o que já achou
+ * e devolve `temResto`. O cursor recomeça do início na rodada seguinte, e o que foi consertado deixa
+ * de aparecer como resíduo, então a leitura avança sem estado guardado.
+ */
+export const ORCAMENTO_DA_LEITURA_MS = 20_000;
 
 /**
  * Quantos contatos a rodada CONSERTA. Este é o teto que protege o relógio do
@@ -316,6 +335,15 @@ function idsComResiduo(
   return comResiduo;
 }
 
+export interface OpcoesDaVarredura {
+  /** Contatos por página (padrão `CONTATOS_POR_PAGINA`). */
+  tamanhoDaPagina?: number;
+  /** Orçamento de tempo da leitura (padrão `ORCAMENTO_DA_LEITURA_MS`). */
+  orcamentoMs?: number;
+  /** Relógio em ms, injetável para teste (padrão `Date.now`). */
+  agora?: () => number;
+}
+
 /**
  * Varre contatos já anonimizados e completa a cascata de quem ficou pela
  * metade. É este o laço que torna a correção alcançável sem clique.
@@ -338,7 +366,13 @@ function idsComResiduo(
 export async function varrerRedacoesIncompletas(
   db: ClienteDaCascata,
   teto: number = MAX_CONTATOS_POR_VARREDURA,
+  opcoes: OpcoesDaVarredura = {},
 ): Promise<ResultadoDaVarredura> {
+  const tamanhoDaPagina = Math.min(opcoes.tamanhoDaPagina ?? CONTATOS_POR_PAGINA, CONTATOS_POR_PAGINA);
+  const orcamentoMs = opcoes.orcamentoMs ?? ORCAMENTO_DA_LEITURA_MS;
+  const agora = opcoes.agora ?? Date.now;
+  const inicio = agora();
+
   const vazio = (falhas: string[]): ResultadoDaVarredura => ({
     examinados: 0,
     comResiduo: 0,
@@ -347,40 +381,64 @@ export async function varrerRedacoesIncompletas(
     falhas,
   });
 
-  const { data, error } = await db
-    .from("contacts")
-    .select("id, organization_id")
-    .eq("is_anonymized", true)
-    .limit(MAX_CONTATOS_EXAMINADOS);
-  if (error) return vazio([`contacts: ${error.message}`]);
-
-  const contatos = (data ?? []) as { id: string; organization_id: string }[];
-  const orgDe = new Map(contatos.map((c) => [c.id, c.organization_id]));
+  const orgDe = new Map<string, string>();
   const falhas: string[] = [];
   const pendentes: string[] = [];
+  let examinados = 0;
+  let leituraIncompleta = false;
+  let cursor: string | null = null;
 
-  for (let i = 0; i < contatos.length; i += CONTATOS_POR_BLOCO) {
-    const bloco = contatos.slice(i, i + CONTATOS_POR_BLOCO).map((c) => c.id);
+  // Leitura por cursor estável: `id` ordenado, sempre estritamente maior que o último visto. Sem
+  // `offset`, então nem contato novo nem contato consertado desloca a página e ninguém é pulado
+  // ou repetido dentro da rodada.
+  for (;;) {
+    let consulta = db.from("contacts").select("id, organization_id").eq("is_anonymized", true);
+    if (cursor !== null) consulta = consulta.gt("id", cursor);
+    const { data, error } = await consulta.order("id").limit(tamanhoDaPagina);
+    if (error) {
+      // Falha na primeira página: nada foi lido, é o "não consegui olhar". Numa página seguinte
+      // o que já foi achado ainda é consertado, e a falha vai dita e marca que sobrou leitura.
+      if (examinados === 0) return vazio([`contacts: ${error.message}`]);
+      falhas.push(`contacts: ${error.message}`);
+      leituraIncompleta = true;
+      break;
+    }
 
-    const { data: leads, error: leadErr } = await db
-      .from("crm_leads")
-      .select("contact_id, title")
-      .in("contact_id", bloco);
-    if (leadErr) falhas.push(`crm_leads varredura: ${leadErr.message}`);
+    const pagina = (data ?? []) as { id: string; organization_id: string }[];
+    for (const c of pagina) orgDe.set(c.id, c.organization_id);
+    examinados += pagina.length;
 
-    const { data: atvs, error: atvErr } = await db
-      .from("crm_lead_activities")
-      .select("contact_id, payload")
-      .in("contact_id", bloco);
-    if (atvErr) falhas.push(`crm_lead_activities varredura: ${atvErr.message}`);
+    for (let i = 0; i < pagina.length; i += CONTATOS_POR_BLOCO) {
+      const bloco = pagina.slice(i, i + CONTATOS_POR_BLOCO).map((c) => c.id);
 
-    const achados = idsComResiduo(
-      (leads ?? []) as { contact_id: string | null; title: string | null }[],
-      (atvs ?? []) as { contact_id: string | null; payload: unknown }[],
-    );
-    // A detecção não filtra org (ver o cabeçalho): um `contact_id` que não
-    // saiu da lista de contatos anonimizados não vira visita.
-    for (const id of achados) if (orgDe.has(id)) pendentes.push(id);
+      const { data: leads, error: leadErr } = await db
+        .from("crm_leads")
+        .select("contact_id, title")
+        .in("contact_id", bloco);
+      if (leadErr) falhas.push(`crm_leads varredura: ${leadErr.message}`);
+
+      const { data: atvs, error: atvErr } = await db
+        .from("crm_lead_activities")
+        .select("contact_id, payload")
+        .in("contact_id", bloco);
+      if (atvErr) falhas.push(`crm_lead_activities varredura: ${atvErr.message}`);
+
+      const achados = idsComResiduo(
+        (leads ?? []) as { contact_id: string | null; title: string | null }[],
+        (atvs ?? []) as { contact_id: string | null; payload: unknown }[],
+      );
+      // A detecção não filtra org (ver o cabeçalho): um `contact_id` que não
+      // saiu da lista de contatos anonimizados não vira visita.
+      for (const id of achados) if (orgDe.has(id)) pendentes.push(id);
+    }
+
+    // Página curta = acabou a tabela. Cheia = pode ter mais, e aí valem os dois freios.
+    if (pagina.length < tamanhoDaPagina) break;
+    cursor = pagina[pagina.length - 1]!.id;
+    if (examinados >= MAX_CONTATOS_EXAMINADOS || agora() - inicio >= orcamentoMs) {
+      leituraIncompleta = true;
+      break;
+    }
   }
 
   const completados: ContatoCompletado[] = [];
@@ -396,10 +454,10 @@ export async function varrerRedacoesIncompletas(
   }
 
   return {
-    examinados: contatos.length,
+    examinados,
     comResiduo: pendentes.length,
     completados,
-    temResto: pendentes.length > teto || contatos.length >= MAX_CONTATOS_EXAMINADOS,
+    temResto: pendentes.length > teto || leituraIncompleta,
     falhas,
   };
 }

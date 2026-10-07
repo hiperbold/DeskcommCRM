@@ -67,6 +67,9 @@ vi.mock("@/lib/supabase/admin", () => ({
       const q: Record<string, unknown> = {
         eq: () => q,
         in: () => q,
+        // A varredura de anonimização lê `contacts` por cursor: `.gt("id", ...).order("id").limit(n)`.
+        gt: () => q,
+        order: () => q,
         limit: () => q,
         then: (r: (v: unknown) => unknown) =>
           Promise.resolve({ data: contatosAnonimizados, error: null }).then(r),

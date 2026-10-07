@@ -98,6 +98,9 @@ interface Escrita {
   alvos: string[];
 }
 
+/** `max_rows` do PostgREST (`supabase/config.toml`): `.limit(5000)` devolve no máximo isto. */
+const MAX_ROWS_DO_POSTGREST = 1000;
+
 /**
  * Um PostgREST de mentira com linhas de VERDADE, e que APLICA o UPDATE.
  *
@@ -108,6 +111,8 @@ interface Escrita {
  */
 function banco(linhas: Linha[]) {
   const escritas: Escrita[] = [];
+  /** Cada leitura de `contacts` (uma por página), com os ids devolvidos, na ordem em que vieram. */
+  const leiturasDeContatos: string[][] = [];
 
   const aplicar = (tabela: string, patch: Record<string, unknown>, alvos: Linha[]) => {
     escritas.push({ tabela, patch, alvos: alvos.map((l) => l.id) });
@@ -120,6 +125,7 @@ function banco(linhas: Linha[]) {
         filtros: Array<[string, unknown]>,
         dentro: [string, string[]] | null,
         faixas: Array<[string, string]> = [],
+        acima: Array<[string, string]> = [],
       ): Linha[] =>
         linhas.filter((l) => {
           if ((l.id.split(":")[0] ?? "") !== tabela) return false;
@@ -131,6 +137,11 @@ function banco(linhas: Linha[]) {
           for (const [col, val] of faixas) {
             const atual = (l as unknown as Record<string, string | undefined>)[col];
             if (atual === undefined || !(atual < val)) return false;
+          }
+          // `.gt()` do cursor da varredura: chave estritamente maior que a última vista.
+          for (const [col, val] of acima) {
+            const atual = (l as unknown as Record<string, string | undefined>)[col];
+            if (atual === undefined || !(atual > val)) return false;
           }
           // O `.in()` da cascata vem em DUAS colunas — `id` no UPDATE das
           // atividades, `contact_id` na detecção em bloco. Um dublê que
@@ -149,8 +160,10 @@ function banco(linhas: Linha[]) {
       ) => {
         const filtros: Array<[string, unknown]> = [];
         const faixas: Array<[string, string]> = [];
+        const acima: Array<[string, string]> = [];
         let dentro: [string, string[]] | null = null;
         let teto: number | null = null;
+        let ordem: string | null = null;
         const q: Record<string, unknown> = {
           eq: (col: string, val: unknown) => {
             filtros.push([col, val]);
@@ -160,19 +173,36 @@ function banco(linhas: Linha[]) {
             faixas.push([col, val]);
             return q;
           },
+          gt: (col: string, val: string) => {
+            acima.push([col, val]);
+            return q;
+          },
           in: (col: string, vals: string[]) => {
             dentro = [col, vals];
             return q;
           },
           select: () => q,
-          order: () => q,
+          order: (col: string) => {
+            ordem = col;
+            return q;
+          },
           limit: (n: number) => {
             teto = n;
             return q;
           },
           then: (r: (v: unknown) => unknown) => {
-            let achadas = casar(filtros, dentro, faixas);
-            if (teto !== null) achadas = achadas.slice(0, teto);
+            let achadas = casar(filtros, dentro, faixas, acima);
+            if (ordem !== null) {
+              const col = ordem;
+              achadas = [...achadas].sort((a, b) => {
+                const x = (a as unknown as Record<string, string | undefined>)[col] ?? "";
+                const y = (b as unknown as Record<string, string | undefined>)[col] ?? "";
+                return x < y ? -1 : x > y ? 1 : 0;
+              });
+            }
+            // O PostgREST corta em `max_rows` mesmo quando o `.limit()` pede mais.
+            achadas = achadas.slice(0, Math.min(teto ?? MAX_ROWS_DO_POSTGREST, MAX_ROWS_DO_POSTGREST));
+            if (modo === "select" && tabela === "contacts") leiturasDeContatos.push(achadas.map((l) => l.id));
             if (modo === "update") {
               aplicar(tabela, patch, achadas);
               return Promise.resolve({ error: null }).then(r);
@@ -201,7 +231,7 @@ function banco(linhas: Linha[]) {
     },
   } as unknown as ClienteDaCascata;
 
-  return { cliente, escritas, linhas };
+  return { cliente, escritas, linhas, leiturasDeContatos };
 }
 
 /** `id` carrega a tabela porque o dublê guarda tudo numa lista só. */
@@ -345,11 +375,72 @@ describe("varredura: a retomada acontece sem ninguém clicar", () => {
     expect(MAX_CONTATOS_POR_VARREDURA).toBeGreaterThan(0);
   });
 
+  it("⭐ mais contatos anonimizados que o max_rows do PostgREST: o resíduo da última página é alcançado (D-161)", async () => {
+    // Antes: `.limit(5000)` sem ordem nem cursor. O PostgREST corta em 1000, então a rodada examinava
+    // sempre o MESMO recorte e quem estava além dele nunca era visitado.
+    const linhas: Linha[] = [];
+    const total = MAX_ROWS_DO_POSTGREST * 2 + 300;
+    for (let i = 0; i < total; i += 1) linhas.push(contatoAnonimizado(String(i).padStart(5, "0")));
+    // O único resíduo mora no ÚLTIMO contato, fora da primeira janela de 1000.
+    const ultimo = String(total - 1).padStart(5, "0");
+    linhas.push({
+      id: "crm_leads:ultimo",
+      organization_id: ORG,
+      contact_id: `contacts:${ultimo}`,
+      title: "Negócio do último contato",
+    });
+    alvo = banco(linhas);
+
+    const r = await varrerRedacoesIncompletas(alvo.cliente);
+
+    expect(r.examinados).toBe(total);
+    expect(r.comResiduo).toBe(1);
+    expect(r.completados.map((c) => c.contactId)).toEqual([`contacts:${ultimo}`]);
+    expect(alvo.linhas.find((l) => l.id === "crm_leads:ultimo")!.title).toBe(
+      `Negócio do último co${SUFIXO_ANONIMIZADO}`,
+    );
+    expect(r.temResto).toBe(false);
+  });
+
+  it("⭐ a paginação por cursor não perde nem repete contato, mesmo com ids fora de ordem na tabela", async () => {
+    const ids = ["m", "c", "x", "a", "q", "f", "z", "b"];
+    alvo = banco(ids.map((s) => contatoAnonimizado(s)));
+
+    const r = await varrerRedacoesIncompletas(alvo.cliente, MAX_CONTATOS_POR_VARREDURA, { tamanhoDaPagina: 3 });
+
+    const vistos = alvo.leiturasDeContatos.flat();
+    expect(vistos, "contato repetido ou perdido entre páginas").toEqual([...ids].sort().map((s) => `contacts:${s}`));
+    expect(alvo.leiturasDeContatos.map((p) => p.length)).toEqual([3, 3, 2]);
+    expect(r.examinados).toBe(ids.length);
+    expect(r.temResto).toBe(false);
+  });
+
+  it("⭐ o orçamento de tempo corta a leitura e diz que sobrou trabalho", async () => {
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    alvo = banco(ids.map((s) => contatoAnonimizado(s)));
+    let agora = 0;
+
+    const r = await varrerRedacoesIncompletas(alvo.cliente, MAX_CONTATOS_POR_VARREDURA, {
+      tamanhoDaPagina: 2,
+      orcamentoMs: 1000,
+      // Cada leitura do relógio gasta 600ms: a segunda página já estoura o orçamento.
+      agora: () => (agora += 600),
+    });
+
+    expect(r.examinados).toBeLessThan(ids.length);
+    expect(r.examinados).toBeGreaterThan(0);
+    expect(r.temResto, "cortou por tempo e não disse que sobrou trabalho").toBe(true);
+  });
+
   it("erro no SELECT não vira varredura vazia silenciosa", async () => {
     const cliente = {
       from: () => ({
         select: () => ({
-          eq: () => ({ limit: () => Promise.resolve({ data: null, error: { message: "sem permissão" } }) }),
+          eq: () => ({
+            order: () => ({
+              limit: () => Promise.resolve({ data: null, error: { message: "sem permissão" } }),
+            }),
+          }),
         }),
       }),
     } as unknown as ClienteDaCascata;

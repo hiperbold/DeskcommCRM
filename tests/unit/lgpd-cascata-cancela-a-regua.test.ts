@@ -115,6 +115,8 @@ function banco(linhas: Linha[]) {
         const filtros: Array<[string, unknown]> = [];
         let dentro: [string, string[]] | null = null;
         let teto: number | null = null;
+        let ordem: string | null = null;
+        const acima: Array<[string, string]> = [];
         const q: Record<string, unknown> = {
           eq: (col: string, val: unknown) => {
             filtros.push([col, val]);
@@ -124,12 +126,32 @@ function banco(linhas: Linha[]) {
             dentro = [col, vals];
             return q;
           },
+          // A varredura pagina `contacts` por cursor (`order("id")` + `gt("id", ultimo)`).
+          gt: (col: string, val: string) => {
+            acima.push([col, val]);
+            return q;
+          },
+          order: (col: string) => {
+            ordem = col;
+            return q;
+          },
           limit: (n: number) => {
             teto = n;
             return q;
           },
           then: (r: (v: unknown) => unknown) => {
             let achadas = casar(filtros, dentro);
+            for (const [col, val] of acima) {
+              achadas = achadas.filter((l) => ((l as unknown as Record<string, string | undefined>)[col] ?? "") > val);
+            }
+            if (ordem !== null) {
+              const col = ordem;
+              achadas = [...achadas].sort((a, b) => {
+                const x = (a as unknown as Record<string, string | undefined>)[col] ?? "";
+                const y = (b as unknown as Record<string, string | undefined>)[col] ?? "";
+                return x < y ? -1 : x > y ? 1 : 0;
+              });
+            }
             if (teto !== null) achadas = achadas.slice(0, teto);
             if (modo === "update") {
               aplicar(tabela, patch, achadas);

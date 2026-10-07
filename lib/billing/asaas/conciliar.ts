@@ -35,6 +35,15 @@ import "server-only";
  *      preenchido, `asaas_assinatura_encerrada_em` nulo): confere se a
  *      assinatura ainda existe no Asaas; se sumiu (404/`deleted:true`),
  *      injeta o evento sintético `SUBSCRIPTION_DELETED`.
+ *   2b. Parcela 2..N de pedido parcelado já pago (D-177): o webhook de uma parcela que se perdeu
+ *      deixaria o livro-caixa (`billing_payments`) incompleto sem afetar o acesso, e o passo 1 só
+ *      olha pedido aberto. Para pedido `pago` com `parcelas > 1` e pagamento nos últimos 400 dias
+ *      (cobre todo período vigente: a última parcela vence em até 12 meses), lista as parcelas do
+ *      parcelamento e injeta o MESMO evento sintético do passo 1 para cada parcela
+ *      CONFIRMED/RECEIVED/RECEIVED_IN_CASH sem linha em `billing_payments`. Idempotente pelo
+ *      `event_id` e pelo `asaas_payment_id` único. Orçamento: 1 GET por pedido, dentro do teto de
+ *      GET da rodada, e no máximo `limitePedidosParcelados` pedidos por rodada, em janela que gira
+ *      por dia sobre a lista ordenada por id (todo pedido é visitado em poucos dias, sem estado).
  *   3. Pedido `vencido` com `asaas_payment_id` ou `asaas_subscription_id`
  *      ainda gravado: refaz `removerCobranca` (pedido avulso) ou
  *      `removerAssinatura` (pedido de tipo `assinatura` com
@@ -113,6 +122,20 @@ export interface PedidoVencidoParaRemocao {
   asaasInstallmentId?: string | null;
 }
 
+/**
+ * D-177: pedido parcelado já `pago` com menos linhas em `billing_payments` do que parcelas.
+ * `parcelasRegistradas` são os `asaas_payment_id` que já têm linha (pagamento manual, sem id do
+ * Asaas, não conta).
+ */
+export interface PedidoParceladoComParcelaFaltando {
+  id: string;
+  organizationId: string;
+  ambiente: "sandbox" | "producao";
+  asaasInstallmentId: string;
+  parcelas: number;
+  parcelasRegistradas: string[];
+}
+
 /** Uma assinatura Asaas ainda ativa localmente (decisão 21). */
 export interface AssinaturaAtivaParaConciliar {
   organizationId: string;
@@ -152,6 +175,14 @@ export interface DbConciliarAsaas {
   ): Promise<RpcResultado<ContratoCanceladoComAssinaturaViva[]>>;
   /** `fn_billing_asaas_marcar_assinatura_encerrada`: grava o marcador depois do DELETE confirmado (D-086). */
   marcarAssinaturaEncerrada(organizationId: string, asaasSubscriptionId: string): Promise<RpcResultado<unknown>>;
+  /**
+   * D-177: pedidos parcelados `pago` do ambiente, pagos desde `desde` (ISO), com menos parcelas
+   * registradas em `billing_payments` do que `parcelas`. Ordem estável por id.
+   */
+  listarPedidosParceladosComParcelaFaltando(
+    ambiente: AmbienteAsaas,
+    desde: string,
+  ): Promise<RpcResultado<PedidoParceladoComParcelaFaltando[]>>;
   /** `billing_contracts` com assinatura Asaas ativa (decisão 21). */
   listarAssinaturasAtivas(limite: number): Promise<RpcResultado<AssinaturaAtivaParaConciliar[]>>;
   /**
@@ -190,12 +221,20 @@ export interface DepsConciliarAsaas {
   limiteVencidos?: number;
   /** Dias de retenção do payload antes da poda (N38). Padrão: `DIAS_DE_PODA_PADRAO` (180). */
   diasDePoda?: number;
+  /** D-177: máximo de pedidos parcelados cujas parcelas são listadas por rodada. Padrão: `LIMITE_PARCELADOS_PADRAO`. */
+  limitePedidosParcelados?: number;
+  /** Relógio injetável (janela diária dos parcelados e corte dos 400 dias). Padrão: `new Date()`. */
+  agora?: () => Date;
 }
 
 export interface ResumoConciliarAsaas {
   habilitado: boolean;
   pedidosAnalisados: number;
   assinaturasAnalisadas: number;
+  /** D-177: pedidos parcelados pagos cujas parcelas foram listadas nesta rodada. */
+  pedidosParceladosAnalisados: number;
+  /** D-177: parcelas confirmadas sem linha no livro-caixa cujo evento sintético foi criado agora. */
+  parcelasRecuperadas: number;
   eventosSinteticos: number;
   pedidosMarcadosInconclusivo: number;
   semCobrancaEncontrada: number;
@@ -211,6 +250,9 @@ export const LIMITE_GETS_PADRAO = 200;
 export const LIMITE_PEDIDOS_PADRAO = 200;
 export const LIMITE_ASSINATURAS_PADRAO = 200;
 export const LIMITE_VENCIDOS_PADRAO = 200;
+export const LIMITE_PARCELADOS_PADRAO = 50;
+/** D-177: o pedido parcelado pago entra na reconciliação por este tempo (a última parcela vence em até 12 meses). */
+export const DIAS_DO_PARCELADO_PAGO = 400;
 export const DIAS_DE_PODA_PADRAO = 180;
 
 const CONTADORES_ZERADOS: ContadoresDeAlarmeAsaas = {
@@ -231,6 +273,8 @@ function resumoZerado(habilitado: boolean): ResumoConciliarAsaas {
     habilitado,
     pedidosAnalisados: 0,
     assinaturasAnalisadas: 0,
+    pedidosParceladosAnalisados: 0,
+    parcelasRecuperadas: 0,
     eventosSinteticos: 0,
     pedidosMarcadosInconclusivo: 0,
     semCobrancaEncontrada: 0,
@@ -526,6 +570,93 @@ async function processarAssinaturasAtivas(
   }
 }
 
+// ─── Passo 2b: parcela 2..N de parcelamento pago com o webhook perdido (D-177) ──
+
+/**
+ * Janela de `limite` itens sobre a lista ordenada, que anda `limite` posições por dia (UTC) e dá a
+ * volta. Sem estado guardado: a lista é estável (ordem por id) e encolhe sozinha quando um pedido
+ * fica completo, então todo pedido é visitado em `ceil(tamanho / limite)` dias.
+ */
+function janelaDoDia<T>(lista: T[], limite: number, agora: Date): T[] {
+  if (lista.length <= limite) return lista;
+  const dia = Math.floor(agora.getTime() / 86_400_000);
+  const inicio = (dia * limite) % lista.length;
+  return Array.from({ length: limite }, (_v, i) => lista[(inicio + i) % lista.length] as T);
+}
+
+async function processarParcelasPerdidas(
+  deps: DepsConciliarAsaas,
+  resumo: ResumoConciliarAsaas,
+  orcamento: OrcamentoDeGets,
+  estado: EstadoDaRodada,
+): Promise<void> {
+  if (estado.configInvalida) return;
+
+  const agora = (deps.agora ?? (() => new Date()))();
+  const desde = new Date(agora.getTime() - DIAS_DO_PARCELADO_PAGO * 86_400_000).toISOString();
+  const lista = await deps.db.listarPedidosParceladosComParcelaFaltando(deps.config.ambiente, desde);
+  if (lista.error) {
+    deps.logger.error("asaas_conciliar_listar_parcelados_falhou", { codigo: lista.error.code });
+    resumo.falhas++;
+    return;
+  }
+  const candidatos = lista.data ?? [];
+  if (candidatos.length === 0) return;
+
+  const pedidos = janelaDoDia(candidatos, deps.limitePedidosParcelados ?? LIMITE_PARCELADOS_PADRAO, agora);
+
+  for (const pedido of pedidos) {
+    if (!orcamento.restante()) {
+      resumo.cortadoPeloTetoDeGets = true;
+      return;
+    }
+
+    let parcelas: CobrancaAsaas[];
+    try {
+      orcamento.gastar();
+      parcelas = await deps.asaas.listarCobrancasDoParcelamento(pedido.asaasInstallmentId);
+    } catch (err) {
+      if (ehErroDeConfiguracao(err)) {
+        deps.logger.error("asaas_conciliar_erro_de_configuracao_abortando", { pedidoId: pedido.id });
+        estado.configInvalida = true;
+        return;
+      }
+      deps.logger.warn("asaas_conciliar_listar_parcelas_falhou", { pedidoId: pedido.id, tipoErro: tipoDoErro(err) });
+      resumo.falhas++;
+      continue;
+    }
+    resumo.pedidosParceladosAnalisados++;
+
+    const registradas = new Set(pedido.parcelasRegistradas);
+    for (const parcela of parcelas) {
+      const eventType = EVENT_TYPE_POR_STATUS_DE_PAGAMENTO[parcela.status];
+      if (!eventType || !STATUS_PAGO_ESPERADO.has(eventType)) continue;
+      if (registradas.has(parcela.id)) continue;
+
+      // Mesmo evento sintético do passo 1: o processador confirma por GET e aplica pelo caminho do
+      // webhook (`fn_billing_asaas_aplicar_pagamento` já registra a parcela seguinte de pedido pago).
+      const eventId = `conc:${parcela.id}:${parcela.status}`;
+      const registrado = await deps.db.registrarEventoSintetico({
+        eventId,
+        eventType,
+        idDoRecurso: parcela.id,
+        ambiente: pedido.ambiente,
+        payload: { id: eventId, event: eventType, payment: parcela },
+      });
+      if (registrado.error) {
+        deps.logger.error("asaas_conciliar_registrar_evento_falhou", {
+          pedidoId: pedido.id,
+          codigo: registrado.error.code,
+        });
+        resumo.falhas++;
+      } else if (registrado.data?.novo) {
+        resumo.parcelasRecuperadas++;
+        resumo.eventosSinteticos++;
+      }
+    }
+  }
+}
+
 // ─── Passo 3: refaz a remoção de cobrança/assinatura de pedido vencido (decisão 10, A1/4) ─
 
 async function refazerRemocaoDeCobrancaVencida(
@@ -702,6 +833,8 @@ export async function conciliarAsaas(deps: DepsConciliarAsaas): Promise<ResumoCo
     await processarAssinaturasAtivas(deps, resumo, orcamento, estado);
   }
 
+  await processarParcelasPerdidas(deps, resumo, orcamento, estado);
+
   await refazerRemocaoDeCobrancaVencida(deps, resumo, estado);
   await refazerRemocaoDeAssinaturaDeContratoEstornado(deps, resumo, estado);
 
@@ -750,6 +883,11 @@ interface LinhaDePedidoCru {
   asaas_payment_id: string | null;
   asaas_subscription_id: string | null;
 }
+
+/** D-177: leitura dos pedidos parcelados pagos, por cursor de id (abaixo do `max_rows` de 1000 do PostgREST). */
+const PEDIDOS_POR_PAGINA = 500;
+const MAX_PAGINAS_DE_PARCELADOS = 10;
+const PEDIDOS_POR_LOTE_DE_PAGAMENTOS = 50;
 
 /**
  * Monta o `DbConciliarAsaas` sobre um `SupabaseClient` de verdade (o admin,
@@ -868,6 +1006,75 @@ export function criarDbConciliarAsaasSobre(admin: SupabaseClient): DbConciliarAs
         return { data: null, error: { code: error.code, message: error.message } };
       }
       return { data, error: null };
+    },
+
+    async listarPedidosParceladosComParcelaFaltando(ambiente, desde) {
+      const faltando: PedidoParceladoComParcelaFaltando[] = [];
+      let cursor: string | null = null;
+
+      // Leitura por cursor de `id` (o `max_rows` do PostgREST corta em 1000), com teto de páginas.
+      for (let pagina = 0; pagina < MAX_PAGINAS_DE_PARCELADOS; pagina += 1) {
+        let consulta = admin
+          .from("billing_orders")
+          .select("id, organization_id, ambiente, asaas_installment_id, parcelas")
+          .eq("status", "pago")
+          .gt("parcelas", 1)
+          .not("asaas_installment_id", "is", null)
+          .eq("ambiente", ambiente)
+          .gte("pago_em", desde);
+        if (cursor !== null) consulta = consulta.gt("id", cursor);
+        const { data, error } = await consulta.order("id").limit(PEDIDOS_POR_PAGINA);
+        if (error) return { data: null, error: { code: error.code, message: error.message } };
+
+        const pedidos = (data ?? []) as unknown as Array<{
+          id: string;
+          organization_id: string;
+          ambiente: "sandbox" | "producao";
+          asaas_installment_id: string;
+          parcelas: number;
+        }>;
+        if (pedidos.length === 0) break;
+
+        // Lotes pequenos: cada pedido tem até 12 linhas e o PostgREST devolve no máximo 1000.
+        for (let i = 0; i < pedidos.length; i += PEDIDOS_POR_LOTE_DE_PAGAMENTOS) {
+          const lote = pedidos.slice(i, i + PEDIDOS_POR_LOTE_DE_PAGAMENTOS);
+          const pagamentos = await admin
+            .from("billing_payments")
+            .select("order_id, asaas_payment_id")
+            .in(
+              "order_id",
+              lote.map((p) => p.id),
+            );
+          if (pagamentos.error) {
+            return { data: null, error: { code: pagamentos.error.code, message: pagamentos.error.message } };
+          }
+          const porPedido = new Map<string, string[]>();
+          for (const linha of (pagamentos.data ?? []) as unknown as Array<{
+            order_id: string;
+            asaas_payment_id: string | null;
+          }>) {
+            if (!linha.asaas_payment_id) continue;
+            porPedido.set(linha.order_id, [...(porPedido.get(linha.order_id) ?? []), linha.asaas_payment_id]);
+          }
+          for (const p of lote) {
+            const registradas = porPedido.get(p.id) ?? [];
+            if (registradas.length >= p.parcelas) continue;
+            faltando.push({
+              id: p.id,
+              organizationId: p.organization_id,
+              ambiente: p.ambiente,
+              asaasInstallmentId: p.asaas_installment_id,
+              parcelas: p.parcelas,
+              parcelasRegistradas: registradas,
+            });
+          }
+        }
+
+        if (pedidos.length < PEDIDOS_POR_PAGINA) break;
+        cursor = pedidos[pedidos.length - 1]!.id;
+      }
+
+      return { data: faltando, error: null };
     },
 
     async listarAssinaturasAtivas(limite) {

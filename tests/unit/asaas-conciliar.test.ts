@@ -16,6 +16,7 @@ import {
   type DbConciliarAsaas,
   type DepsConciliarAsaas,
   type PedidoParaConciliar,
+  type PedidoParceladoComParcelaFaltando,
   type PedidoVencidoParaRemocao,
 } from "@/lib/billing/asaas/conciliar";
 import type { ConfigAsaas } from "@/lib/billing/asaas/config";
@@ -110,6 +111,7 @@ function dbFalso(overrides: Partial<DbConciliarAsaas> = {}): DbConciliarAsaas {
     listarPedidosPendentes: vi.fn(async () => ({ data: [], error: null })),
     listarPedidosVencidosParaRemocao: vi.fn(async () => ({ data: [], error: null })),
     listarAssinaturasAtivas: vi.fn(async () => ({ data: [], error: null })),
+    listarPedidosParceladosComParcelaFaltando: vi.fn(async () => ({ data: [], error: null })),
     listarContratosCanceladosComAssinaturaViva: vi.fn(async () => ({ data: [], error: null })),
     marcarAssinaturaEncerrada: vi.fn(async () => ({ data: {}, error: null })),
     clienteAsaasDaOrganizacao: vi.fn(async () => ({ data: "cus_fake123", error: null })),
@@ -625,5 +627,247 @@ describe("D-086, M3 e B2: a listagem do passo 3b só devolve contrato cortado po
     expect(filtros.billing_contracts).toContainEqual(["is", "asaas_assinatura_encerrada_em", null]);
     // sem candidato, nem consulta os eventos
     expect(filtros.billing_contract_eventos).toBeUndefined();
+  });
+});
+
+describe("D-177: parcela 2..N confirmada cujo webhook se perdeu entra no livro-caixa pela conciliação", () => {
+  const INSTALLMENT = "7315c152-a55f-4727-aa6c-d48249df28d4";
+
+  function parcelado(overrides: Partial<PedidoParceladoComParcelaFaltando> = {}): PedidoParceladoComParcelaFaltando {
+    return {
+      id: "pedido-parc-1",
+      organizationId: "org-1",
+      ambiente: "sandbox",
+      asaasInstallmentId: INSTALLMENT,
+      parcelas: 3,
+      parcelasRegistradas: ["pay_1"],
+      ...overrides,
+    };
+  }
+
+  function parcela(n: number, status: string): CobrancaAsaas {
+    return cobrancaFake({
+      id: `pay_${n}`,
+      status,
+      installment: INSTALLMENT,
+      installmentNumber: n,
+      externalReference: "HC:ord:pedido-parc-1",
+    });
+  }
+
+  function dbComParcelados(lista: PedidoParceladoComParcelaFaltando[]) {
+    return dbFalso({ listarPedidosParceladosComParcelaFaltando: vi.fn(async () => ({ data: lista, error: null })) });
+  }
+
+  it("⭐ registra, pelo MESMO caminho do webhook, só as parcelas pagas que não têm linha em billing_payments", async () => {
+    const db = dbComParcelados([parcelado()]);
+    const asaas = asaasFalso({
+      listarCobrancasDoParcelamento: vi.fn(async () => [parcela(1, "CONFIRMED"), parcela(2, "CONFIRMED"), parcela(3, "RECEIVED")]),
+    });
+    const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+    expect(asaas.listarCobrancasDoParcelamento).toHaveBeenCalledWith(INSTALLMENT);
+    expect(db.registrarEventoSintetico).toHaveBeenCalledTimes(2);
+    expect(db.registrarEventoSintetico).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventId: "conc:pay_2:CONFIRMED",
+        eventType: "PAYMENT_CONFIRMED",
+        idDoRecurso: "pay_2",
+        ambiente: "sandbox",
+        payload: expect.objectContaining({ event: "PAYMENT_CONFIRMED", payment: expect.objectContaining({ id: "pay_2" }) }),
+      }),
+    );
+    expect(db.registrarEventoSintetico).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: "conc:pay_3:RECEIVED", eventType: "PAYMENT_RECEIVED", idDoRecurso: "pay_3" }),
+    );
+    expect(resumo.pedidosParceladosAnalisados).toBe(1);
+    expect(resumo.parcelasRecuperadas).toBe(2);
+    expect(resumo.falhas).toBe(0);
+  });
+
+  it("parcela ainda PENDING ou OVERDUE não vira evento (só dinheiro confirmado entra)", async () => {
+    const db = dbComParcelados([parcelado({ parcelasRegistradas: ["pay_1"] })]);
+    const asaas = asaasFalso({
+      listarCobrancasDoParcelamento: vi.fn(async () => [parcela(1, "CONFIRMED"), parcela(2, "PENDING"), parcela(3, "OVERDUE")]),
+    });
+    const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+    expect(db.registrarEventoSintetico).not.toHaveBeenCalled();
+    expect(resumo.parcelasRecuperadas).toBe(0);
+  });
+
+  it("idempotente: evento sintético que já existe (novo: false) não conta como recuperado nem como falha", async () => {
+    const db = dbFalso({
+      listarPedidosParceladosComParcelaFaltando: vi.fn(async () => ({ data: [parcelado()], error: null })),
+      registrarEventoSintetico: vi.fn(async () => ({ data: { novo: false }, error: null })),
+    });
+    const asaas = asaasFalso({
+      listarCobrancasDoParcelamento: vi.fn(async () => [parcela(1, "CONFIRMED"), parcela(2, "CONFIRMED"), parcela(3, "CONFIRMED")]),
+    });
+    const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+    expect(resumo.parcelasRecuperadas).toBe(0);
+    expect(resumo.falhas).toBe(0);
+  });
+
+  it("falha ao registrar o evento: conta falha e segue para o próximo pedido", async () => {
+    const db = dbFalso({
+      listarPedidosParceladosComParcelaFaltando: vi.fn(async () => ({
+        data: [parcelado({ id: "a" }), parcelado({ id: "b", asaasInstallmentId: "outro-parcelamento-1234" })],
+        error: null,
+      })),
+      registrarEventoSintetico: vi.fn(async () => ({ data: null, error: { code: "XX000" } })),
+    });
+    const asaas = asaasFalso({ listarCobrancasDoParcelamento: vi.fn(async () => [parcela(2, "CONFIRMED")]) });
+    const resumo = await conciliarAsaas(deps({ db, asaas }));
+
+    expect(asaas.listarCobrancasDoParcelamento).toHaveBeenCalledTimes(2);
+    expect(resumo.falhas).toBe(2);
+  });
+
+  it("falha na listagem do parcelamento num pedido não derruba os outros", async () => {
+    const listar = vi
+      .fn()
+      .mockRejectedValueOnce(erroIndisponivel(503))
+      .mockResolvedValueOnce([parcela(2, "CONFIRMED")]);
+    const db = dbComParcelados([parcelado({ id: "a" }), parcelado({ id: "b", asaasInstallmentId: "outro-parcelamento-1234" })]);
+    const resumo = await conciliarAsaas(deps({ db, asaas: asaasFalso({ listarCobrancasDoParcelamento: listar }) }));
+
+    expect(resumo.falhas).toBe(1);
+    expect(resumo.parcelasRecuperadas).toBe(1);
+  });
+
+  it("erro de CONFIGURAÇÃO na listagem aborta o passo, sem mais chamadas ao Asaas", async () => {
+    const listar = vi.fn(async () => {
+      throw erroConfiguracao("base e chave incoerentes");
+    });
+    const db = dbComParcelados([parcelado({ id: "a" }), parcelado({ id: "b", asaasInstallmentId: "outro-parcelamento-1234" })]);
+    const resumo = await conciliarAsaas(deps({ db, asaas: asaasFalso({ listarCobrancasDoParcelamento: listar }) }));
+
+    expect(listar).toHaveBeenCalledTimes(1);
+    expect(resumo.falhas).toBe(0);
+  });
+
+  it("⭐ orçamento: no máximo `limitePedidosParcelados` pedidos por rodada, e os dias seguintes cobrem a lista toda sem repetir", async () => {
+    const lista = Array.from({ length: 5 }, (_v, i) => parcelado({ id: `p-${i}`, asaasInstallmentId: `parcelamento-${i}-aaaa` }));
+    const vistos: string[] = [];
+    for (let dia = 0; dia < 3; dia += 1) {
+      const asaas = asaasFalso({ listarCobrancasDoParcelamento: vi.fn(async () => []) });
+      const resumo = await conciliarAsaas(
+        deps({
+          db: dbComParcelados(lista),
+          asaas,
+          limitePedidosParcelados: 2,
+          agora: () => new Date(Date.UTC(2026, 9, 7 + dia, 12)),
+        }),
+      );
+      expect(asaas.listarCobrancasDoParcelamento).toHaveBeenCalledTimes(2);
+      expect(resumo.pedidosParceladosAnalisados).toBe(2);
+      for (const chamada of vi.mocked(asaas.listarCobrancasDoParcelamento).mock.calls) vistos.push(chamada[0]);
+    }
+    // 3 rodadas x 2 pedidos = 6 consultas para 5 pedidos: todos vistos, só um repete (a volta da janela).
+    expect(new Set(vistos).size).toBe(5);
+  });
+
+  it("⭐ o teto de GET da rodada é dividido com os outros passos: sem GET restante, nem lista parcelamento", async () => {
+    const pedido = pedidoFake({ asaasPaymentId: "pay_x" });
+    const db = dbFalso({
+      listarPedidosPendentes: vi.fn(async () => ({ data: [pedido], error: null })),
+      listarPedidosParceladosComParcelaFaltando: vi.fn(async () => ({ data: [parcelado()], error: null })),
+    });
+    const asaas = asaasFalso({ buscarCobranca: vi.fn(async () => cobrancaFake({ status: "PENDING" })) });
+    const resumo = await conciliarAsaas(deps({ db, asaas, limiteGets: 1 }));
+
+    expect(asaas.listarCobrancasDoParcelamento).not.toHaveBeenCalled();
+    expect(resumo.cortadoPeloTetoDeGets).toBe(true);
+  });
+
+  it("erro ao listar os pedidos parcelados vira falha e a rodada segue (poda e alarmes rodam)", async () => {
+    const db = dbFalso({
+      listarPedidosParceladosComParcelaFaltando: vi.fn(async () => ({ data: null, error: { code: "42501" } })),
+    });
+    const resumo = await conciliarAsaas(deps({ db }));
+
+    expect(resumo.falhas).toBe(1);
+    expect(db.podarEventos).toHaveBeenCalled();
+  });
+
+  it("consulta o banco só do ambiente da instalação e dos pedidos pagos nos últimos 400 dias", async () => {
+    const db = dbComParcelados([]);
+    const agora = new Date(Date.UTC(2026, 9, 7, 12));
+    await conciliarAsaas(deps({ db, agora: () => agora }));
+
+    const desde = new Date(agora.getTime() - 400 * 86_400_000).toISOString();
+    expect(db.listarPedidosParceladosComParcelaFaltando).toHaveBeenCalledWith("sandbox", desde);
+  });
+});
+
+describe("D-177: a listagem dos pedidos parcelados só devolve quem tem parcela sem linha em billing_payments", () => {
+  function adminFalso(resultados: Record<string, unknown[]>) {
+    const filtros: Record<string, Array<[string, ...unknown[]]>> = {};
+    const admin = {
+      from(tabela: string) {
+        const lista: Array<[string, ...unknown[]]> = (filtros[tabela] = filtros[tabela] ?? []);
+        const builder: Record<string, unknown> = {};
+        for (const metodo of ["select", "eq", "gt", "gte", "not", "in", "order", "limit"]) {
+          builder[metodo] = (...args: unknown[]) => {
+            lista.push([metodo, ...args]);
+            return builder;
+          };
+        }
+        builder.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve({ data: resultados[tabela] ?? [], error: null }).then(resolve, reject);
+        return builder;
+      },
+    };
+    return { admin: admin as never, filtros };
+  }
+
+  const pedido = (id: string, parcelas: number) => ({
+    id,
+    organization_id: "org-1",
+    ambiente: "sandbox",
+    asaas_installment_id: `parcelamento-${id}-aaaa`,
+    parcelas,
+  });
+
+  it("pedido com todas as parcelas registradas sai; o que falta fica com os ids já registrados", async () => {
+    const { admin, filtros } = adminFalso({
+      billing_orders: [pedido("completo", 2), pedido("faltando", 3)],
+      billing_payments: [
+        { order_id: "completo", asaas_payment_id: "pay_a" },
+        { order_id: "completo", asaas_payment_id: "pay_b" },
+        { order_id: "faltando", asaas_payment_id: "pay_c" },
+        // pagamento manual (sem id do Asaas) não conta como parcela registrada
+        { order_id: "faltando", asaas_payment_id: null },
+      ],
+    });
+    const r = await criarDbConciliarAsaasSobre(admin).listarPedidosParceladosComParcelaFaltando("sandbox", "2025-09-02T00:00:00.000Z");
+
+    expect(r.error).toBeNull();
+    expect(r.data).toEqual([
+      {
+        id: "faltando",
+        organizationId: "org-1",
+        ambiente: "sandbox",
+        asaasInstallmentId: "parcelamento-faltando-aaaa",
+        parcelas: 3,
+        parcelasRegistradas: ["pay_c"],
+      },
+    ]);
+    expect(filtros.billing_orders).toContainEqual(["eq", "status", "pago"]);
+    expect(filtros.billing_orders).toContainEqual(["gt", "parcelas", 1]);
+    expect(filtros.billing_orders).toContainEqual(["eq", "ambiente", "sandbox"]);
+    expect(filtros.billing_orders).toContainEqual(["gte", "pago_em", "2025-09-02T00:00:00.000Z"]);
+    expect(filtros.billing_orders).toContainEqual(["order", "id"]);
+    expect(filtros.billing_payments).toContainEqual(["in", "order_id", ["completo", "faltando"]]);
+  });
+
+  it("sem pedido parcelado pago, nem consulta billing_payments", async () => {
+    const { admin, filtros } = adminFalso({ billing_orders: [] });
+    const r = await criarDbConciliarAsaasSobre(admin).listarPedidosParceladosComParcelaFaltando("producao", "2025-09-02T00:00:00.000Z");
+
+    expect(r.data).toEqual([]);
+    expect(filtros.billing_payments).toBeUndefined();
   });
 });

@@ -207,6 +207,18 @@ export async function deriveMessageMedia(row: EventRow): Promise<HandlerResult> 
       llm = await resolveOrgLlmConfig(derivePool(), llmCfg, row.organization_id);
     }
 
+    // D-091: este worker chama o resolvedor FORA do `runModelCall`, então a barreira de organização
+    // suspensa ou arquivada precisa estar aqui também (visão e transcrição gastam IA). O status vem
+    // na mesma leitura da config (zero consulta a mais); só um status explícito diferente de
+    // `active` barra, e leitura que falha lança lá em cima e cai no catch (fecha, como no seam).
+    if (typeof llm.statusDaOrg === "string" && llm.statusDaOrg !== "active") {
+      logger.warn("[media-derive] derivação recusada: organização não está ativa (D-091)", {
+        organization_id: row.organization_id,
+        status: llm.statusDaOrg,
+      });
+      return markSkipped("organizacao_inativa");
+    }
+
     // A transcrição é SEMPRE do Whisper (api.openai.com), então precisa de uma
     // chave OpenAI — não da chave do provedor de chat da org. O comentário
     // antigo já dizia isso ("senão exige credencial openai dedicada"), mas o
