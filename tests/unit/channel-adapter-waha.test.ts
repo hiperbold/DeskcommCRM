@@ -142,20 +142,20 @@ describe('adapter WAHA', () => {
 
   it('envia pelo chatId sem o nono quando o WhatsApp não reconhece o 13 dígitos', async () => {
     const fetchMock = stubWaha({ id: { _serialized: 'ABC123' } }, (phone) =>
-      phone === '553198966398'
-        ? { numberExists: true, pn: '553198966398@c.us' }
+      phone === '553191110001'
+        ? { numberExists: true, pn: '553191110001@c.us' }
         : { numberExists: false },
     );
 
     await getAdapter('waha').send({
       organizationId: ORG,
       sessionRef: 'default',
-      to: '5531998966398@c.us',
+      to: '5531991110001@c.us',
       kind: 'text',
       body: 'oi',
     });
 
-    expect(sendTextBody(fetchMock).chatId).toBe('553198966398@c.us');
+    expect(sendTextBody(fetchMock).chatId).toBe('553191110001@c.us');
   });
 
   it('lead só com telefone: envia ao @lid que o check-exists devolveu', async () => {

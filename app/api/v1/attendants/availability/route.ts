@@ -22,7 +22,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { estaPresente } from "@/lib/atendimento/presenca";
 import { isServiceRoleConfigured } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
@@ -60,7 +60,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
       .from("attendant_availability")
       .select(SELECT_COLS)
       .eq("organization_id", activeOrg.orgId);
-    if (error) return fail("internal_error", error.message, 500, { requestId });
+    if (error) return falhaInterna("internal_error", error, { requestId });
     const rows = (data ?? []) as AvailabilityRow[];
     return ok(
       rows.map((r) => ({
@@ -88,9 +88,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
   try {
     roster = await carregarRosterDeAtendimento(admin, activeOrg.orgId, agora);
   } catch (err) {
-    return fail("internal_error", err instanceof Error ? err.message : "roster", 500, {
-      requestId,
-    });
+    return falhaInterna("internal_error", err, { requestId });
   }
   if (roster.length === 0) return ok([], { requestId });
 

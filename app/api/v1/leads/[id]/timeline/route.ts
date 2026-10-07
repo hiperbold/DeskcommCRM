@@ -34,7 +34,7 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { createClient } from "@/lib/supabase/server";
@@ -81,7 +81,7 @@ export async function GET(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .select("id, contact_id")
     .eq("id", leadId)
     .maybeSingle();
-  if (leadErr) return fail("internal_error", leadErr.message, 500, { requestId });
+  if (leadErr) return falhaInterna("internal_error", leadErr, { requestId });
   if (!lead) return fail("not_found", t("Negócio não encontrado."), 404, { requestId });
 
   const contactId = (lead as { contact_id: string | null }).contact_id;
@@ -107,7 +107,7 @@ export async function GET(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   }
 
   const { data, error } = await q;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const rows = (data ?? []) as unknown as TimelineItem[];
   const hasMore = rows.length > limit;

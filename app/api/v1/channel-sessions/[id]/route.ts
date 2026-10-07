@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { audit } from "@/lib/audit";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { CHANNEL_PROVIDER_WAHA } from "@/lib/channels/capabilities";
@@ -233,13 +233,13 @@ export async function GET(
     // por quê. Regrava sem o telefone (o carimbo de saúde não pode ser refém do
     // conflito) e devolve o conflito nomeado.
     if (syncErr.code !== "23505") {
-      return fail("internal_error", syncErr.message, 500, { requestId });
+      return falhaInterna("internal_error", syncErr, { requestId });
     }
     phoneConflict = true;
     phoneNumber = session.phone_number as string | null;
     const { phone_number: _descartado, ...semTelefone } = patch;
     const { error: retryErr } = await gravar(semTelefone);
-    if (retryErr) return fail("internal_error", retryErr.message, 500, { requestId });
+    if (retryErr) return falhaInterna("internal_error", retryErr, { requestId });
   }
 
   return ok(
@@ -455,14 +455,14 @@ export async function DELETE(
       .update(patch)
       .eq("organization_id", activeOrg.orgId)
       .eq("id", id);
-    if (archErr) return fail("internal_error", archErr.message, 500, { requestId });
+    if (archErr) return falhaInterna("internal_error", archErr, { requestId });
   } else {
     const { error: delErr } = await supabase
       .from("channel_sessions")
       .delete()
       .eq("organization_id", activeOrg.orgId)
       .eq("id", id);
-    if (delErr) return fail("internal_error", delErr.message, 500, { requestId });
+    if (delErr) return falhaInterna("internal_error", delErr, { requestId });
   }
 
   // ─── O AVISO NÃO FICA ÓRFÃO (issue #1023) ─────────────────────────────────

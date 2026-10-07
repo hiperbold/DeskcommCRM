@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { fail } from "@/lib/api/wrappers";
+import { fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { auditQuerySchema } from "@/lib/schemas/audit";
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (q.to) query = query.lte("created_at", q.to);
 
   const { data, error } = await query;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const rows = data ?? [];
   const lines = [HEADER.join(",")];

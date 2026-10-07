@@ -13,7 +13,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -52,14 +52,14 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!origem) return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
 
   const { data: nomes, error: nomesErr } = await supabase
     .from("followup_flow_pointers")
     .select("name")
     .eq("organization_id", activeOrg.orgId);
-  if (nomesErr) return fail("internal_error", nomesErr.message, 500, { requestId });
+  if (nomesErr) return falhaInterna("internal_error", nomesErr, { requestId });
 
   const draft_graph = await rascunhoDoFluxo(
     supabase,
@@ -90,7 +90,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     if (insErr?.code === "23505") {
       return fail("conflict", t("Já existe um fluxo com este nome."), 409, { requestId });
     }
-    return fail("internal_error", insErr?.message ?? "followup_flow_duplicate_failed", 500, {
+    return falhaInterna("internal_error", insErr ?? "followup_flow_duplicate_failed", {
       requestId,
     });
   }

@@ -52,11 +52,11 @@ describe("fn_upsert_wa_contact — nono dígito canônico", () => {
   });
 
   it("reencontra o cadastro de 13 dígitos quando o WhatsApp manda sem o 9", async () => {
-    const primeiro = await upsert("+5531998966398", null, "5531998966398@c.us");
-    const segundo = await upsert("+553198966398", null, "553198966398@c.us");
+    const primeiro = await upsert("+5531991110001", null, "5531991110001@c.us");
+    const segundo = await upsert("+553191110001", null, "553191110001@c.us");
     expect(segundo).toBe(primeiro);
     const { rows } = await pool.query<{ n: string }>(
-      "select count(*)::text as n from contacts where organization_id = $1 and is_merged_into is null and phone_number in ('+553198966398','+5531998966398')",
+      "select count(*)::text as n from contacts where organization_id = $1 and is_merged_into is null and phone_number in ('+553191110001','+5531991110001')",
       [ORG],
     );
     expect(rows[0]!.n).toBe("1");

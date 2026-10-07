@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { alterarComandaSchema } from "@/lib/financeiro/comanda";
@@ -43,7 +43,7 @@ export async function GET(_req: NextRequest, ctx: Ctx): Promise<Response> {
     .eq("id", id)
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("not_found", "Comanda não encontrada.", 404, { requestId });
 
   const itens = (data.sale_items ?? []) as Array<{ total_cents: number }>;
@@ -111,7 +111,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
     .update(mudanca)
     .eq("organization_id", authz.org.orgId)
     .eq("id", id);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   // ⚠️ NUNCA espalhe o corpo lido aqui. `lib/audit` grava `metadata` CRU em
   // `api_audit_log`, sem sanitizador, com retenção de anos — e a cascata de

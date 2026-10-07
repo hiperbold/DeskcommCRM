@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { ingestConversationsBatch } from "@/lib/ai/rag/ingest/conversations";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -47,7 +47,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   if (agentErr) {
     console.error("[kb-conversations-cron] agent list failed", agentErr.message);
-    return fail("internal_error", agentErr.message, 500, { requestId });
+    return falhaInterna("internal_error", agentErr, { requestId });
   }
 
   const agents = (agentRows ?? []) as AgentRow[];

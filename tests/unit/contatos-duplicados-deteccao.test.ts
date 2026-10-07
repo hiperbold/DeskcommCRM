@@ -42,8 +42,8 @@ describe("encontrarContatosDuplicados", () => {
     // 12 dígitos (como o `wa_id` às vezes chega) e 13 (como o brasileiro
     // digita). Strings distintas para o índice único, mesma pessoa no mundo.
     const grupos = encontrarContatosDuplicados([
-      contato("a", { phone_number: "+553198966398" }),
-      contato("b", { phone_number: "+5531998966398" }),
+      contato("a", { phone_number: "+553191110001" }),
+      contato("b", { phone_number: "+5531991110001" }),
     ]);
     expect(grupos).toHaveLength(1);
     expect(grupos[0]!.contatos.map((c) => c.id).sort()).toEqual(["a", "b"]);
@@ -55,10 +55,10 @@ describe("encontrarContatosDuplicados", () => {
     // número em `source_metadata.telefone_em_conflito`, esperando por quem
     // opera. Sem este caminho, esse par nunca chegaria à tela.
     const grupos = encontrarContatosDuplicados([
-      contato("dono-do-numero", { phone_number: "+5531998966398" }),
+      contato("dono-do-numero", { phone_number: "+5531991110001" }),
       contato("lid", {
         phone_number: null,
-        source_metadata: { telefone_em_conflito: "+5531998966398" },
+        source_metadata: { telefone_em_conflito: "+5531991110001" },
       }),
     ]);
     expect(grupos).toHaveLength(1);
@@ -69,8 +69,8 @@ describe("encontrarContatosDuplicados", () => {
     // A~B pelo telefone, B~C pelo e-mail. Oferecer duas fusões separadas
     // produziria a segunda já inválida — a primeira teria mesclado B.
     const grupos = encontrarContatosDuplicados([
-      contato("a", { phone_number: "+5531998966398" }),
-      contato("b", { phone_number: "+5531998966398", email: "j@ex.com" }),
+      contato("a", { phone_number: "+5531991110001" }),
+      contato("b", { phone_number: "+5531991110001", email: "j@ex.com" }),
       contato("c", { email: "J@Ex.com" }),
     ]);
     expect(grupos).toHaveLength(1);
@@ -82,9 +82,9 @@ describe("encontrarContatosDuplicados", () => {
     // L-04 é irreversível: reencaixar a linha anonimizada num contato ativo a
     // traria de volta ao atendimento pela porta dos fundos.
     const grupos = encontrarContatosDuplicados([
-      contato("vivo", { phone_number: "+5531998966398" }),
-      contato("anon", { phone_number: "+5531998966398", is_anonymized: true }),
-      contato("lapide", { phone_number: "+5531998966398", is_merged_into: "vivo" }),
+      contato("vivo", { phone_number: "+5531991110001" }),
+      contato("anon", { phone_number: "+5531991110001", is_anonymized: true }),
+      contato("lapide", { phone_number: "+5531991110001", is_merged_into: "vivo" }),
     ]);
     expect(grupos).toHaveLength(0);
   });
@@ -106,12 +106,12 @@ describe("principalSugerido", () => {
   it("sugere quem tem atividade mais recente, e no empate o mais antigo", () => {
     const grupo = encontrarContatosDuplicados([
       contato("velho", {
-        phone_number: "+5531998966398",
+        phone_number: "+5531991110001",
         created_at: "2025-01-01T00:00:00.000Z",
         last_activity_at: "2026-01-01T00:00:00.000Z",
       }),
       contato("ativo", {
-        phone_number: "+5531998966398",
+        phone_number: "+5531991110001",
         created_at: "2026-06-01T00:00:00.000Z",
         last_activity_at: "2026-08-01T00:00:00.000Z",
       }),
@@ -121,8 +121,8 @@ describe("principalSugerido", () => {
 
   it("sem atividade em nenhum dos dois, sugere o mais antigo — nunca sorteia", () => {
     const grupo = encontrarContatosDuplicados([
-      contato("novo", { phone_number: "+5531998966398", created_at: "2026-06-01T00:00:00.000Z" }),
-      contato("antigo", { phone_number: "+5531998966398", created_at: "2025-01-01T00:00:00.000Z" }),
+      contato("novo", { phone_number: "+5531991110001", created_at: "2026-06-01T00:00:00.000Z" }),
+      contato("antigo", { phone_number: "+5531991110001", created_at: "2025-01-01T00:00:00.000Z" }),
     ])[0]!;
     expect(principalSugerido(grupo)).toBe("antigo");
   });
@@ -132,7 +132,7 @@ describe("chaveDeTelefone", () => {
   it("devolve vazio para ausência, e só dígitos para um número", () => {
     expect(chaveDeTelefone(null)).toBe("");
     expect(chaveDeTelefone("   ")).toBe("");
-    expect(chaveDeTelefone("+55 (31) 99896-6398")).toMatch(/^\d+$/);
+    expect(chaveDeTelefone("+55 (31) 99111-0001")).toMatch(/^\d+$/);
   });
 });
 

@@ -23,7 +23,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { requireSupportWrite } from "@/lib/impersonate/support";
@@ -66,7 +66,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     .in("id", lido.data.appointment_ids)
     .in("status", ["confirmed", "completed"]);
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   let faturados = 0;
   const pulados: Record<string, number> = {};

@@ -6,7 +6,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail, noContent } from "@/lib/api/wrappers";
+import { ok, fail, noContent, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { autoriaDaMudanca } from "@/lib/operacao/autoria";
@@ -54,7 +54,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Regra não encontrada."), 404, { requestId });
 
   // Secrets de call_webhook nunca ficam em claro no jsonb (migration 0041);
@@ -86,7 +86,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .select("*")
     .single();
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  if (updErr) return falhaInterna("internal_error", updErr, { requestId });
 
   const { actions: _actionsWithSecrets, ...auditableRule } = parsed.data;
   void audit({
@@ -121,11 +121,11 @@ export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Regra não encontrada."), 404, { requestId });
 
   const { error: delErr } = await supabase.from("automation_rules").delete().eq("id", id);
-  if (delErr) return fail("internal_error", delErr.message, 500, { requestId });
+  if (delErr) return falhaInterna("internal_error", delErr, { requestId });
 
   void audit({
     action: "automation.rule_deleted",

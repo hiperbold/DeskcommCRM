@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { audit } from "@/lib/audit";
-import { fail, ok, noContent } from "@/lib/api/wrappers";
+import { fail, ok, noContent, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { snoozeSchema } from "@/lib/schemas/snooze";
 import { createClient } from "@/lib/supabase/server";
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest, { params }: RouteParams): Promise<R
     .eq("organization_id", org.orgId)
     .select("id")
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
 
   void audit({
@@ -95,7 +95,7 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams): Promis
     .eq("organization_id", org.orgId)
     .select("id")
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
 
   void audit({

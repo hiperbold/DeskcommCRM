@@ -34,7 +34,7 @@ import {
 import { listPipelinesHandler } from "@/app/api/v1/pipelines/_handler";
 import type { HandlerCtx } from "@/lib/api/handlers/types";
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -92,7 +92,7 @@ export async function GET(
     .eq("id", leadId)
     .eq("organization_id", authz.org.orgId)
     .maybeSingle();
-  if (selErr) return fail("internal_error", selErr.message, 500, { requestId });
+  if (selErr) return falhaInterna("internal_error", selErr, { requestId });
   if (!origem) return fail("not_found", t("Lead não encontrado."), 404, { requestId });
 
   const { pipelines } = await listPipelinesHandler(supabase, {
@@ -145,7 +145,7 @@ export async function POST(
       .maybeSingle();
 
     if (selErr) {
-      return fail("internal_error", selErr.message, 500, { requestId });
+      return falhaInterna("internal_error", selErr, { requestId });
     }
     if (!origem) {
       return fail("not_found", t("Lead não encontrado."), 404, { requestId });
@@ -159,7 +159,7 @@ export async function POST(
       .maybeSingle();
 
     if (pipeErr) {
-      return fail("internal_error", pipeErr.message, 500, { requestId });
+      return falhaInterna("internal_error", pipeErr, { requestId });
     }
     if (!pipelineDestino) {
       return fail("pipeline_not_found", t(FUNIL_DE_DESTINO_NAO_ENCONTRADO), 404, { requestId });
@@ -176,7 +176,7 @@ export async function POST(
       .maybeSingle();
 
     if (origemPipeErr) {
-      return fail("internal_error", origemPipeErr.message, 500, { requestId });
+      return falhaInterna("internal_error", origemPipeErr, { requestId });
     }
     const modoDaOrigem = modoDeReabertura(
       (pipelineOrigem as { settings?: unknown } | null)?.settings,
@@ -220,7 +220,7 @@ export async function POST(
       .order("position", { ascending: true });
 
     if (stagesErr) {
-      return fail("internal_error", stagesErr.message, 500, { requestId });
+      return falhaInterna("internal_error", stagesErr, { requestId });
     }
 
     const destino = escolheEtapaDeDestino(
@@ -294,7 +294,7 @@ export async function POST(
         .maybeSingle();
 
       if (perdaErr) {
-        return fail("internal_error", perdaErr.message, 500, { requestId });
+        return falhaInterna("internal_error", perdaErr, { requestId });
       }
       if (!etapaDePerdaDaOrigem) {
         return fail(
@@ -421,7 +421,7 @@ export async function POST(
       .maybeSingle();
 
     if (updErr) {
-      return fail("internal_error", updErr.message, 500, { requestId });
+      return falhaInterna("internal_error", updErr, { requestId });
     }
 
     await audit({

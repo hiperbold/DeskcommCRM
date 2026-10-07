@@ -10,7 +10,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
@@ -44,7 +44,7 @@ export async function GET(): Promise<Response> {
     .eq("organization_id", activeOrg.orgId)
     .order("created_at", { ascending: true });
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   return ok(data ?? [], { requestId });
 }
 
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (error.code === "23505") {
       return fail("numero_ja_cadastrado", "Esse número já está cadastrado.", 409, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   await audit({

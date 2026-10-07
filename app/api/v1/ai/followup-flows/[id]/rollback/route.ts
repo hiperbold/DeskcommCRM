@@ -15,7 +15,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!pointer) return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
 
   const { data: version, error: versionErr } = await supabase
@@ -75,7 +75,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("organization_id", activeOrg.orgId)
     .eq("pointer_id", id)
     .maybeSingle();
-  if (versionErr) return fail("internal_error", versionErr.message, 500, { requestId });
+  if (versionErr) return falhaInterna("internal_error", versionErr, { requestId });
   if (!version) return fail("not_found", t("Version não encontrada."), 404, { requestId });
 
   const { data: updated, error: updErr } = await supabase
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .select("id, status, active_version_id, updated_at")
     .single();
   if (updErr || !updated) {
-    return fail("internal_error", updErr?.message ?? "followup_flow_rollback_failed", 500, {
+    return falhaInterna("internal_error", updErr ?? "followup_flow_rollback_failed", {
       requestId,
     });
   }

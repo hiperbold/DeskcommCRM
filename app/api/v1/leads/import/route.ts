@@ -27,7 +27,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { lerMultipartComTeto } from "@/lib/api/multipart-com-teto";
 import { audit } from "@/lib/audit";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
@@ -189,7 +189,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       .maybeSingle();
 
     if (erroEtapa) {
-      return fail("internal_error", erroEtapa.message, 500, { requestId });
+      return falhaInterna("internal_error", erroEtapa, { requestId });
     }
     if (!primeiraEtapa) {
       return fail("validation_failed", t("Este funil não tem etapas abertas."), 422, { requestId });

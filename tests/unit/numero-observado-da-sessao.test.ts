@@ -11,12 +11,12 @@ import { numeroObservadoDaSessao } from "@/lib/channels/numero-observado";
  * que o WhatsApp cai — deixava o banco mentindo para sempre.
  *
  * O que se mediu: a conexão de produção atendia `551148633324`, o banco dizia
- * `553198966398` (um pareamento anterior, de OUTRA organização), e os 23 avisos
+ * `553191110001` (um pareamento anterior, de OUTRA organização), e os 23 avisos
  * abertos na Central nomeavam o número errado. O aviso existe para responder
  * "QUAL conexão caiu?"; com o dado errado ele manda pegar o celular errado.
  */
 const LIA = "551148633324";
-const ANTIGO = "553198966398";
+const ANTIGO = "553191110001";
 
 describe("qual número o transporte está mesmo atendendo", () => {
   it("corrige o número quando o aparelho muda — o defeito medido", () => {

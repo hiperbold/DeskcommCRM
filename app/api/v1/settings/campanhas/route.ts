@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import {
@@ -37,7 +37,7 @@ export async function GET(): Promise<Response> {
     .select("settings")
     .eq("id", authz.org.orgId)
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   return ok(
     { configuracao: lerConfiguracao((data as { settings?: unknown } | null)?.settings), padrao: CONFIGURACAO_PADRAO },

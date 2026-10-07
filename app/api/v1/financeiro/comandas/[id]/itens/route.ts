@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { itemSchema, percentualDaComissao, totalDoItem } from "@/lib/financeiro/comanda";
@@ -94,7 +94,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
     .select("id, description, quantity, unit_price_cents, discount_cents, total_cents, commission_percent")
     .single();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   await audit({
     action: "comanda.item_incluido",

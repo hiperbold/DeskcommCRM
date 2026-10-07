@@ -12,7 +12,7 @@ import { rascunhoDoFluxo } from "@/lib/followup/rascunho";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -47,7 +47,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
 
   // Linhagem de versions (Task 6.2 — builder): o PublishBar precisa saber se
@@ -61,7 +61,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("organization_id", activeOrg.orgId)
     .eq("pointer_id", id)
     .order("created_at", { ascending: false });
-  if (versionsErr) return fail("internal_error", versionsErr.message, 500, { requestId });
+  if (versionsErr) return falhaInterna("internal_error", versionsErr, { requestId });
 
   // Rascunho ausente COM versão publicada: a tela abre o que está NO AR. Ver
   // `lib/followup/rascunho.ts` — um fluxo publicado por fora do construtor
@@ -120,7 +120,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
 
   const patch = parsed.data;
@@ -132,7 +132,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
       .eq("organization_id", activeOrg.orgId)
       .single();
     if (reloadErr || !unchanged) {
-      return fail("internal_error", reloadErr?.message ?? "reload_failed", 500, { requestId });
+      return falhaInterna("internal_error", reloadErr ?? "reload_failed", { requestId });
     }
     return ok(unchanged, { requestId });
   }
@@ -161,7 +161,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
         { requestId },
       );
     }
-    return fail("internal_error", updErr?.message ?? "followup_flow_update_failed", 500, {
+    return falhaInterna("internal_error", updErr ?? "followup_flow_update_failed", {
       requestId,
     });
   }
@@ -201,7 +201,7 @@ export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
 
   // Enrollment referencia version_id; pointer referencia active_version_id.
@@ -211,28 +211,28 @@ export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response
     .delete()
     .eq("pointer_id", id)
     .eq("organization_id", activeOrg.orgId);
-  if (enrErr) return fail("internal_error", enrErr.message, 500, { requestId });
+  if (enrErr) return falhaInterna("internal_error", enrErr, { requestId });
 
   const { error: unpinErr } = await supabase
     .from("followup_flow_pointers")
     .update({ active_version_id: null, updated_at: new Date().toISOString() })
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId);
-  if (unpinErr) return fail("internal_error", unpinErr.message, 500, { requestId });
+  if (unpinErr) return falhaInterna("internal_error", unpinErr, { requestId });
 
   const { error: verErr } = await supabase
     .from("followup_flow_versions")
     .delete()
     .eq("pointer_id", id)
     .eq("organization_id", activeOrg.orgId);
-  if (verErr) return fail("internal_error", verErr.message, 500, { requestId });
+  if (verErr) return falhaInterna("internal_error", verErr, { requestId });
 
   const { error: delErr } = await supabase
     .from("followup_flow_pointers")
     .delete()
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId);
-  if (delErr) return fail("internal_error", delErr.message, 500, { requestId });
+  if (delErr) return falhaInterna("internal_error", delErr, { requestId });
 
   void audit({
     action: "followup_flow.deleted",

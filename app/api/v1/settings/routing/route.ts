@@ -31,7 +31,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
@@ -59,7 +59,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
     .select("settings")
     .eq("id", activeOrg.orgId)
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const settings = (orgRow?.settings as Record<string, unknown> | null) ?? {};
   const routing = routingConfigSchema.catch(DEFAULT_ROUTING).parse(settings.routing ?? {});
@@ -117,7 +117,7 @@ export async function PATCH(req: NextRequest): Promise<Response> {
     .select("settings")
     .eq("id", activeOrg.orgId)
     .maybeSingle();
-  if (readErr) return fail("internal_error", readErr.message, 500, { requestId });
+  if (readErr) return falhaInterna("internal_error", readErr, { requestId });
 
   const currentSettings = (orgRow?.settings as Record<string, unknown> | null) ?? {};
   const { visibility_mode } = input;

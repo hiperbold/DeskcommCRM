@@ -31,7 +31,7 @@ import { prospectEnrichmentSchema } from "@/lib/prospecting/schema";
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { camposDoFunil, settingsDoEmbed } from "@/lib/leads/campos-do-funil";
 import { createClient } from "@/lib/supabase/server";
@@ -90,7 +90,7 @@ export async function GET(
 
   const { data: contactScope, error: scopeError } = await supabase.from("contacts")
     .select("organization_id, is_anonymized").eq("id", contactId).maybeSingle();
-  if (scopeError) return fail("internal_error", scopeError.message, 500, { requestId });
+  if (scopeError) return falhaInterna("internal_error", scopeError, { requestId });
   if (!contactScope) return fail("not_found", "Contato não encontrado.", 404, { requestId });
   // Candidates are worker-only. Authorize the contact through RLS first, then
   // scope this read to that exact contact and organization. Never expose raw data.
@@ -156,7 +156,7 @@ export async function GET(
   // do lado do servidor, exatamente a mentira que esta rota veio desfazer.
   const falha = leads.error ?? orders.error ?? activities.error ?? demandas.error ?? fatos.error ?? historico.error;
   if (falha) {
-    return fail("internal_error", falha.message, 500, { requestId });
+    return falhaInterna("internal_error", falha, { requestId });
   }
 
   // QUEM agiu, e não só "uma pessoa". O lookup roda sobre os autores DISTINTOS

@@ -35,7 +35,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
 import { audit } from "@/lib/audit";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
 import { createClient } from "@/lib/supabase/server";
@@ -75,7 +75,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", org.orgId)
     .maybeSingle();
-  if (convErr) return fail("internal_error", convErr.message, 500, { requestId });
+  if (convErr) return falhaInterna("internal_error", convErr, { requestId });
   if (!convData) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
 
   const conv = convData as unknown as {
@@ -108,7 +108,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
       p_expected_assignee: null,
       p_enforce_expected: true,
     });
-    if (rpcErr) return fail("internal_error", rpcErr.message, 500, { requestId });
+    if (rpcErr) return falhaInterna("internal_error", rpcErr, { requestId });
     if (!atribuida || (atribuida as unknown[]).length === 0) {
       return fail("state_conflict", t("Outro atendente assumiu esta conversa agora."), 409, {
         requestId,
@@ -132,7 +132,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("organization_id", org.orgId)
     .select("id, contact_id, organization_id, status, assigned_to_user_id, bot_silenced_until")
     .maybeSingle();
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  if (updErr) return falhaInterna("internal_error", updErr, { requestId });
   if (!atualizada) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
 
   const final = atualizada as unknown as Conversation;

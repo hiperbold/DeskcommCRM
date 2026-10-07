@@ -1,8 +1,8 @@
 /**
  * Resolve o wa_id canônico para cartão de contato (vcard).
  *
- * No WhatsApp BR o CRM grava +5531998966398 (13 dígitos) mas o wa_id registrado
- * pode ser 553198966398 (12, sem o nono). vCard com waid errado EXIBE o cartão,
+ * No WhatsApp BR o CRM grava +5531991110001 (13 dígitos) mas o wa_id registrado
+ * pode ser 553191110001 (12, sem o nono). vCard com waid errado EXIBE o cartão,
  * porém o toque no app nativo não abre a conversa — exatamente o bug reportado.
  *
  * WAHA documenta `GET /api/contacts/check-exists` para isso; tentamos todas as

@@ -14,32 +14,32 @@ describe("o caso que motivou o módulo — medido, não suposto", () => {
   it("o `wa_id` real do inbound tem 12 dígitos", () => {
     // Se esta asserção quebrar, a Meta mudou o formato e todo o resto precisa ser
     // re-medido antes de confiar.
-    expect(waIdReal).toBe("553198966398");
+    expect(waIdReal).toBe("553191110001");
     expect(waIdReal).toHaveLength(12);
   });
 
   it("o número para o qual ENVIAMOS tem 13 — e é a mesma pessoa", () => {
-    expect(samePhone(waIdReal, "5531998966398")).toBe(true);
+    expect(samePhone(waIdReal, "5531991110001")).toBe(true);
   });
 
   it("sem o módulo, os dois seriam contatos diferentes", () => {
     // A prova de que o problema existe: comparação crua diz que não é a mesma pessoa.
-    expect(`+${waIdReal}`).not.toBe("+5531998966398");
+    expect(`+${waIdReal}`).not.toBe("+5531991110001");
   });
 });
 
 describe("phoneLookupVariants", () => {
   it("celular de 12 dígitos ganha a variante COM o nono", () => {
-    expect(phoneLookupVariants("553198966398")).toEqual(["+553198966398", "+5531998966398"]);
+    expect(phoneLookupVariants("553191110001")).toEqual(["+553191110001", "+5531991110001"]);
   });
 
   it("celular de 13 dígitos ganha a variante SEM o nono", () => {
-    expect(phoneLookupVariants("5531998966398")).toEqual(["+5531998966398", "+553198966398"]);
+    expect(phoneLookupVariants("5531991110001")).toEqual(["+5531991110001", "+553191110001"]);
   });
 
   it("a original vem SEMPRE primeiro — a busca tenta o que chegou antes do palpite", () => {
-    expect(phoneLookupVariants("553198966398")[0]).toBe("+553198966398");
-    expect(phoneLookupVariants("5531998966398")[0]).toBe("+5531998966398");
+    expect(phoneLookupVariants("553191110001")[0]).toBe("+553191110001");
+    expect(phoneLookupVariants("5531991110001")[0]).toBe("+5531991110001");
   });
 
   it("FIXO de 12 dígitos NÃO ganha variante — fundir dois contatos não tem volta", () => {
@@ -67,14 +67,14 @@ describe("phoneLookupVariants", () => {
   });
 
   it("aceita formatação humana e devolve E.164", () => {
-    expect(phoneLookupVariants("+55 (31) 99896-6398")).toEqual([
-      "+5531998966398",
-      "+553198966398",
+    expect(phoneLookupVariants("+55 (31) 99111-0001")).toEqual([
+      "+5531991110001",
+      "+553191110001",
     ]);
   });
 
   it("DDD inválido não gera palpite", () => {
-    expect(phoneLookupVariants("550198966398")).toEqual(["+550198966398"]);
+    expect(phoneLookupVariants("550191110001")).toEqual(["+550191110001"]);
   });
 
   it("vazio devolve lista vazia, não `+`", () => {
@@ -96,8 +96,8 @@ describe("canonicalPhoneBR — o CRM guarda e mostra COM o nono", () => {
   });
 
   it("celular de 12 dígitos ganha o nono; o de 13 já está canônico", () => {
-    expect(canonicalPhoneBR("553198966398")).toBe("+5531998966398");
-    expect(canonicalPhoneBR("+55 (31) 99896-6398")).toBe("+5531998966398");
+    expect(canonicalPhoneBR("553191110001")).toBe("+5531991110001");
+    expect(canonicalPhoneBR("+55 (31) 99111-0001")).toBe("+5531991110001");
   });
 
   it("FIXO não ganha 9 — fundir com um celular inventado não tem volta", () => {
@@ -119,13 +119,13 @@ describe("canonicalPhoneBR — o CRM guarda e mostra COM o nono", () => {
 
 describe("samePhone", () => {
   it("é simétrico", () => {
-    expect(samePhone("553198966398", "5531998966398")).toBe(true);
-    expect(samePhone("5531998966398", "553198966398")).toBe(true);
+    expect(samePhone("553191110001", "5531991110001")).toBe(true);
+    expect(samePhone("5531991110001", "553191110001")).toBe(true);
   });
 
   it("pessoas diferentes continuam diferentes", () => {
-    expect(samePhone("5531998966398", "5531998966399")).toBe(false);
-    expect(samePhone("553198966398", "553198966399")).toBe(false);
+    expect(samePhone("5531991110001", "5531991110002")).toBe(false);
+    expect(samePhone("553191110001", "553191110002")).toBe(false);
   });
 
   it("fixo e celular com dígitos parecidos NÃO se confundem", () => {

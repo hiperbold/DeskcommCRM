@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { carregarComportamentoDaInstalacao } from "@/lib/instalacao/comportamento-servidor";
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   );
 
   if (sessErr) {
-    return fail("internal_error", sessErr.message, 500, { requestId });
+    return falhaInterna("internal_error", sessErr, { requestId });
   }
   if (!session) {
     // Sessão ainda não registrada no nosso DB — aceita e ignora. Comum quando a

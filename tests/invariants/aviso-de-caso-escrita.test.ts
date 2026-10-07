@@ -152,7 +152,7 @@ beforeAll(() => {
     -- vizinho, "o vizinho lê zero" seria satisfeito por tabela vazia.
     insert into public.config_aviso_de_caso
         (organization_id, channel_session_id, telefone_destino, ligado)
-      values ('${ORG_A}', '${SESSAO_A}', '+5531998966398', true)
+      values ('${ORG_A}', '${SESSAO_A}', '+5531991110001', true)
       on conflict (organization_id) do update
         set channel_session_id = excluded.channel_session_id, ligado = excluded.ligado;
     insert into public.config_aviso_de_caso
@@ -163,7 +163,7 @@ beforeAll(() => {
 
     insert into public.entregas_de_aviso_de_caso
         (organization_id, case_id, destino, channel_session_id, status)
-      values ('${ORG_A}', '${CASO_A}', '+5531998966398', '${SESSAO_A}', 'enviado')
+      values ('${ORG_A}', '${CASO_A}', '+5531991110001', '${SESSAO_A}', 'enviado')
       on conflict do nothing;
   `);
 });

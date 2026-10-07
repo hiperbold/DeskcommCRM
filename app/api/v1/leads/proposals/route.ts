@@ -22,7 +22,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import type { LeadCandidate } from "@/lib/leads/active-lead";
 import { roteiaProximasAcoes, type EstadoDoContato } from "@/lib/leads/next-action";
 import { createClient } from "@/lib/supabase/server";
@@ -85,8 +85,8 @@ export async function GET(req: NextRequest): Promise<Response> {
         .eq("organization_id", orgId)
         .eq("status", "open"),
     ]);
-  if (estadosErr) return fail("internal", estadosErr.message, 500, { requestId });
-  if (candErr) return fail("internal", candErr.message, 500, { requestId });
+  if (estadosErr) return falhaInterna("internal", estadosErr, { requestId });
+  if (candErr) return falhaInterna("internal", candErr, { requestId });
 
   const { porLead } = roteiaProximasAcoes(
     (estados ?? []) as EstadoDoContato[],
@@ -106,7 +106,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       .select("id, title, contact_id, crm_stages!crm_leads_stage_id_fkey(name), contacts(name, display_name)")
       .eq("organization_id", orgId)
       .in("id", leadIds);
-    if (leadsErr) return fail("internal", leadsErr.message, 500, { requestId });
+    if (leadsErr) return falhaInterna("internal", leadsErr, { requestId });
 
     for (const l of (leads ?? []) as unknown as Array<{
       id: string;
@@ -143,7 +143,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     .in("type", ["next_action_approved", "next_action_dismissed"])
     .order("performed_at", { ascending: false })
     .limit(LIMITE_HISTORICO);
-  if (decErr) return fail("internal", decErr.message, 500, { requestId });
+  if (decErr) return falhaInterna("internal", decErr, { requestId });
 
   const linhas = (decididas ?? []) as unknown as Array<{
     id: string;

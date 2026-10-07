@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { audit } from "@/lib/audit";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   const { data: visible, error: readError } = await supabase.from("conversations")
     .select("id, organization_id, service_revision").eq("id", id)
     .eq("organization_id", authz.org.orgId).maybeSingle();
-  if (readError) return fail("internal_error", readError.message, 500, { requestId });
+  if (readError) return falhaInterna("internal_error", readError, { requestId });
   if (!visible) return fail("not_found", t("Conversa não encontrada."), 404, { requestId });
   const { data, error } = await createAdminClient().rpc("fn_service_status", {
     p_org: visible.organization_id, p_conversation: id, p_status: "closed",

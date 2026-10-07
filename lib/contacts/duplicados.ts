@@ -7,8 +7,8 @@
  * saudável, portanto, duas linhas ATIVAS nunca repetem a MESMA string. A
  * duplicata real chega por dois caminhos que o índice não vê:
  *
- *  1. **Grafias diferentes do mesmo número.** `+553198966398` (12 dígitos, como
- *     o WhatsApp às vezes entrega o `wa_id`) e `+5531998966398` (13, como o
+ *  1. **Grafias diferentes do mesmo número.** `+553191110001` (12 dígitos, como
+ *     o WhatsApp às vezes entrega o `wa_id`) e `+5531991110001` (13, como o
  *     brasileiro digita) são strings distintas para o Postgres e a mesma pessoa
  *     para o mundo. É o nono dígito, já tratado em `lib/channels/phone-variants`.
  *  2. **O conflito que a ingestão PARKOU de propósito.** Quando o webhook do

@@ -3,7 +3,7 @@ async function main() {
   const a = getAdapter("meta_cloud");
   console.info("isConfigured:", a.isConfigured());
   const to = a.resolveRecipient({
-    isGroup: false, groupChatId: null, phoneNumber: "+55 31 99896-6398", waIdentity: null,
+    isGroup: false, groupChatId: null, phoneNumber: "+55 31 99111-0001", waIdentity: null,
   });
   console.info("destinatario resolvido:", to);
   try {

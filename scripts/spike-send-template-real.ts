@@ -12,7 +12,7 @@ import { sendTemplate } from "@/lib/channels/meta/send-template";
 
 const TEMPLATE = "deskcomm_prova_webhook_0088";
 const IDIOMA = "pt_BR";
-const DESTINO = "5531998966398";
+const DESTINO = "5531991110001";
 
 async function main() {
   const db = createAdminClient();

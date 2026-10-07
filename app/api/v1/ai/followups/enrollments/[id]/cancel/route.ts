@@ -12,7 +12,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { logger } from "@/lib/logger";
@@ -53,7 +53,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Enrollment não encontrado."), 404, { requestId });
 
   if (!LIVE_STATUSES.includes(existing.status)) {
@@ -75,7 +75,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .select("id, status, cancel_reason, updated_at")
     .single();
   if (updErr || !updated) {
-    return fail("internal_error", updErr?.message ?? "followup_enrollment_cancel_failed", 500, {
+    return falhaInterna("internal_error", updErr ?? "followup_enrollment_cancel_failed", {
       requestId,
     });
   }

@@ -30,7 +30,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (desligado) return desligado;
   const { id } = await ctx.params;
 
-  const authz = await requireRole("viewer", { requestId, resource: "external_db_connections" });
+  // D-146: manager para cima. A consulta não tem lista de tabelas liberada pelo administrador, então
+  // quem lê aqui vê o ERP inteiro (CPF, endereço, cartão); "Somente leitura" e atendente ficam de fora.
+  const authz = await requireRole("manager", { requestId, resource: "external_db_connections" });
   if (!authz.ok) return authz.response;
   const t = (texto: string) => traduzir(texto, authz.user.idioma);
   const { user: authUser, org: activeOrg } = authz;

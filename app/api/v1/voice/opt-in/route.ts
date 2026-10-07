@@ -34,7 +34,7 @@ import type { NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { roleAtLeast } from "@/lib/auth/types";
@@ -66,9 +66,7 @@ export async function GET(): Promise<Response> {
   try {
     ({ escolha, riscoAceitoEm } = await lerEscolhaDaOrg(db, org.orgId));
   } catch (err) {
-    return fail("read_failed", err instanceof Error ? err.message : String(err), 500, {
-      requestId,
-    });
+    return falhaInterna("read_failed", err, { requestId });
   }
 
   const estado = estadoDaVoz(escolha, instalacaoOfereceVoz(env.WACALLS_API_BASE_URL));
@@ -199,7 +197,7 @@ export async function PUT(req: NextRequest): Promise<Response> {
     .select("enabled, risco_aceito_em")
     .maybeSingle();
 
-  if (error) return fail("save_failed", error.message, 500, { requestId });
+  if (error) return falhaInterna("save_failed", error, { requestId });
   if (!gravado) {
     // Upsert que casa zero linhas devolve SUCESSO no PostgREST — a tela diria
     // "salvo" sem nada ter sido gravado. Mesmo cuidado da rota de guardrails.

@@ -10,7 +10,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
@@ -68,7 +68,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .select(MUTATION_COLUMNS)
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!row) return fail("not_found", "Número não encontrado.", 404, { requestId });
 
   await audit({

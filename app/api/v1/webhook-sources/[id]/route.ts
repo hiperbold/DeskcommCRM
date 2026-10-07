@@ -6,13 +6,13 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail, noContent } from "@/lib/api/wrappers";
+import { ok, fail, noContent, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { ApiError } from "@/lib/api/types";
 import { autoriaDaMudanca } from "@/lib/operacao/autoria";
-import { destinoValido } from "@/lib/operacao/entradas-automaticas";
+import { COLUNAS_DA_FONTE, destinoValido, tokensDasFontes } from "@/lib/operacao/entradas-automaticas";
 import { updateWebhookSourceSchema } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -57,7 +57,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Fonte não encontrada."), 404, { requestId });
 
   // D-132: o POST confere o destino (funil e etapa desta organizacao, etapa do
@@ -111,7 +111,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .from("webhook_sources")
     .update(patch)
     .eq("id", id)
-    .select("*")
+    .select(COLUNAS_DA_FONTE)
     .single();
   if (updErr) {
     // Fase F3, decisão 3: este PATCH é um SEGUNDO caminho de escrita para
@@ -120,7 +120,7 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     // `code`, nunca pelo texto do Postgres.
     const recusa = recusaDoPlano(updErr);
     if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
-    return fail("internal_error", updErr.message, 500, { requestId });
+    return falhaInterna("internal_error", updErr, { requestId });
   }
 
   void audit({
@@ -134,8 +134,13 @@ export async function PATCH(req: NextRequest, ctx: RouteCtx): Promise<Response> 
     metadata: { ...restPatch, ...(patchedSecret !== undefined ? { secret_changed: true } : {}) },
   });
 
-  const { secret_encrypted: encAfter, ...updatedPublic } = updated as Record<string, unknown>;
-  return ok({ ...updatedPublic, has_secret: encAfter !== null }, { requestId });
+  // D-128: `path_token` não é legível pela sessão; o servidor o lê (o corpo de sucesso segue o mesmo).
+  const tokens = await tokensDasFontes(
+    { supabase, leitorDeTokens: createAdminClient(), organizationId: activeOrg.orgId, actor: { type: "user", id: user.id }, requestId },
+    [id],
+  );
+  const { secret_encrypted: encAfter, ...updatedPublic } = updated as unknown as Record<string, unknown>;
+  return ok({ ...updatedPublic, path_token: tokens.get(id) ?? "", has_secret: encAfter !== null }, { requestId });
 }
 
 export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
@@ -156,11 +161,11 @@ export async function DELETE(_req: NextRequest, ctx: RouteCtx): Promise<Response
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!existing) return fail("not_found", t("Fonte não encontrada."), 404, { requestId });
 
   const { error: delErr } = await supabase.from("webhook_sources").delete().eq("id", id);
-  if (delErr) return fail("internal_error", delErr.message, 500, { requestId });
+  if (delErr) return falhaInterna("internal_error", delErr, { requestId });
 
   void audit({
     action: "webhook.source_deleted",

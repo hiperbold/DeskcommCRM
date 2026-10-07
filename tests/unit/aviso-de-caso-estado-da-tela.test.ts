@@ -45,7 +45,7 @@ function fatos(patch: Partial<FatosDaTelaDeAviso> = {}): FatosDaTelaDeAviso {
     ],
     config: {
       channelSessionId: CANAL_QR,
-      telefone: "+5531998966398",
+      telefone: "+5531991110001",
       rotulo: "Plantão da Ana",
       ligado: true,
     },
@@ -63,19 +63,19 @@ const codigos = (f: FatosDaTelaDeAviso) => avisosDaTela(f).map((a) => a.codigo);
 
 describe("o telefone de aviso", () => {
   it("aceita só E.164 — a MESMA forma do CHECK do banco", () => {
-    expect(telefoneDeAvisoValido("+5531998966398")).toBe(true);
+    expect(telefoneDeAvisoValido("+5531991110001")).toBe(true);
     // Sem `+`, com zero no DDI, curto demais e longo demais: os quatro jeitos de
     // o RPC devolver `aviso_de_caso_telefone_invalido` depois de a pessoa ter
     // preenchido a tela inteira.
-    expect(telefoneDeAvisoValido("5531998966398")).toBe(false);
-    expect(telefoneDeAvisoValido("+0531998966398")).toBe(false);
+    expect(telefoneDeAvisoValido("5531991110001")).toBe(false);
+    expect(telefoneDeAvisoValido("+0531991110001")).toBe(false);
     expect(telefoneDeAvisoValido("+5531999")).toBe(false);
-    expect(telefoneDeAvisoValido("+5531998966398123456")).toBe(false);
+    expect(telefoneDeAvisoValido("+5531991110001123456")).toBe(false);
   });
 
   it("normaliza o que a pessoa digita para a forma que o banco aceita", () => {
-    expect(normalizarTelefoneDeAviso("(31) 99896-6398")).toBe("+31998966398");
-    expect(normalizarTelefoneDeAviso("+55 31 99896-6398")).toBe("+5531998966398");
+    expect(normalizarTelefoneDeAviso("(31) 99111-0001")).toBe("+31991110001");
+    expect(normalizarTelefoneDeAviso("+55 31 99111-0001")).toBe("+5531991110001");
     // Campo vazio não vira `+`: um `+` sozinho reprovaria na validação e diria à
     // pessoa que ela digitou algo errado quando ela não digitou nada.
     expect(normalizarTelefoneDeAviso("")).toBe("");
@@ -95,7 +95,7 @@ describe("pode ligar o aviso?", () => {
   it("não sem número válido", () => {
     const f = fatos();
     expect(
-      podeLigarOAviso({ ...f, config: { ...f.config!, telefone: "31998966398" } }),
+      podeLigarOAviso({ ...f, config: { ...f.config!, telefone: "31991110001" } }),
     ).toBe(false);
   });
 
@@ -114,7 +114,7 @@ describe("pode ligar o aviso?", () => {
           ],
           config: {
             channelSessionId: CANAL_OFICIAL,
-            telefone: "+5531998966398",
+            telefone: "+5531991110001",
             rotulo: null,
             ligado: false,
           },

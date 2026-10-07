@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { progresso, taxasDaCampanha, type ContagemDaCampanha } from "@/lib/campanhas/metricas";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -44,7 +44,7 @@ export async function GET(
     .eq("organization_id", authz.org.orgId)
     .eq("campaign_id", id)
     .limit(TETO);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const linhas = (data ?? []) as unknown as Array<{
     status: string;

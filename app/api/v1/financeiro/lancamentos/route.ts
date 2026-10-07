@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { recusarEscritaEmModoLeitura } from "@/lib/billing/assinatura/recusa-de-escrita";
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (status === "pending" || status === "paid") q = q.eq("status", status);
 
   const { data, error } = await q;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   return ok(data ?? [], { requestId });
 }
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (error.code === "23503") {
       return fail("validation_failed", "Conta ou plano de contas inválido.", 422, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   await audit({

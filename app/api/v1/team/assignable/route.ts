@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -41,7 +41,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
     .neq("role", "viewer")
     .order("created_at", { ascending: true });
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const memberships = (rows ?? []) as Array<{ user_id: string; role: string }>;
 

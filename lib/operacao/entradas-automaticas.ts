@@ -45,6 +45,12 @@ type SB = SupabaseClient;
 
 export interface DepsDaOperacao {
   supabase: SB;
+  /**
+   * Cliente de SERVIDOR que lê o `path_token` (D-128). A coluna não é legível pela sessão do usuário
+   * (migration 0948): quem chama com a sessão (as rotas REST) passa o cliente admin aqui, depois de
+   * conferir o papel. Ausente, vale `supabase`: o agente de IA já chega com o cliente admin.
+   */
+  leitorDeTokens?: SB;
   organizationId: string;
   /** Resolvido de fonte confiável pelo chamador — nunca do body. */
   actor: Actor;
@@ -78,14 +84,36 @@ export interface FonteVisivel {
  * `redirect_to` e `kind` porque a tela de fontes os consome — trocar a projeção
  * "de passagem" numa refatoração é como uma tela quebra em silêncio.
  */
-const COLUNAS =
-  "id, organization_id, name, is_active, kind, path_token, default_pipeline_id, default_stage_id, " +
+/**
+ * ⚠️ SEM `path_token`: o SELECT dessa coluna foi revogado para a sessão do usuário (D-128, migration
+ * 0948). O token entra depois, lido por `tokensDasFontes` com o cliente de servidor.
+ */
+export const COLUNAS_DA_FONTE =
+  "id, organization_id, name, is_active, kind, default_pipeline_id, default_stage_id, " +
   "redirect_to, field_map, last_received_at, secret_encrypted, created_at, updated_at, " +
   "last_change_actor_kind, last_change_at";
 
-function semSegredo(linha: Record<string, unknown>): FonteVisivel {
+/** O `path_token` das fontes DESTA organização, lido pelo servidor. */
+export async function tokensDasFontes(deps: DepsDaOperacao, ids: string[]): Promise<Map<string, string>> {
+  const tokens = new Map<string, string>();
+  if (ids.length === 0) return tokens;
+  const { data, error } = await (deps.leitorDeTokens ?? deps.supabase)
+    .from("webhook_sources")
+    .select("id, path_token")
+    .eq("organization_id", deps.organizationId)
+    .in("id", ids);
+  if (error) throw new ApiError(500, "internal_error", undefined, deps.requestId, error.message);
+  for (const l of (data ?? []) as unknown as Array<{ id: string; path_token: string }>) tokens.set(l.id, l.path_token);
+  return tokens;
+}
+
+function semSegredo(linha: Record<string, unknown>, pathToken: string): FonteVisivel {
   const { secret_encrypted, ...resto } = linha;
-  return { ...(resto as unknown as Omit<FonteVisivel, "has_secret">), has_secret: secret_encrypted !== null };
+  return {
+    ...(resto as unknown as Omit<FonteVisivel, "has_secret" | "path_token">),
+    path_token: pathToken,
+    has_secret: secret_encrypted !== null,
+  };
 }
 
 export async function listarEntradasAutomaticas(
@@ -94,14 +122,16 @@ export async function listarEntradasAutomaticas(
 ): Promise<FonteVisivel[]> {
   let q = deps.supabase
     .from("webhook_sources")
-    .select(COLUNAS)
+    .select(COLUNAS_DA_FONTE)
     .eq("organization_id", deps.organizationId)
     .order("created_at", { ascending: false });
   if (opts.apenasAtivas) q = q.eq("is_active", true);
 
   const { data, error } = await q;
   if (error) throw new ApiError(500, "internal_error", undefined, deps.requestId, error.message);
-  return ((data ?? []) as unknown as Array<Record<string, unknown>>).map(semSegredo);
+  const linhas = (data ?? []) as unknown as Array<Record<string, unknown>>;
+  const tokens = await tokensDasFontes(deps, linhas.map((l) => l.id as string));
+  return linhas.map((l) => semSegredo(l, tokens.get(l.id as string) ?? ""));
 }
 
 /** A fonte desta organização, ou a recusa — `null` de outro tenant vira 404. */
@@ -111,7 +141,7 @@ async function fonteDaOrg(
 ): Promise<{ id: string; name: string; path_token: string; is_active: boolean }> {
   const { data, error } = await deps.supabase
     .from("webhook_sources")
-    .select("id, name, path_token, is_active")
+    .select("id, name, is_active")
     .eq("id", id)
     .eq("organization_id", deps.organizationId)
     .maybeSingle();
@@ -125,7 +155,9 @@ async function fonteDaOrg(
       "Essa entrada automática de contatos não existe aqui.",
     );
   }
-  return data as unknown as { id: string; name: string; path_token: string; is_active: boolean };
+  const fonte = data as unknown as { id: string; name: string; is_active: boolean };
+  const tokens = await tokensDasFontes(deps, [fonte.id]);
+  return { ...fonte, path_token: tokens.get(fonte.id) ?? "" };
 }
 
 /**
@@ -228,7 +260,7 @@ export async function criarEntradaAutomatica(
       redirect_to: input.redirect_to ?? null,
       ...autoriaDaMudanca(deps.actor),
     })
-    .select(COLUNAS)
+    .select(COLUNAS_DA_FONTE)
     .single();
   if (error || !created) {
     throw erroDePlanoOuGenerico(error, deps.requestId, "webhook_source_insert_failed");
@@ -244,7 +276,8 @@ export async function criarEntradaAutomatica(
     metadata: { name: input.name, actor_type: deps.actor.type },
   });
 
-  return semSegredo(created as unknown as Record<string, unknown>);
+  // O token acabou de ser gerado aqui: não há por que pedi-lo de volta ao banco.
+  return semSegredo(created as unknown as Record<string, unknown>, pathToken);
 }
 
 /**
@@ -269,7 +302,7 @@ export async function definirEntradaAtiva(
     })
     .eq("id", input.id)
     .eq("organization_id", deps.organizationId)
-    .select(COLUNAS)
+    .select(COLUNAS_DA_FONTE)
     .single();
   if (error || !updated) {
     throw erroDePlanoOuGenerico(error, deps.requestId, "webhook_source_update_failed");
@@ -290,7 +323,7 @@ export async function definirEntradaAtiva(
     },
   });
 
-  return semSegredo(updated as unknown as Record<string, unknown>);
+  return semSegredo(updated as unknown as Record<string, unknown>, antes.path_token);
 }
 
 export interface RecebimentoDaEntrada {

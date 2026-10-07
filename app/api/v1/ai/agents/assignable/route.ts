@@ -37,7 +37,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { agenteAtende } from "@/lib/ai/agents/no-ar";
 import { createClient } from "@/lib/supabase/server";
@@ -73,7 +73,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     .order("priority", { ascending: false })
     .order("created_at", { ascending: true });
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const rows = (
     (agents ?? []) as Array<{
@@ -95,7 +95,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       .select("id, version_number")
       .eq("organization_id", orgId)
       .in("id", publishedIds);
-    if (versionsErr) return fail("internal_error", versionsErr.message, 500, { requestId });
+    if (versionsErr) return falhaInterna("internal_error", versionsErr, { requestId });
     for (const v of (versions ?? []) as Array<{ id: string; version_number: number }>) {
       versionById.set(v.id, v.version_number);
     }

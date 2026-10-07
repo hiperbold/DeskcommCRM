@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import {
@@ -466,9 +466,9 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
       .order("position_in_stage"),
   ]);
 
-  if (pipelineErr) return fail("internal_error", pipelineErr.message, 500, { requestId });
-  if (stagesErr) return fail("internal_error", stagesErr.message, 500, { requestId });
-  if (leadsErr) return fail("internal_error", leadsErr.message, 500, { requestId });
+  if (pipelineErr) return falhaInterna("internal_error", pipelineErr, { requestId });
+  if (stagesErr) return falhaInterna("internal_error", stagesErr, { requestId });
+  if (leadsErr) return falhaInterna("internal_error", leadsErr, { requestId });
   if (!pipeline) return fail("resource_not_found", t("Pipeline não encontrado."), 404, { requestId });
 
   const leadsWithOwner = await withOwnerAgents(
@@ -477,7 +477,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     (leads ?? []) as Lead[],
   );
   if (leadsWithOwner.error) {
-    return fail("internal_error", leadsWithOwner.error, 500, { requestId });
+    return falhaInterna("internal_error", leadsWithOwner.error, { requestId });
   }
 
   const { data: pipelinePadrao } = await supabase
@@ -494,7 +494,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     (pipelinePadrao as { id: string } | null)?.id ?? null,
   );
   if (leadsComAcao.error) {
-    return fail("internal_error", leadsComAcao.error, 500, { requestId });
+    return falhaInterna("internal_error", leadsComAcao.error, { requestId });
   }
 
   const leadsComScore = await withScores(
@@ -503,7 +503,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     leadsComAcao.leads,
   );
   if (leadsComScore.error) {
-    return fail("internal_error", leadsComScore.error, 500, { requestId });
+    return falhaInterna("internal_error", leadsComScore.error, { requestId });
   }
 
   const leadsComConversa = await withConversas(
@@ -512,7 +512,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     leadsComScore.leads,
   );
   if (leadsComConversa.error) {
-    return fail("internal_error", leadsComConversa.error, 500, { requestId });
+    return falhaInterna("internal_error", leadsComConversa.error, { requestId });
   }
 
   const leadsComMarcadores = await withMarcadoresDoContato(
@@ -521,7 +521,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     leadsComConversa.leads,
   );
   if (leadsComMarcadores.error) {
-    return fail("internal_error", leadsComMarcadores.error, 500, { requestId });
+    return falhaInterna("internal_error", leadsComMarcadores.error, { requestId });
   }
 
   const board: BoardData = {

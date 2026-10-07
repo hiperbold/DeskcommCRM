@@ -22,7 +22,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { rotuloDoContato } from "@/lib/contacts/rotulo-do-contato";
 import {
@@ -161,7 +161,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("id", id)
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!row) return fail("not_found", t("Follow-up não encontrado."), 404, { requestId });
 
   const { data: eventos, error: evErr } = await supabase
@@ -172,7 +172,7 @@ export async function GET(_req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .order("created_at", { ascending: true })
     .order("id", { ascending: true })
     .limit(TETO_DE_EVENTOS + 1);
-  if (evErr) return fail("internal_error", evErr.message, 500, { requestId });
+  if (evErr) return falhaInterna("internal_error", evErr, { requestId });
 
   const lidos = eventos ?? [];
   const truncado = lidos.length > TETO_DE_EVENTOS;

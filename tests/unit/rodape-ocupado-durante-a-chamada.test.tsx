@@ -96,7 +96,7 @@ function sessaoEmChamada(): Record<string, unknown> {
       id: "c1",
       contact_id: null,
       direction: "outbound",
-      peer_phone: "553198966398",
+      peer_phone: "553191110001",
       status: "connected",
       answered_at: new Date().toISOString(),
     },

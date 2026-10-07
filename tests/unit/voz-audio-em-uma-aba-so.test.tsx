@@ -132,7 +132,7 @@ function linha(over: Record<string, unknown> = {}) {
     id: CHAMADA,
     contact_id: CONTATO,
     direction: "outbound",
-    peer_phone: "553198966398",
+    peer_phone: "553191110001",
     status: "ringing",
     end_reason: null,
     started_at: new Date().toISOString(),

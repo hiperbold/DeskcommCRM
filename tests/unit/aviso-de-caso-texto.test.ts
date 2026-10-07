@@ -113,13 +113,13 @@ describe("montarAvisoDeCaso", () => {
   it("NÃO leva telefone, CPF nem trecho de mensagem do cliente", () => {
     const texto = montarAvisoDeCaso({
       ...BASE,
-      title: "Cliente 529.982.247-25 no +55 31 99896-6398 quer desconto",
-      summary: "ele disse: 'meu cpf é 529.982.247-25, me liga no 31998966398'",
+      title: "Cliente 529.982.247-25 no +55 31 99111-0001 quer desconto",
+      summary: "ele disse: 'meu cpf é 529.982.247-25, me liga no 31991110001'",
       blocker: "a política permite até 10%",
     });
     expect(texto).not.toMatch(/\d{3}\.\d{3}\.\d{3}-\d{2}/);
     expect(texto).not.toMatch(/\+?55\s?\d{2}\s?9?\d{4}[-\s]?\d{4}/);
-    expect(texto).not.toContain("998966398");
+    expect(texto).not.toContain("991110001");
   });
 
   it("a URL escrita pelo lead some; o link do servidor fica", () => {

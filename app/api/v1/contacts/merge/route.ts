@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { contactsMergeSchema, validateRequest } from "@/lib/schemas";
@@ -120,7 +120,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (previsto) {
       return fail(previsto.code, previsto.message, previsto.status, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   const resultado = data as unknown as ResultadoDaFusao;

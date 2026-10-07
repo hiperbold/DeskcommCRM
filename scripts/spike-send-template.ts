@@ -19,7 +19,7 @@ import { buildComponents, missingSlots } from "@/lib/channels/meta/build-compone
 import { deriveTemplateContract, describeAddress } from "@/lib/channels/meta/template-contract";
 
 const TEMPLATE = "jaspers_market_order_confirmation_v1";
-const TO = process.env.META_TEST_RECIPIENT ?? "5531998966398";
+const TO = process.env.META_TEST_RECIPIENT ?? "5531991110001";
 
 function env(name: string): string {
   const v = process.env[name];

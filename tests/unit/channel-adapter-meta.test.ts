@@ -119,8 +119,8 @@ describe("adapter meta_cloud — endereçamento", () => {
   it("telefone vira E.164 em DÍGITOS, sem + e sem sufixo", () => {
     // `@c.us` é do outro canal. Um `+` sobrevivente vira (#131009) na Meta.
     expect(a().resolveRecipient({
-      isGroup: false, groupChatId: null, phoneNumber: "+55 (31) 99896-6398", waIdentity: null,
-    })).toBe("5531998966398");
+      isGroup: false, groupChatId: null, phoneNumber: "+55 (31) 99111-0001", waIdentity: null,
+    })).toBe("5531991110001");
   });
 
   it("grupo devolve null — a API de grupos não faz parte deste seam", () => {
@@ -173,13 +173,13 @@ describe("adapter meta_cloud — envio", () => {
   it("texto vai como type:text e o phone_number_id entra na URL, não no corpo", async () => {
     configurar();
     const spy = stubFetch({ messages: [{ id: "wamid.T" }] });
-    const r = await a().send({ organizationId: ORG, sessionRef: "ignorado", to: "5531998966398", kind: "text", body: "oi" });
+    const r = await a().send({ organizationId: ORG, sessionRef: "ignorado", to: "5531991110001", kind: "text", body: "oi" });
 
     expect(r).toEqual({ externalId: "wamid.T" });
     const [url, init] = spy.mock.calls[0]!;
     expect(url).toContain("/v19.0/1103328999528818/messages");
     const corpo = JSON.parse(init.body as string) as Record<string, unknown>;
-    expect(corpo).toMatchObject({ messaging_product: "whatsapp", to: "5531998966398", type: "text" });
+    expect(corpo).toMatchObject({ messaging_product: "whatsapp", to: "5531991110001", type: "text" });
     expect(corpo).not.toHaveProperty("session");
   });
 
@@ -187,7 +187,7 @@ describe("adapter meta_cloud — envio", () => {
     configurar();
     const spy = stubFetch({ messages: [{ id: "wamid.A" }] });
     await a().send({
-      organizationId: ORG, sessionRef: "x", to: "5531998966398", kind: "audio",
+      organizationId: ORG, sessionRef: "x", to: "5531991110001", kind: "audio",
       media: { url: "https://x/a.ogg", mime: "audio/ogg" },
     });
     const corpo = JSON.parse(spy.mock.calls[0]![1].body as string) as {
@@ -241,7 +241,7 @@ describe("adapter meta_cloud — envio", () => {
     const r = await a().send({
       organizationId: "org-1",
       sessionRef: "ignorado",
-      to: "5531998966398",
+      to: "5531991110001",
       kind: "contact",
       contact: {
         fullName: "Maria Silva",

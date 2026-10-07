@@ -295,8 +295,8 @@ describe("o sentido da ligação quando o evento não o traz", () => {
 
 describe("o contato da ligação pelas duas grafias do nono dígito", () => {
   it("peer SEM o nono acha o contato cadastrado COM o nono", async () => {
-    // O caso medido: o WhatsApp registra `553198966398`, o CRM guarda
-    // `+5531998966398`. Com a ligação discada para o endereço certo, casar só
+    // O caso medido: o WhatsApp registra `553191110001`, o CRM guarda
+    // `+5531991110001`. Com a ligação discada para o endereço certo, casar só
     // `'+' || peer` deixaria toda ligação desse contato sem ele.
     const SEM_NONO = TELEFONE.slice(0, 4) + TELEFONE.slice(5); // 55 11 [9]66660000
     const ID = "grafia-sem-nono";

@@ -23,6 +23,12 @@ const HASHES_PROIBIDOS = new Set([
   "1dc5f97845cf6439fe2a47a0c4101c4cf57b0211c63ed8e7d07e3c46867387cb",
   "5832af35c7c2f293e344819bfc4868519762c4abd5e18ed730c9a5c8420c8d22",
   "e4e889a2bdb11363be183744c1572fa0e1b33be81f3b481be02cbe3790ea04b7",
+  // Celular real que ainda estava em dezenas de fixtures (D-170), nas quatro formas isoladas
+  // em que aparecia: com 55 e nono dígito, com 55 sem o nono, local com e sem o nono.
+  "53dcb6ab73e66c0116236855131887613c645d164fca20fc0b9fbd6a01cd0718",
+  "2549f030027cdb1cfa454afbd2f9adc6d63b67f2c5f93efa0608aa3e9c80c073",
+  "1214ca4cea9e931ac2cb36ad0a019f371b738cf4dab477b743e82fb175678c54",
+  "9f7a7bc9c3f3c82b7a0410dab717517d1aea6579996c0efe88c4d9d487acfbfb",
 ]);
 
 const AREAS = ["app", "lib", "workers", "components", "hooks", "tests", "docs"];

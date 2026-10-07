@@ -20,7 +20,7 @@ import { type NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
 import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { claimConversationSchema, validateRequest } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   });
 
   if (error) {
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
   const row = data?.[0];
   if (!row) {

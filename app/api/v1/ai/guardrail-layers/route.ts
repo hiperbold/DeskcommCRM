@@ -28,7 +28,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { roleAtLeast } from "@/lib/auth/types";
@@ -49,7 +49,7 @@ export async function GET(): Promise<Response> {
     .select("layer, enabled")
     .eq("organization_id", org.orgId);
 
-  if (error) return fail("read_failed", error.message, 500);
+  if (error) return falhaInterna("read_failed", error);
 
   const escolhido = new Map((data ?? []).map((r) => [r.layer as string, r.enabled as boolean]));
   // O padrão como o WORKER o monta — ver `padraoDasCamadasNoAmbiente`. A tela usa
@@ -105,7 +105,7 @@ export async function PUT(req: NextRequest): Promise<Response> {
     .select("layer, enabled")
     .maybeSingle();
 
-  if (error) return fail("save_failed", error.message, 500);
+  if (error) return falhaInterna("save_failed", error);
   if (!gravado) {
     // Upsert que casa zero linhas devolve sucesso no PostgREST — a tela diria
     // "salvo" sem nada ter sido gravado. Mesmo cuidado da rota de provedores.

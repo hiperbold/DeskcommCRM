@@ -36,7 +36,7 @@ import {
   houveRedacao,
   type ClienteDaCascata,
 } from "@/lib/lgpd/cascata";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { lgpdAnonymizeSchema, validateRequest } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     .eq("id", input.contact_id)
     .maybeSingle();
   if (selErr) {
-    return fail("internal_error", selErr.message, 500, { requestId });
+    return falhaInterna("internal_error", selErr, { requestId });
   }
   if (!existing) {
     // Sem `t()` de propósito: o único consumidor (`useAnonymizeContact`) usa
@@ -125,7 +125,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (c1Err.code === "42501") return fail("forbidden", "Sem permissão para anonimizar este contato.", 403, { requestId });
     if (c1Err.code === "P0002") return fail("not_found", "Contato não encontrado.", 404, { requestId });
     if (c1Err.code === "40001") return fail("state_conflict", "O contato está em atualização. Tente novamente.", 409, { requestId });
-    return fail("internal_error", `contacts: ${c1Err.message}`, 500, { requestId });
+    return falhaInterna("internal_error", c1Err, { requestId });
   }
   const step = z.object({ already_anonymized: z.boolean(), anonymized_at: z.string().nullable() }).safeParse(stepData);
   if (!step.success) return fail("internal_error", "Não foi possível confirmar a anonimização.", 500, { requestId });

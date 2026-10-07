@@ -12290,6 +12290,9 @@ export const DICIONARIO: Traducoes = {
   "Esta conexão está desativada. Ative-a na lista para consultar os dados.": {
     es: "Esta conexión está desactivada. Actívala en la lista para consultar los datos.",
   },
+  "A consulta aos dados desta conexão é de gestores e administradores.": {
+    es: "La consulta a los datos de esta conexión es de gestores y administradores.",
+  },
   // Frase inteira, e não "Ativada" seco: essa chave já existe neste arquivo,
   // de outra tela e no feminino (`Activada`) — reusá-la duplicaria a chave e
   // discordaria do gênero de `Recorrido`.

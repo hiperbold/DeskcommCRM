@@ -81,7 +81,7 @@ function monta(over: Partial<Estado> = {}, deps: Partial<AvisoDeps> = {}) {
     cfg: {
       organization_id: ORG,
       channel_session_id: CANAL,
-      telefone_destino: "+5531998966398",
+      telefone_destino: "+5531991110001",
       destino_jid: null,
       ligado: true,
     },
@@ -216,7 +216,7 @@ describe("aviso ao suporte — nenhum desfecho é `error`", () => {
   });
 
   it("configuração desligada sai `skipped`, sem tocar a rede", async () => {
-    const { deps, estado } = monta({ cfg: { channel_session_id: CANAL, telefone_destino: "+5531998966398", ligado: false } });
+    const { deps, estado } = monta({ cfg: { channel_session_id: CANAL, telefone_destino: "+5531991110001", ligado: false } });
     const r = await aplicaAvisoDeCaso(deps, evento());
     expect(r.status).toBe("skipped");
     expect(estado.enviados).toHaveLength(0);
@@ -362,7 +362,7 @@ describe("aviso ao suporte — o que impede o envio", () => {
         id: "77777777-7777-4777-8777-777777777777",
         organization_id: ORG,
         case_id: CASO,
-        destino: "+5531998966398",
+        destino: "+5531991110001",
         status: "pendente",
         tentativas: 6,
         created_at: new Date(AGORA.getTime() - 60_000).toISOString(),
@@ -446,13 +446,13 @@ describe("aviso ao suporte — o envio bem-sucedido", () => {
     const r = await aplicaAvisoDeCaso(deps, evento());
 
     expect(r.status).toBe("ok");
-    expect(estado.enviados[0]?.to).toBe("5531998966398@c.us");
+    expect(estado.enviados[0]?.to).toBe("5531991110001@c.us");
     expect(estado.enviados[0]?.body).toContain("Acme CRM");
     expect(estado.enviados[0]?.body).toContain("Cliente: Maria");
     expect(estado.patches.at(-1)).toMatchObject({ status: "enviado", external_id: "wamid.ABC" });
     expect(estado.patches.at(-1)?.corpo_hash).toEqual(expect.any(String));
     expect(estado.ledger).toBe(1);
-    expect(estado.jids).toEqual(["5531998966398@c.us"]);
+    expect(estado.jids).toEqual(["5531991110001@c.us"]);
     expect(estado.eventosDoCaso[0]).toMatchObject({ kind: "alert_sent", actorKind: "system" });
     expect(estado.auditorias).toContain("ai.case_alert_sent");
   });

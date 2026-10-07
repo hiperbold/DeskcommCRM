@@ -8,7 +8,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -72,7 +72,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", runId)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (runErr) return fail("internal_error", runErr.message, 500, { requestId });
+  if (runErr) return falhaInterna("internal_error", runErr, { requestId });
   if (!run) return fail("not_found", t("Run não encontrado."), 404, { requestId });
 
   if (!run.event_id) {
@@ -85,7 +85,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", run.rule_id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (ruleErr) return fail("internal_error", ruleErr.message, 500, { requestId });
+  if (ruleErr) return falhaInterna("internal_error", ruleErr, { requestId });
   if (!rule) return fail("not_found", t("Regra do run não encontrada."), 404, { requestId });
 
   const { data: eventRow, error: eventErr } = await supabase
@@ -94,7 +94,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", run.event_id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (eventErr) return fail("internal_error", eventErr.message, 500, { requestId });
+  if (eventErr) return falhaInterna("internal_error", eventErr, { requestId });
   if (!eventRow) {
     return fail("event_gone", t("O evento original deste run foi removido."), 409, { requestId });
   }
@@ -165,7 +165,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .select("*")
     .single();
   if (insErr || !newRun) {
-    return fail("internal_error", insErr?.message ?? "run_insert_failed", 500, { requestId });
+    return falhaInterna("internal_error", insErr ?? "run_insert_failed", { requestId });
   }
 
   void audit({

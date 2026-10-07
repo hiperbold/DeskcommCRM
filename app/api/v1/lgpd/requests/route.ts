@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -101,7 +101,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
   const { data: rows, error: dbErr } = await dataQuery;
   if (dbErr) {
-    return fail("internal_error", dbErr.message, 500, { requestId });
+    return falhaInterna("internal_error", dbErr, { requestId });
   }
 
   // Compute sla_bucket per row and apply optional filter

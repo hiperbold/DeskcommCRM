@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { NextRequest } from "next/server";
 
 import { requireSupportWrite } from "@/lib/impersonate/support";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { isServiceRoleConfigured } from "@/lib/audit";
@@ -53,7 +53,7 @@ export async function POST(
     .eq("organization_id", activeOrg.orgId)
     .eq("id", id)
     .maybeSingle();
-  if (readErr) return fail("internal_error", readErr.message, 500, { requestId });
+  if (readErr) return falhaInterna("internal_error", readErr, { requestId });
   if (!row) return fail("not_found", t("Convite não encontrado."), 404, { requestId });
 
   const convite = row as ConviteDeTime;

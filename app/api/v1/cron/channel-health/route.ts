@@ -42,7 +42,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import {
   CHANNEL_SESSION_REF_COLUMNS,
   DEFAULT_CHANNEL_PROVIDER,
@@ -93,7 +93,7 @@ async function handle(req: NextRequest): Promise<Response> {
 
   if (error) {
     logger.error("[channel-health] query falhou", { detail: error.message, requestId });
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   const sessoes = (data ?? []) as LinhaDeSessao[];

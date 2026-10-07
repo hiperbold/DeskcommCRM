@@ -43,6 +43,8 @@ export async function GET(): Promise<Response> {
   try {
     const entradas = await listarEntradasAutomaticas({
       supabase,
+      // D-128: o token não é legível pela sessão; o servidor o lê depois de conferido o papel (manager).
+      leitorDeTokens: createAdminClient(),
       organizationId: authz.org.orgId,
       actor: { type: "user", id: authz.user.id, role: authz.org.role },
       requestId,
@@ -95,6 +97,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   const supabase = await createClient();
   const deps: DepsDaOperacao = {
     supabase,
+    leitorDeTokens: createAdminClient(),
     organizationId: authz.org.orgId,
     actor: { type: "user", id: authz.user.id, role: authz.org.role },
     requestId,

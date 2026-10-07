@@ -57,7 +57,7 @@ import { DEFAULT_CLASSIFIER_MODEL } from "@/lib/ai/gateway";
 import { resolverModeloDoPonto } from "@/lib/ai/gateway-binding";
 import { PROVEDORES_DE_DECISAO } from "@/lib/ai/pontos/provedores";
 import { DEFAULT_SENTIMENT_THRESHOLD } from "@/lib/ai/prompts/sentiment";
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { roleAtLeast } from "@/lib/auth/types";
@@ -479,7 +479,7 @@ export async function PATCH(req: NextRequest): Promise<Response> {
     .select("settings")
     .eq("id", org.orgId)
     .maybeSingle();
-  if (orgErr) return fail("query_failed", orgErr.message, 500, { requestId });
+  if (orgErr) return falhaInterna("query_failed", orgErr, { requestId });
   const atual = lerConfigDoJev(orgAtual?.settings);
 
   const mudanca: MudancaDaConfig = {};
@@ -500,7 +500,7 @@ export async function PATCH(req: NextRequest): Promise<Response> {
       .eq("organization_id", org.orgId)
       .eq("provider", PROVEDOR_DO_JEV)
       .eq("is_active", true);
-    if (credsErr) return fail("query_failed", credsErr.message, 500, { requestId });
+    if (credsErr) return falhaInterna("query_failed", credsErr, { requestId });
     if (credencialEmUsoPeloJev(creds ?? []) === null) {
       return fail(
         "jev_exige_chave_validada",

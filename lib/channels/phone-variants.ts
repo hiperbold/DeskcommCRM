@@ -2,8 +2,8 @@
  * Nono dígito brasileiro: a mesma pessoa chega com 12 ou 13 dígitos.
  *
  * ─── O problema, medido contra a WABA real em 2026-07-29 ─────────────────────
- *   envio (funcionou)        5531998966398   13 dígitos
- *   `wa_id` do inbound        553198966398   12 dígitos, sem o nono
+ *   envio (funcionou)        5531991110001   13 dígitos
+ *   `wa_id` do inbound        553191110001   12 dígitos, sem o nono
  *
  * Sem tratar, o contato que recebe e o que responde viram DOIS — conversa
  * partida, histórico fragmentado, e silencioso.

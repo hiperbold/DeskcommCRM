@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { requireSupportWrite } from "@/lib/impersonate/support";
@@ -63,7 +63,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     p_org: authz.org.orgId,
     p_contact: contactId,
   });
-  if (erroSaldo) return fail("internal_error", erroSaldo.message, 500, { requestId });
+  if (erroSaldo) return falhaInterna("internal_error", erroSaldo, { requestId });
 
   const { data: extrato, error } = await supabase
     .from("loyalty_ledger")
@@ -72,7 +72,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     .eq("contact_id", contactId)
     .order("created_at", { ascending: false })
     .limit(LIMITE_DO_EXTRATO);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   return ok({ contact_id: contactId, saldo: saldo ?? 0, extrato: extrato ?? [] }, { requestId });
 }
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (error.code === "23503") {
       return fail("validation_failed", "Contato inválido.", 422, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   // ⚠️ O MOTIVO NÃO ENTRA NO AUDIT, e aqui a linha é ainda mais direta que no

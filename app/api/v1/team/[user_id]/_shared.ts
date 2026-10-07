@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
@@ -54,7 +54,7 @@ export async function changeMemberRole(
     .eq("organization_id", activeOrg.orgId)
     .eq("user_id", targetUserId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!target) return fail("not_found", t("Membro não encontrado."), 404, { requestId });
   if (target.revoked_at) {
     return fail("state_conflict", t("Membro está revogado."), 409, { requestId });
@@ -67,7 +67,7 @@ export async function changeMemberRole(
       .eq("organization_id", activeOrg.orgId)
       .eq("role", "admin")
       .is("revoked_at", null);
-    if (countErr) return fail("internal_error", countErr.message, 500, { requestId });
+    if (countErr) return falhaInterna("internal_error", countErr, { requestId });
     if ((count ?? 0) <= 1) {
       return fail(
         "state_conflict",
@@ -89,7 +89,7 @@ export async function changeMemberRole(
     if (updErr.message.includes("organizacao_sem_admin")) {
       return fail("state_conflict", t("Não é possível rebaixar o último admin do tenant."), 409, { requestId });
     }
-    return fail("internal_error", updErr.message, 500, { requestId });
+    return falhaInterna("internal_error", updErr, { requestId });
   }
 
   await audit({

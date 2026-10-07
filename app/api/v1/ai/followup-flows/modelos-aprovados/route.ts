@@ -9,7 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { modelosQueOFluxoEnvia, type LinhaDeModeloDoCanal } from "@/lib/followup/modelos-aprovados";
 import { createClient } from "@/lib/supabase/server";
@@ -27,7 +27,7 @@ export async function GET(): Promise<Response> {
     .select("id, name, language, status, parameter_format, components")
     .eq("organization_id", authz.org.orgId)
     .order("name");
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   return ok(modelosQueOFluxoEnvia((data ?? []) as LinhaDeModeloDoCanal[]), { requestId });
 }

@@ -25,7 +25,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { ApiError } from "@/lib/api/types";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
@@ -93,7 +93,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (q.direction) query = query.eq("direction", q.direction);
 
   const { data, error } = await query;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const rows = (data ?? []).map((row) => {
     const apiStatus = mapStatusParaApi(row.status, row.end_reason);
@@ -195,7 +195,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     .single();
 
   if (insertError || !callRow) {
-    return fail("internal_error", insertError?.message ?? "failed_to_create_call", 500, { requestId });
+    return falhaInterna("internal_error", insertError ?? "failed_to_create_call", { requestId });
   }
 
   try {

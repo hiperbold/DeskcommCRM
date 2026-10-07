@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { DEFAULT_CHANNEL_PROVIDER, getAdapter, type ChannelProvider } from "@/lib/channels";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -95,7 +95,7 @@ async function handle(req: NextRequest): Promise<Response> {
 
   if (queryError) {
     logger.error("[contact-avatars] query failed", { detail: queryError.message, requestId });
-    return fail("internal_error", queryError.message, 500, { requestId });
+    return falhaInterna("internal_error", queryError, { requestId });
   }
 
   const rows = (contatos ?? []) as ContactRow[];

@@ -46,7 +46,7 @@ const { POST: TESTE } = await import("@/app/api/v1/ai/cases/alerta/teste/route")
 const ORG = "11111111-1111-4111-8111-111111111111";
 const USER = "22222222-2222-4222-8222-222222222222";
 const CANAL = "33333333-3333-4333-8333-333333333333";
-const TELEFONE = "+5531998966398";
+const TELEFONE = "+5531991110001";
 
 const ESTADO_VAZIO = {
   config: null,
@@ -156,7 +156,7 @@ describe("PUT — salvar a configuração", () => {
 
   it("recusa corpo inválido antes de tocar o banco", async () => {
     const { rpc } = clienteDeSessao({});
-    const r = await PUT(put({ ...CORPO_OK, telefone: "31998966398" }));
+    const r = await PUT(put({ ...CORPO_OK, telefone: "31991110001" }));
     expect(r.status).toBe(422);
     expect(rpc).not.toHaveBeenCalled();
   });
@@ -185,11 +185,11 @@ describe("PUT — salvar a configuração", () => {
       metadata: Record<string, unknown>;
     };
     expect(entrada.action).toBe("ai.case_alert_settings_changed");
-    expect(entrada.metadata.destino_mascarado).toBe("••••6398");
+    expect(entrada.metadata.destino_mascarado).toBe("••••0001");
     expect(entrada.metadata).toMatchObject({ trocou_numero: true, antes_ligado: false, depois_ligado: true });
     // `api_audit_log` é append-only e a cascata de LGPD não o alcança: o que
     // entra ali fica para sempre.
-    expect(JSON.stringify(entrada.metadata)).not.toContain("998966398");
+    expect(JSON.stringify(entrada.metadata)).not.toContain("991110001");
   });
 
   it("o número que já é de um cliente vira PERGUNTA, com código próprio", async () => {
@@ -270,7 +270,7 @@ describe("POST /teste — o botão que manda de verdade", () => {
     clienteDeSessao({ config: { channel_session_id: CANAL, telefone_destino: TELEFONE } });
     vi.mocked(enviarAvisoDeTeste).mockResolvedValue({
       enviado: true,
-      destinoMascarado: "••••6398",
+      destinoMascarado: "••••0001",
       externalId: null,
     });
     await TESTE(req());
@@ -306,10 +306,10 @@ describe("POST /teste — o botão que manda de verdade", () => {
     };
     expect(entrada.action).toBe("ai.case_alert_test_sent");
     expect(entrada.metadata).toMatchObject({
-      destino_mascarado: "••••6398",
+      destino_mascarado: "••••0001",
       enviado: false,
       motivo: "canal_desconectado",
     });
-    expect(JSON.stringify(entrada.metadata)).not.toContain("998966398");
+    expect(JSON.stringify(entrada.metadata)).not.toContain("991110001");
   });
 });

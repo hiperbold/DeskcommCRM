@@ -14,7 +14,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { resolveMetaCreds } from "@/lib/channels/meta/credentials";
 import { metaSessionForOrg } from "@/lib/channels/meta/session";
@@ -118,7 +118,7 @@ export async function GET(): Promise<NextResponse> {
     .order("status")
     .order("name");
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const templates: TemplateView[] = (data ?? []).map((row) => {
     const contrato = deriveTemplateContract({
@@ -266,7 +266,7 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
     .eq("organization_id", r.orgId)
     .eq("name", body.name)
     .eq("language", body.language);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!linhas || linhas.length === 0) {
     return fail("not_found", "modelo não encontrado", 404, { requestId });
   }
@@ -298,7 +298,7 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
       .update({ saved_values: plano.valores })
       .eq("organization_id", r.orgId)
       .eq("id", plano.id);
-    if (erro) return fail("internal_error", erro.message, 500, { requestId });
+    if (erro) return falhaInterna("internal_error", erro, { requestId });
   }
 
   return ok({ savedValues: planos[0]!.valores });

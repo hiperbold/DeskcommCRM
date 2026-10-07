@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { codificarCursor, decodificarCursor, listarDestinatariosSchema } from "@/lib/campanhas/schemas";
 import { TEXTO_DA_EXCLUSAO } from "@/lib/campanhas/tipos";
@@ -58,7 +58,7 @@ export async function GET(
   }
 
   const { data, error } = await query;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const linhas = (data ?? []) as unknown as Array<Record<string, unknown>>;
   const temMais = linhas.length > q.limit;

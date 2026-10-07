@@ -20,7 +20,7 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { createClient } from "@/lib/supabase/server";
@@ -70,7 +70,7 @@ export async function GET(
     .select("id")
     .eq("id", contactId)
     .maybeSingle();
-  if (cErr) return fail("internal_error", cErr.message, 500, { requestId });
+  if (cErr) return falhaInterna("internal_error", cErr, { requestId });
   if (!contactRow) return fail("not_found", t("Contato não encontrado."), 404, { requestId });
 
   // Resolve owned lead ids first.
@@ -78,7 +78,7 @@ export async function GET(
     .from("crm_leads")
     .select("id")
     .eq("contact_id", contactId);
-  if (lErr) return fail("internal_error", lErr.message, 500, { requestId });
+  if (lErr) return falhaInterna("internal_error", lErr, { requestId });
 
   const leadIds = (leadRows ?? []).map((r) => (r as { id: string }).id);
 
@@ -111,10 +111,10 @@ export async function GET(
   const [directRes, leadRes] = await Promise.all([directQ, leadQ]);
 
   if (directRes.error) {
-    return fail("internal_error", directRes.error.message, 500, { requestId });
+    return falhaInterna("internal_error", directRes.error, { requestId });
   }
   if ("error" in leadRes && leadRes.error) {
-    return fail("internal_error", leadRes.error.message, 500, { requestId });
+    return falhaInterna("internal_error", leadRes.error, { requestId });
   }
 
   // Cast duplo porque a lista de colunas agora é montada com `join()`: o

@@ -43,7 +43,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     .select("id")
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("not_found", t("Tipo de agendamento não encontrado."), 404, { requestId });
 
   await audit({

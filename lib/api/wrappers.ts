@@ -11,6 +11,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import type { ApiErrorCode } from "@/lib/api/errors";
+import { logger } from "@/lib/logger";
 
 // -----------------------------------------------------------------------------
 // Tipos públicos
@@ -80,6 +81,35 @@ export function fail(
   const res = NextResponse.json(body, { status, headers: opts.headers });
   res.headers.set("X-Request-Id", opts.requestId ?? randomUUID());
   return res;
+}
+
+/** O que o cliente lê quando o servidor falhou por dentro: nada do erro, só o que fazer. */
+export const MENSAGEM_DE_FALHA_INTERNA = "Não foi possível concluir agora. Tente novamente em instantes.";
+
+function causaDaFalha(erro: unknown): string {
+  if (erro instanceof Error) return erro.message;
+  if (typeof erro === "string") return erro;
+  if (erro && typeof erro === "object" && typeof (erro as { message?: unknown }).message === "string") {
+    return (erro as { message: string }).message;
+  }
+  return "desconhecido";
+}
+
+/**
+ * 500 de uma falha interna (banco, driver, serviço de apoio) sem repassar o erro (D-135).
+ *
+ * A mensagem do Postgres traz nome de tabela, de coluna, de constraint e o VALOR da chave duplicada;
+ * devolvida ao cliente, vira um mapa do banco e um vazamento de dado. O cliente recebe o código
+ * estável (quem já tinha um próprio, como `read_failed`, o mantém) e uma frase fixa; o erro de verdade
+ * vai só para o log, com o `request_id` que também sai no cabeçalho da resposta.
+ */
+export function falhaInterna(
+  code: ApiErrorCode | (string & {}),
+  erro: unknown,
+  opts: FailOptions = {},
+): NextResponse<ApiError> {
+  logger.error("api.falha_interna", { code, request_id: opts.requestId, causa: causaDaFalha(erro) });
+  return fail(code, MENSAGEM_DE_FALHA_INTERNA, 500, opts);
 }
 
 // -----------------------------------------------------------------------------

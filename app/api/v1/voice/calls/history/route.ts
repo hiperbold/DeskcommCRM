@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { logger } from "@/lib/logger";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -53,7 +53,7 @@ export async function GET(req: Request): Promise<Response> {
       organization_id: activeOrg.orgId,
       error: error.message,
     });
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
   return ok(data ?? [], { requestId, meta: { has_more: (data?.length ?? 0) === limit } });
 }

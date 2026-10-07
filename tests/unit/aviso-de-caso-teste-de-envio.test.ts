@@ -31,7 +31,7 @@ import type { CanalDoAviso } from "@/lib/escalacao/aviso-ao-suporte";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
 const CANAL = "22222222-2222-4222-8222-222222222222";
-const TELEFONE = "+5531998966398";
+const TELEFONE = "+5531991110001";
 const AGORA = new Date("2026-09-18T12:00:00.000Z");
 
 const canalSaudavel: CanalDoAviso = {
@@ -80,10 +80,10 @@ describe("o caminho feliz", () => {
 
     expect(r.enviado).toBe(true);
     if (!r.enviado) return;
-    expect(r.destinoMascarado).toBe("••••6398");
+    expect(r.destinoMascarado).toBe("••••0001");
     // O número inteiro NUNCA volta para a tela: quem pediu o teste é admin, mas
     // a resposta de uma rota entra em log de proxy e em aba aberta.
-    expect(JSON.stringify(r)).not.toContain("998966398");
+    expect(JSON.stringify(r)).not.toContain("991110001");
     expect(enviados).toHaveLength(1);
   });
 

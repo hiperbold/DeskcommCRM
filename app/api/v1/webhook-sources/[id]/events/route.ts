@@ -5,8 +5,9 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
 
@@ -25,13 +26,15 @@ export async function GET(_req: Request, ctx: RouteCtx): Promise<Response> {
   const { org: activeOrg } = authz;
 
   const supabase = await createClient();
-  const { data: source, error: sourceErr } = await supabase
+  // D-128: `path_token` não é legível pela sessão. O papel (manager) já foi conferido e o filtro por
+  // organização vai junto: o servidor só entrega o token de uma fonte DESTA organização.
+  const { data: source, error: sourceErr } = await createAdminClient()
     .from("webhook_sources")
     .select("path_token")
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (sourceErr) return fail("internal_error", sourceErr.message, 500, { requestId });
+  if (sourceErr) return falhaInterna("internal_error", sourceErr, { requestId });
   if (!source) return fail("not_found", t("Fonte não encontrada."), 404, { requestId });
 
   const { data, error } = await supabase
@@ -40,7 +43,7 @@ export async function GET(_req: Request, ctx: RouteCtx): Promise<Response> {
     .eq("webhook_path_token", source.path_token)
     .order("received_at", { ascending: false })
     .limit(20);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   return ok(data ?? [], { requestId });
 }

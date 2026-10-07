@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     .order("starts_at", { ascending: true })
     .limit(TETO);
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!agendamentos?.length) return ok([], { requestId });
 
   // Quais já têm comanda. Uma consulta só, e não uma por agendamento: a segunda

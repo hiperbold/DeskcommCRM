@@ -46,7 +46,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { PROVEDOR_GOOGLE } from "@/lib/agenda/tipos";
@@ -98,7 +98,7 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     .eq("provider", PROVEDOR_GOOGLE);
 
   if (erroLeitura) {
-    return fail("internal_error", erroLeitura.message, 500, { requestId });
+    return falhaInterna("internal_error", erroLeitura, { requestId });
   }
   if (!conexoes || conexoes.length === 0) {
     // 404 e não 200: dizer "desconectei" sobre o que não existe é a mesma
@@ -115,14 +115,14 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     .delete()
     .eq("organization_id", org.orgId)
     .in("connection_id", ids);
-  if (erroEventos) return fail("internal_error", erroEventos.message, 500, { requestId });
+  if (erroEventos) return falhaInterna("internal_error", erroEventos, { requestId });
 
   const { error: erroCalendarios } = await admin
     .from("calendar_connection_calendars")
     .delete()
     .eq("organization_id", org.orgId)
     .in("connection_id", ids);
-  if (erroCalendarios) return fail("internal_error", erroCalendarios.message, 500, { requestId });
+  if (erroCalendarios) return falhaInterna("internal_error", erroCalendarios, { requestId });
 
   const { error: erroConexao } = await admin
     .from("calendar_connections")
@@ -136,7 +136,7 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     })
     .eq("organization_id", org.orgId)
     .in("id", ids);
-  if (erroConexao) return fail("internal_error", erroConexao.message, 500, { requestId });
+  if (erroConexao) return falhaInterna("internal_error", erroConexao, { requestId });
 
   // UMA LINHA POR CONEXÃO, e não uma com `ids[0]`.
   //

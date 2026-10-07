@@ -29,7 +29,7 @@ const EVENTO: InboundMessageEvent = {
   wabaId: "waba-1",
   phoneNumberId: "111",
   externalId: "wamid.TESTE236",
-  from: "5531998966398",
+  from: "5531991110001",
   profileName: "Cliente",
   sentAt: new Date("2026-08-20T12:00:00.000Z"),
   type: "text",

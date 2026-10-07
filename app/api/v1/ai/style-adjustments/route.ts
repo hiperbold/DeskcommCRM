@@ -2,7 +2,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { roleAtLeast } from "@/lib/auth/types";
@@ -36,7 +36,7 @@ export async function GET(): Promise<Response> {
     .eq("organization_id", org.orgId)
     .in("layer", layers);
 
-  if (error) return fail("read_failed", error.message, 500);
+  if (error) return falhaInterna("read_failed", error);
 
   const escolhas = new Map(
     (data ?? []).flatMap((row) => {
@@ -84,7 +84,7 @@ export async function PUT(req: NextRequest): Promise<Response> {
     .select("layer, enabled")
     .maybeSingle();
 
-  if (error) return fail("save_failed", error.message, 500);
+  if (error) return falhaInterna("save_failed", error);
   if (!gravado) {
     return fail("save_failed", t("nada foi gravado — verifique as permissões da organização"), 500);
   }

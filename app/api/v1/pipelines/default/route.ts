@@ -8,7 +8,7 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
 import type { Pipeline, Stage } from "@/lib/kanban/types";
@@ -34,7 +34,7 @@ export async function GET(): Promise<Response> {
     .order("position", { ascending: true })
     .limit(1)
     .maybeSingle();
-  if (pipelineErr) return fail("internal_error", pipelineErr.message, 500, { requestId });
+  if (pipelineErr) return falhaInterna("internal_error", pipelineErr, { requestId });
   if (!pipeline) {
     return fail("resource_not_found", t("Nenhum funil configurado nesta organização."), 404, {
       requestId,
@@ -47,7 +47,7 @@ export async function GET(): Promise<Response> {
     .eq("pipeline_id", (pipeline as Pipeline).id)
     .eq("is_archived", false)
     .order("position");
-  if (stagesErr) return fail("internal_error", stagesErr.message, 500, { requestId });
+  if (stagesErr) return falhaInterna("internal_error", stagesErr, { requestId });
 
   return ok(
     { pipeline: pipeline as Pipeline, stages: (stages ?? []) as Stage[] },

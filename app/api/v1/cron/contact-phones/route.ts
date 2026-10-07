@@ -36,7 +36,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import {
   CHANNEL_SESSION_REF_COLUMNS,
   DEFAULT_CHANNEL_PROVIDER,
@@ -94,7 +94,7 @@ async function handle(req: NextRequest): Promise<Response> {
 
   if (queryError) {
     logger.error("[contact-phones] query failed", { detail: queryError.message, requestId });
-    return fail("internal_error", queryError.message, 500, { requestId });
+    return falhaInterna("internal_error", queryError, { requestId });
   }
 
   const rows = (contatos ?? []) as ContactRow[];

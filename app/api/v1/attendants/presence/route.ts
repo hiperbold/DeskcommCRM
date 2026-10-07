@@ -63,7 +63,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { PRESENCA_EXPIRA_SEGUNDOS } from "@/lib/atendimento/presenca";
@@ -114,7 +114,7 @@ export async function POST(_req: NextRequest): Promise<Response> {
     .select(SELECT_COLS)
     .single();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   if (primeiraBatida) {
     void audit({

@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { carregarCampanha } from "@/lib/campanhas/acoes";
 import { ehEditavel, ehTerminal } from "@/lib/campanhas/maquina-de-estados";
@@ -193,7 +193,7 @@ export async function PATCH(
     .eq("status", campanha.status)
     .select(COLUNAS)
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) {
     return fail(
       "campanha_nao_editavel",

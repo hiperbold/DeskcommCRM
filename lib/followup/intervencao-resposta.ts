@@ -5,7 +5,7 @@
  * é a regra, e a regra é testada sem servidor. Aqui mora o que só existe na
  * borda — o código canônico e o status.
  */
-import { fail } from "@/lib/api/wrappers";
+import { fail, falhaInterna } from "@/lib/api/wrappers";
 import type { FalhaDaIntervencao } from "./intervencao";
 
 export function respostaDaFalha(
@@ -38,6 +38,6 @@ export function respostaDaFalha(
       return fail("validation_failed", t(falha.mensagem), 422, { requestId, details: falha.detalhes });
     case "erro_interno":
       // Texto de driver/Postgres — nunca traduzir (doutrina do repo).
-      return fail("internal_error", falha.mensagem, 500, { requestId });
+      return falhaInterna("internal_error", falha.mensagem, { requestId });
   }
 }

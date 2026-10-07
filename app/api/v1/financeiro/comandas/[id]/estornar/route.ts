@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { estornarSchema } from "@/lib/financeiro/comanda";
@@ -86,7 +86,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
     if (traduzido) {
       return fail(traduzido.code as never, traduzido.texto, traduzido.status as never, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   const desfecho = (data ?? {}) as { sale_id?: string; ja_estornada?: boolean };

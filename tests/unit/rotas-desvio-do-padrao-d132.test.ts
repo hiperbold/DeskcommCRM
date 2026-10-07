@@ -20,6 +20,10 @@ vi.mock("@/lib/supabase/admin", () => ({
       const q: Record<string, unknown> = {
         select: () => q,
         eq: () => q,
+        // D-128: o PATCH da fonte lê o `path_token` pelo cliente de servidor (`.in("id", [...])`).
+        in: () => q,
+        then: (resolver: (v: unknown) => unknown) =>
+          resolver({ data: [{ id: "33333333-3333-4333-8333-333333333333", path_token: "tok" }], error: null }),
         maybeSingle: async () => ({ data: { id: "22222222-2222-4222-8222-222222222222" }, error: null }),
       };
       return q;

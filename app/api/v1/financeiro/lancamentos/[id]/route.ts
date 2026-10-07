@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { recusarEscritaEmModoLeitura } from "@/lib/billing/assinatura/recusa-de-escrita";
@@ -74,7 +74,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
     .update({ status: "paid", paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("organization_id", authz.org.orgId)
     .eq("id", id);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   await audit({
     action: "financeiro.lancamento_pago",
@@ -133,7 +133,7 @@ export async function DELETE(_req: NextRequest, ctx: Ctx): Promise<Response> {
     .delete()
     .eq("organization_id", authz.org.orgId)
     .eq("id", id);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   await audit({
     action: "financeiro.lancamento_removido",

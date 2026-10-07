@@ -23,7 +23,7 @@ describe("inbound real — texto", () => {
     const [e] = inbound(0);
     expect(e).toMatchObject({
       kind: "inbound_message",
-      from: "553198966398",
+      from: "553191110001",
       phoneNumberId: "1103328999528818",
       type: "text",
       text: "oi",

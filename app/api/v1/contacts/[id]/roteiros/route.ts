@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { montarRoteirosDoContato, type LinhaDoRoteiro } from "@/lib/followup/roteiros-do-contato";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -53,7 +53,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .eq("organization_id", authz.org.orgId)
     .eq("id", id)
     .maybeSingle();
-  if (contatoErr) return fail("internal_error", contatoErr.message, 500, { requestId });
+  if (contatoErr) return falhaInterna("internal_error", contatoErr, { requestId });
   if (!contato) return fail("not_found", t("Contato não encontrado."), 404, { requestId });
   // Anonimizado: as respostas foram apagadas e o que sobra (nome do roteiro,
   // datas) é histórico de uma pessoa que pediu para sair. Nenhuma tela mostra —
@@ -70,7 +70,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     .eq("followup_flow_pointers.surface", "atendimento")
     .order("started_at", { ascending: false })
     .limit(20);
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const linhas: LinhaDoRoteiro[] = ((data ?? []) as unknown as LinhaDoBanco[]).flatMap((r) => {
     const pointer = um(r.followup_flow_pointers);

@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { emitLeadActivity } from "@/lib/leads/activity-emitter";
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .select("id, organization_id, contact_id, status")
     .eq("id", leadId)
     .maybeSingle();
-  if (leadErr) return fail("internal_error", leadErr.message, 500, { requestId });
+  if (leadErr) return falhaInterna("internal_error", leadErr, { requestId });
   if (!lead) return fail("not_found", t("Lead não encontrado."), 404, { requestId });
 
   const row = lead as {
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .eq("organization_id", row.organization_id)
     .eq("contact_id", row.contact_id)
     .maybeSingle();
-  if (estadoErr) return fail("internal_error", estadoErr.message, 500, { requestId });
+  if (estadoErr) return falhaInterna("internal_error", estadoErr, { requestId });
 
   const linha = estado as { next_action: string | null; next_action_seq: number } | null;
   const atual = linha?.next_action?.trim() ?? null;
@@ -142,7 +142,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .update({ next_action: null })
     .eq("organization_id", row.organization_id)
     .eq("contact_id", row.contact_id);
-  if (limpaErr) return fail("internal_error", limpaErr.message, 500, { requestId });
+  if (limpaErr) return falhaInterna("internal_error", limpaErr, { requestId });
 
   return ok({ lead_id: row.id, decision, next_action: atual }, { requestId });
 }

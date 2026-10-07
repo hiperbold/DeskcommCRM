@@ -8,7 +8,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requirePlatformAdmin } from "@/lib/auth/requirePlatformAdmin";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { audit } from "@/lib/audit";
@@ -41,7 +41,7 @@ export async function GET(
     .maybeSingle();
 
   if (reqErr) {
-    return fail("internal_error", reqErr.message, 500, { requestId });
+    return falhaInterna("internal_error", reqErr, { requestId });
   }
   if (!request) {
     return fail("not_found", "Solicitação não encontrada.", 404, { requestId });

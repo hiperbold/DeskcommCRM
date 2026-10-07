@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { audit } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
 import { moveLeadSchema, validateRequest } from "@/lib/schemas";
@@ -74,7 +74,7 @@ export async function POST(
     .maybeSingle();
 
   if (selErr) {
-    return fail("internal_error", selErr.message, 500, { requestId });
+    return falhaInterna("internal_error", selErr, { requestId });
   }
   if (!lead) {
     return fail("not_found", t("Lead não encontrado."), 404, { requestId });
@@ -90,7 +90,7 @@ export async function POST(
     .maybeSingle();
 
   if (stageErr) {
-    return fail("internal_error", stageErr.message, 500, { requestId });
+    return falhaInterna("internal_error", stageErr, { requestId });
   }
   if (!stage) {
     return fail("not_found", t("Stage não encontrado."), 404, { requestId });
@@ -253,7 +253,7 @@ export async function POST(
     // chegar aqui como 500 — que é o defeito, com outro nome.
     const recusa = recusaDeMotivoDaPerdaPeloBanco(updErr, user.idioma);
     if (recusa) return fail(recusa.codigo, recusa.mensagem, 422, { requestId });
-    return fail("internal_error", updErr.message, 500, { requestId });
+    return falhaInterna("internal_error", updErr, { requestId });
   }
 
   if (!updated) {

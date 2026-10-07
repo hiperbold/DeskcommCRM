@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { FILTRO_VAZIO } from "@/lib/campanhas/audiencia";
@@ -69,7 +69,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const { data, error } = await query;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const linhas = data ?? [];
   const temMais = linhas.length > q.limit;
@@ -152,9 +152,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     .select(COLUNAS_DA_LISTA)
     .single();
   if (error || !data) {
-    return fail("internal_error", error?.message ?? t("Não foi possível criar a campanha."), 500, {
-      requestId,
-    });
+    return falhaInterna("internal_error", error ?? "campanha_nao_criada", { requestId });
   }
 
   const criada = data as unknown as { id: string };

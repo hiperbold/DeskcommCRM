@@ -328,21 +328,21 @@ describe("a ponte de eventos grava a ligação antes da rota — e a rota comple
   });
 
   it("o número discado é o que o WhatsApp registrou, não o do cadastro", async () => {
-    // Medido na VPS em 2026-09-15: cadastro +5531998966398, WhatsApp
-    // 553198966398. Discar o do cadastro mandava a oferta para lugar nenhum.
-    numeroDiscavel.resolver.mockResolvedValueOnce({ digitos: "553198966398", fonte: "whatsapp" });
+    // Medido na VPS em 2026-09-15: cadastro +5531991110001, WhatsApp
+    // 553191110001. Discar o do cadastro mandava a oferta para lugar nenhum.
+    numeroDiscavel.resolver.mockResolvedValueOnce({ digitos: "553191110001", fonte: "whatsapp" });
     respostas["contacts"] = {
-      data: { id: CONTATO, phone_number: "+5531998966398", name: "Fulano", is_blocked: false, is_anonymized: false },
+      data: { id: CONTATO, phone_number: "+5531991110001", name: "Fulano", is_blocked: false, is_anonymized: false },
       error: null,
     };
     respostas["voice_calls"] = { data: { id: CHAMADA, status: "starting" }, error: null };
 
     const res = await discar();
     expect(res.status).toBe(201);
-    expect(numeroDiscavel.resolver).toHaveBeenCalledWith(expect.anything(), ORG, "+5531998966398");
-    expect(wacalls.startCall).toHaveBeenCalledWith("sessao-up", EU, "553198966398");
+    expect(numeroDiscavel.resolver).toHaveBeenCalledWith(expect.anything(), ORG, "+5531991110001");
+    expect(wacalls.startCall).toHaveBeenCalledWith("sessao-up", EU, "553191110001");
     // O registro guarda o telefone do cadastro, com o nono — é como o CRM lê.
-    expect(inseridas.find((i) => i.tabela === "voice_calls")?.linha.peer_phone).toBe("+5531998966398");
+    expect(inseridas.find((i) => i.tabela === "voice_calls")?.linha.peer_phone).toBe("+5531991110001");
   });
 
   it("controle: outro erro de escrita continua sendo erro", async () => {

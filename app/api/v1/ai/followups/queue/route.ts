@@ -24,7 +24,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { situacaoDoRetorno } from "@/lib/followup/retorno";
 import { createClient } from "@/lib/supabase/server";
@@ -176,7 +176,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       .eq("organization_id", activeOrg.orgId)
       .or(`name.ilike.%${safeQ}%,display_name.ilike.%${safeQ}%,phone_number.ilike.%${safeQ}%`)
       .limit(500); // ponytail: fila é escala MVP; sobe se virar hot path
-    if (cErr) return fail("internal_error", cErr.message, 500, { requestId });
+    if (cErr) return falhaInterna("internal_error", cErr, { requestId });
     contactIds = (matches ?? []).map((m) => m.id);
     if (contactIds.length === 0) {
       return ok<QueueRow[]>([], { requestId, meta: { cursor: null, has_more: false } });
@@ -236,8 +236,8 @@ export async function GET(req: NextRequest): Promise<Response> {
     enrollQuery,
     skipPromises ? Promise.resolve({ data: [], error: null }) : promiseQuery,
   ]);
-  if (enrollRes.error) return fail("internal_error", enrollRes.error.message, 500, { requestId });
-  if (promiseRes.error) return fail("internal_error", promiseRes.error.message, 500, { requestId });
+  if (enrollRes.error) return falhaInterna("internal_error", enrollRes.error, { requestId });
+  if (promiseRes.error) return falhaInterna("internal_error", promiseRes.error, { requestId });
 
   const enrollRows: QueueRow[] = (enrollRes.data ?? []).map((e) =>
     enrollmentToQueueRow(e as Parameters<typeof enrollmentToQueueRow>[0]),

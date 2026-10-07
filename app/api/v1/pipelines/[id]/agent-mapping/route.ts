@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { LEAD_STAGES, type LeadStage } from "@/lib/agent-engine/agent/lead-state";
@@ -265,7 +265,7 @@ export async function PUT(req: NextRequest, ctx: RouteCtx): Promise<Response> {
         requestId,
       });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   if (updates.length > 0) {

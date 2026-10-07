@@ -13,6 +13,7 @@ import { notFound, redirect } from "next/navigation";
 
 import { ExploradorDeDados } from "./_components/ExploradorDeDados";
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
+import { ROLE_RANK } from "@/lib/auth/types";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { createClient } from "@/lib/supabase/server";
 
@@ -24,6 +25,10 @@ export default async function ConexaoExternaPage({ params }: { params: Promise<{
   const activeOrg = await resolveActiveOrg(user);
   if (!activeOrg) redirect("/app");
   const idioma = user.idioma;
+  // D-146: as rotas de leitura do banco externo são de manager para cima; sem este corte o
+  // explorador abriria para quem só levaria 403 em cada chamada.
+  const podeExplorar =
+    (user.is_platform_admin && !user.support) || ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager;
 
   const supabase = await createClient();
   const { data } = await supabase
@@ -62,7 +67,13 @@ export default async function ConexaoExternaPage({ params }: { params: Promise<{
         </div>
       )}
 
-      <ExploradorDeDados connectionId={conexao.id} />
+      {podeExplorar ? (
+        <ExploradorDeDados connectionId={conexao.id} />
+      ) : (
+        <div className="rounded-md border p-3 text-sm text-muted-foreground">
+          {traduzir("A consulta aos dados desta conexão é de gestores e administradores.", idioma)}
+        </div>
+      )}
     </div>
   );
 }

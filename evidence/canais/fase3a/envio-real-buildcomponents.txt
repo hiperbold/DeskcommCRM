@@ -1,6 +1,6 @@
 # Envio REAL com o payload de buildComponents — Fase 3a, Task 2
 
-Graph API real, 2026-07-28. WABA de teste, destinatário 5531998966398 (registrado
+Graph API real, 2026-07-28. WABA de teste, destinatário 5531991110001 (registrado
 na lista permitida do número de teste). Comando:
 
   pnpm exec tsx --env-file=.env.local scripts/spike-send-template.ts
@@ -50,8 +50,8 @@ demonstracao: o 132000 so e alcancavel saindo do caminho normal.
   "messaging_product": "whatsapp",
   "contacts": [
     {
-      "input": "5531998966398",
-      "wa_id": "553198966398"
+      "input": "5531991110001",
+      "wa_id": "553191110001"
     }
   ],
   "messages": [

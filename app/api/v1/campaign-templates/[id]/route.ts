@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { editarTemplateSchema } from "@/lib/campanhas/schemas";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -58,7 +58,7 @@ export async function PATCH(
         requestId,
       });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
   if (!data) return fail("campanha_nao_encontrada", t("Texto não encontrado."), 404, { requestId });
 
@@ -86,7 +86,7 @@ export async function DELETE(
     .eq("id", id)
     .select("id")
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("campanha_nao_encontrada", t("Texto não encontrado."), 404, { requestId });
 
   return ok({ id }, { requestId });

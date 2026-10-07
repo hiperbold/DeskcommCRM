@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         .eq("user_id", ownerId)
         .is("revoked_at", null)
         .maybeSingle();
-      if (memberErr) return fail("internal_error", memberErr.message, 500, { requestId });
+      if (memberErr) return falhaInterna("internal_error", memberErr, { requestId });
       if (!member || member.role === "viewer") {
         return fail(
           "invalid_owner",
@@ -187,7 +187,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         .eq("organization_id", organizationId)
         .eq("id", input.params.stage_id)
         .maybeSingle();
-      if (etapaErr) return fail("internal_error", etapaErr.message, 500, { requestId });
+      if (etapaErr) return falhaInterna("internal_error", etapaErr, { requestId });
       if (!etapaDeDestino || etapaDeDestino.organization_id !== organizationId) {
         return fail("not_found", t("Stage não encontrado."), 404, { requestId });
       }
@@ -388,7 +388,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         if (recusaDoBanco) {
           return fail(recusaDoBanco.codigo, recusaDoBanco.mensagem, 422, { requestId });
         }
-        return fail("internal_error", error.message, 500, { requestId });
+        return falhaInterna("internal_error", error, { requestId });
       }
       const movidosNoBanco = (data ?? []) as LeadMovidoEmLote[];
       updatedCount = movidosNoBanco.length;
@@ -506,7 +506,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         .update(patch)
         .in("id", visibleIds)
         .select("id");
-      if (error) return fail("internal_error", error.message, 500, { requestId });
+      if (error) return falhaInterna("internal_error", error, { requestId });
       updatedCount = data?.length ?? 0;
       break;
     }
@@ -524,7 +524,7 @@ export async function POST(req: NextRequest): Promise<Response> {
           .from("crm_leads")
           .update({ tags: next, updated_at: nowIso })
           .eq("id", row.id);
-        if (error) return fail("internal_error", error.message, 500, { requestId });
+        if (error) return falhaInterna("internal_error", error, { requestId });
         updatedCount += 1;
 
         // Per-lead lead.tag_added (only-when-added), same contract as
@@ -554,7 +554,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         .delete()
         .in("id", visibleIds)
         .select("id");
-      if (error) return fail("internal_error", error.message, 500, { requestId });
+      if (error) return falhaInterna("internal_error", error, { requestId });
       updatedCount = data?.length ?? 0;
       break;
     }

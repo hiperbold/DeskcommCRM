@@ -27,7 +27,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import {
   ABANDONO_HORAS_DEFAULT,
@@ -146,7 +146,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     p_to: to.toISOString(),
     p_abandono_horas: abandonoHoras,
   });
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const raw = (data ?? {
     ...VAZIO,

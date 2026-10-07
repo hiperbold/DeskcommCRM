@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -87,7 +87,7 @@ export async function PUT(req: NextRequest): Promise<Response> {
     if (error.code === "PGRST205") {
       return fail("unavailable", t("Web Push ainda não está no banco desta instalação."), 503, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   void audit({
@@ -129,6 +129,6 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     .eq("endpoint" as never, parsed.data.endpoint)
     .eq("user_id" as never, authz.user.id);
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   return ok({ ok: true }, { requestId });
 }

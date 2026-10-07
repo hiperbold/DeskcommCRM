@@ -46,7 +46,7 @@ function estado(patch: Partial<EstadoDoAviso> = {}): EstadoDoAviso {
   return {
     config: {
       channel_session_id: CANAL_QR,
-      telefone: "+5531998966398",
+      telefone: "+5531991110001",
       rotulo: "Plantão da Ana",
       ligado: true,
       atualizado_em: "2026-09-18T12:00:00.000Z",
@@ -207,7 +207,7 @@ describe("a lista de entregas", () => {
           {
             id: "e1",
             case_id: "c1",
-            destino_mascarado: "••••6398",
+            destino_mascarado: "••••0001",
             status: "falhou",
             erro_codigo: "teto_diario_do_numero",
             tentativas: 3,
@@ -218,10 +218,10 @@ describe("a lista de entregas", () => {
       }),
     );
     const lista = screen.getByTestId("lista-de-entregas");
-    expect(lista.textContent).toContain("••••6398");
+    expect(lista.textContent).toContain("••••0001");
     expect(lista.textContent).toContain("limite diário do período de aquecimento");
     // O número inteiro nunca entra nesta lista: quem a lê pode ser `manager`.
-    expect(lista.textContent).not.toContain("998966398");
+    expect(lista.textContent).not.toContain("991110001");
   });
 });
 

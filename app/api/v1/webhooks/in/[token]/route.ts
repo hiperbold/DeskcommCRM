@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { checkRateLimit } from "@/lib/ai/dispatcher/rate-limit";
 import { logger } from "@/lib/logger";
@@ -151,7 +151,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<NextRespons
     .select("id, name, organization_id, secret_encrypted, default_pipeline_id, default_stage_id, field_map, redirect_to, is_active")
     .eq("path_token", token)
     .maybeSingle();
-  if (srcErr) return fail("internal_error", srcErr.message, 500, { requestId });
+  if (srcErr) return falhaInterna("internal_error", srcErr, { requestId });
   if (!source || !source.is_active) {
     return fail("not_found", "unknown webhook token", 404, { requestId });
   }

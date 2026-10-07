@@ -104,7 +104,7 @@ export interface InboundMessageEvent {
   externalId: string;
   /**
    * `wa_id` do contato. **Pode vir sem o nono dígito** em celular brasileiro
-   * (medido: 553198966398 para quem recebemos como 5531998966398) — quem resolve o
+   * (medido: 553191110001 para quem recebemos como 5531991110001) — quem resolve o
    * contato TEM de usar `phoneLookupVariants`, senão duplica a pessoa.
    */
   from: string;

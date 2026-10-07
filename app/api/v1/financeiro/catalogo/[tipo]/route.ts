@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import {
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest, ctx: Ctx): Promise<Response> {
   if (!incluirInativos) q = q.eq("is_active", true);
 
   const { data, error } = await q;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   return ok(data ?? [], { requestId });
 }
 
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest, ctx: Ctx): Promise<Response> {
         requestId,
       });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   void audit({
@@ -177,7 +177,7 @@ export async function PATCH(req: NextRequest, ctx: Ctx): Promise<Response> {
         requestId,
       });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
   if (!data) return fail("not_found", t("Não encontrado."), 404, { requestId });
 
@@ -221,7 +221,7 @@ export async function DELETE(req: NextRequest, ctx: Ctx): Promise<Response> {
     .select("id")
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!data) return fail("not_found", t("Não encontrado."), 404, { requestId });
 
   void audit({

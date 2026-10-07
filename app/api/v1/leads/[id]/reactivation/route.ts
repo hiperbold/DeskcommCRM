@@ -20,7 +20,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { emitLeadActivity } from "@/lib/leads/activity-emitter";
 import { registraFalhaDeAtividade } from "@/lib/leads/activity-write-failure";
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .select("id, expires_at")
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   if (!decidida) {
     // Não distinguimos "não existe" de "já não está pendente" na MENSAGEM por
     // vazamento? Não: aqui distinguir ajuda e não expõe nada — a pessoa precisa

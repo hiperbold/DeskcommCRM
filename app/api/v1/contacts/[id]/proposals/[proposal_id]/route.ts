@@ -28,7 +28,7 @@ import { z } from "zod";
 
 import { patchContactHandler } from "@/app/api/v1/contacts/_handler";
 import { ApiError } from "@/lib/api/types";
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
     .select("id, campo, valor_proposto, valor_anterior")
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   if (!decidida) {
     // Distinguir "já decidida" de "não existe" AJUDA e não expõe nada: sem

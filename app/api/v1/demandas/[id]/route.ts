@@ -32,7 +32,7 @@ import { type NextRequest } from "next/server";
 import { z } from "zod";
 
 import { audit } from "@/lib/audit";
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -115,7 +115,7 @@ export async function PATCH(
     .select("id, proximo_passo, proximo_passo_em")
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   // Zero linhas é indistinguível de sucesso no PostgREST — o bug conhecido de
   // `organizations` engana exatamente assim. Aqui o `select` de volta é o que
   // separa "gravou" de "não achou/já fechada".

@@ -127,11 +127,11 @@ describe("parseMetaWebhook", () => {
               field: "messages",
               value: {
                 metadata: { phone_number_id: "1103328999528818" },
-                contacts: [{ wa_id: "5531998966398", profile: { name: "Cliente" } }],
+                contacts: [{ wa_id: "5531991110001", profile: { name: "Cliente" } }],
                 messages: [
                   {
                     id: "wamid.C",
-                    from: "5531998966398",
+                    from: "5531991110001",
                     timestamp: "1700000000",
                     type: "contacts",
                     contacts: [

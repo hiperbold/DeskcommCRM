@@ -14,7 +14,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -59,7 +59,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!pointer) return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
 
   // Roteiro de atendimento: só existe com o módulo ligado (mesma resposta de
@@ -134,7 +134,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
       .eq("id", stageId)
       .eq("organization_id", activeOrg.orgId)
       .maybeSingle();
-    if (stageErr) return fail("internal_error", stageErr.message, 500, { requestId });
+    if (stageErr) return falhaInterna("internal_error", stageErr, { requestId });
     if (!stage) {
       return fail(
         "trigger_stage_not_found",
@@ -172,7 +172,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
   // A regra de etapa guarda o `stage_id`, e só o banco diz se a etapa existe e
   // está ativa — sem esta leitura, uma regra que nunca decide publicaria calada.
   const citadas = await carregaEtapasCitadas(admin, activeOrg.orgId, graph.nodes);
-  if (!citadas.ok) return fail("internal_error", citadas.mensagem, 500, { requestId });
+  if (!citadas.ok) return falhaInterna("internal_error", citadas.mensagem, { requestId });
   // Roteiro: para onde os OUTROS roteiros ativos encadeiam — para recusar a
   // publicação que fecharia um ciclo A → B → A (revisão do #1573).
   let roteiro: RoteiroDoPublish | undefined;
@@ -184,7 +184,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
       .eq("surface", "atendimento")
       .eq("status", "active")
       .neq("id", id);
-    if (ativosErr) return fail("internal_error", ativosErr.message, 500, { requestId });
+    if (ativosErr) return falhaInterna("internal_error", ativosErr, { requestId });
     const versoes = (ativos ?? []).flatMap((r) => (r.active_version_id ? [r.active_version_id as string] : []));
     const grafos = new Map<string, unknown>();
     if (versoes.length > 0) {
@@ -193,7 +193,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
         .select("id, graph")
         .eq("organization_id", activeOrg.orgId)
         .in("id", versoes);
-      if (vsErr) return fail("internal_error", vsErr.message, 500, { requestId });
+      if (vsErr) return falhaInterna("internal_error", vsErr, { requestId });
       for (const v of vs ?? []) grafos.set(v.id as string, v.graph);
     }
     roteiro = {
@@ -214,7 +214,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .select("provider")
     .eq("organization_id", activeOrg.orgId)
     .is("archived_at", null);
-  if (conexoesErr) return fail("internal_error", conexoesErr.message, 500, { requestId });
+  if (conexoesErr) return falhaInterna("internal_error", conexoesErr, { requestId });
   const exigeModeloForaDaJanela = algumCanalExigeModeloForaDaJanela(
     (conexoes ?? []).map((c) => c.provider as string | null),
   );
@@ -241,7 +241,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     if (result.code === "pointer_not_found") {
       return fail("not_found", t("Fluxo não encontrado."), 404, { requestId });
     }
-    return fail("internal_error", result.message, 500, { requestId });
+    return falhaInterna("internal_error", result, { requestId });
   }
 
   const { data: updatedPointer, error: reloadErr } = await admin
@@ -251,7 +251,7 @@ export async function POST(_req: NextRequest, ctx: RouteCtx): Promise<Response> 
     .eq("organization_id", activeOrg.orgId)
     .single();
   if (reloadErr || !updatedPointer) {
-    return fail("internal_error", reloadErr?.message ?? "followup_flow_reload_failed", 500, {
+    return falhaInterna("internal_error", reloadErr ?? "followup_flow_reload_failed", {
       requestId,
     });
   }

@@ -125,7 +125,7 @@ function donoValido(owner: unknown): string | null {
  * O contato do número que ligou ou foi ligado — pelas DUAS grafias do celular.
  *
  * O peer vem do WhatsApp, e o WhatsApp registra muito celular brasileiro SEM o
- * nono dígito (`553198966398`); o cadastro guarda COM (`+5531998966398`,
+ * nono dígito (`553191110001`); o cadastro guarda COM (`+5531991110001`,
  * `lib/channels/phone-variants.ts`). Casar só `'+' || peer` achava o contato
  * por acaso enquanto a ligação era discada para o endereço errado; com o
  * destino certo (`lib/voice/numero-discavel.ts`) deixaria de achar, e toda

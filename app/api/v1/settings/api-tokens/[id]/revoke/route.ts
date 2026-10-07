@@ -6,7 +6,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -36,7 +36,7 @@ export async function POST(
     .eq("id", id)
     .eq("organization_id", activeOrg.orgId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!token) return fail("not_found", t("Token não encontrado."), 404, { requestId });
   if (token.revoked_at) {
     return ok({ id, already_revoked: true }, { requestId });
@@ -47,7 +47,7 @@ export async function POST(
     .from("api_tokens")
     .update({ revoked_at: nowIso, revoked_by: authUser.id, updated_at: nowIso })
     .eq("id", id);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  if (updErr) return falhaInterna("internal_error", updErr, { requestId });
 
   await audit({
     action: "token.revoked",

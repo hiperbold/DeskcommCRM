@@ -13,7 +13,7 @@ import type { NextRequest } from "next/server";
 import { connectWahaChannel, ChannelConnectionError } from "@/lib/channels/connect-waha";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { mfaEmDivida } from "@/lib/auth/server";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
@@ -58,7 +58,7 @@ export async function GET(): Promise<Response> {
     () => base().is(ARCHIVED_AT, null).order("created_at", { ascending: true }),
     () => base().order("created_at", { ascending: true }),
   );
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   return ok(data ?? [], {
     requestId,

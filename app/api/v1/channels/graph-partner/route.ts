@@ -27,7 +27,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
@@ -186,7 +186,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // segurança, nunca 500 para um teto de plano.
     const recusa = recusaDoPlano(errorRaw);
     if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
-    return fail("internal_error", error, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   // A volta de um canal arquivado já é auditada por `reactivateChannelSession`
@@ -253,7 +253,7 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
     channelSessionId: sessao.id,
     secretEncrypted: cifrado,
   });
-  if (error) return fail("internal_error", error, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   void audit({
     action: "channel.connected",

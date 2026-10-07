@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { resolverHierarquiaDoContato } from "@/lib/plataformas-de-anuncio/hierarquia-do-contato";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -44,7 +44,7 @@ export async function GET(
     .select("organization_id, source_metadata, is_anonymized")
     .eq("id", contactId)
     .maybeSingle();
-  if (erroDoContato) return fail("internal_error", erroDoContato.message, 500, { requestId });
+  if (erroDoContato) return falhaInterna("internal_error", erroDoContato, { requestId });
   if (!contato) return fail("not_found", "Contato não encontrado.", 404, { requestId });
 
   // Contato anonimizado não ganha consulta nova à plataforma: a ficha dele

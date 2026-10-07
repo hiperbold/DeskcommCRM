@@ -7,7 +7,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -43,7 +43,7 @@ export async function GET(req?: NextRequest): Promise<Response> {
     ? base.eq("surface", "atendimento")
     : base.neq("surface", "atendimento")
   ).order("updated_at", { ascending: false });
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   return ok(data ?? [], { requestId });
 }
 
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (insErr?.code === "23505") {
       return fail("conflict", t("Já existe um fluxo com este nome."), 409, { requestId });
     }
-    return fail("internal_error", insErr?.message ?? "followup_flow_insert_failed", 500, {
+    return falhaInterna("internal_error", insErr ?? "followup_flow_insert_failed", {
       requestId,
     });
   }

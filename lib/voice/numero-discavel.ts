@@ -1,11 +1,11 @@
 /**
  * O NÚMERO QUE A LIGAÇÃO DISCA É O QUE O WHATSAPP REGISTROU, NÃO O DO CADASTRO.
  *
- * Medido na VPS em 2026-09-15: o contato `+5531998966398` foi discado como
- * `5531998966398@s.whatsapp.net`. O WhatsApp registra esse celular como
- * `553198966398` — sem o nono dígito, o caso comum em DDD fora de São Paulo —,
+ * Medido na VPS em 2026-09-15: o contato `+5531991110001` foi discado como
+ * `5531991110001@s.whatsapp.net`. O WhatsApp registra esse celular como
+ * `553191110001` — sem o nono dígito, o caso comum em DDD fora de São Paulo —,
  * e o canal de mensagens da organização confirmou (as duas grafias responderam
- * `553198966398@c.us`). O serviço de voz não pergunta nada a ninguém: monta o
+ * `553191110001@c.us`). O serviço de voz não pergunta nada a ninguém: monta o
  * destino com `types.NewJID(dígitos, DefaultUserServer)`. A oferta saiu para um
  * endereço que não existe, o painel ficou em "Chamando…" e a ligação expirou
  * sem que telefone nenhum tocasse.

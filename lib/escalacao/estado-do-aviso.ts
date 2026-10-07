@@ -148,7 +148,7 @@ export function telefoneDeAvisoValido(bruto: string | null | undefined): boolean
 /**
  * O que a pessoa digitou, na forma que o banco aceita.
  *
- * ⚠️ NÃO há máscara por país, e é decisão. Agrupar `+55 31 99896-6398` exige
+ * ⚠️ NÃO há máscara por país, e é decisão. Agrupar `+55 31 99111-0001` exige
  * saber o plano de numeração de cada DDI; inventá-lo produz um campo que
  * reformata errado o número de quem está fora do Brasil — e este produto é
  * distribuído. A máscara aqui é a única que vale em todo lugar: `+` na frente,

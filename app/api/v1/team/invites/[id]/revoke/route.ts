@@ -12,7 +12,7 @@ import { z } from "zod";
 import type { NextRequest } from "next/server";
 
 import { requireSupportWrite } from "@/lib/impersonate/support";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createClient } from "@/lib/supabase/server";
@@ -46,7 +46,7 @@ export async function POST(
     .eq("organization_id", activeOrg.orgId)
     .eq("id", id)
     .maybeSingle();
-  if (readErr) return fail("internal_error", readErr.message, 500, { requestId });
+  if (readErr) return falhaInterna("internal_error", readErr, { requestId });
   if (!row) return fail("not_found", t("Convite não encontrado."), 404, { requestId });
   if (row.accepted_at) {
     return fail("state_conflict", t("Este convite já foi aceito."), 409, { requestId });
@@ -62,7 +62,7 @@ export async function POST(
     .eq("id", id)
     .is("accepted_at", null)
     .is("revoked_at", null);
-  if (updErr) return fail("internal_error", updErr.message, 500, { requestId });
+  if (updErr) return falhaInterna("internal_error", updErr, { requestId });
 
   await audit({
     action: "member.invite_revoked",

@@ -37,7 +37,7 @@ import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { requireSupportWrite } from "@/lib/impersonate/support";
@@ -86,7 +86,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (ate) q = q.lte("exception_date", ate);
 
   const { data, error } = await q;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   return ok(data ?? [], { requestId });
 }
 
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (error.code === "42501") {
       return fail("forbidden", t("Você só pode alterar a sua própria agenda."), 403, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   void audit({
@@ -180,7 +180,7 @@ export async function DELETE(req: NextRequest): Promise<Response> {
     .select("id, exception_date")
     .maybeSingle();
 
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   // Sem linha: ou não existe, ou a RLS não deixou ver. Os dois viram 404 — dizer
   // "existe, mas não é sua" já é contar algo sobre a agenda alheia.
   if (!data) return fail("not_found", t("Bloqueio não encontrado."), 404, { requestId });

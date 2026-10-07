@@ -29,7 +29,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import {
   avaliarCanal,
@@ -89,7 +89,7 @@ async function handle(req: NextRequest): Promise<Response> {
       detail: erroAvisos.message,
       requestId,
     });
-    return fail("internal_error", erroAvisos.message, 500, { requestId });
+    return falhaInterna("internal_error", erroAvisos, { requestId });
   }
 
   const abertos = new Map<string, AvisoAberto>();
@@ -108,7 +108,7 @@ async function handle(req: NextRequest): Promise<Response> {
       detail: erroCanais.message,
       requestId,
     });
-    return fail("internal_error", erroCanais.message, 500, { requestId });
+    return falhaInterna("internal_error", erroCanais, { requestId });
   }
 
   const canais = (canaisBruto ?? []) as CanalParaAvaliar[];

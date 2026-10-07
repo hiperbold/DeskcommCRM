@@ -22,7 +22,7 @@ function emLigacao(over: Record<string, unknown> = {}) {
       id: "c1",
       contact_id: null,
       direction: "outbound",
-      peer_phone: "553198966398",
+      peer_phone: "553191110001",
       status: "connected",
       answered_at: new Date().toISOString(),
     },
@@ -67,7 +67,7 @@ describe("o aviso de mídia do painel", () => {
   it("abertura que falhou avisa já com o telefone tocando, e oferece tentar de novo", () => {
     emLigacao({
       estadoDaMidia: "falhou",
-      call: { id: "c1", contact_id: null, direction: "outbound", peer_phone: "553198966398", status: "ringing", answered_at: null },
+      call: { id: "c1", contact_id: null, direction: "outbound", peer_phone: "553191110001", status: "ringing", answered_at: null },
     });
     expect(screen.getByText("Não consegui abrir o áudio. Confira o microfone.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));

@@ -13,19 +13,19 @@ describe("whatsappIdFromCheckResult", () => {
     expect(
       whatsappIdFromCheckResult({
         numberExists: true,
-        pn: "553198966398@c.us",
+        pn: "553191110001@c.us",
         chatId: "100000000000001@lid",
       }),
-    ).toBe("553198966398");
+    ).toBe("553191110001");
   });
 
   it("extrai dígitos de chatId @c.us", () => {
     expect(
       whatsappIdFromCheckResult({
         numberExists: true,
-        chatId: "5531998966398@c.us",
+        chatId: "5531991110001@c.us",
       }),
-    ).toBe("5531998966398");
+    ).toBe("5531991110001");
   });
 });
 
@@ -47,16 +47,16 @@ describe("resolveWhatsappIdForContactCard", () => {
       checkContactExists: vi
         .fn()
         .mockResolvedValueOnce({ numberExists: false })
-        .mockResolvedValueOnce({ numberExists: true, pn: "553198966398@c.us" }),
+        .mockResolvedValueOnce({ numberExists: true, pn: "553191110001@c.us" }),
     };
 
     const id = await resolveWhatsappIdForContactCard(
       client as never,
       "sessao-1",
-      "+5531998966398",
+      "+5531991110001",
     );
 
-    expect(id).toBe("553198966398");
+    expect(id).toBe("553191110001");
     expect(client.checkContactExists).toHaveBeenCalledTimes(2);
   });
 
@@ -68,7 +68,7 @@ describe("resolveWhatsappIdForContactCard", () => {
     const id = await resolveWhatsappIdForContactCard(
       client as never,
       "sessao-1",
-      "+5531998966398",
+      "+5531991110001",
     );
 
     expect(id).toBeNull();
@@ -92,11 +92,11 @@ describe("resolveCanonicalCusChatId", () => {
       checkContactExists: vi
         .fn()
         .mockResolvedValueOnce({ numberExists: false })
-        .mockResolvedValueOnce({ numberExists: true, pn: "553198966398@c.us" }),
+        .mockResolvedValueOnce({ numberExists: true, pn: "553191110001@c.us" }),
     };
     await expect(
-      resolveCanonicalCusChatId(client as never, "s", "5531998966398@c.us"),
-    ).resolves.toBe("553198966398@c.us");
+      resolveCanonicalCusChatId(client as never, "s", "5531991110001@c.us"),
+    ).resolves.toBe("553191110001@c.us");
   });
 
   it("troca o chatId quando o WhatsApp só conhece a variante COM o nono", async () => {
@@ -104,11 +104,11 @@ describe("resolveCanonicalCusChatId", () => {
       checkContactExists: vi
         .fn()
         .mockResolvedValueOnce({ numberExists: false })
-        .mockResolvedValueOnce({ numberExists: true, chatId: "5531998966398@c.us" }),
+        .mockResolvedValueOnce({ numberExists: true, chatId: "5531991110001@c.us" }),
     };
     await expect(
-      resolveCanonicalCusChatId(client as never, "s", "553198966398@c.us"),
-    ).resolves.toBe("5531998966398@c.us");
+      resolveCanonicalCusChatId(client as never, "s", "553191110001@c.us"),
+    ).resolves.toBe("5531991110001@c.us");
   });
 
   it("lead novo: usa o @lid do check-exists (caso +5532984793302)", async () => {
@@ -127,10 +127,10 @@ describe("resolveCanonicalCusChatId", () => {
 
 describe("wahaContactPayload com wa_id resolvido", () => {
   it("alinha phoneNumber e waid ao id canônico de 12 dígitos", () => {
-    const p = wahaContactPayload("Maria", "+5531998966398", "553198966398");
-    expect(p.whatsappId).toBe("553198966398");
-    expect(p.phoneNumber).toBe("+553198966398");
-    expect(p.vcard).toContain("waid=553198966398");
-    expect(p.vcard).toContain("+553198966398");
+    const p = wahaContactPayload("Maria", "+5531991110001", "553191110001");
+    expect(p.whatsappId).toBe("553191110001");
+    expect(p.phoneNumber).toBe("+553191110001");
+    expect(p.vcard).toContain("waid=553191110001");
+    expect(p.vcard).toContain("+553191110001");
   });
 });

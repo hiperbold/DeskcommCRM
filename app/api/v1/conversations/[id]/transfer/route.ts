@@ -15,7 +15,7 @@ import { type NextRequest } from "next/server";
 import { audit, isServiceRoleConfigured } from "@/lib/audit";
 import { registrarTrocaDeComando } from "@/lib/inbox/atividade-de-comando";
 import { ApiError } from "@/lib/api/types";
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { transferConversationSchema, validateRequest } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/server";
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
       .is("revoked_at", null)
       .maybeSingle();
     if (memberErr) {
-      return fail("internal_error", memberErr.message, 500, { requestId });
+      return falhaInterna("internal_error", memberErr, { requestId });
     }
     if (!member || member.role === "viewer") {
       return fail("unprocessable_entity", t("Destino não é um atendente desta organização."), 422, {
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest, ctx: RouteCtx): Promise<Response> {
   });
 
   if (error) {
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
   const row = data?.[0];
   if (!row) {

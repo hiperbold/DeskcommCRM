@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { canonicalConversationTagsSchema } from "@/lib/schemas/settings";
 import { createClient } from "@/lib/supabase/server";
@@ -28,7 +28,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
     .select("settings")
     .eq("id", activeOrg.orgId)
     .maybeSingle();
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   const raw = (data?.settings as Record<string, unknown> | null)?.[
     "canonical_conversation_tags"
@@ -52,7 +52,7 @@ export async function GET(_req: NextRequest): Promise<Response> {
   );
   // A falha SOBE. Engolir devolveria o vocabulário curado como se fosse a lista
   // completa — que é exatamente a mentira que esta rota veio desfazer.
-  if (erroEmUso) return fail("internal_error", erroEmUso.message, 500, { requestId });
+  if (erroEmUso) return falhaInterna("internal_error", erroEmUso, { requestId });
 
   const usadas = (emUso ?? []).map((l: { tag: string }) => l.tag);
   const tags = [...new Set([...canonicas, ...usadas])].sort((a, b) =>

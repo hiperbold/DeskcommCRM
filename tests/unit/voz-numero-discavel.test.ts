@@ -1,10 +1,10 @@
 /**
  * O NÚMERO QUE A LIGAÇÃO DISCA — perguntado ao WhatsApp, não adivinhado.
  *
- * Medido na VPS em 2026-09-15: o contato `+5531998966398` foi discado como
- * `5531998966398@s.whatsapp.net`, e o WhatsApp o registra como `553198966398`.
+ * Medido na VPS em 2026-09-15: o contato `+5531991110001` foi discado como
+ * `5531991110001@s.whatsapp.net`, e o WhatsApp o registra como `553191110001`.
  * O WAHA respondeu `check-exists` das DUAS grafias com
- * `{"numberExists":true,"chatId":"553198966398@c.us"}` — é essa resposta,
+ * `{"numberExists":true,"chatId":"553191110001@c.us"}` — é essa resposta,
  * copiada do terminal, que os casos abaixo usam. Ver `lib/voice/numero-discavel.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +22,7 @@ import { phoneJidDigitsFromCheckResult } from "@/lib/waha/resolve-contact-whatsa
 import { resolverNumeroDiscavel } from "@/lib/voice/numero-discavel";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
-const RESPOSTA_MEDIDA = { numberExists: true, chatId: "553198966398@c.us" };
+const RESPOSTA_MEDIDA = { numberExists: true, chatId: "553191110001@c.us" };
 
 type Sessao = { provider: string; waha_session_name?: string | null; meta_phone_number_id?: string | null; zernio_account_id?: string | null };
 
@@ -60,10 +60,10 @@ function canal(responde?: (phone: string) => Promise<string | null>, configurado
 
 describe("phoneJidDigitsFromCheckResult — só endereço de TELEFONE serve para ligar", () => {
   it("c.us e s.whatsapp.net viram dígitos; o sufixo de aparelho sai", () => {
-    expect(phoneJidDigitsFromCheckResult(RESPOSTA_MEDIDA)).toBe("553198966398");
+    expect(phoneJidDigitsFromCheckResult(RESPOSTA_MEDIDA)).toBe("553191110001");
     expect(
-      phoneJidDigitsFromCheckResult({ numberExists: true, chatId: "553198966398:12@s.whatsapp.net" }),
-    ).toBe("553198966398");
+      phoneJidDigitsFromCheckResult({ numberExists: true, chatId: "553191110001:12@s.whatsapp.net" }),
+    ).toBe("553191110001");
   });
 
   it("@lid sozinho NÃO serve: o WaCalls transformaria os dígitos do lid num telefone inexistente", () => {
@@ -75,26 +75,26 @@ describe("phoneJidDigitsFromCheckResult — só endereço de TELEFONE serve para
       phoneJidDigitsFromCheckResult({
         numberExists: true,
         chatId: "59782320914646@lid",
-        pn: "553198966398@c.us",
+        pn: "553191110001@c.us",
       }),
-    ).toBe("553198966398");
+    ).toBe("553191110001");
   });
 
   it("número que não existe não devolve nada", () => {
-    expect(phoneJidDigitsFromCheckResult({ numberExists: false, chatId: "553198966398@c.us" })).toBeNull();
+    expect(phoneJidDigitsFromCheckResult({ numberExists: false, chatId: "553191110001@c.us" })).toBeNull();
   });
 });
 
 describe("resolverNumeroDiscavel — pela porta do canal", () => {
   it("o caso medido: cadastro COM o nono, canal responde SEM — disca o do canal", async () => {
     const { db, filtros } = supabaseCom([SESSAO_DE_MENSAGEM]);
-    const { adapter, perguntas } = canal(async () => "553198966398");
+    const { adapter, perguntas } = canal(async () => "553191110001");
 
-    const r = await resolverNumeroDiscavel(db, ORG, "+5531998966398", { adapterDe: () => adapter });
+    const r = await resolverNumeroDiscavel(db, ORG, "+5531991110001", { adapterDe: () => adapter });
 
-    expect(r).toEqual({ digitos: "553198966398", fonte: "whatsapp" });
+    expect(r).toEqual({ digitos: "553191110001", fonte: "whatsapp" });
     // A pergunta vai com o identificador da sessão que o seam resolveu.
-    expect(perguntas).toEqual([{ sessionRef: "org_988371bf_8a08b2", phone: "+5531998966398" }]);
+    expect(perguntas).toEqual([{ sessionRef: "org_988371bf_8a08b2", phone: "+5531991110001" }]);
     // Sessões desta organização, em pé, não arquivadas, só de mensagem.
     expect(filtros).toEqual(
       expect.arrayContaining([
@@ -112,32 +112,32 @@ describe("resolverNumeroDiscavel — pela porta do canal", () => {
       SESSAO_DE_MENSAGEM,
     ]);
     const mudo = canal();
-    const sabe = canal(async () => "553198966398");
-    const r = await resolverNumeroDiscavel(db, ORG, "+5531998966398", {
+    const sabe = canal(async () => "553191110001");
+    const r = await resolverNumeroDiscavel(db, ORG, "+5531991110001", {
       adapterDe: (provider) => (provider === "meta_cloud" ? mudo.adapter : sabe.adapter),
     });
-    expect(r.digitos).toBe("553198966398");
+    expect(r.digitos).toBe("553191110001");
   });
 
   it("sem sessão de mensagens em pé, disca o cadastro sem perguntar a ninguém", async () => {
     const { db } = supabaseCom([]);
-    const { adapter, perguntas } = canal(async () => "553198966398");
-    const r = await resolverNumeroDiscavel(db, ORG, "+5531998966398", { adapterDe: () => adapter });
-    expect(r).toEqual({ digitos: "5531998966398", fonte: "cadastro" });
+    const { adapter, perguntas } = canal(async () => "553191110001");
+    const r = await resolverNumeroDiscavel(db, ORG, "+5531991110001", { adapterDe: () => adapter });
+    expect(r).toEqual({ digitos: "5531991110001", fonte: "cadastro" });
     expect(perguntas).toEqual([]);
   });
 
   it("canal não configurado, que falha ou que não sabe o número cai no cadastro", async () => {
     const { db } = supabaseCom([SESSAO_DE_MENSAGEM]);
     for (const { adapter } of [
-      canal(async () => "553198966398", false),
+      canal(async () => "553191110001", false),
       canal(async () => {
         throw new Error("transporte_500");
       }),
       canal(async () => null),
     ]) {
-      expect(await resolverNumeroDiscavel(db, ORG, "+5531998966398", { adapterDe: () => adapter })).toEqual({
-        digitos: "5531998966398",
+      expect(await resolverNumeroDiscavel(db, ORG, "+5531991110001", { adapterDe: () => adapter })).toEqual({
+        digitos: "5531991110001",
         fonte: "cadastro",
       });
     }
@@ -149,8 +149,8 @@ describe("resolverNumeroDiscavel — pela porta do canal", () => {
     const { db } = supabaseCom([SESSAO_DE_MENSAGEM]);
     const { adapter } = canal(() => new Promise(() => undefined));
     const inicio = Date.now();
-    const r = await resolverNumeroDiscavel(db, ORG, "+5531998966398", { adapterDe: () => adapter, prazoMs: 50 });
-    expect(r).toEqual({ digitos: "5531998966398", fonte: "cadastro" });
+    const r = await resolverNumeroDiscavel(db, ORG, "+5531991110001", { adapterDe: () => adapter, prazoMs: 50 });
+    expect(r).toEqual({ digitos: "5531991110001", fonte: "cadastro" });
     expect(Date.now() - inicio).toBeLessThan(2_000);
   });
 });
@@ -161,16 +161,16 @@ describe("o adaptador pergunta ao transporte as duas grafias", () => {
     transporte.cliente = {
       checkContactExists: vi.fn(async (_s: string, digitos: string) => {
         perguntas.push(digitos);
-        return digitos === "553198966398" ? RESPOSTA_MEDIDA : { numberExists: false };
+        return digitos === "553191110001" ? RESPOSTA_MEDIDA : { numberExists: false };
       }),
     } as unknown as WahaClient;
     const r = await wahaAdapter.resolveRegisteredPhone!({
       organizationId: ORG,
       sessionRef: "sessao",
-      phone: "+5531998966398",
+      phone: "+5531991110001",
     });
-    expect(perguntas).toEqual(["5531998966398", "553198966398"]);
-    expect(r).toBe("553198966398");
+    expect(perguntas).toEqual(["5531991110001", "553191110001"]);
+    expect(r).toBe("553191110001");
   });
 
   it("só @lid não serve, e transporte ausente responde null", async () => {
@@ -178,11 +178,11 @@ describe("o adaptador pergunta ao transporte as duas grafias", () => {
       checkContactExists: vi.fn(async () => ({ numberExists: true, chatId: "59782320914646@lid" })),
     } as unknown as WahaClient;
     expect(
-      await wahaAdapter.resolveRegisteredPhone!({ organizationId: ORG, sessionRef: "s", phone: "+5531998966398" }),
+      await wahaAdapter.resolveRegisteredPhone!({ organizationId: ORG, sessionRef: "s", phone: "+5531991110001" }),
     ).toBeNull();
     transporte.cliente = null;
     expect(
-      await wahaAdapter.resolveRegisteredPhone!({ organizationId: ORG, sessionRef: "s", phone: "+5531998966398" }),
+      await wahaAdapter.resolveRegisteredPhone!({ organizationId: ORG, sessionRef: "s", phone: "+5531991110001" }),
     ).toBeNull();
   });
 });

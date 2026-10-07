@@ -15,7 +15,7 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { z } from "zod";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -78,9 +78,9 @@ export async function GET(req: NextRequest): Promise<Response> {
     supabase.from("crm_stages").select("id, name").eq("organization_id", activeOrg.orgId),
   ]);
 
-  if (perdas.error) return fail("internal_error", perdas.error.message, 500, { requestId });
-  if (funis.error) return fail("internal_error", funis.error.message, 500, { requestId });
-  if (etapas.error) return fail("internal_error", etapas.error.message, 500, { requestId });
+  if (perdas.error) return falhaInterna("internal_error", perdas.error, { requestId });
+  if (funis.error) return falhaInterna("internal_error", funis.error, { requestId });
+  if (etapas.error) return falhaInterna("internal_error", etapas.error, { requestId });
 
   const settingsPorFunil: Record<string, unknown> = {};
   for (const funil of funis.data ?? []) settingsPorFunil[funil.id] = funil.settings;

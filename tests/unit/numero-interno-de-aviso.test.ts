@@ -62,14 +62,14 @@ beforeEach(() => {
 });
 
 describe("ehOChatDoAviso — a regra pura", () => {
-  const cfg = { destino: "+5531998966398", jid: "224466@lid" };
+  const cfg = { destino: "+5531991110001", jid: "224466@lid" };
 
   it("casa o telefone exato", () => {
-    expect(ehOChatDoAviso({ kind: "phone", phone: "+5531998966398", lid: null }, cfg)).toBe(true);
+    expect(ehOChatDoAviso({ kind: "phone", phone: "+5531991110001", lid: null }, cfg)).toBe(true);
   });
 
   it("casa a OUTRA grafia do nono dígito — a mesma pessoa, dois cadastros", () => {
-    expect(ehOChatDoAviso({ kind: "phone", phone: "+553198966398", lid: null }, cfg)).toBe(true);
+    expect(ehOChatDoAviso({ kind: "phone", phone: "+553191110001", lid: null }, cfg)).toBe(true);
   });
 
   it("não casa outro número", () => {
@@ -86,12 +86,12 @@ describe("ehOChatDoAviso — a regra pura", () => {
     // resposta de quem está em modo privacidade passa. É por isso que o handler
     // grava `destino_jid` no sucesso do envio, e não em outro momento.
     expect(
-      ehOChatDoAviso({ kind: "lid", phone: null, lid: "224466" }, { destino: "+5531998966398", jid: null }),
+      ehOChatDoAviso({ kind: "lid", phone: null, lid: "224466" }, { destino: "+5531991110001", jid: null }),
     ).toBe(false);
   });
 
   it("sem configuração nenhuma, nada casa", () => {
-    expect(ehOChatDoAviso({ kind: "phone", phone: "+5531998966398", lid: null }, { destino: null, jid: null })).toBe(
+    expect(ehOChatDoAviso({ kind: "phone", phone: "+5531991110001", lid: null }, { destino: null, jid: null })).toBe(
       false,
     );
   });
@@ -107,10 +107,10 @@ describe("lerNumeroInternoDeAviso — a leitura quente", () => {
     // Se a leitura filtrasse por `ligado`, pausar o aviso transformaria o número
     // do suporte em lead na semana seguinte — e ninguém ligaria uma coisa à
     // outra. A consulta NÃO pergunta pelo campo, e é isso que este caso mede.
-    const { db } = fakeDb({ telefone_destino: "+5531998966398", destino_jid: null, ligado: false });
+    const { db } = fakeDb({ telefone_destino: "+5531991110001", destino_jid: null, ligado: false });
     const cfg = await lerNumeroInternoDeAviso(db, ORG);
-    expect(cfg.destino).toBe("+5531998966398");
-    expect(await ehNumeroInternoDeAviso(db, ORG, { kind: "phone", phone: "+5531998966398", lid: null })).toBe(
+    expect(cfg.destino).toBe("+5531991110001");
+    expect(await ehNumeroInternoDeAviso(db, ORG, { kind: "phone", phone: "+5531991110001", lid: null })).toBe(
       true,
     );
   });
@@ -118,7 +118,7 @@ describe("lerNumeroInternoDeAviso — a leitura quente", () => {
   it("organização sem configuração devolve vazio e não casa nada", async () => {
     const { db } = fakeDb(null);
     expect(await lerNumeroInternoDeAviso(db, ORG)).toEqual({ destino: null, jid: null });
-    expect(await ehNumeroInternoDeAviso(db, ORG, { kind: "phone", phone: "+5531998966398", lid: null })).toBe(
+    expect(await ehNumeroInternoDeAviso(db, ORG, { kind: "phone", phone: "+5531991110001", lid: null })).toBe(
       false,
     );
   });
@@ -126,14 +126,14 @@ describe("lerNumeroInternoDeAviso — a leitura quente", () => {
   it("a segunda leitura no mesmo instante NÃO vai ao banco", async () => {
     // Isto roda em TODO webhook de mensagem. Sem cache, o corte custa uma ida ao
     // banco por mensagem recebida na instalação inteira.
-    const { db, leituras } = fakeDb({ telefone_destino: "+5531998966398", destino_jid: null });
+    const { db, leituras } = fakeDb({ telefone_destino: "+5531991110001", destino_jid: null });
     await lerNumeroInternoDeAviso(db, ORG);
     await lerNumeroInternoDeAviso(db, ORG);
     expect(leituras()).toBe(1);
   });
 
   it("o cache expira em 30 s — trocar o número não leva meia hora para valer", async () => {
-    const { db, leituras } = fakeDb({ telefone_destino: "+5531998966398", destino_jid: null });
+    const { db, leituras } = fakeDb({ telefone_destino: "+5531991110001", destino_jid: null });
     const base = Date.now();
     const relogio = vi.spyOn(Date, "now");
     relogio.mockReturnValue(base);
@@ -148,7 +148,7 @@ describe("lerNumeroInternoDeAviso — a leitura quente", () => {
   });
 
   it("o cache é POR ORGANIZAÇÃO — o número de uma não responde pela outra", async () => {
-    const { db, leituras } = fakeDb({ telefone_destino: "+5531998966398", destino_jid: null });
+    const { db, leituras } = fakeDb({ telefone_destino: "+5531991110001", destino_jid: null });
     await lerNumeroInternoDeAviso(db, ORG);
     await lerNumeroInternoDeAviso(db, "22222222-2222-4222-8222-222222222222");
     expect(leituras()).toBe(2);
@@ -164,7 +164,7 @@ describe("lerNumeroInternoDeAviso — a leitura quente", () => {
       maybeSingle: async () => ({ data: null, error: { message: "boom" } }),
     };
     const db = { from: () => builder } as unknown as SupabaseClient;
-    expect(await ehNumeroInternoDeAviso(db, ORG, { kind: "phone", phone: "+5531998966398", lid: null })).toBe(
+    expect(await ehNumeroInternoDeAviso(db, ORG, { kind: "phone", phone: "+5531991110001", lid: null })).toBe(
       false,
     );
   });

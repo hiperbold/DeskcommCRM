@@ -13,7 +13,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -123,7 +123,7 @@ export async function POST(
     .maybeSingle();
 
   if (reqErr) {
-    return fail("internal_error", reqErr.message, 500, { requestId });
+    return falhaInterna("internal_error", reqErr, { requestId });
   }
   if (!request) {
     return fail("not_found", t("Solicitação não encontrada."), 404, { requestId });
@@ -158,7 +158,7 @@ export async function POST(
     .select("id");
 
   if (updateErr) {
-    return fail("internal_error", updateErr.message, 500, { requestId });
+    return falhaInterna("internal_error", updateErr, { requestId });
   }
   if (!reivindicado || reivindicado.length === 0) {
     return fail(

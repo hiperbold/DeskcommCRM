@@ -7,7 +7,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAutomationRuleSchema } from "@/lib/schemas";
@@ -30,7 +30,7 @@ export async function GET(): Promise<Response> {
     .select("*")
     .eq("organization_id", activeOrg.orgId)
     .order("created_at", { ascending: false });
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
   return ok(data ?? [], { requestId });
 }
 
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     .select("*")
     .single();
   if (insErr || !created) {
-    return fail("internal_error", insErr?.message ?? "automation_rule_insert_failed", 500, { requestId });
+    return falhaInterna("internal_error", insErr ?? "automation_rule_insert_failed", { requestId });
   }
 
   void audit({

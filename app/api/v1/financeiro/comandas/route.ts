@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
 import { abrirComandaSchema } from "@/lib/financeiro/comanda";
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const { data, error } = await q;
-  if (error) return fail("internal_error", error.message, 500, { requestId });
+  if (error) return falhaInterna("internal_error", error, { requestId });
 
   // O total de uma comanda ABERTA é derivado dos itens, sempre. `total_cents` só
   // é gravado na finalização, e ler a coluna antes disso mostraria zero numa
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   const { data: numero, error: erroNumero } = await supabase.rpc("fn_proximo_numero_de_comanda", {
     p_org: org,
   });
-  if (erroNumero) return fail("internal_error", erroNumero.message, 500, { requestId });
+  if (erroNumero) return falhaInterna("internal_error", erroNumero, { requestId });
 
   const { data, error } = await supabase
     .from("sales")
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     if (error.code === "23505") {
       return fail("conflict", "Esta comanda já foi aberta.", 409, { requestId });
     }
-    return fail("internal_error", error.message, 500, { requestId });
+    return falhaInterna("internal_error", error, { requestId });
   }
 
   await audit({

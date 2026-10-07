@@ -36,7 +36,7 @@ import { requireSupportWrite } from "@/lib/impersonate/support";
 import { randomUUID } from "node:crypto";
 import type { NextRequest } from "next/server";
 
-import { ok, fail } from "@/lib/api/wrappers";
+import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { requireRole } from "@/lib/auth/require-role";
@@ -69,7 +69,7 @@ export async function POST(
     .eq("organization_id", activeOrg.orgId)
     .eq("user_id", targetUserId)
     .maybeSingle();
-  if (fetchErr) return fail("internal_error", fetchErr.message, 500, { requestId });
+  if (fetchErr) return falhaInterna("internal_error", fetchErr, { requestId });
   if (!target) return fail("not_found", t("Membro não encontrado."), 404, { requestId });
 
   // Idempotente, na mesma forma que `revoke` usa para o caso simétrico: dois
@@ -92,7 +92,7 @@ export async function POST(
     // Postgres.
     const recusa = recusaDoPlano(updErr);
     if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
-    return fail("internal_error", updErr.message, 500, { requestId });
+    return falhaInterna("internal_error", updErr, { requestId });
   }
 
   await audit({

@@ -100,11 +100,11 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
   it("reponta conversa, mensagem, negócio do funil e atividade; a lápide fica", async () => {
     const vencedor = await contato("d0208001-0000-4000-8000-000000000001", {
       nome: "Maria",
-      telefone: "+5531998966301",
+      telefone: "+5531991110101",
     });
     const perdedor = await contato("d0208001-0000-4000-8000-000000000002", {
       email: "maria@example.com",
-      telefone: "+553198966301",
+      telefone: "+553191110101",
     });
 
     const conversa = "d0208001-0000-4000-8000-00000000000a";
@@ -187,10 +187,10 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
        )`,
     );
     const vencedor = await contato("d0208002-0000-4000-8000-000000000001", {
-      telefone: "+5531998966302",
+      telefone: "+5531991110102",
     });
     const perdedor = await contato("d0208002-0000-4000-8000-000000000002", {
-      telefone: "+553198966302",
+      telefone: "+553191110102",
     });
     await pool.query(
       "insert into public.anexos_do_contato_0208 (organization_id, contact_id, rotulo) values ($1, $2, 'contrato.pdf')",
@@ -212,10 +212,10 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
   it("o WhatsApp do perdedor passa a cair no vencedor — a duplicata não volta", async () => {
     const vencedor = await contato("d0208003-0000-4000-8000-000000000001", {
       nome: "João",
-      telefone: "+5531998966303",
+      telefone: "+5531991110103",
     });
     const perdedor = await contato("d0208003-0000-4000-8000-000000000002", {
-      lid: "553198966303",
+      lid: "553191110103",
     });
 
     await mesclar(vencedor, [perdedor]);
@@ -224,7 +224,7 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
     // criaria um contato NOVO e refaria a duplicata que acabou de ser desfeita.
     const { rows } = await pool.query<{ id: string }>(
       "select public.fn_upsert_wa_contact($1, 'lid', null, $2, $3, null) as id",
-      [ORG, "553198966303", "553198966303@lid"],
+      [ORG, "553191110103", "553191110103@lid"],
     );
     expect(rows[0]!.id).toBe(vencedor);
   });
@@ -232,12 +232,12 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
   it("completa o que falta no vencedor e NUNCA sobrescreve o que ele já tinha", async () => {
     const vencedor = await contato("d0208004-0000-4000-8000-000000000001", {
       nome: "Nome do atendente",
-      telefone: "+5531998966304",
+      telefone: "+5531991110104",
     });
     const perdedor = await contato("d0208004-0000-4000-8000-000000000002", {
       nome: "Nome do WhatsApp",
       email: "cliente@example.com",
-      telefone: "+553198966304",
+      telefone: "+553191110104",
     });
     await pool.query("update contacts set tags = $2 where id = $1", [vencedor, ["vip"]]);
     await pool.query("update contacts set tags = $2 where id = $1", [perdedor, ["import"]]);
@@ -257,14 +257,14 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
     );
     expect(rows[0]!.name).toBe("Nome do atendente");
     expect(rows[0]!.email).toBe("cliente@example.com");
-    expect(rows[0]!.phone_number).toBe("+5531998966304");
+    expect(rows[0]!.phone_number).toBe("+5531991110104");
     expect([...rows[0]!.tags].sort()).toEqual(["import", "vip"]);
     expect(rows[0]!.mesclado_de).toEqual([perdedor]);
   });
 
   it("recusa contato anonimizado — L-04 não se desfaz pela porta dos fundos", async () => {
     const vencedor = await contato("d0208005-0000-4000-8000-000000000001", {
-      telefone: "+5531998966305",
+      telefone: "+5531991110105",
     });
     const anonimizado = await contato("d0208005-0000-4000-8000-000000000002", {
       anonimizado: true,
@@ -276,7 +276,7 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
 
   it("recusa contato de outra organização", async () => {
     const vencedor = await contato("d0208006-0000-4000-8000-000000000001", {
-      telefone: "+5531998966306",
+      telefone: "+5531991110106",
     });
     const alheio = await contato("d0208006-0000-4000-8000-000000000002", {
       org: ORG_VIZINHA,
@@ -294,7 +294,7 @@ describe("fn_mesclar_contatos — o histórico segue o vencedor", () => {
 
   it("recusa o principal entre os secundários", async () => {
     const um = await contato("d0208007-0000-4000-8000-000000000001", {
-      telefone: "+5531998966307",
+      telefone: "+5531991110107",
     });
     await expect(mesclar(um, [um])).rejects.toThrow(/selecao_de_mesclagem_invalida/);
   });

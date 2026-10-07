@@ -33,7 +33,7 @@ import type {
   RecipientInput,
 } from "../types";
 
-/** Só dígitos. `+55 (31) 99896-6398` → `5531998966398`. */
+/** Só dígitos. `+55 (31) 99111-0001` → `5531991110001`. */
 export function toE164Digits(raw: string): string {
   return raw.replace(/\D/g, "");
 }

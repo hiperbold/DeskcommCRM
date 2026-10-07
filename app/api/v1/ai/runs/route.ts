@@ -11,7 +11,7 @@
 import { z } from "zod";
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { PROVEDOR_DO_JEV } from "@/lib/ai/decisao/credencial";
 import {
@@ -139,7 +139,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   const { data, error } = await q;
-  if (error) return fail("query_failed", error.message, 500);
+  if (error) return falhaInterna("query_failed", error);
 
   const execucoes = ((data ?? []) as LinhaDeExecucao[]).map((l) => {
     const ponto = PONTO_POR_ID.get(l.purpose);

@@ -17,7 +17,7 @@ function linha(over: Partial<VoiceCallRow> = {}): VoiceCallRow {
     id: "c1",
     contact_id: null,
     direction: "outbound",
-    peer_phone: "553198966398",
+    peer_phone: "553191110001",
     status: "ringing",
     end_reason: null,
     started_at: "2026-09-15T13:42:24.000Z",

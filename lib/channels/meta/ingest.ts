@@ -14,8 +14,8 @@
  * eliminou.
  *
  * ─── Duas armadilhas medidas contra a WABA real ─────────────────────────────
- * 1. **O `wa_id` pode vir sem o nono dígito** (`553198966398` para quem recebemos
- *    como `5531998966398`). A resolução do contato passa por `phoneLookupVariants`,
+ * 1. **O `wa_id` pode vir sem o nono dígito** (`553191110001` para quem recebemos
+ *    como `5531991110001`). A resolução do contato passa por `phoneLookupVariants`,
  *    senão a mesma pessoa vira dois cadastros e a conversa parte ao meio.
  * 2. **A Meta re-entrega tudo que não recebe 2xx.** A idempotência por
  *    `unique (organization_id, external_id)` não é higiene, é obrigatória: sem ela a

@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
-import { fail, ok } from "@/lib/api/wrappers";
+import { ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { CONVERSATION_TERMINAL_STATUSES } from "@/lib/schemas";
 import { orgTemAutomatico } from "@/lib/ai/agents/org-tem-automatico";
@@ -148,7 +148,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   const firstErr =
     fila.error ?? automatico.error ?? mine.error ?? all.error ?? closed.error ?? archived.error;
   if (firstErr) {
-    return fail("internal_error", firstErr.message, 500, { requestId });
+    return falhaInterna("internal_error", firstErr, { requestId });
   }
 
   return ok(

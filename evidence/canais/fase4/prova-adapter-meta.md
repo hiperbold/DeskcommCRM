@@ -4,7 +4,7 @@ Saída literal em [adapter-meta-real.txt](evidence/canais/fase4/adapter-meta-rea
 
 ```
 isConfigured: true
-destinatario resolvido: 5531998966398
+destinatario resolvido: 5531991110001
 ENVIADO: {"externalId":"wamid.HBgMNTUzMTk4OTY2Mzk4FQIAERgSNkQwQjNDNjVCMkVGODhBMzFCAA=="}
 ```
 
