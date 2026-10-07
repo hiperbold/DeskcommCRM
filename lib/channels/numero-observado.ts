@@ -13,7 +13,7 @@
  * número antigo para sempre.
  *
  * Medido numa instalação real: a conexão de produção atendia `551148633324`, e
- * o banco dizia `553191110001` — o número de um pareamento anterior, de outra
+ * o banco dizia `553191110001`, o número de um pareamento anterior, de outra
  * organização. Os 23 avisos abertos na Central nomeavam o número errado.
  *
  * Isso não é cosmético. `health.ts` escolhe o apelido do aviso justamente para

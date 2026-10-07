@@ -4,7 +4,7 @@
  * Medido na VPS em 2026-09-15: o contato `+5531991110001` foi discado como
  * `5531991110001@s.whatsapp.net`, e o WhatsApp o registra como `553191110001`.
  * O WAHA respondeu `check-exists` das DUAS grafias com
- * `{"numberExists":true,"chatId":"553191110001@c.us"}` — é essa resposta,
+ * `{"numberExists":true,"chatId":"553191110001@c.us"}`, é essa resposta,
  * copiada do terminal, que os casos abaixo usam. Ver `lib/voice/numero-discavel.ts`.
  */
 import { describe, expect, it, vi } from "vitest";

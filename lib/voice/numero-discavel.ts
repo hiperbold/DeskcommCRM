@@ -3,7 +3,7 @@
  *
  * Medido na VPS em 2026-09-15: o contato `+5531991110001` foi discado como
  * `5531991110001@s.whatsapp.net`. O WhatsApp registra esse celular como
- * `553191110001` — sem o nono dígito, o caso comum em DDD fora de São Paulo —,
+ * `553191110001`, sem o nono dígito, o caso comum em DDD fora de São Paulo,
  * e o canal de mensagens da organização confirmou (as duas grafias responderam
  * `553191110001@c.us`). O serviço de voz não pergunta nada a ninguém: monta o
  * destino com `types.NewJID(dígitos, DefaultUserServer)`. A oferta saiu para um
