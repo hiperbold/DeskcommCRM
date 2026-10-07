@@ -52,6 +52,9 @@ export default async function ConnectionsPage() {
         wacallsConfigured={wacallsConfigured}
         bloqueio={bloqueio}
         graphParceiro={canalGraphParceiroLigado() ? { label: GRAPH_PARTNER_LABEL } : null}
+        // O mesmo piso de `PUT /api/v1/ai/pacing` (`manager`): abaixo disso a ficha
+        // abre só para ler, em vez de oferecer um Salvar que a rota recusaria.
+        podeEditarProtecao={ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager}
       />
     </div>
   );

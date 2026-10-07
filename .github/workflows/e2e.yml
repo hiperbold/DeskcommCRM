@@ -985,6 +985,8 @@ jobs:
         qa-l12-tags-radar.spec.ts
         extensoes-recuperacao.spec.ts
         extensoes-portas-novas.spec.ts
+        extensoes-declarativas.spec.ts
+        extensoes-versao.spec.ts
         motivo-do-publicar-na-tela.spec.ts
         followup-cartoes.spec.ts
         followup-modelos-de-clinica.spec.ts
@@ -1080,6 +1082,27 @@ jobs:
       # service role e apaga tudo no fim. Roda depois da `jev-decisoes-rapidas`
       # — as duas nunca disputam a porta, porque a parte roda uma spec por vez.
       # PREVISÃO, não medida: ~1 min.
+      #
+      # ── 2026-10-07: a parte 5 estourou o relógio no run 37694166178 (PR #1) ──
+      #
+      # A parte 5 saiu com exit 124 aos 1683s de relógio do job: preparo de 555s
+      # (o `playwright install` levou 3m12s naquele runner; as outras partes
+      # prepararam em 302 a 383s) e 1126s de suíte, cortada com 73 casos feitos e
+      # `extensoes-versao` sem rodar. Soma da duração dos casos por parte, medida
+      # nesse run e ajustada ao que as listas fazem hoje (a
+      # `whatsapp-pareamento-por-codigo` está pulada, 180s a menos na parte 3; a
+      # `extensoes-versao` entra pelos 49s medidos na rodada de 19/09):
+      #
+      #     parte 1 → 1001s · parte 2 → ~1008s · parte 3 → ~898s · parte 5 → ~1179s
+      #
+      # `extensoes-declarativas` (84s) e `extensoes-versao` (49s) voltam para a
+      # PARTE_3, onde ficaram até 19/09 e onde já moram as outras duas specs da
+      # família (`extensoes-recuperacao`, `extensoes-portas-novas`). Previsão, que
+      # a rodada seguinte mede: parte 3 ~1031s e parte 5 ~1046s de suíte, a
+      # diferença entre a maior e a menor das comuns caindo de ~280s para ~45s.
+      # Com 1046s a parte 5 cabe no corte mesmo num runner de 555s de preparo
+      # (555 + 1046 x 1,04 = ~1643s contra o corte de 1680s). O orçamento de 24
+      # min e o teto de 30 min ficam como estão.
       SPECS_PARTE_5: >-
         inbox-busca-e-filtros-dizem-a-verdade.spec.ts
         extensoes-da-instalacao.spec.ts
@@ -1097,8 +1120,6 @@ jobs:
         fluxo-de-atendimento.spec.ts
         qa-l12-funil.spec.ts
         i18n-espanhol-na-tela.spec.ts
-        extensoes-declarativas.spec.ts
-        extensoes-versao.spec.ts
         marca-logo.spec.ts
         suporte-temporario.spec.ts
         olhar-telas-do-epico.spec.ts

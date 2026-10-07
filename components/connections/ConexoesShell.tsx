@@ -44,6 +44,7 @@ export function ConexoesShell({
   wacallsConfigured,
   bloqueio,
   graphParceiro = null,
+  podeEditarProtecao,
 }: {
   /** Sem uso na Hiperbold (sem canal por QR); mantido para a página do autor não mudar. */
   wahaConfigured: boolean;
@@ -61,6 +62,11 @@ export function ConexoesShell({
    * O rótulo vem do servidor porque a tela não pode nomear provider.
    */
   graphParceiro?: { label: string } | null;
+  /**
+   * Proteção de envio nos cartões da API não oficial: `true` edita, `false` só
+   * lê, `undefined` não oferece. Calculado no servidor pelo piso da rota.
+   */
+  podeEditarProtecao?: boolean;
 }) {
   const t = useT();
   const router = useRouter();
@@ -126,7 +132,7 @@ export function ConexoesShell({
       </TabsList>
 
       <TabsContent value="instancia" className="mt-0">
-        <CanalInstanciaClient bloqueio={bloqueio} />
+        <CanalInstanciaClient bloqueio={bloqueio} podeEditarProtecao={podeEditarProtecao} />
       </TabsContent>
 
       <TabsContent value="telefonia" className="mt-0">

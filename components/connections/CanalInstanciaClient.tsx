@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { apiClient } from "@/lib/api/client";
 import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
+import { usePacingKnobs } from "@/hooks/channels/usePacingKnobs";
 import { useT } from "@/hooks/i18n/useT";
+import { ShieldCheck } from "@/lib/ui/icons";
+import { AntiBanSheet } from "./AntiBanSheet";
 import { ChannelAiAccess } from "./ChannelAiAccess";
 
 /**
@@ -66,6 +70,7 @@ function rotuloDoStatus(status: string | null, t: (s: string) => string): string
 
 export function CanalInstanciaClient({
   bloqueio,
+  podeEditarProtecao,
 }: {
   /**
    * Fase F3, tarefa 9: quando o bloqueio do plano vale e "conexões" está no
@@ -74,8 +79,19 @@ export function CanalInstanciaClient({
    * onboarding) equivale a "não desabilita", nunca a "desabilita por engano".
    */
   bloqueio?: BloqueioDoBotao;
+  /**
+   * Proteção de envio (anti-ban) no cartão de cada conexão. É a ficha que morava
+   * na lista de números por QR e ficou sem tela quando a aba saiu (be97dd61f).
+   *
+   * `undefined` = a tela não oferece a ficha (o wizard de onboarding não passa a
+   * prop). `false` = oferece só para ler. `true` = oferece e edita. Quem decide é
+   * o servidor da página, pelo MESMO piso da rota (`PUT /api/v1/ai/pacing` exige
+   * `manager`): a tela nunca calcula papel sozinha nem libera mais que a rota.
+   */
+  podeEditarProtecao?: boolean;
 } = {}) {
   const t = useT();
+  const qc = useQueryClient();
   const [estado, setEstado] = useState<Estado | null>(null);
   const [servidor, setServidor] = useState("");
   const [token, setToken] = useState("");
@@ -83,6 +99,8 @@ export function CanalInstanciaClient({
   const [salvando, setSalvando] = useState(false);
   const [aviso, setAviso] = useState<string | null>(null);
   const [confirmandoRemocao, setConfirmandoRemocao] = useState<string | null>(null);
+  const [antiBanId, setAntiBanId] = useState<string | null>(null);
+  const oferecerProtecao = podeEditarProtecao !== undefined;
 
   const carregar = async () => {
     try {
@@ -117,6 +135,9 @@ export function CanalInstanciaClient({
         toast.warning(t("Conectado, mas as mensagens ainda não entram. Veja o aviso."));
       }
       await carregar();
+      // A ficha de proteção é indexada pela lista de conexões: sem isto, a
+      // conexão recém-criada abriria o painel como "não encontrada".
+      void qc.invalidateQueries({ queryKey: ["pacing-knobs"] });
     } catch (e) {
       toast.error(e instanceof Error ? t(e.message) : t("Não foi possível conectar."));
     } finally {
@@ -135,6 +156,7 @@ export function CanalInstanciaClient({
       await apiClient.delete(`/api/v1/channels/instancia?id=${encodeURIComponent(id)}`);
       toast.success(t("Conexão removida."));
       await carregar();
+      void qc.invalidateQueries({ queryKey: ["pacing-knobs"] });
     } catch (e) {
       toast.error(e instanceof Error ? t(e.message) : t("Não foi possível remover."));
     }
@@ -142,6 +164,9 @@ export function CanalInstanciaClient({
 
   const rotulo = estado?.label ?? t("API não oficial");
   const conexoes = estado?.conexoes ?? [];
+  // Só busca a ficha quando a tela a oferece e há conexão: o onboarding e a tela
+  // vazia não pagam uma consulta que ninguém vai abrir.
+  const pacingItems = usePacingKnobs(oferecerProtecao && conexoes.length > 0).data?.items ?? [];
 
   return (
     <div className="flex flex-col gap-4" data-testid="canal-instancia-root">
@@ -241,13 +266,29 @@ export function CanalInstanciaClient({
 
           <ChannelAiAccess channelId={c.id} />
 
-          <div>
+          <div className="flex flex-wrap gap-2">
+            {oferecerProtecao && (
+              <Button variant="outline" size="sm" onClick={() => setAntiBanId(c.id)}>
+                <ShieldCheck size={14} aria-hidden />
+                {t("Proteção de envio")}
+              </Button>
+            )}
             <Button variant="outline" size="sm" onClick={() => void remover(c.id)}>
               {confirmandoRemocao === c.id ? t("Clique de novo para remover") : t("Remover conexão")}
             </Button>
           </div>
         </Card>
       ))}
+
+      {/* Só monta quando alguém pediu para abrir: assim o AntiBanSheet distingue
+          "painel fechado" de "a conexão pedida sumiu da lista". */}
+      {oferecerProtecao && antiBanId !== null && (
+        <AntiBanSheet
+          item={pacingItems.find((i) => i.channel_session.id === antiBanId) ?? null}
+          canWrite={podeEditarProtecao}
+          onClose={() => setAntiBanId(null)}
+        />
+      )}
     </div>
   );
 }
