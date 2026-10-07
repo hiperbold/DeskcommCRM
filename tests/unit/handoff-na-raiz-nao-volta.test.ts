@@ -160,8 +160,6 @@ const EXIGEM_ROTULO: Classe[] = ["conversa", "org", "telefone"];
 const PERMITIDOS: Record<string, string> = {
   "docs/handoffs/HANDOFF-canais-oficial.md":
     "PRÉ-EXISTENTE: `@c.us` com DDD e número de exemplo, citado como esperado de spec unitária. A heurística de rótulo NÃO o classifica como etiqueta (o número é varied), e é exatamente por isso que ele precisa de nome: fixture é exceção declarada, não deduzida.",
-  "docs/handoffs/HANDOFF-crm-vivo.md":
-    "PRÉ-EXISTENTE a este PR; tratamento com o mantenedor em canal privado (#638).",
   "docs/handoffs/HANDOFF-inbox-multimodal.md":
     "PRÉ-EXISTENTE a este PR; tratamento com o mantenedor em canal privado (#638).",
   "docs/handoffs/HANDOFF-wave1-devvivo.md":

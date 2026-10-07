@@ -3738,6 +3738,18 @@ export const DICIONARIO: Traducoes = {
   "O botão de testar não conclui, e você fica sem saber se a configuração está de pé antes de colocar no ar.": {
     es: "El botón de probar no termina y no sabes si la configuración funciona antes de activarla.",
   },
+  "Sugerir o funil no onboarding": {
+    es: "Sugerir el embudo en el onboarding",
+  },
+  "Lê o que o negócio vende e propõe as colunas do quadro de clientes, no passo \"Onde ele organiza\" do onboarding.": {
+    es: "Lee lo que vende el negocio y propone las columnas del tablero de clientes, en el paso \"Dónde se organiza\" del onboarding.",
+  },
+  "Usa o modelo e a chave do funcionário que acabou de ser criado no onboarding, porque é a única chave que a pessoa já colou nesse momento. Para trocar o modelo, troque na versão do agente.": {
+    es: "Usa el modelo y la clave del empleado que acaba de crearse en el onboarding, porque es la única clave que la persona ya pegó en ese momento. Para cambiar el modelo, cámbialo en la versión del agente.",
+  },
+  "O passo do funil mostra um pacote pronto de colunas em vez de uma sugestão feita para o seu negócio.": {
+    es: "El paso del embudo muestra un paquete listo de columnas en lugar de una sugerencia hecha para tu negocio.",
+  },
   "Ensaiar o agente antes de publicar": {
     es: "Ensayar el agente antes de publicar",
   },

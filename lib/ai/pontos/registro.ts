@@ -574,6 +574,22 @@ export const PONTOS_DE_IA: readonly PontoDeIa[] = [
     registraEm: "ai_agent_runs",
   },
   {
+    id: "onboarding_funil",
+    rotulo: "Sugerir o funil no onboarding",
+    oQueFaz:
+      "Lê o que o negócio vende e propõe as colunas do quadro de clientes, no passo \"Onde ele organiza\" do onboarding.",
+    papel: "melhorar",
+    exige: {},
+    emissor: "app/actions/onboarding/montarQuadro.ts",
+    fixo: {
+      razao:
+        "Usa o modelo e a chave do funcionário que acabou de ser criado no onboarding, porque é a única chave que a pessoa já colou nesse momento. Para trocar o modelo, troque na versão do agente.",
+    },
+    sintomaDeFalha:
+      "O passo do funil mostra um pacote pronto de colunas em vez de uma sugestão feita para o seu negócio.",
+    registraEm: "llm_calls",
+  },
+  {
     id: "contagem_de_tokens",
     rotulo: "Medir o tamanho do contexto",
     oQueFaz:

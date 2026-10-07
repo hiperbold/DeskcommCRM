@@ -26,7 +26,10 @@ describe("consentimento de telemetria no primeiro install", () => {
   it("o instalador distingue primeira execução de uma escolha já gravada", () => {
     expect(install).toContain('if [ -z "${SENTRY_DSN+x}" ]; then');
     expect(install).toContain('SENTRY_DSN="off"');
-    expect(install).toContain('SENTRY_DSN=""');
+    // D-135: aceitar grava `community` explícito. Vazio passou a DESLIGAR, então
+    // o instalador nunca grava `SENTRY_DSN=""` como escolha de quem consentiu.
+    expect(install).toContain('SENTRY_DSN="community"');
+    expect(install).not.toContain('SENTRY_DSN=""');
     expect(install).toContain('envq SENTRY_DSN "${SENTRY_DSN:-}"');
   });
 

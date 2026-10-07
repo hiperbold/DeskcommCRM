@@ -73,18 +73,22 @@ import { textoDoResumo, type EstadoDaDemonstracao } from "./lib/resumo-do-seed-d
 
 // `process.env` VENCE o `.env.local` (ver scripts/lib/env-de-teste.ts).
 const credenciais = credenciaisSupabaseDeTeste();
-anunciarDestino("seed-automacoes-e-followups", credenciais);
 
 // Só a URL decide: este script fala apenas com a API do Supabase (admin client)
 // e nunca abre `pg.Pool`, então o `dbUrl` não é destino dele.
+// A porta vem ANTES de `anunciarDestino`: o anúncio também recusa destino remoto
+// (D-162), mas com exit 1 e sem citar `--permitir-remoto`. Na frente, quem lê
+// recebe o flag deste script e o exit 2.
 if (!destinoEhLocal(credenciais.url) && !process.argv.includes("--permitir-remoto")) {
   console.error(
-    `[seed-automacoes-e-followups] recusado: ${credenciais.url} não é local, e este seed cria ` +
+    `[seed-automacoes-e-followups] recusado: destino REMOTO ${credenciais.url} não é local, e este seed cria ` +
       "regras de automação e follow-up ATIVOS. Para gravar mesmo assim, rode de novo com " +
       "--permitir-remoto.",
   );
   process.exit(2);
 }
+
+anunciarDestino("seed-automacoes-e-followups", credenciais);
 
 const admin = createClient(credenciais.url, credenciais.serviceRole, {
   auth: { autoRefreshToken: false, persistSession: false },
