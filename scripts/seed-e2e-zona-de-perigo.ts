@@ -15,10 +15,12 @@
  *            action. Sem uma segunda organização com dado, um `.eq` esquecido
  *            passaria verde.
  *
- * O usuário é o `manager` do harness — de propósito. Ele é `manager` na
- * organização compartilhada (e portanto NÃO enxerga esta tela lá, o que a spec
- * também confere) e `admin` nas duas daqui. E ele não tem fator de MFA, então o
- * login não depende do TOTP compartilhado que outros seeds rotacionam.
+ * Dois usuários do harness são `admin` nas duas daqui:
+ *   • o `admin`, que tem fator de MFA: apagar é irreversível e a action exige o
+ *     segundo fator PROVADO na sessão (aal2), então quem zera é ele, logando com
+ *     TOTP pelo helper que sobrevive à rotação do fator por outros seeds;
+ *   • o `manager`, que é `manager` na organização compartilhada (e portanto NÃO
+ *     enxerga esta tela lá, o que a spec também confere) e `admin` nas duas daqui.
  *
  * Idempotente: reusa organização por slug, membership por par, e apaga/recria o
  * dado operacional a cada rodada — a spec anterior pode tê-lo apagado, que é
@@ -285,11 +287,15 @@ async function main() {
   };
   const usuario = creds.users.manager;
   if (!usuario) throw new Error("`.e2e-creds.json` sem o usuário `manager`");
+  const quemZera = creds.users.admin;
+  if (!quemZera) throw new Error("`.e2e-creds.json` sem o usuário `admin`");
 
   const orgA = await garantirOrg(A);
   const orgB = await garantirOrg(B);
   await garantirMembroAdmin(usuario.id, orgA);
   await garantirMembroAdmin(usuario.id, orgB);
+  await garantirMembroAdmin(quemZera.id, orgA);
+  await garantirMembroAdmin(quemZera.id, orgB);
 
   const canalA = await garantirCanal(orgA, A);
   const canalB = await garantirCanal(orgB, B);
@@ -308,6 +314,7 @@ async function main() {
     org_b_contato: B.contato,
     org_b_lead: B.lead,
     usuario_email: usuario.email,
+    quem_zera_id: quemZera.id,
   };
   fs.writeFileSync(CREDS_PATH, JSON.stringify(creds, null, 2));
   console.info(`[seed-zona] A=${orgA} B=${orgB} — dono ${usuario.email} é admin nas duas`);

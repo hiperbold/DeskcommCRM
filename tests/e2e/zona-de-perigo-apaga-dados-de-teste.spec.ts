@@ -15,12 +15,16 @@
  * inteira), e as duas provas de B são pela TELA — trocar de organização e ver
  * o contato e o negócio ainda lá — e pelo BANCO, contando as seis tabelas.
  *
- * ─── Por que o usuário é o `manager`, e não o `admin` ───────────────────────
+ * ─── Quem zera é o `admin` (com MFA); o `manager` prova o RBAC ──────────────
  *
- * Dois motivos, os dois medidos:
- *   • ele não tem fator de MFA, então o login não depende do TOTP compartilhado
- *     que outros seeds rotacionam no meio de um run;
- *   • ele é `manager` na organização compartilhada e `admin` nas duas do
+ * Apagar é irreversível e a action exige o segundo fator PROVADO na sessão
+ * (aal2, `portaoDeAdminDaOrganizacao` com `exigirAal2`, auditoria de 30/09/2026).
+ * O `manager` do harness não tem fator de MFA, então não zera nada: a versão
+ * antiga desta spec, que o usava, codificava justamente o comportamento que a
+ * auditoria fechou de propósito. Por isso:
+ *   • o primeiro caso entra como `admin`, que tem TOTP, pelo helper que
+ *     sobrevive à rotação do fator por outros seeds;
+ *   • o `manager` é `manager` na organização compartilhada e `admin` nas duas do
  *     fixture — o que dá de graça o caso negativo do RBAC: a MESMA pessoa, na
  *     MESMA sessão, não alcança a tela onde não administra.
  *
@@ -32,6 +36,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { createClient } from "@supabase/supabase-js";
+import { loginComoAdmin, lerCreds } from "./helpers/login-admin";
 import { test, expect, type Page } from "./helpers/test";
 
 const RAIZ = path.resolve(__dirname, "../..");
@@ -49,6 +54,8 @@ interface Zona {
   org_b_contato: string;
   org_b_lead: string;
   usuario_email: string;
+  /** O `admin` (com MFA), membro admin de A e B só enquanto o primeiro caso roda. */
+  quem_zera_id: string;
 }
 interface Creds {
   password: string;
@@ -121,11 +128,26 @@ async function trocarPara(page: Page, orgId: string) {
 
 test.describe.configure({ timeout: 180_000 });
 
+// O `admin` do harness só entra em A e B para zerar A. Depois ele sai: as demais specs
+// (seletor de organização, troca de organização) contam com o `admin` na organização
+// compartilhada e não esperam duas organizações extras nas contas dele.
+let adminDaZona: { id: string; orgs: string[] } | null = null;
+test.afterAll(async () => {
+  if (!adminDaZona) return;
+  const { error } = await bancoDeTeste()
+    .from("user_organizations")
+    .update({ revoked_at: new Date().toISOString() } as never)
+    .eq("user_id", adminDaZona.id)
+    .in("organization_id", adminDaZona.orgs);
+  if (error) throw new Error(`tirar o admin das organizações da zona: ${error.message}`);
+});
+
 test("o admin zera os dados da sua organização pela tela — e a vizinha não sente nada", async ({
   page,
 }) => {
   const creds = semear();
   const z = creds.zona_de_perigo!;
+  adminDaZona = { id: z.quem_zera_id, orgs: [z.org_a_id, z.org_b_id] };
 
   // ── Precondição medida, não presumida ───────────────────────────────────
   const antesA = await contarTudo(z.org_a_id);
@@ -135,7 +157,7 @@ test("o admin zera os dados da sua organização pela tela — e a vizinha não 
     expect(antesB[tabela], `o fixture de B não tem ${tabela}`).toBeGreaterThan(0);
   }
 
-  await entrar(page, z.usuario_email, creds.password);
+  await loginComoAdmin(page, lerCreds());
   await page.goto("/app/inbox");
   await trocarPara(page, z.org_a_id);
 

@@ -25,7 +25,7 @@
  *
  * Run: npx tsx scripts/seed-e2e-elegibilidade.ts
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -56,6 +56,7 @@ interface Creds {
     stage_id: string;
     webhook_source_id: string;
     webhook_source_token: string;
+    webhook_source_secret: string;
   };
 }
 
@@ -160,7 +161,19 @@ async function ensureWebhookSource(
   orgId: string,
   pipelineId: string,
   stageId: string,
-): Promise<{ id: string; token: string }> {
+): Promise<{ id: string; token: string; secret: string }> {
+  // Só uma fonte com SEGREDO e assinatura conferida autoriza a IA pela forma Respondi
+  // (D-109): o formato é público e qualquer um o imita. A spec assina o corpo com este
+  // segredo; a cada rodada ele é regravado, então o que está no .e2e-creds.json sempre
+  // bate com o que está no banco.
+  const secret = randomBytes(24).toString("hex");
+  const { data: cifrado, error: cifraErr } = await admin.rpc("fn_encrypt_oauth", {
+    plaintext: secret,
+  });
+  if (cifraErr || !cifrado) {
+    throw new Error(`fn_encrypt_oauth: ${cifraErr?.message ?? "sem chave app.nuvemshop_oauth_key"}`);
+  }
+
   const { data: existing } = await admin
     .from("webhook_sources")
     .select("id, path_token")
@@ -169,7 +182,12 @@ async function ensureWebhookSource(
     .maybeSingle();
   if (existing) {
     const row = existing as { id: string; path_token: string };
-    return { id: row.id, token: row.path_token };
+    const { error: updErr } = await admin
+      .from("webhook_sources")
+      .update({ secret_encrypted: cifrado } as never)
+      .eq("id", row.id);
+    if (updErr) throw new Error(`webhook_sources update secret: ${updErr.message}`);
+    return { id: row.id, token: row.path_token, secret };
   }
 
   const token = randomUUID().replace(/-/g, "");
@@ -184,12 +202,13 @@ async function ensureWebhookSource(
       default_stage_id: stageId,
       field_map: {},
       is_active: true,
+      secret_encrypted: cifrado,
     } as never)
     .select("id, path_token")
     .single();
   if (error || !data) throw new Error(`webhook_sources insert: ${error?.message}`);
   const row = data as { id: string; path_token: string };
-  return { id: row.id, token: row.path_token };
+  return { id: row.id, token: row.path_token, secret };
 }
 
 async function main(): Promise<void> {
@@ -215,6 +234,7 @@ async function main(): Promise<void> {
     stage_id: stageId,
     webhook_source_id: source.id,
     webhook_source_token: source.token,
+    webhook_source_secret: source.secret,
   };
   fs.writeFileSync(CREDS_PATH, JSON.stringify(creds, null, 2));
 

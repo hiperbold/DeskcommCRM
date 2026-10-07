@@ -25,6 +25,7 @@
  *   pnpm e2e:env && pnpm e2e:build
  *   E2E_PORT=3001 pnpm exec playwright test tests/e2e/j20-elegibilidade-respondi.spec.ts
  */
+import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -47,6 +48,7 @@ interface Creds {
     waha_path_token: string;
     credential_id: string;
     webhook_source_token: string;
+    webhook_source_secret?: string;
   };
 }
 
@@ -57,7 +59,8 @@ function seedBase(): void {
     execFileSync("npx", ["tsx", "scripts/seed-e2e-credentials.ts"], { stdio: "inherit" });
   }
   const atual = JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")) as Creds;
-  if (!atual.elegibilidade) {
+  // Sem o segredo da fonte (seed de antes do D-109) a submissão não prova a origem.
+  if (!atual.elegibilidade?.webhook_source_secret) {
     execFileSync("npx", ["tsx", "scripts/seed-e2e-elegibilidade.ts"], { stdio: "inherit" });
   }
   creds = JSON.parse(fs.readFileSync(CREDS_PATH, "utf8")) as Creds;
@@ -154,8 +157,17 @@ test.describe("J20.6 — a submissão do Respondi autoriza a IA", () => {
       // (1) A submissão do Respondi entra pela URL da fonte de captação.
       // ---------------------------------------------------------------------
       const token = creds.elegibilidade!.webhook_source_token;
+      // Desde o D-109 só autoriza a IA a submissão com ORIGEM PROVADA: a fonte tem segredo e
+      // o corpo vem assinado (HMAC SHA-256 hex em X-Deskcomm-Signature), como a integração
+      // de servidor do cliente envia. Sem assinatura o lead entra, mas a autorização fica
+      // para um humano (coberto em captacao-publica-limite-por-ip-teto-de-corpo-e-respondi-sem-segredo).
+      const corpo = JSON.stringify(respondiPayload(respPhone, respondentId));
+      const assinatura = createHmac("sha256", creds.elegibilidade!.webhook_source_secret!)
+        .update(corpo)
+        .digest("hex");
       const sub = await page.request.post(`${APP_URL}/api/v1/webhooks/in/${token}`, {
-        data: respondiPayload(respPhone, respondentId),
+        data: corpo,
+        headers: { "content-type": "application/json", "x-deskcomm-signature": assinatura },
       });
       expect(sub.status(), await sub.text()).toBe(200);
 

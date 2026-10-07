@@ -242,12 +242,15 @@ test.describe("ciclo de vida do convite (ponta a ponta + adversarial)", () => {
     // Token válido mintado direto: o convidado já é membro (testes anteriores), então
     // reconvidá-lo seria — corretamente — barrado por already_member. Aqui testamos só
     // a IDEMPOTÊNCIA do aceite em si (aceitar o mesmo token 2x não duplica membership).
+    // `invited_by` é o que um emissor real sempre grava: sem linha em `team_invites` e sem
+    // convidador o aceite recusa o token, porque nenhum emissor atual o produz (D-089).
     const token = signInviteToken({
       invite_id: randomUUID(),
       email: inv.invitee_email,
       organization_id: inv.org_id,
       role: "agent",
       exp: Math.floor(Date.now() / 1000) + 3600,
+      invited_by: base.users.admin!.id,
     });
     const ctx = await browser.newContext();
     const page = await ctx.newPage();

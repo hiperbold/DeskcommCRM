@@ -335,8 +335,10 @@ describe("o preâmbulo do CI não come o orçamento dos testes", () => {
       .filter((l) => !l.trimStart().startsWith("#"))
       .join("\n");
 
+    // A action referencia o `actions/cache` pelo SHA do commit (supply chain, lote 10), com a
+    // versão no comentário do fim da linha; a regra aceita a tag antiga e o SHA de 40 hex.
     expect(a, "cache do npm ausente: sem ele o self-installer volta a ir ao registry").toMatch(
-      /uses:\s*actions\/cache@v\d[\s\S]*?path:\s*~\/\.npm/,
+      /uses:\s*actions\/cache@(?:v\d|[0-9a-f]{40})(?![0-9a-f])[\s\S]*?path:\s*~\/\.npm/,
     );
     expect(a, "sem prefer-offline o cache não é usado: npm revalida no registry").toMatch(
       /npm_config_prefer_offline:\s*['"]?true/,
