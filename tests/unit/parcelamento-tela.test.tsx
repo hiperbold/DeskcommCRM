@@ -82,9 +82,9 @@ describe("seletor de parcelas", () => {
 
     expect(screen.getByTestId("parcelas-pro-1").textContent).toContain("sem juros");
     expect(screen.getByTestId("parcelas-pro-3").textContent).toContain("sem juros");
-    // 3x: R$ 349,67 com a última de R$ 349,66, total R$ 1.049,00.
-    expect(screen.getByTestId("parcelas-pro-3").textContent).toMatch(reais("349,67"));
-    expect(screen.getByTestId("parcelas-pro-3").textContent).toMatch(reais("349,66"));
+    // 3x: R$ 349,66 com a última de R$ 349,68, total R$ 1.049,00 (divisão medida no sandbox).
+    expect(screen.getByTestId("parcelas-pro-3").textContent).toMatch(reais("349,68"));
+    expect(screen.getByTestId("parcelas-pro-3").textContent).toMatch(reais("349,68"));
     expect(screen.getByTestId("parcelas-pro-3").textContent).toMatch(reais("1.049,00"));
 
     const quatro = screen.getByTestId("parcelas-pro-4").textContent ?? "";

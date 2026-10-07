@@ -65,10 +65,10 @@ describe("calcularParcelamento: 1x, 2x e 3x sem juros", () => {
     }
   });
 
-  it("3x do Pro semestral: o Asaas divide o total e a diferença de arredondamento vai para a última (349,67 x 2 e 349,66)", () => {
+  it("3x do Pro semestral: o Asaas divide o total e a diferença de arredondamento vai para a última (349,66 x 2 e 349,68, medido no sandbox em 07/10/2026)", () => {
     const r = calcularParcelamento(PRO_SEMESTRAL, 3, PARAMETROS_DE_REFERENCIA);
-    expect(r.parcelaCents).toBe(34967);
-    expect(r.ultimaParcelaCents).toBe(34966);
+    expect(r.parcelaCents).toBe(34966);
+    expect(r.ultimaParcelaCents).toBe(34968);
     expect(r.parcelaCents * 2 + r.ultimaParcelaCents).toBe(PRO_SEMESTRAL);
   });
 
@@ -95,7 +95,7 @@ describe("calcularParcelamento: 1x, 2x e 3x sem juros", () => {
 
 describe("dividirTotalEmParcelas: a regra do Asaas (totalValue)", () => {
   it("arredonda a parcela ao centavo e joga a diferença na última", () => {
-    expect(dividirTotalEmParcelas(104900, 3)).toEqual({ parcelaCents: 34967, ultimaParcelaCents: 34966 });
+    expect(dividirTotalEmParcelas(104900, 3)).toEqual({ parcelaCents: 34966, ultimaParcelaCents: 34968 });
     expect(dividirTotalEmParcelas(100000, 3)).toEqual({ parcelaCents: 33333, ultimaParcelaCents: 33334 });
     expect(dividirTotalEmParcelas(100000, 1)).toEqual({ parcelaCents: 100000, ultimaParcelaCents: 100000 });
   });

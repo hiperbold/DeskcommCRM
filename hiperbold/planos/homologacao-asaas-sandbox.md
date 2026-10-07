@@ -209,3 +209,14 @@ Rodado com `homologar-asaas-e2e-sandbox.mts` (etapas de ciclo), chave sandbox do
 - Cancelamento do anual pelo cliente: DELETE da assinatura no Asaas, marcador de encerramento, acesso mantido até o fim do período; segunda tentativa recusada; `SUBSCRIPTION_DELETED` não muda o contrato.
 - Limpeza: nenhuma assinatura aberta sobrou para C e D; as cobranças ficam como histórico. Nada apagado no banco local.
 - Não homologado ponta a ponta: Pix semestral e anual e a renovação depois de 6 e 12 meses (cobertos por `tests/invariants/venda-semestral-e-anual-banco.test.ts`).
+
+## Parcelado no cartão (D-177), 07/10/2026
+
+Rodado com as etapas `parcelado-semestral-e` (Pro semestral 4x com juros) e `parcelado-semestral-3x-f` (Pro semestral 3x sem juros), chave sandbox do CRM, banco local com backup antes (`F:/temp/2026-10-07/asaas/banco-local-antes-ciclos.dump`) e baseline reaplicado até a 0947.
+
+- Pagar a primeira parcela por `payWithCreditCard` deixou TODAS as parcelas `CONFIRMED` na hora (4 de 4 e 3 de 3): o cartão compromete o total de uma vez; o crédito ao lojista continua mensal (creditDate de cada parcela um mês depois da outra). A trava do M2 (só concede com todas confirmadas) não atrasa a compra.
+- 4x: R$ 275,43 por parcela, total R$ 1.101,72, igual ao cálculo do CRM; `GET /installments` devolve `value` = total enviado.
+- 3x sem juros de R$ 1.049,00: o Asaas TRUNCA a parcela e põe a sobra na última: 349,66 + 349,66 + 349,68 (não 349,67 + 349,67 + 349,66 como o CRM supunha). Corrigido em `dividirTotalEmParcelas` (a tela agora mostra o que o Asaas cobra); o total e a conferência do banco já estavam certos.
+- Nos dois: pedido pago, uma linha em `billing_payments` por parcela, período concedido uma vez (6 meses mais 1 dia), tokens uma vez, nenhuma assinatura criada, nada renova sozinho.
+- As 2 falhas do resultado são do script, corrigidas depois: a checagem "o total não divide exato" só vale sem juros, e a regra de arredondamento assumida era a errada.
+- Não medido: a fatura hospedada parcelada paga à mão (o que o cliente vê na tela do Asaas).

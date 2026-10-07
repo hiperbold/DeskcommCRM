@@ -16,10 +16,9 @@
  * parcelamento: só sobra o 1x.
  *
  * Arredondamento do Asaas (documentação: "quando `totalValue` não puder ser dividido igualmente, a
- * diferença será aplicada à última parcela"): `dividirTotalEmParcelas` assume parcela arredondada ao
- * centavo mais próximo e o resto na última (3x de R$ 1.049,00 = 349,67 + 349,67 + 349,66). A documentação
- * não diz se o Asaas arredonda ou trunca a parcela; a etapa de homologação do sandbox imprime as parcelas
- * reais para conferir.
+ * diferença será aplicada à última parcela"): `dividirTotalEmParcelas` trunca a parcela no centavo e põe a sobra
+ * na última. Medido no sandbox em 07/10/2026: 3x de R$ 1.049,00 = 349,66 + 349,66 + 349,68 (a documentação
+ * não diz se arredonda ou trunca).
  */
 
 export type CicloParcelavel = "semiannual" | "yearly";
@@ -61,11 +60,11 @@ function arredondar(valor: number): number {
 }
 
 /**
- * Como o Asaas reparte o `totalValue` em parcelas: as n-1 primeiras arredondadas ao centavo, e a última
- * leva a diferença (pode ser 1 ou 2 centavos a menos ou a mais).
+ * Como o Asaas reparte o `totalValue` em parcelas: as n-1 primeiras truncadas no centavo, e a última
+ * leva a diferença (sempre igual ou maior que as outras). Medido no sandbox em 07/10/2026.
  */
 export function dividirTotalEmParcelas(totalCents: number, parcelas: number): { parcelaCents: number; ultimaParcelaCents: number } {
-  const parcelaCents = arredondar(totalCents / parcelas);
+  const parcelaCents = Math.floor(totalCents / parcelas);
   return { parcelaCents, ultimaParcelaCents: totalCents - parcelaCents * (parcelas - 1) };
 }
 

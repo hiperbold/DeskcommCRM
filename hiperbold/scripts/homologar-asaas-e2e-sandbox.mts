@@ -1166,7 +1166,7 @@ async function parcelado(l: Letra, rotulo: string, oferta: OfertaDeTeste, parcel
     checar(`${rotulo}: iniciarCompra devolve redirecionar para a fatura do sandbox`, resultado.tipo === "redirecionar" && /^https:\/\/sandbox\.asaas\.com\//.test(resultado.url), resultado);
     checar(`${rotulo}: pedido aguardando_pagamento, ${parcelas}x, total ${reais(esperado.totalCents)} do cálculo do servidor, sem assinatura`, pedido.status === "aguardando_pagamento" && pedido.parcelas === parcelas && pedido.amount_cents === esperado.totalCents && pedido.asaas_subscription_id === null && Boolean(pedido.asaas_installment_id), pedido);
     checar(`${rotulo}: o Asaas criou ${parcelas} cobranças que somam o total (${reais(esperado.totalCents)}) e levam o externalReference do pedido`, lista.length === parcelas && Math.round(lista.reduce((t, p) => t + Number(p.value) * 100, 0)) === esperado.totalCents && lista.every((p) => p.externalReference === pedido.external_reference), lista.map((p) => p.value));
-    // A regra de arredondamento assumida (parcela ao centavo mais próximo, sobra na última) contra o que o Asaas fez.
+    // A regra de arredondamento (parcela truncada no centavo, sobra na última; medida em 07/10/2026) contra o que o Asaas fez.
     checar(`${rotulo}: arredondamento do Asaas = parcelas de ${reais(esperado.parcelaCents)} e última de ${reais(esperado.ultimaParcelaCents)}`, lista.every((p, i) => Math.round(Number(p.value) * 100) === (i === lista.length - 1 ? esperado.ultimaParcelaCents : esperado.parcelaCents)), lista.map((p) => p.value));
     checar(`${rotulo}: o total do parcelamento no Asaas (GET /installments) é ${reais(esperado.totalCents)}`, Math.round(Number(inst?.corpo.value) * 100) === esperado.totalCents && inst?.corpo.installmentCount === parcelas, inst?.corpo);
     // D-177 B5: o `value` de GET /installments contra o totalValue que o CRM enviou (amount_cents / 100). Só prova
@@ -1182,7 +1182,8 @@ async function parcelado(l: Letra, rotulo: string, oferta: OfertaDeTeste, parcel
       totalDivideExatoPelasParcelas: divideExato,
     });
     checar(`${rotulo}: o value de GET /installments (${String(inst?.corpo.value)}) é o totalValue enviado (${totalValueEnviado}), não o valor de uma parcela`, Number(inst?.corpo.value) === totalValueEnviado && Number(inst?.corpo.value) !== Number(lista[0]?.value), { enviado: totalValueEnviado, value: inst?.corpo.value, paymentValue: inst?.corpo.paymentValue });
-    checar(`${rotulo}: o total ${reais(esperado.totalCents)} NÃO divide exato por ${parcelas} (só assim a conferência prova a regra de arredondamento)`, !divideExato, { totalCents: esperado.totalCents, parcelas });
+    // Com juros (Tabela Price) a parcela é igual e o total é parcela x n: divide sempre; a conferência só vale sem juros.
+    if (parcelas <= 3) checar(`${rotulo}: o total ${reais(esperado.totalCents)} NÃO divide exato por ${parcelas} (só assim a conferência prova a regra de arredondamento)`, !divideExato, { totalCents: esperado.totalCents, parcelas });
     if (resultado.tipo === "redirecionar") estado[`faturaParcelado${l}`] = resultado.url;
     salvarEstado();
   }
