@@ -85,6 +85,11 @@ const TELAS = ["/app/inbox", "/app/kanban", "/app/contacts", "/app/metrics", "/a
  */
 const DADO_DO_TENANT = new Set([
   "Entregue", // crm_stages.name, do seed de e2e
+  // crm_stages.name, do funil "loja" (lib/onboarding/pacotes-de-funil.ts), que o
+  // wizard aplica na organização. A chave existe no dicionário só pelo rótulo do
+  // pedido do plano (settings/plano/pedido), e nome de etapa é o que o tenant
+  // cadastrou: o funil em /app/metrics o mostra como está.
+  "Aguardando pagamento",
 ]);
 
 const CHAVES_QUE_MUDAM = new Set(

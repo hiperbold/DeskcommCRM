@@ -240,6 +240,25 @@ test.describe("J1 — onboarding do dono numa instalação fresca", () => {
     await login(page);
     await page.waitForURL(/\/onboarding\/setup-ai/);
 
+    // ⚠️ O CANAL É PRÉ-CONDIÇÃO DESTE CASO, e agora ele mesmo o cria. O aviso de
+    // "sem chave" só existe depois que a publicação achou um número: sem canal,
+    // `publishFirstVersion` devolve `no_channel` ANTES de olhar a chave, o agente
+    // fica rascunho de propósito e o wizard segue calado para `/onboarding/funil`
+    // (é o que o J1.26 mede). Este caso contava com o canal do J1.5 (ver a nota
+    // do J1.24, "o canal existe desde o QR de J1.5"), mas o J1.5 hoje prova o
+    // contrário, que a instância própria não cria canal nenhum, e o J1.6 pula o
+    // WhatsApp: a org chega aqui sem número e o alerta nunca era desenhado. Linha
+    // de banco, e não QR, porque o que se mede aqui é a publicação e o aviso, não
+    // o pareamento.
+    const orgDoCanal = await orgRow();
+    const { error: erroCanal } = await svc.from("channel_sessions").insert({
+      organization_id: orgDoCanal.id,
+      waha_session_name: `j17-${Date.now()}`,
+      webhook_secret_encrypted: "\\x00",
+      status: "WORKING",
+    });
+    expect(erroCanal, "o canal que o aviso de chave pressupõe").toBeNull();
+
     await page.locator("#name").fill("Tomik QA");
     await page.getByRole("button", { name: /criar e continuar/i }).click();
 

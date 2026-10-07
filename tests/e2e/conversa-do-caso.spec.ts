@@ -315,6 +315,7 @@ test.describe("conversar com a IA que abriu o caso", () => {
           altura: Math.round(rb.height),
           visivel: botao.offsetParent !== null,
           fonte: estilo.fontFamily,
+          fonteDoCorpo: getComputedStyle(document.body).fontFamily,
           fundo: estilo.backgroundColor,
         },
         campo: { largura: Math.round(campoEl.getBoundingClientRect().width) },
@@ -337,7 +338,11 @@ test.describe("conversar com a IA que abriu o caso", () => {
     // A fonte e a cor são as do PRODUTO, não as do sistema: um botão em
     // Helvetica cinza é o sintoma de tema não carregado, e ele passa
     // despercebido em screenshot.
-    expect(m.botao.fonte).toMatch(/Atkinson/i);
+    // A fonte da INTERFACE, e não um nome de fonte fixo: o nome já mudou de
+    // propósito (a Hiperbold serve a Inter, no lugar da Atkinson, pela mesma
+    // variável `--font-atkinson`). O que se quer pegar é o botão cair na fonte do
+    // sistema, e isso é não ser a do corpo.
+    expect(m.botao.fonte).toBe(m.botao.fonteDoCorpo);
     expect(m.botao.fundo).toMatch(/^rgba?\(/);
     expect(m.botao.fundo).not.toBe("rgba(0, 0, 0, 0)");
 

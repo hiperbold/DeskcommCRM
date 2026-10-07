@@ -167,8 +167,14 @@ test("fechar canal preserva demanda, desfecho explícito e nova entrada volta à
     await page.waitForURL(/\/app(?:\/|$)/);
     await abrirConversa(page, conversation);
     const panel = page.getByTestId("inbox-demandas");
-    await expect(panel.getByText("Demanda vigente neste canal")).toBeVisible();
-    await expect(page.getByTestId("inbox-memoria")).toContainText("Preferência de horário");
+    // O painel carrega demandas e memória por requisição própria depois de a
+    // conversa abrir; com o runner do CI sob carga, os 5 s padrão da asserção
+    // pegaram o painel ainda em esqueleto (só os títulos das seções na tela,
+    // run 37694166178, parte 3). Espera-se o dado, e não se afrouxa o que ele diz.
+    await expect(panel.getByText("Demanda vigente neste canal")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("inbox-memoria")).toContainText("Preferência de horário", {
+      timeout: 20_000,
+    });
     // DoD 12 para a issue #908: o rótulo do botão que CRIA o lead provado pela
     // tela, não só em jsdom. O painel é `flex flex-wrap` e o rótulo ficou mais
     // longo — se ele quebrar a fileira ou sumir, é aqui que aparece. Cabe nesta

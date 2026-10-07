@@ -40,6 +40,18 @@ async function insert(table: string, value: Record<string, unknown>): Promise<st
 }
 
 test("o administrador conecta o WhatsApp digitando o código no celular", async ({ page }) => {
+  // A INSTALAÇÃO DA HIPERBOLD NÃO TEM O CANAL POR QR (decisão de 16/09/2026,
+  // be97dd61f): a aba "Números por QR" saiu de Conexões, e com ela a lista que
+  // trazia o botão "Reconectar" e o diálogo de pareamento por código. A tela que
+  // esta spec percorre não existe nesta instalação, então o clique em "Reconectar"
+  // esperava 180 s por um botão que o produto não desenha mais. O componente do
+  // pareamento segue provado por `PairingOptions.test.tsx` e pelos testes de
+  // rota; a jornada pela tela volta no dia em que o canal por QR voltar à tela.
+  test.skip(
+    true,
+    "canal por QR (WAHA) fora da tela de Conexões nesta instalação: o botão Reconectar do pareamento não existe",
+  );
+
   const receiverUrl = new URL(process.env.WAHA_API_BASE_URL ?? "");
   expect(["127.0.0.1", "localhost", "::1", "[::1]"]).toContain(receiverUrl.hostname);
   expect(receiverUrl.port).toBe("3999");

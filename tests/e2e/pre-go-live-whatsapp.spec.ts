@@ -25,7 +25,10 @@ test("admin configura testes, remove número, confirma abertura e volta a restri
   // Esta spec cobre a configuração do canal após onboarding, não o wizard.
   expect((await admin.from("organizations").update({ onboarded_at: new Date().toISOString() }).eq("id", orgId)).error).toBeNull();
   const { data: channel, error } = await admin.from("channel_sessions").insert({
-    organization_id: orgId, display_name: "Canal de validação", waha_session_name: `prego_${suffix}`,
+    // Canal por instância: é o único tipo que a tela de Conexões lista aqui (a aba
+    // "Números por QR" saiu em be97dd61f), e a spec precisa ver o cartão do canal.
+    organization_id: orgId, display_name: "Canal de validação", provider: "uazapi",
+    uazapi_instance_id: `prego_${suffix}`, uazapi_base_url: "https://uazapi.exemplo.test",
     webhook_secret_encrypted: "\\x00", metadata: metadataInicialDoCanal(), status: "STOPPED",
   }).select("id").single();
   expect(error).toBeNull();

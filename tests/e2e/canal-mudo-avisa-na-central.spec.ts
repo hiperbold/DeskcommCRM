@@ -92,9 +92,16 @@ test.describe("o canal em modo de teste avisa na Central", () => {
 
     // O canal do defeito: ligado há cinco dias, em modo de teste, sem ninguém
     // autorizado. É o estado que o operador não vê porque nada reclama.
+    //
+    // Canal por INSTÂNCIA, que é o único número que a tela de Conexões lista
+    // nesta instalação: a aba "Números por QR" saiu (be97dd61f) e com ela a
+    // lista dos canais do outro provedor, então um canal assim existe no banco
+    // e nunca aparece na tela, e o laço pela tela não tinha onde clicar.
     canalId = await insere("channel_sessions", {
       organization_id: orgId,
-      waha_session_name: `canal-mudo-${SUFIXO}`,
+      provider: "uazapi",
+      uazapi_instance_id: `canal-mudo-${SUFIXO}`,
+      uazapi_base_url: "https://uazapi.exemplo.test",
       display_name: `WhatsApp mudo ${SUFIXO}`,
       status: "WORKING",
       webhook_secret_encrypted: "\\x00",

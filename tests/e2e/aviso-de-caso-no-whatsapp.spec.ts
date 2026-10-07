@@ -263,6 +263,7 @@ test.describe("aviso de caso no WhatsApp", () => {
           altura: Math.round(r.height),
           visivel: salvar.offsetParent !== null,
           fonte: estilo.fontFamily,
+          fonteDoCorpo: getComputedStyle(document.body).fontFamily,
           fundo: estilo.backgroundColor,
         },
         campoLargura: Math.round(campo.getBoundingClientRect().width),
@@ -277,7 +278,11 @@ test.describe("aviso de caso no WhatsApp", () => {
     expect(m.salvar.altura).toBeGreaterThanOrEqual(32);
     expect(m.salvar.x + m.salvar.largura).toBeLessThanOrEqual(m.janela);
     expect(m.rolagemHorizontal, "a tela do aviso não pode rolar para o lado").toBeLessThanOrEqual(0);
-    expect(m.salvar.fonte).toMatch(/Atkinson/i);
+    // A fonte da INTERFACE, e não um nome de fonte fixo: o nome já mudou de
+    // propósito (a Hiperbold serve a Inter, no lugar da Atkinson, pela mesma
+    // variável `--font-atkinson`). O que se quer pegar é o botão cair na fonte do
+    // sistema, e isso é não ser a do corpo.
+    expect(m.salvar.fonte).toBe(m.salvar.fonteDoCorpo);
     expect(m.salvar.fundo).not.toBe("rgba(0, 0, 0, 0)");
 
     // Em largura de telefone continua sem rolagem lateral.

@@ -181,6 +181,8 @@ interface Moldura {
   readonly raio: string;
   readonly caixaDoPai: Caixa;
   readonly caixaDoLogo: Caixa;
+  /** `getComputedStyle(img).content`: `url(...)` quando uma regra trocou a arte. */
+  readonly conteudoDoLogo: string;
 }
 
 const px = (s: string): number => Number.parseFloat(s) || 0;
@@ -212,6 +214,7 @@ async function medirMoldura(logo: Locator): Promise<Moldura> {
       raio: cs.borderRadius,
       caixaDoPai: { x: rp.x, y: rp.y, largura: rp.width, altura: rp.height },
       caixaDoLogo: { x: rl.x, y: rl.y, largura: rl.width, altura: rl.height },
+      conteudoDoLogo: getComputedStyle(el).content,
     };
   });
   return { ...bruto, padding: bruto.padding.map(px) };
@@ -222,6 +225,32 @@ function canais(cor: string): { r: number; g: number; b: number; a: number } | n
   const m = cor.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+))?/);
   if (!m) return null;
   return { r: +m[1]!, g: +m[2]!, b: +m[3]!, a: m[4] === undefined ? 1 : +m[4]! };
+}
+
+/**
+ * O DESENHO DA HIPERBOLD NO TEMA ESCURO: sem moldura, com a arte trocada.
+ *
+ * O autor põe uma moldura branca atrás de todo logo enviado quando o tema é
+ * escuro (`dark:bg-white dark:px-… dark:shadow-sm`). Esta instalação decidiu o
+ * contrário em `hiperbold/marca.css`: no escuro o logo da instalação
+ * (`/brand-logos/…`, ícone azul e texto preto) é trocado pela versão oficial de
+ * texto branco (`content: url(/hiperbold/logo-tema-escuro.png)`) e a moldura é
+ * zerada (fundo transparente, sem folga, sem sombra). Moldura clara com arte
+ * trocada ficaria um retângulo branco em volta de um logo branco, e foi por isso
+ * que a regra existe. A spec mede o desenho que o produto TEM: nenhum pixel de
+ * moldura e a arte do tema escuro de fato entrando no lugar.
+ */
+function expectSemMolduraEComArteDoEscuro(m: Moldura, onde: string): void {
+  expect(
+    fundoETransparente(m.fundo),
+    `${onde}: no escuro a moldura clara deveria estar zerada (fundo=${m.fundo}, classe="${m.classeDoPai}")`,
+  ).toBe(true);
+  expect(m.padding, `${onde}: a moldura zerada não pode ter folga`).toEqual([0, 0, 0, 0]);
+  expect(m.sombra, `${onde}: a moldura zerada não pode ter sombra`).toBe("none");
+  expect(
+    m.conteudoDoLogo,
+    `${onde}: o logo do tema escuro não entrou no lugar da arte enviada`,
+  ).toContain("logo-tema-escuro");
 }
 
 /**
@@ -387,7 +416,7 @@ test.describe("a moldura do logo no tema escuro", () => {
     return s!;
   };
 
-  test("(1) tema ESCURO + logo ENVIADO: a barra lateral pinta a moldura clara", async ({
+  test("(1) tema ESCURO + logo ENVIADO: a barra lateral sem moldura clara e com a arte do escuro", async ({
     page,
   }) => {
     await loginComTotp(page, creds.users.dono!.email, secret());
@@ -408,24 +437,13 @@ test.describe("a moldura do logo no tema escuro", () => {
     anotar("1-barra-escuro.json", m);
     await page.screenshot({ path: evidencia("1-barra-escuro.png") });
 
-    expect(
-      fundoEClaro(m.fundo),
-      `a moldura não foi pintada: o pai do <img> tem background-color=${m.fundo} ` +
-        `(tag=${m.tagDoPai}, classe="${m.classeDoPai}")`,
-    ).toBe(true);
-    expect(
-      m.padding.every((p) => p > 0),
-      `a moldura não tem folga: padding=${m.padding}`,
-    ).toBe(true);
-    expect(m.sombra, "a moldura não tem sombra").not.toBe("none");
-
-    // CONTENÇÃO, não proximidade: a moldura tem de ser MAIOR que o logo nos dois
-    // eixos e contê-lo. Uma moldura irmã (a sabotagem que derrubou a primeira
-    // versão da cerca unitária) teria fundo claro e não conteria nada.
-    expect(m.caixaDoPai.largura).toBeGreaterThan(m.caixaDoLogo.largura);
-    expect(m.caixaDoPai.altura).toBeGreaterThan(m.caixaDoLogo.altura);
-    expect(m.caixaDoPai.x).toBeLessThanOrEqual(m.caixaDoLogo.x);
-    expect(m.caixaDoPai.y).toBeLessThanOrEqual(m.caixaDoLogo.y);
+    expectSemMolduraEComArteDoEscuro(m, "barra lateral");
+    // Controle: a moldura continua declarada no DOM (as classes `dark:` do autor),
+    // e quem a zera é a regra da instalação. Se a classe sumir do componente, esta
+    // linha avisa antes de a regra da instalação passar a esconder a ausência.
+    expect(m.classeDoPai, "o componente deixou de declarar a moldura `dark:`").toContain(
+      "dark:bg-white",
+    );
   });
 
   test("(2) tema CLARO + logo ENVIADO: NÃO há moldura — as classes são `dark:`", async ({
@@ -465,17 +483,7 @@ test.describe("a moldura do logo no tema escuro", () => {
         await pagina.screenshot({ path: evidencia(`3-fachada-${tema}.png`) });
 
         if (tema === "dark") {
-          expect(
-            fundoEClaro(m.fundo),
-            `a fachada no escuro desenhou o logo CRU (fundo=${m.fundo}) — o defeito ` +
-              `volta inteiro na tela de primeira impressão`,
-          ).toBe(true);
-          expect(
-            m.padding.every((p) => p > 0),
-            `fachada escura sem folga: ${m.padding}`,
-          ).toBe(true);
-          expect(m.caixaDoPai.largura).toBeGreaterThan(m.caixaDoLogo.largura);
-          expect(m.caixaDoPai.altura).toBeGreaterThan(m.caixaDoLogo.altura);
+          expectSemMolduraEComArteDoEscuro(m, "fachada");
         } else {
           expect(
             fundoETransparente(m.fundo),

@@ -105,6 +105,18 @@ async function abrirFicha(page: Page): Promise<void> {
 test.describe.configure({ timeout: 120_000 });
 
 test.describe("Proteção de envio: o Switch sabe dizer 'não mexi'", () => {
+  // A INSTALAÇÃO DA HIPERBOLD NÃO TEM O CANAL POR QR (decisão de 16/09/2026,
+  // be97dd61f): a ficha "Proteção de envio" (`AntiBanSheet`) só é montada pela lista
+  // de números por QR, que saiu de Conexões. O cartão que esta spec procura não
+  // existe nesta instalação, e a fixture (canal sem instância) nunca aparece na
+  // tela. A regra do knob "herdado" segue provada pelos testes de rota e de
+  // componente; a jornada pela tela volta se a ficha for montada para o canal por
+  // instância.
+  test.skip(
+    true,
+    "ficha Proteção de envio só existe na lista do canal por QR, fora da tela de Conexões nesta instalação",
+  );
+
   let sessionId = "";
   let orgId = "";
 
