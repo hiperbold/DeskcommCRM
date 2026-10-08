@@ -1,10 +1,9 @@
 "use client";
 
 /**
- * A tela de compra pelo cliente (fase F5, Tarefa 20): escolha de ciclo e
- * método por plano (decisão 2), pacotes de tokens, formulário do pagador na
- * primeira compra (decisão 16), e o desfecho de cada tentativa
- * (`redirecionar` ou `pix`).
+ * A tela de compra pelo cliente (fase F5, Tarefa 20): o plano em passo a passo (D-180, em
+ * `./_passo-a-passo`), os pacotes de tokens, o formulário do pagador na primeira compra (decisão 16)
+ * e o desfecho de cada tentativa (`redirecionar` ou `pix`).
  *
  * As três ações (`iniciarAssinatura`, `comprarPacote`, o gate de admin e as
  * duas chaves) já vivem em `app/actions/settings/compraDoPlano.ts`: este
@@ -23,16 +22,13 @@
  * terminal (erro de validação do formulário, pedido `falhou`/`cancelado`,
  * ou qualquer outra recusa), gera uma chave nova.
  */
-import Link from "next/link";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { comprarPacote, iniciarAssinatura } from "@/app/actions/settings/compraDoPlano";
+import { comprarPacote } from "@/app/actions/settings/compraDoPlano";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useTagDeIdioma } from "@/hooks/i18n/useLocaleDeData";
 import { useT } from "@/hooks/i18n/useT";
 import { cn } from "@/lib/utils";
@@ -45,50 +41,18 @@ import type { OpcaoDeParcelas } from "@/lib/billing/asaas/parcelamento";
 
 import {
   chaveParaProximaTentativaDeCompra,
-  ciclosDisponiveis,
   classificarDesfechoDaTentativa,
   montarPagadorDoFormulario,
-  precoDoCiclo,
-  resumoDoCiclo,
   urlDeRedirecionamentoEhSegura,
   type CamposDoFormularioDoPagador,
-  type CicloDeCompra,
   type DadosDoPagador,
   type DesfechoDaTentativaDeCompra,
   type EscolhaDeCompra,
 } from "../_logica-compra";
 import { PixPendente } from "./_pix-pendente";
+import { AceiteDosTermos, CAMPOS_VAZIOS, FormularioDoPagador, formatarReais } from "./_comuns";
+import { AssinarPlanoPassoAPasso } from "./_passo-a-passo";
 import type { PacoteParaVenda } from "./_dados";
-
-const CAMPOS_VAZIOS: CamposDoFormularioDoPagador = { nome: "", documento: "", email: "", celular: "" };
-
-function formatarReais(centavos: number, tagDoIdioma: string): string {
-  return (centavos / 100).toLocaleString(tagDoIdioma, { style: "currency", currency: "BRL" });
-}
-
-/** D-133: o aceite obrigatório dos Termos de Uso, em cada cartão de compra. */
-function AceiteDosTermos({ id, aceito, onChange }: { id: string; aceito: boolean; onChange: (v: boolean) => void }) {
-  const t = useT();
-  return (
-    <label htmlFor={id} className="flex items-start gap-2 text-sm">
-      <input
-        id={id}
-        type="checkbox"
-        checked={aceito}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-1"
-        required
-      />
-      <span>
-        {t("Li e aceito os")}{" "}
-        <Link className="underline" href="/legal/terms" target="_blank" rel="noreferrer">
-          {t("Termos de Uso")}
-        </Link>
-        .
-      </span>
-    </label>
-  );
-}
 
 function classeDoToggle(ativo: boolean): string {
   return cn(
@@ -106,6 +70,7 @@ export function AssinarOuComprarClient({
   pacotes,
   precisaPagador,
   leituraFalhou,
+  planoAtualCode = null,
 }: {
   /** D-177: calculadas no servidor (parâmetros de `billing_settings`); o cliente só escolhe o número de parcelas. */
   opcoesDeParcelas?: OpcoesDeParcelasPorPlano;
@@ -114,12 +79,14 @@ export function AssinarOuComprarClient({
   pacotes: PacoteParaVenda[];
   precisaPagador: boolean;
   leituraFalhou: boolean;
+  /** D-180: o plano que a organização tem hoje (contrato vivo), só para marcar o cartão; `null` quando não há. */
+  planoAtualCode?: string | null;
 }) {
   const t = useT();
   const nadaAVenda = planos.length === 0 && pacotes.length === 0;
 
   return (
-    <div className="flex h-full flex-col gap-6 overflow-y-auto p-6">
+    <div className="flex h-full flex-col gap-8 overflow-y-auto p-6">
       <header className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">{t("Assinar ou comprar")}</h1>
       </header>
@@ -137,24 +104,20 @@ export function AssinarOuComprarClient({
       )}
 
       {planos.length > 0 && (
-        <section id="planos" className="space-y-3">
+        <section id="planos" className="space-y-4">
           <h2 className="text-lg font-medium">{t("Planos disponíveis")}</h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            {planos.map((plano) => (
-              <PlanoParaAssinar
-                key={plano.code}
-                plano={plano}
-                precisaPagador={precisaPagador}
-                opcoesDeParcelas={opcoesDeParcelas[plano.code] ?? { semiannual: [], yearly: [] }}
-                taxaMensalPercentual={taxaMensalPercentual}
-              />
-            ))}
-          </div>
+          <AssinarPlanoPassoAPasso
+            planos={planos}
+            opcoesDeParcelas={opcoesDeParcelas}
+            taxaMensalPercentual={taxaMensalPercentual}
+            precisaPagador={precisaPagador}
+            planoAtualCode={planoAtualCode}
+          />
         </section>
       )}
 
       {pacotes.length > 0 && (
-        <section id="pacotes" className="space-y-3">
+        <section id="pacotes" className="space-y-3 border-t pt-8">
           <h2 className="text-lg font-medium">{t("Pacotes de tokens")}</h2>
           <div className="grid gap-4 md:grid-cols-2">
             {pacotes.map((pacote) => (
@@ -164,253 +127,6 @@ export function AssinarOuComprarClient({
         </section>
       )}
     </div>
-  );
-}
-
-// ─── Um plano, com ciclo, método e o desfecho da tentativa ─────────────────
-
-function PlanoParaAssinar({
-  plano,
-  precisaPagador,
-  opcoesDeParcelas,
-  taxaMensalPercentual,
-}: {
-  plano: PlanoParaVenda;
-  precisaPagador: boolean;
-  opcoesDeParcelas: { semiannual: OpcaoDeParcelas[]; yearly: OpcaoDeParcelas[] };
-  taxaMensalPercentual: number | null;
-}) {
-  const t = useT();
-  const tagDoIdioma = useTagDeIdioma();
-  const [ciclo, setCiclo] = useState<CicloDeCompra>("monthly");
-  const [metodo, setMetodo] = useState<"CREDIT_CARD" | "PIX">("CREDIT_CARD");
-  const [parcelas, setParcelas] = useState(1);
-  const [pagador, setPagador] = useState<CamposDoFormularioDoPagador>(CAMPOS_VAZIOS);
-  const [pendente, setPendente] = useState(false);
-  const [aceitouTermos, setAceitouTermos] = useState(false);
-  const [resultado, setResultado] = useState<ResultadoIniciarCompra | null>(null);
-  // Chave de idempotência (decisão 13 do plano da fase): estável entre
-  // repetições da MESMA escolha depois de "aguarde"; nova a cada mudança de
-  // ciclo/método ou a cada desfecho terminal (correção 6 da revisão).
-  const [chave, setChave] = useState<string>(() => randomId());
-  const tentativaAnteriorRef = useRef<{ escolha: EscolhaDeCompra; desfecho: DesfechoDaTentativaDeCompra } | null>(null);
-
-  // Só os ciclos com preço no catálogo aparecem (D-176): o plano sem preço
-  // semestral ou anual simplesmente não oferece esse botão.
-  const ciclos = ciclosDisponiveis(plano);
-  const resumo = resumoDoCiclo(plano, ciclo);
-
-  function escolherCiclo(novo: CicloDeCompra) {
-    setCiclo(novo);
-    setParcelas(1);
-    if (novo === "monthly") setMetodo("CREDIT_CARD");
-  }
-
-  // D-177: só o cartão no semestral e no anual parcela; o mensal e o Pix ficam à vista.
-  const opcoesDoCiclo = ciclo === "semiannual" ? opcoesDeParcelas.semiannual : ciclo === "yearly" ? opcoesDeParcelas.yearly : [];
-  const mostraParcelas = metodo === "CREDIT_CARD" && opcoesDoCiclo.length > 1;
-  const parcelasEfetivas = mostraParcelas ? parcelas : 1;
-
-  const rotuloDoCiclo: Record<CicloDeCompra, string> = {
-    monthly: t("Mensal"),
-    semiannual: t("Semestral"),
-    yearly: t("Anual"),
-  };
-
-  async function assinar() {
-    const escolhaAtual: EscolhaDeCompra = { tipo: "assinatura", planCode: plano.code, ciclo, metodo, parcelas: parcelasEfetivas };
-    const chaveDestaTentativa = chaveParaProximaTentativaDeCompra({
-      chaveAtual: chave,
-      escolhaAtual,
-      tentativaAnterior: tentativaAnteriorRef.current,
-    });
-    if (chaveDestaTentativa !== chave) setChave(chaveDestaTentativa);
-
-    let entradaDoPagador: DadosDoPagador | undefined;
-
-    if (precisaPagador) {
-      const montado = montarPagadorDoFormulario(pagador);
-      if (!montado.ok) {
-        toast.error(t(montado.erro));
-        tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: "terminal" };
-        return;
-      }
-      entradaDoPagador = montado.pagador;
-    }
-
-    setPendente(true);
-    try {
-      const r = await iniciarAssinatura({
-        planCode: plano.code,
-        ciclo,
-        metodo,
-        // D-177: só vai quando parcela; à vista a entrada segue exatamente como antes.
-        ...(parcelasEfetivas > 1 ? { parcelas: parcelasEfetivas } : {}),
-        chave: chaveDestaTentativa,
-        pagador: entradaDoPagador,
-        termosVersao: VERSAO_DOS_TERMOS,
-      });
-      tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: classificarDesfechoDaTentativa(r) };
-
-      if (r.tipo === "erro") {
-        // A frase de recusa da troca de plano (0942) tem es e zh-CN no dicionário; as demais
-        // mensagens da ação seguem em português, como antes (t() devolve a própria frase quando
-        // não há tradução).
-        toast.error(t(r.mensagem));
-        setPendente(false);
-        return;
-      }
-
-      if (r.tipo === "redirecionar") {
-        if (!urlDeRedirecionamentoEhSegura(r.url)) {
-          toast.error(t("Não foi possível continuar: o endereço de pagamento não é reconhecido."));
-          setPendente(false);
-          return;
-        }
-        window.location.href = r.url;
-        return;
-      }
-
-      setResultado(r);
-      setPendente(false);
-    } catch {
-      tentativaAnteriorRef.current = { escolha: escolhaAtual, desfecho: "terminal" };
-      toast.error(t("Não foi possível concluir a compra agora. Tente novamente em instantes."));
-      setPendente(false);
-    }
-  }
-
-  if (resultado?.tipo === "pix") {
-    return <PixPendente pedidoId={resultado.pedidoId} qr={resultado.qr} />;
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-          <span>{plano.name}</span>
-          <Badge variant="info">
-            {formatarReais(plano.priceMonthlyCents, tagDoIdioma)} {t("por mês")}
-          </Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-1.5">
-          <span className="text-sm font-medium">{t("Ciclo")}</span>
-          <div className="flex w-fit flex-wrap items-center gap-0.5 rounded-md border bg-muted p-0.5">
-            {ciclos.map((opcao) => (
-              <button
-                key={opcao}
-                type="button"
-                data-testid={`ciclo-${plano.code}-${opcao}`}
-                aria-pressed={ciclo === opcao}
-                className={classeDoToggle(ciclo === opcao)}
-                onClick={() => escolherCiclo(opcao)}
-              >
-                {rotuloDoCiclo[opcao]}
-                {opcao !== "monthly" && ` · ${formatarReais(precoDoCiclo(plano, opcao) as number, tagDoIdioma)}`}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {ciclo !== "monthly" && resumo && (
-          <div className="space-y-0.5 text-sm" data-testid={`resumo-${plano.code}`}>
-            <p>
-              {t("Total do período")}: <span className="font-medium">{formatarReais(resumo.totalCents, tagDoIdioma)}</span> (
-              {resumo.meses} {t("meses")})
-            </p>
-            {resumo.economiaCents > 0 && (
-              <p className="text-xs text-muted-foreground">
-                {t("Economia de")} {formatarReais(resumo.economiaCents, tagDoIdioma)} ({resumo.economiaPercentual}%){" "}
-                {t("em relação ao mensal")}
-              </p>
-            )}
-          </div>
-        )}
-
-        {ciclo !== "monthly" && (
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium">{t("Forma de pagamento")}</span>
-            <div className="flex w-fit items-center gap-0.5 rounded-md border bg-muted p-0.5">
-              <button
-                type="button"
-                aria-pressed={metodo === "CREDIT_CARD"}
-                className={classeDoToggle(metodo === "CREDIT_CARD")}
-                onClick={() => setMetodo("CREDIT_CARD")}
-              >
-                {t("Cartão de crédito")}
-              </button>
-              <button
-                type="button"
-                aria-pressed={metodo === "PIX"}
-                className={classeDoToggle(metodo === "PIX")}
-                onClick={() => {
-                  setMetodo("PIX");
-                  setParcelas(1);
-                }}
-              >
-                {t("Pix")}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {mostraParcelas && (
-          <div className="space-y-1.5" data-testid={`parcelas-${plano.code}`}>
-            <span className="text-sm font-medium">{t("Parcelamento")}</span>
-            <div className="space-y-1">
-              {opcoesDoCiclo.map((opcao) => {
-                const ultimaDiferente = opcao.ultimaParcelaCents !== opcao.parcelaCents;
-                return (
-                  <label
-                    key={opcao.parcelas}
-                    className="flex cursor-pointer items-start gap-2 rounded-md border p-2 text-sm"
-                    data-testid={`parcelas-${plano.code}-${opcao.parcelas}`}
-                  >
-                    <input
-                      type="radio"
-                      name={`parcelas-${plano.code}`}
-                      checked={parcelas === opcao.parcelas}
-                      onChange={() => setParcelas(opcao.parcelas)}
-                      className="mt-1"
-                    />
-                    <span>
-                      <span className="font-medium">
-                        {opcao.parcelas}x {formatarReais(opcao.parcelaCents, tagDoIdioma)}
-                      </span>{" "}
-                      <span className="text-muted-foreground">
-                        {opcao.comJuros
-                          ? `${t("com juros de")} ${taxaMensalPercentual === null ? "" : taxaMensalPercentual.toLocaleString(tagDoIdioma)}% ${t("ao mês")}`
-                          : t("sem juros")}
-                      </span>
-                      {ultimaDiferente && (
-                        <span className="block text-xs text-muted-foreground">
-                          {t("última parcela")}: {formatarReais(opcao.ultimaParcelaCents, tagDoIdioma)}
-                        </span>
-                      )}
-                      <span className="block text-xs text-muted-foreground">
-                        {t("Total a pagar")}: {formatarReais(opcao.totalCents, tagDoIdioma)}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {precisaPagador && (
-          <FormularioDoPagador pagador={pagador} onChange={setPagador} idPrefixo={`pagador-plano-${plano.code}`} />
-        )}
-
-        <AceiteDosTermos id={`termos-plano-${plano.code}`} aceito={aceitouTermos} onChange={setAceitouTermos} />
-
-        <Button data-testid={`assinar-${plano.code}`} disabled={pendente || !aceitouTermos} onClick={() => void assinar()}>
-          {pendente ? t("Enviando...") : t("Assinar")}
-        </Button>
-      </CardContent>
-    </Card>
   );
 }
 
@@ -534,74 +250,5 @@ function PacoteParaComprar({ pacote, precisaPagador }: { pacote: PacoteParaVenda
         </Button>
       </CardContent>
     </Card>
-  );
-}
-
-// ─── Formulário do pagador (decisão 16): nunca guardado no navegador ───────
-
-function FormularioDoPagador({
-  pagador,
-  onChange,
-  idPrefixo,
-}: {
-  pagador: CamposDoFormularioDoPagador;
-  onChange: (pagador: CamposDoFormularioDoPagador) => void;
-  idPrefixo: string;
-}) {
-  const t = useT();
-  return (
-    <div className="space-y-3 rounded-md border p-4">
-      <p className="text-sm font-medium">{t("Dados de quem paga")}</p>
-      <p className="text-xs text-muted-foreground">
-        {t("Só usados para emitir a cobrança no Asaas. Não ficam guardados neste sistema.")}
-      </p>
-
-      <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefixo}-nome`}>{t("Nome completo")}</Label>
-        <Input
-          id={`${idPrefixo}-nome`}
-          value={pagador.nome}
-          onChange={(e) => onChange({ ...pagador, nome: e.target.value })}
-          maxLength={200}
-          autoComplete="off"
-          required
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefixo}-documento`}>{t("CPF ou CNPJ")}</Label>
-        <Input
-          id={`${idPrefixo}-documento`}
-          value={pagador.documento}
-          onChange={(e) => onChange({ ...pagador, documento: e.target.value })}
-          maxLength={20}
-          autoComplete="off"
-          required
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefixo}-email`}>{t("E-mail (opcional)")}</Label>
-        <Input
-          id={`${idPrefixo}-email`}
-          type="email"
-          value={pagador.email}
-          onChange={(e) => onChange({ ...pagador, email: e.target.value })}
-          maxLength={200}
-          autoComplete="off"
-        />
-      </div>
-
-      <div className="space-y-1.5">
-        <Label htmlFor={`${idPrefixo}-celular`}>{t("Celular (opcional)")}</Label>
-        <Input
-          id={`${idPrefixo}-celular`}
-          value={pagador.celular}
-          onChange={(e) => onChange({ ...pagador, celular: e.target.value })}
-          maxLength={20}
-          autoComplete="off"
-        />
-      </div>
-    </div>
   );
 }

@@ -31,6 +31,7 @@ import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { compraLigada, configDoAsaas, ErroConfiguracaoAsaas, type AmbienteAsaas } from "@/lib/billing/asaas/config";
 import { planosParaVenda } from "@/lib/billing/asaas/leitura";
+import { planoDaOrganizacao } from "@/lib/billing/planos/plano-da-organizacao";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -91,12 +92,22 @@ export default async function AssinarPage() {
     );
   }
 
-  const [planosResultado, pacotesResultado, precisaPagador, parametros] = await Promise.all([
+  const [planosResultado, pacotesResultado, precisaPagador, parametros, planoDaOrg] = await Promise.all([
     planosParaVenda(admin, logger),
     pacotesParaVenda(admin, logger),
     precisaDeFormularioDoPagador(admin, activeOrg.orgId, ambiente, logger),
     parametrosDeParcelamento(admin, logger),
+    planoDaOrganizacao(admin, activeOrg.orgId, logger),
   ]);
+
+  // D-180: o plano que a organização tem hoje, só para marcar o cartão no passo 1. Contrato vivo
+  // (avaliação, ativa ou atrasada) e leitura sem falha; sem contrato, suspenso ou cancelado, nenhum cartão é marcado.
+  const planoAtualCode =
+    !planoDaOrg.leituraFalhou &&
+    planoDaOrg.contrato !== null &&
+    ["avaliacao", "ativa", "atrasada"].includes(planoDaOrg.contrato.status)
+      ? planoDaOrg.plano.code
+      : null;
 
   const planos = planosResultado.planos.filter((p) => p.forSale && p.priceMonthlyCents > 0);
   const leituraFalhou = planosResultado.leituraFalhou || pacotesResultado.leituraFalhou;
@@ -120,6 +131,7 @@ export default async function AssinarPage() {
       pacotes={pacotesResultado.pacotes}
       precisaPagador={precisaPagador}
       leituraFalhou={leituraFalhou}
+      planoAtualCode={planoAtualCode}
     />
   );
 }

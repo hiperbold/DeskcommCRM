@@ -3,6 +3,9 @@
  * anual, com o valor da parcela, o total e "sem juros" até 3x ou os juros a partir de 4x, e manda ao servidor só
  * o número de parcelas. As opções (e a conta) vêm calculadas do servidor; a ação de servidor é o limite do teste.
  * Também cobre a derivação "plano parcelado não renova sozinho" da tela de plano.
+ *
+ * D-180: o plano é um passo a passo; o seletor de parcelas mora no passo 3 (pagamento) e o resumo do passo 4 repete a
+ * escolha. As asserções são as de antes.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -55,6 +58,17 @@ function tela(locale = "pt-BR") {
   );
 }
 
+// Atalhos entre os passos do plano (1 Plano, 2 Ciclo, 3 Pagamento, 4 Resumo).
+const ateOPagamento = (ciclo: "semiannual" | "yearly" | "monthly") => {
+  fireEvent.click(screen.getByTestId("escolher-pro"));
+  fireEvent.click(screen.getByTestId(`ciclo-pro-${ciclo}`));
+  fireEvent.click(screen.getByTestId("continuar"));
+};
+const aceitarEIrAoResumo = () => {
+  fireEvent.click(document.getElementById("termos-plano-pro") as HTMLElement);
+  fireEvent.click(screen.getByTestId("continuar"));
+};
+
 const reais = (valor: string) => new RegExp(`R\\$\\s*${valor.replace(/\./g, "\\.")}`);
 
 beforeEach(() => {
@@ -66,8 +80,11 @@ afterEach(() => cleanup());
 describe("seletor de parcelas", () => {
   it("o mensal e o Pix não mostram parcelas", () => {
     tela();
+    ateOPagamento("monthly");
     expect(screen.queryByTestId("parcelas-pro")).toBeNull();
+    fireEvent.click(screen.getByTestId("voltar"));
     fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    fireEvent.click(screen.getByTestId("continuar"));
     expect(screen.getByTestId("parcelas-pro")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Pix"));
     expect(screen.queryByTestId("parcelas-pro")).toBeNull();
@@ -75,7 +92,7 @@ describe("seletor de parcelas", () => {
 
   it("semestral: de 1x a 6x, sem juros até 3x e com juros de 1,99% ao mês de 4x em diante, com o total", () => {
     tela();
-    fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    ateOPagamento("semiannual");
 
     for (let n = 1; n <= 6; n += 1) expect(screen.getByTestId(`parcelas-pro-${n}`)).toBeInTheDocument();
     expect(screen.queryByTestId("parcelas-pro-7")).toBeNull();
@@ -96,16 +113,16 @@ describe("seletor de parcelas", () => {
 
   it("anual: até 12x (R$ 179,46 por parcela, total R$ 2.153,52)", () => {
     tela();
-    fireEvent.click(screen.getByTestId("ciclo-pro-yearly"));
+    ateOPagamento("yearly");
     expect(screen.getByTestId("parcelas-pro-12").textContent).toMatch(reais("179,46"));
     expect(screen.getByTestId("parcelas-pro-12").textContent).toMatch(reais("2.153,52"));
   });
 
   it("manda ao servidor só o número de parcelas escolhido (nenhum valor)", async () => {
     tela();
-    fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    ateOPagamento("semiannual");
     fireEvent.click(screen.getByTestId("parcelas-pro-4").querySelector("input") as HTMLElement);
-    fireEvent.click(document.getElementById("termos-plano-pro") as HTMLElement);
+    aceitarEIrAoResumo();
     fireEvent.click(screen.getByTestId("assinar-pro"));
 
     await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
@@ -116,10 +133,12 @@ describe("seletor de parcelas", () => {
 
   it("trocar de ciclo volta para 1x", async () => {
     tela();
-    fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    ateOPagamento("semiannual");
     fireEvent.click(screen.getByTestId("parcelas-pro-5").querySelector("input") as HTMLElement);
+    fireEvent.click(screen.getByTestId("voltar"));
     fireEvent.click(screen.getByTestId("ciclo-pro-yearly"));
-    fireEvent.click(document.getElementById("termos-plano-pro") as HTMLElement);
+    fireEvent.click(screen.getByTestId("continuar"));
+    aceitarEIrAoResumo();
     fireEvent.click(screen.getByTestId("assinar-pro"));
     await waitFor(() => expect(iniciarAssinatura).toHaveBeenCalledTimes(1));
     expect(iniciarAssinatura.mock.calls[0]![0]).toMatchObject({ ciclo: "yearly" });
@@ -128,7 +147,7 @@ describe("seletor de parcelas", () => {
 
   it("em espanhol o seletor sai traduzido", () => {
     tela("es");
-    fireEvent.click(screen.getByTestId("ciclo-pro-semiannual"));
+    ateOPagamento("semiannual");
     expect(screen.getByText("Parcelamiento")).toBeInTheDocument();
     expect(screen.getByTestId("parcelas-pro-1").textContent).toContain("sin intereses");
   });

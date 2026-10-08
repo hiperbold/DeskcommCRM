@@ -5460,5 +5460,21 @@
   "Ou copie e cole este link no navegador:": "或将此链接复制并粘贴到浏览器中：",
   "Marca própria de cada empresa": "各公司专属品牌",
   "Ligado, o administrador de cada empresa pode trocar o nome, a cor e o logo que a empresa dele mostra dentro do sistema (Configurações, Marca). Desligado, o sistema mostra sempre a marca da instalação: a tela some, a gravação é recusada e o que cada empresa já tinha salvo não é aplicado (continua guardado e volta se você religar).": "开启后，每家公司的管理员可以更改本公司在系统内显示的名称、颜色和标志（设置，品牌）。关闭后，系统始终显示本安装的品牌：该页面消失，保存会被拒绝，各公司已保存的内容不会生效（仍会保留，重新开启后恢复）。",
-  "A marca própria de cada empresa está desligada nesta instalação.": "本安装已关闭各公司专属品牌功能。"
+  "A marca própria de cada empresa está desligada nesta instalação.": "本安装已关闭各公司专属品牌功能。",
+  "Etapas da assinatura": "订阅步骤",
+  "Escolha o plano": "选择套餐",
+  "Escolha o ciclo de cobrança": "选择计费周期",
+  "Como você quer pagar": "选择付款方式",
+  "Revise e confirme": "核对并确认",
+  "Escolher": "选择",
+  "Plano atual": "当前套餐",
+  "Ciclos disponíveis": "可选周期",
+  "Alterar": "修改",
+  "À vista": "一次付清",
+  "Os dados do cartão são informados na fatura do Asaas, nunca neste sistema.": "银行卡信息在 Asaas 账单页面填写，不会在本系统中输入。",
+  "Pagamento": "付款",
+  "Forma de pagamento": "付款方式",
+  "Cartão de crédito": "信用卡",
+  "Ciclo": "周期",
+  "Pix": "Pix"
 }
