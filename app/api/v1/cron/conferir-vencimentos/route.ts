@@ -48,6 +48,7 @@ import {
   conferirVencimentos,
   type ResumoDoConferidorDeVencimentos,
 } from "@/lib/billing/assinatura/conferir-vencimentos";
+import { criarAvisoDeSuspensaoSobre } from "@/lib/email/conta-e-cobranca/gatilhos-de-conta";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -62,8 +63,10 @@ async function handle(req: NextRequest): Promise<Response> {
 
   let resumo: ResumoDoConferidorDeVencimentos;
   try {
-    const db = conferidorDeVencimentosSobre(createAdminClient());
-    resumo = await conferirVencimentos(db);
+    const admin = createAdminClient();
+    const db = conferidorDeVencimentosSobre(admin);
+    // COB-06: quem a rodada suspende recebe o aviso de conta suspensa (com cópia ao operador).
+    resumo = await conferirVencimentos(db, { aoSuspender: criarAvisoDeSuspensaoSobre(admin) });
   } catch (err) {
     const detalhe = err instanceof Error ? err.message : String(err);
     // O texto do erro do banco fica só no log; a resposta HTTP não repete

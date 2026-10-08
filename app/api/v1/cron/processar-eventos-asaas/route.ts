@@ -46,6 +46,7 @@ import {
   processarEventosAsaas,
   type ResumoProcessarEventosAsaas,
 } from "@/lib/billing/asaas/processar-eventos";
+import { criarAvisosDeCobrancaSobre } from "@/lib/email/conta-e-cobranca/gatilhos-de-cobranca";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -65,7 +66,10 @@ async function handle(req: NextRequest): Promise<Response> {
     const admin = createAdminClient();
     const db = criarDbEventosAsaasSobre(admin);
     const asaas = criarClienteAsaas({ fetch, config, logger });
-    resumo = await processarEventosAsaas({ db, asaas, config, logger, auditar: audit });
+    // Os e-mails de cobrança (plano confirmado, recibo, pagamento não aprovado, estorno) saem DEPOIS de o
+    // evento estar aplicado; a unicidade de `billing_emails_enviados` garante um por fato.
+    const avisos = criarAvisosDeCobrancaSobre(admin);
+    resumo = await processarEventosAsaas({ db, asaas, config, logger, auditar: audit, avisos });
   } catch (err) {
     // O texto do erro (rede, banco, configuração) pode citar detalhe interno:
     // não é para o corpo da resposta HTTP, só para quem lê o log do servidor.

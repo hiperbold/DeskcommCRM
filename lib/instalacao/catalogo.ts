@@ -147,6 +147,15 @@ export const CATALOGO_DA_INSTALACAO: readonly ChaveDaInstalacao[] = [
     controle: "edita",
   },
   {
+    chave: "EMAIL_DE_COPIA_DOS_AVISOS",
+    rotulo: "E-mail que recebe cópia dos avisos de clientes",
+    explicacao:
+      "Quem recebe uma cópia dos e-mails de conta e de cobrança que o sistema manda aos clientes (boas-vindas, plano confirmado, recibo, pagamento não aprovado, estorno). Pode ser mais de um, separados por vírgula. Vazio: a cópia vai para os administradores da plataforma.",
+    grupo: "email",
+    natureza: "texto",
+    controle: "edita",
+  },
+  {
     chave: "LGPD_DPO_EMAIL",
     rotulo: "E-mail do encarregado de dados (DPO)",
     explicacao:

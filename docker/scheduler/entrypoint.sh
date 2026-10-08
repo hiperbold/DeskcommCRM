@@ -183,6 +183,24 @@ CRONS="
 # sozinha aos 150s e deixa o resto para o dia seguinte. Depois do conferir-vencimentos (05:40), para o
 # aviso olhar o contrato já conferido.
 0 11 * * *|180|api/v1/cron/avisar-renovacao
+# O AVISO DE RENOVAÇÃO NO CARTÃO (COB-04, e-mail). Uma vez ao dia, 11:05 UTC (08:05 em América/São_Paulo), logo
+# depois da régua acima: ela avisa quem NÃO renova sozinho, esta avisa quem tem assinatura viva no cartão, de 1 a
+# 3 dias antes da cobrança. Varredura de banco que só ENFILEIRA o aviso (o envio é do cron enviar-emails-de-conta,
+# abaixo), sem chamada ao Asaas; orçamento interno de 45s dentro do teto de 60s.
+5 11 * * *|60|api/v1/cron/avisar-renovacao-no-cartao
+# O AVISO DE TOKENS DE IA ACABANDO (IA-02, e-mail). A cada 15 minutos: o 100% é urgente e a rodada vazia é uma
+# consulta curta. Quem detecta o cruzamento de 80% e 100% é o banco, no débito de cada chamada
+# (fn_billing_avisar_carteira); este cron só lê as linhas das últimas 48h e ENFILEIRA o aviso, uma vez por nível por
+# ciclo (o envio é do cron enviar-emails-de-conta, abaixo). Nada é comparado no caminho quente das mensagens.
+*/15 * * * *|60|api/v1/cron/avisar-tokens-acabando
+# O ENVIO DOS E-MAILS DE CONTA E DE COBRANÇA (fila billing_emails_enviados, migration 0952). Minuto a minuto: quem
+# paga, cancela ou é suspenso espera o e-mail em segundos, e o aviso que falhou volta a tentar com espera crescente
+# (1, 5, 15, 60 e 240 min, 6 tentativas). Lote de 20 por rodada e orçamento interno de 40s (lib/email/conta-e-
+# cobranca/enviar.ts) dentro do teto de 55s do curl: a rodada para sozinha antes de o curl cortar, e o que não
+# começou volta à fila sem gastar tentativa. Rodada vazia é uma chamada de RPC. Sem SMTP nem Resend configurados não
+# reserva nada. Os gatilhos (processador do Asaas, conferidor de vencimentos, cadastro, os dois avisos acima) só
+# enfileiram; nenhum deles espera servidor de e-mail.
+* * * * *|55|api/v1/cron/enviar-emails-de-conta
 # A RETENÇÃO DE MÍDIA (upstream). 05:20 UTC, janela própria, antes das rodadas
 # diárias de billing acima (05:25 e 05:40), para não disputar I/O com elas.
 20 5 * * *|120|api/v1/cron/media-retention

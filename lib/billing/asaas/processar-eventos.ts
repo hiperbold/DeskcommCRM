@@ -208,8 +208,37 @@ export interface DbEventosAsaas {
  */
 export type AuditoriaDoCorteDeEstorno = Parameters<typeof audit>[0];
 
+/**
+ * O que o processador entrega a quem avisa o cliente (e-mails de cobrança) DEPOIS de o evento ter sido aplicado
+ * no banco. `resultado` é o que `fn_billing_asaas_aplicar_evento` devolveu (`aplicado`, `ja_aplicado`,
+ * `ignorado`...), `alarmes` os códigos de alarme dele e `cobranca` o objeto CONFIRMADO no Asaas (nunca o corpo
+ * do webhook), quando o evento fez o GET.
+ */
+export interface EntradaDeAvisoDeCobranca {
+  eventType: string;
+  resultado: string;
+  organizationId: string | null;
+  alarmes: string[];
+  /** O `payment.id` do Asaas do evento (`resource_id`). */
+  idDoPagamento: string | null;
+  cobranca: CobrancaAsaas | null;
+}
+
+/**
+ * Avisos ao cliente. Injetável (a rota do cron passa a implementação de `lib/email/conta-e-cobranca`); sem
+ * ele, o processamento é o mesmo e nenhum e-mail sai. O aviso roda DENTRO do fluxo do evento, logo depois de o
+ * efeito estar gravado, e só ENFILEIRA o e-mail (uma leitura e uma gravação no banco, sem SMTP): o envio é do
+ * cron `enviar-emails-de-conta`. Não pode lançar nem mudar o resultado do evento: o processador trata a falha
+ * como log.
+ */
+export interface AvisosDeCobranca {
+  aoAplicar(entrada: EntradaDeAvisoDeCobranca): Promise<void>;
+}
+
 export interface DepsProcessarEventosAsaas {
   db: DbEventosAsaas;
+  /** E-mails ao cliente depois de aplicar o evento (plano confirmado, recibo, pagamento não aprovado, estorno). */
+  avisos?: AvisosDeCobranca;
   /** Auditoria do corte por estorno total; nunca lança, nunca bloqueia (fire-and-forget). */
   auditar?: (entrada: AuditoriaDoCorteDeEstorno) => Promise<void>;
   asaas: ClienteAsaasHttp;
@@ -536,6 +565,8 @@ function confirmacaoDeAssinatura(
 interface ResultadoDeUmEvento {
   categoria: string;
   abortarRodada: boolean;
+  /** O que o banco devolveu ao aplicar o evento; ausente quando o evento nem chegou a ser aplicado. */
+  aplicacao?: AplicarEventoResultado;
 }
 
 async function aplicarSemConfirmacao(deps: DepsProcessarEventosAsaas, evento: EventoReservado): Promise<ResultadoDeUmEvento> {
@@ -768,7 +799,7 @@ async function finalizarAplicacao(
   if (alarmes.includes("remover_assinatura_pendente")) {
     await tentarRemoverAssinatura(deps, evento, subscriptionId, organizationId);
   }
-  return { categoria: resultado, abortarRodada: false };
+  return { categoria: resultado, abortarRodada: false, aplicacao: aplicado.data };
 }
 
 /**
@@ -795,6 +826,34 @@ async function tentarRemoverCobranca(
   } catch (err) {
     // Falha aqui só loga (decisão 10): a conciliação diária (Tarefa 16) refaz.
     deps.logger.warn("asaas_processar_remover_cobranca_falhou", {
+      eventoId: evento.id,
+      tipoErro: tipoDoErro(err),
+    });
+  }
+}
+
+/**
+ * Avisa o cliente (e-mails de cobrança) depois do efeito gravado. Nunca lança e nunca muda a categoria do
+ * evento: um e-mail que não saiu é log, não é falha do processamento.
+ */
+async function avisarClientes(
+  deps: DepsProcessarEventosAsaas,
+  evento: EventoReservado,
+  resultado: ResultadoDeUmEvento,
+  cobranca: CobrancaAsaas | null,
+): Promise<void> {
+  if (!deps.avisos || !resultado.aplicacao) return;
+  try {
+    await deps.avisos.aoAplicar({
+      eventType: evento.eventType,
+      resultado: resultado.aplicacao.resultado,
+      organizationId: resultado.aplicacao.organizationId,
+      alarmes: resultado.aplicacao.alarme ? resultado.aplicacao.alarme.split(",") : [],
+      idDoPagamento: evento.idDoRecurso,
+      cobranca,
+    });
+  } catch (err) {
+    deps.logger.warn("asaas_processar_aviso_ao_cliente_falhou", {
       eventoId: evento.id,
       tipoErro: tipoDoErro(err),
     });
@@ -910,7 +969,14 @@ async function processarEventoDeDinheiro(
 
   const confirmacao = confirmacaoDoPagamento(cobranca, assinaturaStatus, parcelamento);
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
-  return finalizarAplicacao(deps, evento, aplicado, cobranca.subscription ?? null);
+  const finalizado = await finalizarAplicacao(
+    deps,
+    evento,
+    aplicado,
+    cobranca.subscription ?? null,
+  );
+  await avisarClientes(deps, evento, finalizado, cobranca);
+  return finalizado;
 }
 
 /**
@@ -958,7 +1024,15 @@ async function processarEventoDeCobranca(
   const aplicado = await deps.db.aplicarEvento(evento.id, evento.leaseToken, confirmacao);
   const subscriptionId = "removido" in cobranca ? null : (cobranca.subscription ?? null);
   const installmentId = "removido" in cobranca ? null : (cobranca.installment ?? null);
-  return finalizarAplicacao(deps, evento, aplicado, subscriptionId, installmentId);
+  const finalizado = await finalizarAplicacao(
+    deps,
+    evento,
+    aplicado,
+    subscriptionId,
+    installmentId,
+  );
+  await avisarClientes(deps, evento, finalizado, "removido" in cobranca ? null : cobranca);
+  return finalizado;
 }
 
 /**
@@ -1051,7 +1125,9 @@ async function carregarPayloads(deps: DepsProcessarEventosAsaas, ids: string[]):
  * devolve contagem zero - os eventos ficam guardados, `aguardando`, para
  * quando a chave for ligada.
  */
-export async function processarEventosAsaas(deps: DepsProcessarEventosAsaas): Promise<ResumoProcessarEventosAsaas> {
+export async function processarEventosAsaas(
+  deps: DepsProcessarEventosAsaas,
+): Promise<ResumoProcessarEventosAsaas> {
   const resumo = resumoZerado(deps.config.habilitado);
   if (!deps.config.habilitado) {
     return resumo;

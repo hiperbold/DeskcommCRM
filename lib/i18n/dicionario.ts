@@ -13615,6 +13615,211 @@ export const DICIONARIO: Traducoes = {
   "Ou copie e cole este link no navegador:": {
     es: "O copia y pega este enlace en el navegador:",
   },
+  // ─── lib/email/templates/_layout-transacional.ts e os 10 e-mails transacionais (CONTA-06, COB-02 a COB-09, IA-02) ───
+  "Você recebe este e-mail porque administra a {empresa} no {crm}.": {
+    es: "Recibes este correo porque administras {empresa} en {crm}.",
+  },
+  "Você recebe este e-mail porque criou a {empresa} no {crm}.": {
+    es: "Recibes este correo porque creaste {empresa} en {crm}.",
+  },
+  "Cartão": {
+    es: "Tarjeta",
+  },
+  "Cartão em {n}x": {
+    es: "Tarjeta en {n} cuotas",
+  },
+  "Acesso até": {
+    es: "Acceso hasta",
+  },
+  "Data do pagamento": {
+    es: "Fecha del pago",
+  },
+  "{inicio} a {fim}": {
+    es: "{inicio} al {fim}",
+  },
+  "Parcela": {
+    es: "Cuota",
+  },
+  "{n} de {total}": {
+    es: "{n} de {total}",
+  },
+  "final {final}": {
+    es: "terminada en {final}",
+  },
+  "Data da cobrança": {
+    es: "Fecha del cobro",
+  },
+  "Data do estorno": {
+    es: "Fecha del reembolso",
+  },
+  "Valor pago": {
+    es: "Valor pagado",
+  },
+  "{tokens} tokens": {
+    es: "{tokens} tokens",
+  },
+  "Conta criada": {
+    es: "Cuenta creada",
+  },
+  "Pagamento aprovado": {
+    es: "Pago aprobado",
+  },
+  "Recibo": {
+    es: "Recibo",
+  },
+  "Renovação automática": {
+    es: "Renovación automática",
+  },
+  "Pagamento pendente": {
+    es: "Pago pendiente",
+  },
+  "Cancelamento": {
+    es: "Cancelación",
+  },
+  "Estorno": {
+    es: "Reembolso",
+  },
+  "Tokens liberados": {
+    es: "Tokens liberados",
+  },
+  "Começar agora": {
+    es: "Empezar ahora",
+  },
+  "Ver meu plano": {
+    es: "Ver mi plan",
+  },
+  "Ver pagamentos": {
+    es: "Ver pagos",
+  },
+  "Gerenciar plano": {
+    es: "Gestionar plan",
+  },
+  "Pagar agora": {
+    es: "Pagar ahora",
+  },
+  "Regularizar": {
+    es: "Regularizar",
+  },
+  "Reativar plano": {
+    es: "Reactivar plan",
+  },
+  "Ver consumo": {
+    es: "Ver consumo",
+  },
+  "Comprar tokens": {
+    es: "Comprar tokens",
+  },
+  "Bem-vindo ao {crm}, {nome}": {
+    es: "Te damos la bienvenida a {crm}, {nome}",
+  },
+  "Bem-vindo, {nome}": {
+    es: "Te damos la bienvenida, {nome}",
+  },
+  "Sua empresa {empresa} já está no {crm}. Para começar:": {
+    es: "Tu empresa {empresa} ya está en {crm}. Para empezar:",
+  },
+  "Conecte seu WhatsApp": {
+    es: "Conecta tu WhatsApp",
+  },
+  "Leia o QR Code em Conexões e as conversas passam a cair no CRM.": {
+    es: "Escanea el código QR en Conexiones y las conversaciones empezarán a llegar al CRM.",
+  },
+  "Convide sua equipe": {
+    es: "Invita a tu equipo",
+  },
+  "Cada atendente entra com o próprio login.": {
+    es: "Cada agente entra con su propio usuario.",
+  },
+  "Configure seu primeiro agente de IA": {
+    es: "Configura tu primer agente de IA",
+  },
+  "Ele responde, qualifica e passa para a equipe quando precisar.": {
+    es: "Responde, califica y pasa al equipo cuando hace falta.",
+  },
+  "Seu plano {plano} está ativo": {
+    es: "Tu plan {plano} está activo",
+  },
+  "Recebemos o pagamento e o plano {plano} ({ciclo}) já está liberado até {data}.": {
+    es: "Recibimos el pago y el plan {plano} ({ciclo}) ya está disponible hasta el {data}.",
+  },
+  "Recibo do seu pagamento de {valor}": {
+    es: "Recibo de tu pago de {valor}",
+  },
+  "Pagamento de {valor} recebido em {data}, referente a {plano} ({periodo}). Guarde este e-mail como comprovante.": {
+    es: "Pago de {valor} recibido el {data}, correspondiente a {plano} ({periodo}). Guarda este correo como comprobante.",
+  },
+  "Seu plano renova em 1 dia": {
+    es: "Tu plan se renueva en 1 día",
+  },
+  "Seu plano renova em {dias} dias": {
+    es: "Tu plan se renueva en {dias} días",
+  },
+  "No dia {data} vamos cobrar {valor} no cartão {final} para renovar o plano {plano}. Para trocar o cartão ou cancelar, use o botão abaixo.": {
+    es: "El {data} cobraremos {valor} en la tarjeta {final} para renovar el plan {plano}. Para cambiar la tarjeta o cancelar, usa el botón de abajo.",
+  },
+  "Não conseguimos cobrar a renovação do seu plano": {
+    es: "No pudimos cobrar la renovación de tu plan",
+  },
+  "A cobrança de {valor} do plano {plano} não foi aprovada. Seu acesso continua até {data}; depois disso a conta entra em modo só leitura.": {
+    es: "El cobro de {valor} del plan {plano} no fue aprobado. Tu acceso continúa hasta el {data}; después la cuenta pasa a modo de solo lectura.",
+  },
+  "Sua conta está suspensa": {
+    es: "Tu cuenta está suspendida",
+  },
+  "A conta da {empresa} foi suspensa por falta de pagamento. Suas conversas e contatos estão guardados; o atendimento e a IA voltam assim que o pagamento for feito.": {
+    es: "La cuenta de {empresa} fue suspendida por falta de pago. Tus conversaciones y contactos están guardados; la atención y la IA vuelven en cuanto se realice el pago.",
+  },
+  "Cancelamento confirmado": {
+    es: "Cancelación confirmada",
+  },
+  "O plano {plano} foi cancelado e não haverá novas cobranças. Você continua com acesso até {data}.": {
+    es: "El plan {plano} fue cancelado y no habrá nuevos cobros. Sigues con acceso hasta el {data}.",
+  },
+  "Estorno de {valor} feito": {
+    es: "Reembolso de {valor} realizado",
+  },
+  "Estornamos {valor} referente a {plano}. O prazo para aparecer na fatura depende do seu banco ou cartão.": {
+    es: "Reembolsamos {valor} correspondiente a {plano}. El plazo para que aparezca en tu estado de cuenta depende de tu banco o tarjeta.",
+  },
+  "Seu pacote de {tokens} tokens está liberado": {
+    es: "Tu paquete de {tokens} tokens está liberado",
+  },
+  "O pacote de {tokens} tokens já está no saldo da {empresa} e vale até {data}.": {
+    es: "El paquete de {tokens} tokens ya está en el saldo de {empresa} y vale hasta el {data}.",
+  },
+  "Seus tokens de IA estão acabando": {
+    es: "Tus tokens de IA se están acabando",
+  },
+  "Seus tokens de IA acabaram": {
+    es: "Tus tokens de IA se acabaron",
+  },
+  "A {empresa} já usou 80% dos tokens de IA do mês. Ao chegar a 100%, a IA para de responder até {data} ou até a compra de um pacote extra.": {
+    es: "{empresa} ya usó el 80% de los tokens de IA del mes. Al llegar al 100%, la IA deja de responder hasta el {data} o hasta que se compre un paquete extra.",
+  },
+  "A {empresa} já usou 100% dos tokens de IA do mês. A IA parou de responder e volta em {data} ou assim que um pacote extra for comprado.": {
+    es: "{empresa} ya usó el 100% de los tokens de IA del mes. La IA dejó de responder y vuelve el {data} o en cuanto se compre un paquete extra.",
+  },
+  "Seus tokens de IA do mês acabaram": {
+    es: "Tus tokens de IA del mes se acabaron",
+  },
+  "A {empresa} já usou 80% dos tokens de IA do mês. Para manter o uso dentro do plano, compre um pacote extra.": {
+    es: "{empresa} ya usó el 80% de los tokens de IA del mes. Para mantener el uso dentro del plan, compra un paquete extra.",
+  },
+  "A {empresa} já usou 100% dos tokens de IA do mês. Para manter o uso dentro do plano, compre um pacote extra.": {
+    es: "{empresa} ya usó el 100% de los tokens de IA del mes. Para mantener el uso dentro del plan, compra un paquete extra.",
+  },
+  "Tokens usados no mês": {
+    es: "Tokens usados en el mes",
+  },
+  "{usados} de {total}": {
+    es: "{usados} de {total}",
+  },
+  "No dia {data} vamos cobrar {valor} no cartão cadastrado para renovar o plano {plano}. Para trocar o cartão ou cancelar, use o botão abaixo.": {
+    es: "El {data} cobraremos {valor} en la tarjeta registrada para renovar el plan {plano}. Para cambiar la tarjeta o cancelar, usa el botón de abajo.",
+  },
+  "O pacote de {tokens} tokens já está no saldo da {empresa}.": {
+    es: "El paquete de {tokens} tokens ya está en el saldo de {empresa}.",
+  },
 };
 
 /**

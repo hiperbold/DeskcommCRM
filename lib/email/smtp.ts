@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "@/lib/env";
 import { getSmtpConfig, type SmtpConfig } from "@/lib/email/config";
+import { PRAZO_DE_CONEXAO_SMTP_MS, PRAZO_DE_SILENCIO_SMTP_MS } from "@/lib/email/prazo";
 
 interface SendArgs {
   to: string | string[];
@@ -60,12 +61,19 @@ function getTransport(config: SmtpConfig) {
     requireTLS: config.security === "starttls",
     ignoreTLS: config.security === "none",
     auth: config.username ? { user: config.username, pass: config.password } : undefined,
+    // Prazos (lib/email/prazo.ts): 10 s para conectar e para o servidor cumprimentar, mas 60 s de silêncio no
+    // socket, para o servidor lento que já aceitou a mensagem não virar falha (e e-mail em dobro na nova
+    // tentativa). Estourou, o Nodemailer lança e o envio vira `send_failed`.
+    connectionTimeout: PRAZO_DE_CONEXAO_SMTP_MS,
+    greetingTimeout: PRAZO_DE_CONEXAO_SMTP_MS,
+    socketTimeout: PRAZO_DE_SILENCIO_SMTP_MS,
   });
   return transporter;
 }
 function classify(error: unknown): EmailDeliveryError {
   const value = error as { code?: string; responseCode?: number };
-  if (value.responseCode === 429 || value.code === "ETIMEDOUT") return "rate_limited";
+  // ETIMEDOUT é o prazo estourado (conexão, saudação ou silêncio no socket): falha de envio, não limite de taxa.
+  if (value.responseCode === 429) return "rate_limited";
   if (value.responseCode === 550 || value.responseCode === 553) return "sender_rejected";
   return "send_failed";
 }

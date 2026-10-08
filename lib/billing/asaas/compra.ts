@@ -392,6 +392,12 @@ export interface DepsCompra {
   logger: LoggerCompra;
   /** Injetável só para teste; padrão `() => new Date()`. */
   agora?: () => Date;
+  /**
+   * COB-07: chamado DEPOIS de o cancelamento estar gravado, com a assinatura cancelada (a chave de
+   * idempotência do e-mail). Opcional; quem não passa não manda e-mail. Nunca desfaz nem muda o resultado do
+   * cancelamento: o gatilho engole a própria falha, e `avisarCancelamento` engole a que escapar.
+   */
+  avisoDeCancelamento?: (cancelamento: { organizationId: string; asaasSubscriptionId: string }) => Promise<void>;
 }
 
 // ─── Mensagens fixas (risco 13: nunca a mensagem crua do Asaas na tela) ────
@@ -1238,7 +1244,21 @@ async function cancelarAssinaturaAgendadaDoPedido(
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
   }
 
+  await avisarCancelamento(deps, organizationId, pedido.asaasSubscriptionId);
   return { tipo: "ok", cancelAtPeriodEnd: false };
+}
+
+async function avisarCancelamento(
+  deps: DepsCompra,
+  organizationId: string,
+  asaasSubscriptionId: string,
+): Promise<void> {
+  if (!deps.avisoDeCancelamento) return;
+  try {
+    await deps.avisoDeCancelamento({ organizationId, asaasSubscriptionId });
+  } catch (err) {
+    deps.logger.warn("asaas_cancelar_aviso_falhou", { org: organizationId, tipoErro: tipoDoErro(err) });
+  }
 }
 
 /**
@@ -1290,5 +1310,6 @@ export async function cancelarAssinaturaDoCliente(
     return { tipo: "erro", mensagem: MENSAGEM_GENERICA };
   }
 
+  await avisarCancelamento(deps, organizationId, asaasSubscriptionId);
   return { tipo: "ok", cancelAtPeriodEnd: true };
 }

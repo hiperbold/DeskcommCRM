@@ -1117,3 +1117,112 @@ describe("D-133: iniciarCompra sem o aceite dos Termos", () => {
     expect(asaas.criarAssinatura).not.toHaveBeenCalled();
   });
 });
+
+describe("cancelarAssinaturaDoCliente: aviso COB-07 (cancelamento confirmado)", () => {
+  const contratoVivo = () =>
+    vi.fn(async () => ({
+      data: { asaasSubscriptionId: "sub_ativo123", asaasAssinaturaEncerradaEm: null, currentPeriodEnd: "2026-11-15T03:00:00Z" },
+      error: null,
+    }));
+
+  it("depois do cancelamento gravado, avisa com a organização e a assinatura cancelada", async () => {
+    const ordem: string[] = [];
+    const db: DbCompra = {
+      ...dbStubVazio(),
+      lerContrato: contratoVivo(),
+      marcarAssinaturaEncerrada: vi.fn(async () => {
+        ordem.push("marcar_encerrada");
+        return { data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" }, error: null };
+      }),
+    };
+    const avisoDeCancelamento = vi.fn(async () => {
+      ordem.push("aviso");
+    });
+    const { deps } = montarDeps(db, asaasFalso());
+
+    const resultado = await cancelarAssinaturaDoCliente({ ...deps, avisoDeCancelamento }, "org-1", "actor-1");
+
+    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+    expect(avisoDeCancelamento).toHaveBeenCalledWith({ organizationId: "org-1", asaasSubscriptionId: "sub_ativo123" });
+    expect(ordem).toEqual(["marcar_encerrada", "aviso"]);
+  });
+
+  it("aviso que lança não muda o resultado do cancelamento (vira log)", async () => {
+    const db: DbCompra = { ...dbStubVazio(), lerContrato: contratoVivo() };
+    db.marcarAssinaturaEncerrada = vi.fn(async () => ({
+      data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
+      error: null,
+    }));
+    const { deps, linhas } = montarDeps(db, asaasFalso());
+
+    const resultado = await cancelarAssinaturaDoCliente(
+      {
+        ...deps,
+        avisoDeCancelamento: async () => {
+          throw new Error("smtp caiu");
+        },
+      },
+      "org-1",
+      "actor-1",
+    );
+
+    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+    expect(linhas.some((l) => l.nivel === "warn" && l.msg === "asaas_cancelar_aviso_falhou")).toBe(true);
+  });
+
+  it("sem o aviso injetado o cancelamento é o de sempre", async () => {
+    const db: DbCompra = { ...dbStubVazio(), lerContrato: contratoVivo() };
+    db.marcarAssinaturaEncerrada = vi.fn(async () => ({
+      data: { jaRegistrado: false, asaasAssinaturaEncerradaEm: "2026-09-24T00:00:00Z" },
+      error: null,
+    }));
+    const { deps } = montarDeps(db, asaasFalso());
+    expect(await cancelarAssinaturaDoCliente(deps, "org-1", "actor-1")).toEqual({ tipo: "ok", cancelAtPeriodEnd: true });
+  });
+
+  it("cancelamento que falhou (DELETE no Asaas ou marcador não gravado) não avisa", async () => {
+    const avisoDeCancelamento = vi.fn(async () => {});
+
+    const asaasQuebrado = asaasFalso({
+      removerAssinatura: vi.fn(async () => {
+        throw erroIndisponivel(500, false);
+      }),
+    });
+    const dbA: DbCompra = { ...dbStubVazio(), lerContrato: contratoVivo() };
+    const a = montarDeps(dbA, asaasQuebrado);
+    expect((await cancelarAssinaturaDoCliente({ ...a.deps, avisoDeCancelamento }, "org-1", "actor-1")).tipo).toBe("erro");
+
+    const dbB: DbCompra = {
+      ...dbStubVazio(),
+      lerContrato: contratoVivo(),
+      marcarAssinaturaEncerrada: vi.fn(async () => ({ data: null, error: { code: "P0002", message: "billing_contrato_nao_encontrado" } })),
+    };
+    const b = montarDeps(dbB, asaasFalso());
+    expect((await cancelarAssinaturaDoCliente({ ...b.deps, avisoDeCancelamento }, "org-1", "actor-1")).tipo).toBe("erro");
+
+    expect(avisoDeCancelamento).not.toHaveBeenCalled();
+  });
+
+  it("assinatura AGENDADA cancelada (período pago a frente): avisa com a assinatura agendada", async () => {
+    const pedido = pedidoBase({ status: "aguardando_pagamento", asaasSubscriptionId: "sub_agendada123" });
+    const db: DbCompra = {
+      ...dbStubVazio(),
+      lerContrato: vi.fn(async () => ({
+        data: { asaasSubscriptionId: null, asaasAssinaturaEncerradaEm: null, currentPeriodEnd: "2026-11-15T03:00:00Z" },
+        error: null,
+      })),
+      buscarPedidoAbertoPorTipo: vi.fn(async () => ({ data: pedido, error: null })),
+      marcarPedido: vi.fn(async (_org: string, id: string, status: "inconclusivo" | "falhou" | "cancelado") => ({
+        data: { pedidoId: id, statusAnterior: pedido.status, statusNovo: status },
+        error: null,
+      })) as DbCompra["marcarPedido"],
+    };
+    const avisoDeCancelamento = vi.fn(async () => {});
+    const { deps } = montarDeps(db, asaasFalso());
+
+    const resultado = await cancelarAssinaturaDoCliente({ ...deps, avisoDeCancelamento }, "org-1", "actor-1");
+
+    expect(resultado).toEqual({ tipo: "ok", cancelAtPeriodEnd: false });
+    expect(avisoDeCancelamento).toHaveBeenCalledWith({ organizationId: "org-1", asaasSubscriptionId: "sub_agendada123" });
+  });
+});

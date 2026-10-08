@@ -246,6 +246,6 @@ describe("0916: o que as funções fazem", () => {
 describe("0916: o processador audita e a rota injeta a auditoria", () => {
   it("o cron de eventos passa audit ao processador", () => {
     expect(ROTA).toMatch(/import \{ audit \} from "@\/lib\/audit";/);
-    expect(ROTA).toMatch(/processarEventosAsaas\(\{ db, asaas, config, logger, auditar: audit \}\)/);
+    expect(ROTA).toMatch(/processarEventosAsaas\(\{ db, asaas, config, logger, auditar: audit, avisos \}\)/);
   });
 });

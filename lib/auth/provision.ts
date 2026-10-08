@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { audit } from "@/lib/audit";
+import { avisarBoasVindas } from "@/lib/email/conta-e-cobranca/boas-vindas";
 
 /** Normaliza o nome da empresa para um slug candidato (citext unique no DB). */
 export function slugify(name: string): string {
@@ -148,6 +149,16 @@ export async function ensureTenantForUser(
     bypassedRls: true,
     metadata: { slug: org.slug },
   });
+
+  // CONTA-06: boas-vindas só a quem pediu a empresa pelo cadastro (o cadastro do próprio cliente e a aprovação
+  // do pedido pelo admin da plataforma, `app/actions/registration/decide.ts`, passam aqui; o e-mail vai a quem
+  // pediu, não a quem aprovou; o provisionamento externo não passa). Só enfileira (uma gravação rápida, sem
+  // SMTP; o cron `enviar-emails-de-conta` envia) e nunca lança nem segura o cadastro: a falha do aviso é log.
+  try {
+    await avisarBoasVindas({ organizationId: org.id, criadorUserId: user.id });
+  } catch {
+    // o enfileiramento já trata e registra a própria falha; nada a fazer aqui
+  }
 
   return { provisioned: true, organizationId: org.id };
 }

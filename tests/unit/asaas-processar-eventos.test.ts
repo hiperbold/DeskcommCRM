@@ -1129,3 +1129,98 @@ describe("D-177: parcela de um parcelamento no cartão", () => {
     expect(asaas.removerCobranca).not.toHaveBeenCalled();
   });
 });
+
+describe("processarEventosAsaas: o aviso por e-mail roda dentro do fluxo do evento, logo depois do efeito gravado", () => {
+  function tresPagamentos() {
+    const eventos = [1, 2, 3].map((n) =>
+      eventoDinheiro({ id: `evt-${n}`, idDoRecurso: `pay_${n}`, leaseToken: `lease-${n}` }),
+    );
+    const ordem: string[] = [];
+    const db = dbFalso({
+      reservarEventos: vi.fn(async () => ({ data: eventos, error: null })),
+      lerPayloads: vi.fn(async () => ({
+        data: eventos.map((e) => ({ id: e.id, payload: payloadDePagamento({ id: e.idDoRecurso }) })),
+        error: null,
+      })),
+      aplicarEvento: vi.fn(async (eventoId: string) => {
+        ordem.push(`aplicar:${eventoId}`);
+        return { data: { resultado: "aplicado", organizationId: "org-1", alarme: null }, error: null };
+      }),
+    });
+    const asaas = asaasFalso({
+      buscarCobranca: vi.fn(async (id: string) => cobrancaFake({ id })),
+    });
+    return { eventos, ordem, db, asaas };
+  }
+
+  it("cada aviso sai logo depois de o seu evento ser aplicado e antes do evento seguinte", async () => {
+    const { ordem, db, asaas } = tresPagamentos();
+    const avisos = {
+      aoAplicar: vi.fn(async (e: { idDoPagamento: string | null }) => {
+        ordem.push(`aviso:${e.idDoPagamento}`);
+      }),
+    };
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas, avisos }));
+
+    expect(resumo.aplicados).toBe(3);
+    expect(ordem).toEqual([
+      "aplicar:evt-1",
+      "aviso:pay_1",
+      "aplicar:evt-2",
+      "aviso:pay_2",
+      "aplicar:evt-3",
+      "aviso:pay_3",
+    ]);
+  });
+
+  it("aviso que lança vira log, não muda o resumo e não impede os seguintes", async () => {
+    const { db, asaas } = tresPagamentos();
+    const logger = loggerFalso();
+    const entregues: string[] = [];
+    const avisos = {
+      aoAplicar: vi.fn(async (e: { idDoPagamento: string | null }) => {
+        if (e.idDoPagamento === "pay_2") throw new Error("banco caiu");
+        entregues.push(String(e.idDoPagamento));
+      }),
+    };
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas, avisos, logger }));
+
+    expect(resumo).toMatchObject({ aplicados: 3, falhas: 0 });
+    expect(entregues).toEqual(["pay_1", "pay_3"]);
+    expect(logger.warn).toHaveBeenCalledWith("asaas_processar_aviso_ao_cliente_falhou", expect.any(Object));
+  });
+
+  it("orçamento da rodada esgotado: os eventos já aplicados foram avisados, e só eles", async () => {
+    const { db, asaas } = tresPagamentos();
+    let relogio = 0;
+    const agora = () => new Date((relogio += 20));
+    const entregues: string[] = [];
+    const avisos = {
+      aoAplicar: vi.fn(async (e: { idDoPagamento: string | null }) => {
+        entregues.push(String(e.idDoPagamento));
+      }),
+    };
+
+    const resumo = await processarEventosAsaas(deps({ db, asaas, avisos, agora, orcamentoMs: 50 }));
+
+    expect(resumo.cortadoPeloOrcamento).toBe(true);
+    expect(resumo.processados).toBeLessThan(3);
+    expect(entregues).toHaveLength(resumo.processados);
+  });
+
+  it("evento que o banco não aplicou não chega ao aviso", async () => {
+    const { db, asaas } = tresPagamentos();
+    db.aplicarEvento = vi.fn(async () => ({ data: null, error: { code: "XX000", message: "boom" } }));
+    const avisos = { aoAplicar: vi.fn(async () => undefined) };
+    await processarEventosAsaas(deps({ db, asaas, avisos }));
+    expect(avisos.aoAplicar).not.toHaveBeenCalled();
+  });
+
+  it("sem avisos injetados o processamento é o de sempre", async () => {
+    const { db, asaas } = tresPagamentos();
+    const resumo = await processarEventosAsaas(deps({ db, asaas }));
+    expect(resumo.aplicados).toBe(3);
+  });
+});

@@ -378,6 +378,13 @@ const schema = z.object({
    */
   SUPPORT_EMAIL: z.string().optional().default(""),
 
+  /**
+   * Quem recebe a cópia dos e-mails de conta e de cobrança enviados aos clientes (um endereço, ou vários
+   * separados por vírgula). Vazio = os administradores da plataforma (`platform_admins`, escopo full).
+   * Editável pela tela de credenciais; lida por `valorDaInstalacao("EMAIL_DE_COPIA_DOS_AVISOS")`.
+   */
+  EMAIL_DE_COPIA_DOS_AVISOS: z.string().optional().default(""),
+
   // EPIC-11 Impersonate cookie HMAC secret. Optional at boot (route returns
   // 503 at runtime if missing/short); required in prod for the feature to
   // function. Min 32 chars when present is enforced at use site.

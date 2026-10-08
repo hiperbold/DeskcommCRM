@@ -426,6 +426,14 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "anon e authenticated barrados por permission denied ao SELECT, INSERT, UPDATE e DELETE " +
       "(medido sob set role), RLS ligada sem nenhuma policy, service_role sem delete/truncate.",
   },
+  // ─── billing_emails_enviados (migration 0952, fork Hiperbold, e-mails de conta e de cobrança) ───
+  {
+    tabela: "billing_emails_enviados",
+    razao:
+      "tests/invariants/emails-de-conta-e-cobranca-banco.test.ts, item 5 (fork Hiperbold, 0952): " +
+      "anon e authenticated barrados por permission denied ao SELECT, INSERT, UPDATE e DELETE " +
+      "(medido sob set role), RLS ligada sem nenhuma policy, service_role sem delete/truncate.",
+  },
   // ─── billing_trigger_alarmes (migration 0910, fork Hiperbold, fase F7, D-055) ───
   //
   // Mesmo desenho deny-all de billing_payments/billing_contract_eventos,

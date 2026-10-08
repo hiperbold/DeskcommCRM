@@ -14,6 +14,8 @@ que o `next/font/google` baixava.
 |---|---|---|---|---|
 | `atkinson-hyperlegible-{400,700}-latin-latin-ext.woff2` | Atkinson Hyperlegible | 400, 700 | latin + latin-ext | `atkinsonhyperlegible/v12` |
 | `ibm-plex-mono-{400,500}-latin-latin-ext.woff2` | IBM Plex Mono | 400, 500 | latin + latin-ext | `ibmplexmono/v20` |
+| `inter-{400,500,600,700}-latin-latin-ext.woff2` | Inter | 400, 500, 600, 700 | latin + latin-ext | `inter/v20` |
+| `assistant-{600,700,800}-latin-latin-ext.woff2` | Assistant | 600, 700, 800 | latin + latin-ext | `assistant/v24` |
 | `bricolage-grotesque-200-800-latin.woff2` | Bricolage Grotesque | variável 200–800 | latin | `bricolagegrotesque/v9` |
 | `plus-jakarta-sans-200-800-latin.woff2` | Plus Jakarta Sans | variável 200–800 | latin | `plusjakartasans/v12` |
 | `fraunces-100-900-latin.woff2` | Fraunces | variável 100–900 + `opsz`, `SOFT`, `WONK` | latin | `fraunces/v38` |
@@ -39,7 +41,7 @@ subsets juntos (e sem hinting, como o do Chrome):
 
 ```bash
 UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10.10; rv:40.0) Gecko/20100101 Firefox/40.0'
-curl -sA "$UA" 'https://fonts.googleapis.com/css?family=Atkinson+Hyperlegible:400,700|IBM+Plex+Mono:400,500&subset=latin,latin-ext&display=swap'
+curl -sA "$UA" 'https://fonts.googleapis.com/css?family=Atkinson+Hyperlegible:400,700|IBM+Plex+Mono:400,500|Inter:400,500,600,700|Assistant:600,700,800&subset=latin,latin-ext&display=swap'
 ```
 
 ## Licença

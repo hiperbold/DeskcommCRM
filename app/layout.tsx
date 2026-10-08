@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Assistant, IBM_Plex_Mono, Inter } from "next/font/google";
+import localFont from "next/font/local";
 import { headers } from "next/headers";
 import { Toaster } from "sonner";
 import { coresDaBarraDoNavegador } from "@/lib/branding/barra-do-navegador";
@@ -29,30 +29,36 @@ import "@/hiperbold/marca.css";
 // Hiperbold: Inter no lugar da Atkinson, com o mesmo nome de variável para não
 // editar o globals.css nem tests/unit/tailwind-tokens.test.ts.
 //
-// ⚠️ Risco herdado do upstream (não resolvido aqui): a main passou a servir
-// fonte LOCAL (`app/fonts/`, ver README de lá) porque `next/font/google`
-// baixava a fonte durante o build e o build caía quando o Google não
-// respondia. As três fontes da marca Hiperbold (Inter, Assistant, IBM Plex
-// Mono) continuam via `next/font/google` e sujeitas ao mesmo risco, vencer
-// isso exigiria vendorizar os arquivos woff2 destas três fontes, fora do
-// escopo desta resolução de merge.
-const atkinson = Inter({
-  subsets: ["latin", "latin-ext"],
-  weight: ["400", "500", "600", "700"],
+// As três fontes da marca (Inter, Assistant, IBM Plex Mono) são servidas de
+// `app/fonts/` (origem e licença no README de lá), e não pelo carregador do Google:
+// aquele baixava a fonte durante o `next build` e o build caía sempre que o
+// Google não respondia. Cada arquivo traz latin + latin-ext juntos.
+const atkinson = localFont({
+  src: [
+    { path: "./fonts/inter-400-latin-latin-ext.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/inter-500-latin-latin-ext.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/inter-600-latin-latin-ext.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/inter-700-latin-latin-ext.woff2", weight: "700", style: "normal" },
+  ],
   display: "swap",
   variable: "--font-atkinson",
 });
 
-const assistant = Assistant({
-  subsets: ["latin", "latin-ext"],
-  weight: ["600", "700", "800"],
+const assistant = localFont({
+  src: [
+    { path: "./fonts/assistant-600-latin-latin-ext.woff2", weight: "600", style: "normal" },
+    { path: "./fonts/assistant-700-latin-latin-ext.woff2", weight: "700", style: "normal" },
+    { path: "./fonts/assistant-800-latin-latin-ext.woff2", weight: "800", style: "normal" },
+  ],
   display: "swap",
   variable: "--font-assistant",
 });
 
-const plexMono = IBM_Plex_Mono({
-  subsets: ["latin", "latin-ext"],
-  weight: ["400", "500"],
+const plexMono = localFont({
+  src: [
+    { path: "./fonts/ibm-plex-mono-400-latin-latin-ext.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/ibm-plex-mono-500-latin-latin-ext.woff2", weight: "500", style: "normal" },
+  ],
   display: "swap",
   variable: "--font-mono",
 });

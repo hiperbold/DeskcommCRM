@@ -30,6 +30,7 @@ function tabela(nome: string) {
 }
 
 vi.mock("@/lib/audit", () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock("@/lib/email/conta-e-cobranca/boas-vindas", () => ({ avisarBoasVindas: vi.fn(async () => undefined) }));
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
     from: tabela,

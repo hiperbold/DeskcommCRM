@@ -24,8 +24,9 @@
  * Fora dele elas ficavam fora do `.env.example` e fora do `install.sh`, e o
  * `.env` é escrito com truncamento: chave posta à mão sumia no update seguinte.
  */
-import { Resend } from "resend";
+import { Resend, type CreateEmailRequestOptions } from "resend";
 
+import { PRAZO_DO_ENVIO_RESEND_MS } from "@/lib/email/prazo";
 import { env } from "@/lib/env";
 import { valorDaInstalacao } from "@/lib/instalacao/config";
 
@@ -132,15 +133,21 @@ export async function sendEmail(args: SendArgs): Promise<SendResult> {
   }
 
   try {
-    const { data, error } = await client.emails.send({
-      from,
-      to: args.to,
-      subject: args.subject,
-      html: args.html,
-      text: args.text,
-      replyTo: args.replyTo,
-      tags: args.tags,
-    });
+    // Prazo no envio: o SDK repassa as opções ao `fetch` (o tipo `CreateEmailRequestOptions` não declara o
+    // `signal`, mas o objeto vai inteiro para a requisição). Estourou, o fetch aborta, o SDK devolve erro e o
+    // envio vira `send_failed` como qualquer outra falha.
+    const { data, error } = await client.emails.send(
+      {
+        from,
+        to: args.to,
+        subject: args.subject,
+        html: args.html,
+        text: args.text,
+        replyTo: args.replyTo,
+        tags: args.tags,
+      },
+      { signal: AbortSignal.timeout(PRAZO_DO_ENVIO_RESEND_MS) } as CreateEmailRequestOptions,
+    );
 
     if (error) {
       return {

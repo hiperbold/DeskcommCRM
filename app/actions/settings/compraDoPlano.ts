@@ -75,6 +75,7 @@ import {
   type ResultadoIniciarCompra,
 } from "@/lib/billing/asaas/compra";
 import { dbCompraSupabase } from "@/lib/billing/asaas/db-compra-supabase";
+import { criarAvisoDeCancelamentoSobre } from "@/lib/email/conta-e-cobranca/gatilhos-de-conta";
 import { supportWriteError } from "@/lib/impersonate/support";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { VERSAO_DOS_TERMOS } from "@/lib/legal/versao-dos-termos";
@@ -215,6 +216,8 @@ function montarDeps(config: ConfigAsaas, admin: ReturnType<typeof createAdminCli
     asaas: criarClienteAsaas({ fetch: globalThis.fetch.bind(globalThis), config, logger }),
     config,
     logger,
+    // COB-07: o e-mail de cancelamento confirmado (só é chamado pelo cancelamento; compra ignora).
+    avisoDeCancelamento: criarAvisoDeCancelamentoSobre(admin),
   };
 }
 
