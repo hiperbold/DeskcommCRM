@@ -5,7 +5,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { AGENT_CONFIG_DEFAULTS, agentConfigSchema } from "@/lib/ai/guardrails-schema";
-import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 import { logger } from "@/lib/logger";
 
 export interface VoiceAgentConfig {
@@ -50,7 +50,7 @@ async function resolverChaveOpenAiDaVoz(
     const admin = createAdminClient();
     const { data } = await admin
       .from("ai_provider_credentials")
-      .select("api_key_encrypted, api_key_iv, api_key_tag")
+      .select("id, api_key_encrypted, api_key_iv, api_key_tag")
       .eq("organization_id", organizationId)
       .eq("provider", "openai")
       .eq("is_active", true)
@@ -61,11 +61,7 @@ async function resolverChaveOpenAiDaVoz(
 
     if (data) {
       return {
-        apiKey: decryptKey({
-          ciphertext: byteaToBuffer(data.api_key_encrypted),
-          iv: byteaToBuffer(data.api_key_iv),
-          tag: byteaToBuffer(data.api_key_tag),
-        }),
+        apiKey: decifrarColunasDaCredencial(data, organizationId),
         origemDaChave: "credencial_da_organizacao",
       };
     }

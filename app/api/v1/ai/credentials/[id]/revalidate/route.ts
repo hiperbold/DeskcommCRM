@@ -12,7 +12,7 @@ import { type NextRequest } from "next/server";
 import { ok, fail } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
-import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 import { validateProviderKey } from "@/lib/ai/provider-validators";
 import { codigoParaOrganizacao } from "@/lib/automation/destino-recusado";
 import { lerBaseUrlDaCredencial } from "@/lib/ai/credenciais/guardar";
@@ -66,11 +66,7 @@ export async function POST(
   // loadCredential — revalidate aceita credenciais ainda não validadas).
   let apiKey: string;
   try {
-    apiKey = decryptKey({
-      ciphertext: byteaToBuffer(row.api_key_encrypted),
-      iv: byteaToBuffer(row.api_key_iv),
-      tag: byteaToBuffer(row.api_key_tag),
-    });
+    apiKey = decifrarColunasDaCredencial(row, activeOrg.orgId);
   } catch (err) {
     logger.error("[ai.credentials] decifragem falhou durante a revalidação", {
       credentialId: id,

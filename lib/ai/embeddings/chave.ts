@@ -47,7 +47,7 @@
  * com que modelo foi calculada (`ai_knowledge_versions.embedding_model`).
  */
 import type { OrigemDaChaveLlm } from "@/lib/agent-engine/edge/llm/credentials";
-import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -272,7 +272,7 @@ async function decifrarCredencial(
     const admin = createAdminClient();
     const { data } = await admin
       .from("ai_provider_credentials")
-      .select("label, api_key_encrypted, api_key_iv, api_key_tag")
+      .select("id, label, api_key_encrypted, api_key_iv, api_key_tag")
       .eq("id", credentialId)
       .eq("organization_id", organizationId)
       .eq("is_active", true)
@@ -280,11 +280,7 @@ async function decifrarCredencial(
       .maybeSingle();
     if (!data) return null;
     return {
-      apiKey: decryptKey({
-        ciphertext: byteaToBuffer(data.api_key_encrypted),
-        iv: byteaToBuffer(data.api_key_iv),
-        tag: byteaToBuffer(data.api_key_tag),
-      }),
+      apiKey: decifrarColunasDaCredencial(data, organizationId),
       rotulo: String((data as { label?: string }).label ?? ""),
     };
   } catch {
@@ -327,11 +323,7 @@ async function credencialOpenAiDaOrganizacao(
     if (!primeira) return null;
 
     return {
-      apiKey: decryptKey({
-        ciphertext: byteaToBuffer(primeira.api_key_encrypted),
-        iv: byteaToBuffer(primeira.api_key_iv),
-        tag: byteaToBuffer(primeira.api_key_tag),
-      }),
+      apiKey: decifrarColunasDaCredencial(primeira, organizationId),
       rotulo: primeira.label,
       quantas: linhas.length,
     };

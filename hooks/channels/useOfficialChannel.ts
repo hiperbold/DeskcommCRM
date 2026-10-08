@@ -101,3 +101,54 @@ export function useRegistrarWebhookOficial() {
     },
   });
 }
+
+export type EstadoDoNumeroNaMeta =
+  | { disponivel: false; motivo: string }
+  | {
+      disponivel: true;
+      /** `CONNECTED`, `PENDING`... como a Meta devolve. */
+      status: string | null;
+      codeVerificationStatus: string | null;
+      displayPhoneNumber: string | null;
+      verifiedName: string | null;
+      qualityRating: string | null;
+      /** Verdadeiro no `PENDING`: verificado, mas nunca registrado. */
+      precisaRegistrar: boolean;
+    };
+
+/** O estado do número lido AO VIVO na Meta (D-174). Só admin; a rota recusa os outros. */
+export function useEstadoDoNumeroOficial(habilitado: boolean) {
+  return useQuery({
+    queryKey: ["official-channel", "numero"],
+    queryFn: async () =>
+      apiClient.get<{ data: EstadoDoNumeroNaMeta }>("/api/v1/channels/official/numero"),
+    enabled: habilitado,
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
+export interface ResultadoDoRegistroDoNumero {
+  registrado: boolean;
+  /** O PIN que o CRM gerou. Vem UMA vez, só neste retorno; `null` se o admin informou o dele. */
+  pin: string | null;
+  pinGerado: boolean;
+  codigo: string | null;
+  erro: string | null;
+}
+
+/**
+ * Registra o número `PENDING` na Meta (D-174). Como o webhook, a recusa da Meta volta como 200 com o
+ * motivo em `erro`, e a tela o mostra; por isso não há toast de erro genérico no sucesso.
+ */
+export function useRegistrarNumeroOficial() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { pin?: string }) =>
+      apiClient.post<{ data: ResultadoDoRegistroDoNumero }>("/api/v1/channels/official/registrar", input),
+    onError: showApiError,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["official-channel"] });
+    },
+  });
+}

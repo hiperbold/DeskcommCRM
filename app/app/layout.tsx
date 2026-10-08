@@ -1,7 +1,7 @@
 import { InterfaceRefresh } from "@/hooks/auth/InterfaceRefresh";
 import { redirect } from "next/navigation";
 import { cookies, headers } from "next/headers";
-import { isMfaEnrolled, loadAuthUser, requiresMfa, resolveActiveOrg } from "@/lib/auth/server";
+import { isMfaEnrolled, loadAuthUser, requiresMfa, resolveActiveOrg, sessionAal } from "@/lib/auth/server";
 import { DEFAULT_VISIBILITY_MODE, roleAtLeast, type VisibilityMode } from "@/lib/auth/types";
 import { clientePelaAgendaLigado } from "@/lib/schemas/settings";
 import { AuthProvider } from "@/hooks/auth/AuthProvider";
@@ -208,6 +208,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ]);
     enrolled = isEnrolled;
     needsMfaGate = mfaRequired;
+  }
+
+  // D-092: quem TEM fator verificado precisa tê-lo provado nesta sessão. O gate acima é de
+  // CADASTRO (`enrolled`), nunca do nível da sessão: sem esta conferência, a sessão aal1 (só a senha)
+  // de um admin com TOTP renderizava toda tela de `/app`. O nível vem do JWT (leitura local, sem
+  // consulta). Nível ilegível conta como dívida: quem decide acesso falha fechado. O caminho de volta
+  // só aceita `/app...`, porque o cabeçalho que o carrega não é fonte de destino confiável.
+  if (enrolled && (await sessionAal()) !== "aal2") {
+    const caminho = await caminhoDaRequisicao();
+    const volta = /^\/app(\/\S*)?$/.test(caminho) ? caminho : "/app";
+    redirect(`/login/mfa?next=${encodeURIComponent(volta)}`);
   }
 
   // Read sidebar collapsed state SSR to avoid flash.

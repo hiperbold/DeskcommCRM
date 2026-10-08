@@ -6,7 +6,7 @@
  * ou enviado pra Sentry. Caller é responsável por descartar a referência ao
  * término da request.
  */
-import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 import type { ProvedorComChave } from "@/lib/ai/pontos/provedores";
@@ -92,11 +92,7 @@ export async function loadCredential(
 
   let apiKey: string;
   try {
-    apiKey = decryptKey({
-      ciphertext: byteaToBuffer(data.api_key_encrypted),
-      iv: byteaToBuffer(data.api_key_iv),
-      tag: byteaToBuffer(data.api_key_tag),
-    });
+    apiKey = decifrarColunasDaCredencial(data, organizationId);
   } catch (err) {
     throw new CredentialUnavailableError(
       "decrypt_failed",

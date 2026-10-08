@@ -34,7 +34,7 @@
  * default.
  */
 import { allowlistedFetch, buildAllowlist } from "@/lib/agent-engine/edge/egress";
-import { byteaToBuffer, decryptKey } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -104,7 +104,7 @@ export async function chaveDaOrganizacao(organizationId: string, ponto: string):
 
     const { data, error } = await admin
       .from("ai_provider_credentials")
-      .select("api_key_encrypted, api_key_iv, api_key_tag")
+      .select("id, api_key_encrypted, api_key_iv, api_key_tag")
       .eq("organization_id", organizationId)
       .eq("provider", PROVEDOR_DO_JEV)
       .eq("is_active", true)
@@ -114,11 +114,7 @@ export async function chaveDaOrganizacao(organizationId: string, ponto: string):
       .maybeSingle();
     if (error) throw error;
     if (!data) return null;
-    return decryptKey({
-      ciphertext: byteaToBuffer(data.api_key_encrypted),
-      iv: byteaToBuffer(data.api_key_iv),
-      tag: byteaToBuffer(data.api_key_tag),
-    });
+    return decifrarColunasDaCredencial(data, organizationId);
   } catch (erro) {
     logger.warn("chave do Jev não pôde ser lida; seguindo pelo caminho de sempre", {
       organizationId,

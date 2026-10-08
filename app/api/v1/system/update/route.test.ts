@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({ insertError: { code: "", message: "" }, audit:
 vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: async () => null }));
 vi.mock("@/lib/auth/server", () => ({
   loadAuthUser: async () => ({ id: "owner", is_platform_admin: true }),
+  // D-092: a rota pergunta pela MFA da sessão; aqui ela está em dia.
+  mfaEmDivida: async () => false,
 }));
 vi.mock("@/lib/audit", () => ({ audit: mocks.audit }));
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn() } }));

@@ -10,7 +10,7 @@ import type { NextRequest } from "next/server";
 
 import { fail, ok } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
-import { loadAuthUser } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida } from "@/lib/auth/server";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isRunStale } from "@/lib/system/update-run";
@@ -29,6 +29,11 @@ export async function POST(_req: NextRequest): Promise<Response> {
   if (!user) return fail("unauthenticated", "Faça login para continuar.", 401);
   if (!user.is_platform_admin) {
     return fail("forbidden", "Só o dono do servidor pode atualizar o sistema.", 403);
+  }
+  // D-092: disparar a atualização do servidor é a ação mais pesada do produto; a sessão aal1 de quem
+  // tem fator cadastrado (senha vazada) não a aciona.
+  if (await mfaEmDivida()) {
+    return fail("mfa_required", "Esta sessão precisa da verificação em duas etapas. Entre novamente com o código do aplicativo.", 403);
   }
 
   const db = createAdminClient();

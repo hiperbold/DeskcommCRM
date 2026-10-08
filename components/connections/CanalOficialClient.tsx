@@ -17,6 +17,7 @@ import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useT } from "@/hooks/i18n/useT";
 import { ChannelAiAccess } from "./ChannelAiAccess";
+import { NumeroOficialCard } from "./NumeroOficialCard";
 import { ParaIntegrar } from "./ParaIntegrar";
 
 /** Campo somente-leitura com botão de copiar — o que o operador cola na Meta. */
@@ -115,6 +116,7 @@ export function CanalOficialClient({
           </p>
         </Card>
       ) : null}
+      {estado?.connected ? <NumeroOficialCard /> : null}
       {estado?.channel_session_id && <ChannelAiAccess channelId={estado.channel_session_id} />}
 
       {estado?.webhook ? (

@@ -59,6 +59,8 @@ vi.mock("@/lib/auth/server", () => ({
   requireAuth: async () => ({ id: "user-1", idioma: "pt-BR", is_platform_admin: false, support: estado.support }),
   resolveActiveOrg: async () => ({ orgId: "org-1", role: "admin", interface_settings: null }),
   isMfaEnrolled: async () => true,
+  // D-092: quem tem fator precisa tê-lo provado; aqui a sessão está em aal2.
+  sessionAal: async () => "aal2",
   requiresMfa: async () => false,
 }));
 vi.mock("@/lib/auth/vinculo-revogado", () => ({ acessoFoiRevogado: async () => false }));

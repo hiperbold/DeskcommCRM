@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
-import { loadAuthUser, resolveActiveOrg } from "@/lib/auth/server";
+import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Role } from "@/lib/auth/types";
@@ -36,6 +36,9 @@ async function ensureAdmin(): Promise<AdminGuard> {
   if (ROLE_RANK[activeOrg.role] < ROLE_RANK.admin) {
     return { kind: "fail", result: { ok: false, error: "forbidden_role" } };
   }
+  // D-092: a action escreve com service role, então a RLS não vê o nível da sessão. Quem tem fator
+  // cadastrado precisa tê-lo provado (aal2), como nas rotas com `requireRole`.
+  if (await mfaEmDivida()) return { kind: "fail", result: { ok: false, error: "mfa_required" } };
   return { kind: "ok", authUser, activeOrg };
 }
 

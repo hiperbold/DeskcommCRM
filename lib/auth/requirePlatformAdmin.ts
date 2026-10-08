@@ -53,11 +53,18 @@ export async function requirePlatformAdmin(): Promise<PlatformAdminContext> {
     redirect("/admin/forbidden");
   }
 
-  if (paRow.mfa_required) {
-    const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aalData?.currentLevel !== "aal2") {
-      redirect("/login/mfa?next=/admin");
+  // D-092: `mfa_required` decide o CADASTRO obrigatório, não a prova da sessão. Quem TEM fator
+  // verificado prova sempre (mesma regra de `mfaEmDivida`), e a leitura dos fatores que falha lança:
+  // quem decide acesso não trata leitura que não aconteceu como "sem fator".
+  const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (aalData?.currentLevel !== "aal2") {
+    let exige = paRow.mfa_required;
+    if (!exige) {
+      const { data: fatores, error: erroFatores } = await supabase.auth.mfa.listFactors();
+      if (erroFatores) throw erroFatores;
+      exige = !!fatores?.totp?.some((f) => f.status === "verified");
     }
+    if (exige) redirect("/login/mfa?next=/admin");
   }
 
   return {

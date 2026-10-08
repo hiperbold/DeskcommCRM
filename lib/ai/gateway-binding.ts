@@ -28,7 +28,7 @@ import type { LanguageModel } from "ai";
 
 import { DEEPSEEK_ENDPOINT, REQUESTY_ENDPOINT } from "@/lib/agent-engine/edge/llm/providers";
 import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
-import { decryptKey, byteaToBuffer } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -462,7 +462,7 @@ async function credencialDaOrganizacao(
     // obrigatório (CLAUDE.md, anti-pattern 10).
     const { data } = await admin
       .from("ai_provider_credentials")
-      .select("api_key_encrypted, api_key_iv, api_key_tag")
+      .select("id, api_key_encrypted, api_key_iv, api_key_tag")
       .eq("organization_id", organizationId)
       .eq("provider", provider)
       .eq("is_active", true)
@@ -474,11 +474,7 @@ async function credencialDaOrganizacao(
 
     return {
       provider,
-      apiKey: decryptKey({
-        ciphertext: byteaToBuffer(data.api_key_encrypted),
-        iv: byteaToBuffer(data.api_key_iv),
-        tag: byteaToBuffer(data.api_key_tag),
-      }),
+      apiKey: decifrarColunasDaCredencial(data, organizationId),
     };
   } catch (erro) {
     // Falha FECHADA na ação (segue para a chave da instalação) e ABERTA na
@@ -505,18 +501,14 @@ async function decifrarChave(
     const admin = createAdminClient();
     const { data } = await admin
       .from("ai_provider_credentials")
-      .select("api_key_encrypted, api_key_iv, api_key_tag")
+      .select("id, api_key_encrypted, api_key_iv, api_key_tag")
       .eq("id", credentialId)
       .eq("organization_id", organizationId)
       .eq("is_active", true)
       .not("validated_at", "is", null)
       .maybeSingle();
     if (!data) return null;
-    return decryptKey({
-      ciphertext: byteaToBuffer(data.api_key_encrypted),
-      iv: byteaToBuffer(data.api_key_iv),
-      tag: byteaToBuffer(data.api_key_tag),
-    });
+    return decifrarColunasDaCredencial(data, organizationId);
   } catch (erro) {
     // Mesma regra do catch acima: fecha a ação, abre a informação, e o log leva
     // só a classe do erro.

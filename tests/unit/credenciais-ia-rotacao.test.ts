@@ -19,7 +19,7 @@ import { PATCH } from "@/app/api/v1/ai/credentials/[id]/route";
 import { requireRole } from "@/lib/auth/require-role";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { audit } from "@/lib/audit";
-import { decryptKey, byteaToBuffer } from "@/lib/crypto/aes_gcm";
+import { decifrarColunasDaCredencial } from "@/lib/ai/credenciais/cifra";
 
 vi.mock("@/lib/auth/require-role", () => ({ requireRole: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: vi.fn() }));
@@ -136,13 +136,15 @@ describe("PATCH /api/v1/ai/credentials/:id", () => {
     expect(patch.validation_error).toBeNull();
     expect(patch.models_available).toBeNull();
 
-    // A chave que o agente vai usar é a nova: o round-trip real prova.
-    const decifrada = decryptKey({
-      ciphertext: byteaToBuffer(patch.api_key_encrypted),
-      iv: byteaToBuffer(patch.api_key_iv),
-      tag: byteaToBuffer(patch.api_key_tag),
-    });
-    expect(decifrada).toBe(CHAVE_NOVA);
+    // A chave que o agente vai usar é a nova: o round-trip real prova. D-168: a cifra nasce ligada à
+    // organização e à linha, então só decifra com elas (e a mesma cifra numa outra linha não decifra).
+    const colunas = {
+      api_key_encrypted: patch.api_key_encrypted,
+      api_key_iv: patch.api_key_iv,
+      api_key_tag: patch.api_key_tag,
+    };
+    expect(decifrarColunasDaCredencial({ id, ...colunas }, org)).toBe(CHAVE_NOVA);
+    expect(() => decifrarColunasDaCredencial({ id: "outra-linha", ...colunas }, org)).toThrow();
 
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({

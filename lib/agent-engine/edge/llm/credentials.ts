@@ -18,7 +18,7 @@
 import type pg from 'pg';
 import { z } from 'zod';
 
-import { byteaToBuffer, decryptKey } from '@/lib/crypto/aes_gcm';
+import { decifrarColunasDaCredencial } from '@/lib/ai/credenciais/cifra';
 import {
   LIMIAR_PADRAO_PCT,
   normalizarChaveDeOrcamento,
@@ -391,11 +391,7 @@ export async function resolveOrgLlmConfig(
   let origemDaChave: OrigemDaChaveLlm;
   const cred = credRows[0];
   if (cred !== undefined) {
-    apiKey = decryptKey({
-      ciphertext: byteaToBuffer(cred.api_key_encrypted),
-      iv: byteaToBuffer(cred.api_key_iv),
-      tag: byteaToBuffer(cred.api_key_tag),
-    });
+    apiKey = decifrarColunasDaCredencial(cred, organizationId);
     origemDaChave = 'credencial_da_organizacao';
   } else if (provider === 'anthropic' && cfg.anthropicApiKey) {
     apiKey = cfg.anthropicApiKey;

@@ -18,8 +18,11 @@
  * porque a rota responde JSON com `requestId` e a Server Action responde para
  * uma tela em português.
  */
+import { randomUUID } from "node:crypto";
+
 import { audit } from "@/lib/audit";
 import { bufToBytea, encryptKey } from "@/lib/crypto/aes_gcm";
+import { aadDaCredencialDeIa } from "@/lib/ai/credenciais/cifra";
 import type { ProvedorComChave } from "@/lib/ai/pontos/provedores";
 import { validateProviderKey } from "@/lib/ai/provider-validators";
 import { codigoParaOrganizacao } from "@/lib/automation/destino-recusado";
@@ -74,9 +77,13 @@ export interface PedidoDeGuardar {
  * usarem a MESMA cifragem: uma segunda chamada a `encryptKey` com parâmetros
  * diferentes (ou, pior, um caminho que gravasse plaintext) divergiria em
  * silêncio, e o ajuste que divergisse seria o de segurança.
+ *
+ * D-168: a cifra leva a organização e a linha como dado adicional (e a versão da chave no envelope),
+ * então uma cifra copiada para outra linha ou organização deixa de decifrar. Por isso o cadastro
+ * escolhe o `id` ANTES do insert, e a rotação regrava a linha legada na forma nova.
  */
-function colunasCifradas(apiKey: string) {
-  const encrypted = encryptKey(apiKey);
+function colunasCifradas(apiKey: string, organizationId: string, credentialId: string) {
+  const encrypted = encryptKey(apiKey, { aad: aadDaCredencialDeIa(organizationId, credentialId) });
   return {
     api_key_encrypted: bufToBytea(encrypted.ciphertext),
     api_key_iv: bufToBytea(encrypted.iv),
@@ -87,9 +94,10 @@ function colunasCifradas(apiKey: string) {
 }
 
 export async function guardarCredencial(p: PedidoDeGuardar): Promise<ResultadoDeGuardar> {
+  const id = randomUUID();
   let cifrada: ReturnType<typeof colunasCifradas>;
   try {
-    cifrada = colunasCifradas(p.apiKey);
+    cifrada = colunasCifradas(p.apiKey, p.orgId, id);
   } catch (err) {
     // Sem `console.error` com a chave por perto: o que interessa é que falhou.
     return { ok: false, motivo: "cifragem", detalhe: err instanceof Error ? err.message : undefined };
@@ -98,6 +106,7 @@ export async function guardarCredencial(p: PedidoDeGuardar): Promise<ResultadoDe
   const { data: created, error } = await p.admin
     .from("ai_provider_credentials")
     .insert({
+      id,
       organization_id: p.orgId,
       provider: p.provider,
       label: p.label,
@@ -116,8 +125,6 @@ export async function guardarCredencial(p: PedidoDeGuardar): Promise<ResultadoDe
     if (error?.code === "23505") return { ok: false, motivo: "label_em_uso" };
     return { ok: false, motivo: "banco", detalhe: error?.message };
   }
-
-  const id = created.id as string;
 
   await audit({
     action: "ai.credential_created",
@@ -174,7 +181,7 @@ export async function rotacionarCredencial(
   if (p.apiKey !== undefined) {
     let cifrada: ReturnType<typeof colunasCifradas>;
     try {
-      cifrada = colunasCifradas(p.apiKey);
+      cifrada = colunasCifradas(p.apiKey, p.orgId, p.credentialId);
     } catch (err) {
       return { ok: false, motivo: "cifragem", detalhe: err instanceof Error ? err.message : undefined };
     }
