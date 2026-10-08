@@ -23,17 +23,26 @@
  * 42501. Server Action não passa por `requireRole` — ver o cabeçalho de
  * `app/actions/settings/updateMarcaDaOrganizacao.ts`.
  *
- * `redirect("/403")` e não `notFound()`: dentro do tenant, a existência desta
+ * ── O módulo `marca_por_organizacao` (D-178) ─────────────────────────────────
+ *
+ * Desligado (o padrão), esta tela NÃO EXISTE: `notFound()` antes de qualquer
+ * gate de papel, para todo papel, e a action e a rota de logo recusam também.
+ * É um interruptor da instalação em `/admin/sistema`, pensado para poder ser
+ * liberado de novo (por exemplo como vantagem de um plano) sem tocar no código.
+ *
+ * `redirect("/403")` e não `notFound()` para o PAPEL: dentro do tenant, a existência desta
  * tela não é segredo de ninguém — o `manager` sabe que a empresa tem marca, só
  * não é ele quem a troca. Mesma escolha de `settings/tenant/page.tsx`.
  */
-import { redirect } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
 import { marcaDaInstalacao } from "@/lib/branding/instalacao";
 import { marcaDaOrganizacaoDeSettings } from "@/lib/branding/organizacao";
 import { env } from "@/lib/env";
+import { moduloLigado } from "@/lib/instalacao/modulos";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { traduzir } from "@/lib/i18n/dicionario";
 
@@ -43,6 +52,8 @@ export const metadata = { title: "Marca" };
 export const dynamic = "force-dynamic";
 
 export default async function MarcaDaOrganizacaoPage() {
+  if (!(await moduloLigado(createAdminClient(), "marca_por_organizacao"))) notFound();
+
   const user = await requireAuth();
   const activeOrg = await resolveActiveOrg(user);
   if (!activeOrg) redirect("/app");

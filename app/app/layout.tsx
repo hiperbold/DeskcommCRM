@@ -155,6 +155,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       orgRow?.settings ?? null,
       await marcaDaInstalacao(),
       env,
+      // D-178: desligado, a marca gravada pela organização não é aplicada. A lista
+      // de módulos já foi lida acima, então isto não custa consulta.
+      modulos.includes("marca_por_organizacao"),
     );
 
     // SÓ quando a cor veio mesmo da organização. Se ela não configurou nada, a

@@ -74,6 +74,7 @@ import * as zlib from "node:zlib";
 
 import { test, expect, type Page, type Browser, type Locator } from "./helpers/test";
 
+import { desligarModuloNoE2e, ligarModuloNoE2e } from "./helpers/modulo-da-instalacao";
 import { generateTotp, msUntilNextTotpWindow } from "./utils/totp";
 import { TAMANHO_MAXIMO_DO_LOGO } from "@/lib/branding/logo";
 import { lerPng, montarPng, ruidoQuantizado } from "../helpers/png-sintetico";
@@ -676,6 +677,14 @@ test.describe("o logo subido pela tela chega à tela", () => {
    */
   test.setTimeout(180_000);
 
+  // D-178: a tela `/app/settings/marca` só existe com o módulo
+  // `marca_por_organizacao` ligado na instalação (nasce desligado). Esta spec
+  // mede justamente a camada da empresa, então liga o módulo aqui e o devolve ao
+  // padrão no `afterAll`, DEPOIS da limpeza que ainda abre a tela.
+  test.beforeAll(async () => {
+    await ligarModuloNoE2e("marca_por_organizacao", creds.users.dono!.id);
+  });
+
   test("(1) o dono do servidor sobe o logo e ele aparece na barra lateral", async ({ page }) => {
     // ESTE CASO NÃO USA `subirLogoDaCamada`, de propósito: a subida é o que ele
     // MEDE, e a ordem na FONTE importa — `tests/unit/marca-logo-spec-ancora-a-rota.test.ts`
@@ -1124,6 +1133,7 @@ test.describe("o logo subido pela tela chega à tela", () => {
       await removerLogoSeHouver(pagina, "/admin/marca", "instalacao");
     } finally {
       await contexto.close();
+      await desligarModuloNoE2e("marca_por_organizacao");
     }
   });
 });

@@ -74,6 +74,7 @@ describe("camadaDaOrganizacao — o que a fábrica declara e o que ela cala", ()
       { branding: { app_name: "Loja da Ana" } },
       INSTALACAO,
       AMBIENTE,
+      true,
     );
     expect(marca.origens.logoUrl).not.toBe("organizacao");
   });
@@ -92,6 +93,7 @@ describe("precedência entre os três andares", () => {
       { branding: { accent_hex: "#b3261e" } },
       INSTALACAO,
       AMBIENTE,
+      true,
     );
     expect(marca.origens.cor).toBe("organizacao");
     expect(marca.cor?.semente).toBe("#b3261e");
@@ -106,6 +108,7 @@ describe("precedência entre os três andares", () => {
       { branding: { app_name: "Loja da Ana" } },
       INSTALACAO,
       AMBIENTE,
+      true,
     );
     expect(marca.name).toBe("Loja da Ana");
     expect(marca.origens.nome).toBe("organizacao");
@@ -124,7 +127,7 @@ describe("precedência entre os três andares", () => {
       { branding: { app_name: "Loja da Ana", accent_hex: null } },
       { branding: { app_name: "Loja da Ana", accent_hex: "  " } },
     ]) {
-      const marca = resolverMarcaDaOrganizacao(settings, INSTALACAO, AMBIENTE);
+      const marca = resolverMarcaDaOrganizacao(settings, INSTALACAO, AMBIENTE, true);
       expect(marca.origens.cor, JSON.stringify(settings)).toBe("banco");
       expect(
         marca.motivos.filter((m) => m.origem === "organizacao"),
@@ -143,6 +146,7 @@ describe("precedência entre os três andares", () => {
       { branding: { accent_hex: "vermelho" } },
       INSTALACAO,
       AMBIENTE,
+      true,
     );
     expect(marca.origens.cor).toBe("banco");
     expect(marca.cor?.semente).toBe("#2563eb");
@@ -153,7 +157,7 @@ describe("precedência entre os três andares", () => {
   });
 
   it("sem organização e sem instalação, sobra o `.env` — a pilha inteira desce", () => {
-    const marca = resolverMarcaDaOrganizacao(null, null, AMBIENTE);
+    const marca = resolverMarcaDaOrganizacao(null, null, AMBIENTE, true);
     expect(marca.origens).toEqual({ nome: "env", logoUrl: "padrao", cor: "env" });
     expect(marca.cor?.semente).toBe("#123456");
   });
@@ -166,13 +170,14 @@ describe("precedência entre os três andares", () => {
       { branding: { app_name: "Loja da Ana", accent_hex: "#b3261e" } },
       INSTALACAO,
       AMBIENTE,
+      true,
     );
     expect(tudo.origens).toEqual({ nome: "organizacao", logoUrl: "banco", cor: "organizacao" });
     expect(tudo.name).toBe("Loja da Ana");
     expect(tudo.cor?.semente).toBe("#b3261e");
 
     // Tirando o andar de cima, quem assume é o do meio — e não o de baixo.
-    const semOrg = resolverMarcaDaOrganizacao(null, INSTALACAO, AMBIENTE);
+    const semOrg = resolverMarcaDaOrganizacao(null, INSTALACAO, AMBIENTE, true);
     expect(semOrg.origens).toEqual({ nome: "banco", logoUrl: "banco", cor: "banco" });
     expect(semOrg.cor?.semente).toBe("#2563eb");
   });

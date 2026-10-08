@@ -13465,6 +13465,13 @@ export const DICIONARIO: Traducoes = {
   "Respostas dos roteiros de atendimento": { es: "Respuestas de los guiones de atención" },
   "não respondido": { es: "no respondido" },
   "Ligado, cada empresa pode montar roteiros de perguntas que a IA conduz durante a conversa (nome, CPF, interesse…), e as respostas aparecem na ficha do cliente. Desligado, a tela, o menu e o roteiro no atendimento da IA somem.": { es: "Activado, cada empresa puede armar guiones de preguntas que la IA conduce durante la conversación (nombre, CPF, interés…), y las respuestas aparecen en la ficha del cliente. Desactivado, la pantalla, el menú y el guion en la atención de la IA desaparecen." },
+  "Marca própria de cada empresa": { es: "Marca propia de cada empresa" },
+  "Ligado, o administrador de cada empresa pode trocar o nome, a cor e o logo que a empresa dele mostra dentro do sistema (Configurações, Marca). Desligado, o sistema mostra sempre a marca da instalação: a tela some, a gravação é recusada e o que cada empresa já tinha salvo não é aplicado (continua guardado e volta se você religar).": {
+    es: "Activado, el administrador de cada empresa puede cambiar el nombre, el color y el logo que su empresa muestra dentro del sistema (Configuración, Marca). Desactivado, el sistema muestra siempre la marca de la instalación: la pantalla desaparece, el guardado se rechaza y lo que cada empresa ya tenía guardado no se aplica (sigue guardado y vuelve si lo reactivas).",
+  },
+  "A marca própria de cada empresa está desligada nesta instalação.": {
+    es: "La marca propia de cada empresa está desactivada en esta instalación.",
+  },
   "Recurso não encontrado.": { es: "Recurso no encontrado." },
   // ─── C-076: Comandos pelo celular (#on/#off) ───
   "Comandos pelo celular": { es: "Comandos desde el celular" },

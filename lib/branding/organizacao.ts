@@ -95,18 +95,26 @@ export function marcaDaOrganizacaoDeSettings(settings: unknown): MarcaDaOrganiza
  * definiu só a cor continua com o nome E o logo do revendedor. Desde a onda do
  * upload, a camada da organização TAMBÉM fala de logo — e continua sendo por
  * campo: `logo_path` ausente desce para a instalação, não a apaga.
+ *
+ * `personalizacaoLigada` é o módulo `marca_por_organizacao` da instalação
+ * (`lib/instalacao/modulos.ts`, D-178). Desligado, a camada da organização NÃO
+ * ENTRA na pilha: o que ficou gravado em `settings.branding` continua no banco,
+ * mas nenhuma superfície o aplica, e religar o módulo o devolve intacto. Sem
+ * valor padrão de propósito: um chamador novo que esquecesse de perguntar ao
+ * módulo voltaria a aplicar a marca do cliente sem ninguém ter decidido isso, e
+ * o compilador é quem avisa.
  */
 export function resolverMarcaDaOrganizacao(
   settings: unknown,
   linha: LinhaDaInstalacao | null,
   ambiente: AmbienteDaMarca,
+  personalizacaoLigada: boolean,
 ): MarcaResolvida {
+  const base = [camadaDaInstalacao(linha), camadaDoAmbiente(ambiente)];
   return resolverMarca(
-    [
-      camadaDaOrganizacao(marcaDaOrganizacaoDeSettings(settings)),
-      camadaDaInstalacao(linha),
-      camadaDoAmbiente(ambiente),
-    ],
+    personalizacaoLigada
+      ? [camadaDaOrganizacao(marcaDaOrganizacaoDeSettings(settings)), ...base]
+      : base,
     REGUA_DO_PRODUTO,
   );
 }

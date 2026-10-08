@@ -861,6 +861,8 @@ export const NAV_CATALOG = [
     // identidade da empresa, e dá-lo a `manager` o colocaria abaixo de billing e
     // de API tokens na mesma prancheta.
     minRole: "admin",
+    // D-178: só existe quando a instalação liga a personalização por empresa.
+    modulo: "marca_por_organizacao",
     // SEM `sidebar`: fica só no hub. Trocar a marca é tarefa de uma vez, e
     // agrupar o menu já o fez crescer — duas telas a mais estouraram a dobra em
     // 900px, medido pelo e2e `navegacao.spec.ts`.

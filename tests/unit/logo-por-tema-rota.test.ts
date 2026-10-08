@@ -32,6 +32,12 @@ vi.mock("@/lib/supabase/admin", () => ({
     rpc: mocks.rpc,
     from: () => ({
       select: () => ({
+        // A leitura do módulo da instalação (D-178): estes casos são da rota com a
+        // personalização por empresa LIGADA; o caso desligado está em `route.test.ts`.
+        in: async () => ({
+          data: [{ chave: "MODULO_MARCA_POR_ORGANIZACAO", valor: "ligado" }],
+          error: null,
+        }),
         eq: (...args: unknown[]) => {
           mocks.eq(...args);
           return { maybeSingle: async () => ({ data: { settings: { branding: {} } } }) };

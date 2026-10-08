@@ -13,6 +13,7 @@ import {
   marcaDaOrganizacaoSchema,
   type MarcaDaOrganizacaoInput,
 } from "@/lib/schemas/settings";
+import { moduloLigado } from "@/lib/instalacao/modulos";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export type UpdateMarcaDaOrganizacaoResult =
@@ -25,6 +26,7 @@ export type UpdateMarcaDaOrganizacaoResult =
         | "forbidden_tenant"
         | "forbidden_role"
         | "mfa_required"
+        | "modulo_desligado"
         | "nao_gravou"
         | "db_error";
       details?: unknown;
@@ -105,6 +107,14 @@ export async function updateMarcaDaOrganizacao(
   // seja o papel): a ordem é o que faz cada código dizer a coisa certa.
   const portao = await portaoDeAdminDaOrganizacao(authUser, activeOrg);
   if (!portao.ok) return { ok: false, error: portao.erro };
+
+  // D-178: a personalização por empresa é um módulo da INSTALAÇÃO, desligado por
+  // padrão. Esconder a tela não basta: a action é invocável por POST direto, e
+  // sem esta recusa um admin de empresa gravaria uma marca que o módulo desligado
+  // diz que não existe. O banco guarda o estado; a recusa mora aqui, no servidor.
+  if (!(await moduloLigado(createAdminClient(), "marca_por_organizacao"))) {
+    return { ok: false, error: "modulo_desligado" };
+  }
 
   const hdrs = await headers();
   const requestId = hdrs.get("x-request-id");

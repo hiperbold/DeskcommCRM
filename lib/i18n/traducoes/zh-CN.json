@@ -5457,5 +5457,8 @@
   "Faltam {dias} dias para o fim do seu plano {plano}": "距离您的 {plano} 套餐结束还剩 {dias} 天",
   "O acesso vai até {data} e este plano não renova sozinho: nada é cobrado sem a sua confirmação. Para continuar sem interrupção, faça uma nova compra em Plano e uso. Você escolhe como pagar: à vista no cartão (com renovação automática) ou no Pix, e, nos planos semestral e anual, parcelado no cartão.": "您可以使用至 {data}，此套餐不会自动续订：未经您确认，不会产生任何扣款。如需不间断使用，请在“套餐与用量”中重新购买。您可以选择付款方式：信用卡一次性付款（自动续订）或 Pix；半年和年度套餐还可使用信用卡分期付款。",
   "Renovar meu plano": "续订我的套餐",
-  "Ou copie e cole este link no navegador:": "或将此链接复制并粘贴到浏览器中："
+  "Ou copie e cole este link no navegador:": "或将此链接复制并粘贴到浏览器中：",
+  "Marca própria de cada empresa": "各公司专属品牌",
+  "Ligado, o administrador de cada empresa pode trocar o nome, a cor e o logo que a empresa dele mostra dentro do sistema (Configurações, Marca). Desligado, o sistema mostra sempre a marca da instalação: a tela some, a gravação é recusada e o que cada empresa já tinha salvo não é aplicado (continua guardado e volta se você religar).": "开启后，每家公司的管理员可以更改本公司在系统内显示的名称、颜色和标志（设置，品牌）。关闭后，系统始终显示本安装的品牌：该页面消失，保存会被拒绝，各公司已保存的内容不会生效（仍会保留，重新开启后恢复）。",
+  "A marca própria de cada empresa está desligada nesta instalação.": "本安装已关闭各公司专属品牌功能。"
 }

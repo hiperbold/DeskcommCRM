@@ -73,6 +73,7 @@ import {
 import { extensaoDe, farejarTipo, pareceSvg, podeApagar } from "@/lib/branding/logo-arquivo";
 import { marcaDaOrganizacaoDeSettings } from "@/lib/branding/organizacao";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
+import { moduloLigado } from "@/lib/instalacao/modulos";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -163,6 +164,18 @@ async function abrirContexto(escopo: Escopo): Promise<{ ctx: Contexto } | { recu
   if (!org) {
     return {
       recusa: { codigo: "forbidden_tenant", mensagem: "Sem organização ativa.", status: 403 },
+    };
+  }
+  // D-178: a marca por empresa é um módulo da instalação, desligado por padrão.
+  // Vale para subir E para remover: com o módulo desligado nada do que a empresa
+  // gravou é aplicado, então não há o que trocar nem o que limpar por aqui.
+  if (!(await moduloLigado(createAdminClient(), "marca_por_organizacao"))) {
+    return {
+      recusa: {
+        codigo: "modulo_desligado",
+        mensagem: "A marca própria de cada empresa está desligada nesta instalação.",
+        status: 403,
+      },
     };
   }
   if (!user.is_platform_admin && !roleAtLeast(org.role, "admin")) {

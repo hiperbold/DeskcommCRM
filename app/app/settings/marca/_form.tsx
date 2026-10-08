@@ -87,6 +87,7 @@ const ERRO_EM_PORTUGUES: Record<string, string> = {
   // gravação não casou nenhuma linha, e a tela dizer "salvo" quando nada foi
   // gravado é a forma exata do defeito que a função SQL veio fechar.
   nao_gravou: "A alteração não chegou ao banco — nada foi mudado. Tente de novo.",
+  modulo_desligado: "A marca própria de cada empresa está desligada nesta instalação.",
 };
 
 const CLASSE_DO_TOM: Record<Tom, string> = {

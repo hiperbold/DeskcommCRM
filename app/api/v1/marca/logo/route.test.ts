@@ -68,7 +68,12 @@ function arquivoPng(): File {
  * tocados, e simula sucesso em tudo. É ele que prova a ASSERÇÃO CENTRAL: para
  * `escopo=organizacao`, `platform_branding` nunca aparece em `fromChamadas`.
  */
-function criarAdminEspiao(logoAnteriorDaOrganizacao: string | null = null) {
+function criarAdminEspiao(
+  logoAnteriorDaOrganizacao: string | null = null,
+  // D-178: o módulo `marca_por_organizacao` da instalação. É DADO em
+  // `platform_config`, lido pelo código real de `lib/instalacao/modulos.ts`.
+  moduloLigado = true,
+) {
   const fromChamadas: string[] = [];
   const rpcChamadas: Array<{ nome: string; args: unknown }> = [];
   const removeChamadas: string[] = [];
@@ -87,6 +92,13 @@ function criarAdminEspiao(logoAnteriorDaOrganizacao: string | null = null) {
         select: () => builder,
         eq: () => builder,
         maybeSingle: async () => ({ data: linha, error: null }),
+        in: async () => ({
+          data:
+            tabela === "platform_config" && moduloLigado
+              ? [{ chave: "MODULO_MARCA_POR_ORGANIZACAO", valor: "ligado" }]
+              : [],
+          error: null,
+        }),
         upsert: async () => ({ error: null }),
       };
       return builder;
@@ -269,5 +281,62 @@ describe("escopo=instalacao — só o dono do servidor alcança, e a organizaç�
       "escopo=instalacao chamou .from() na tabela da ORGANIZAÇÃO",
     ).not.toContain("organizations");
     expect(espiao.rpcChamadas).toHaveLength(0);
+  });
+});
+
+describe("escopo=organizacao com o módulo marca_por_organizacao DESLIGADO (D-178)", () => {
+  it("upload é recusado com 403 antes de subir arquivo ou chamar o banco de marca", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValue(usuarioAdminDeOrganizacao());
+    const espiao = criarAdminEspiao(null, false);
+    vi.mocked(createAdminClient).mockReturnValue(espiao.client as never);
+
+    const form = new FormData();
+    form.set("escopo", "organizacao");
+    form.set("file", arquivoPng());
+
+    const { POST } = await import("./route");
+    const res = await POST(
+      new NextRequest("http://localhost/api/v1/marca/logo", { method: "POST", body: form }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: { code: "modulo_desligado" } });
+    expect(espiao.rpcChamadas).toHaveLength(0);
+    expect(espiao.removeChamadas).toHaveLength(0);
+    expect(espiao.fromChamadas).not.toContain("organizations");
+    expect(espiao.fromChamadas).not.toContain("platform_branding");
+  });
+
+  it("remover também é recusado, e nada é apagado do storage", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValue(usuarioAdminDeOrganizacao());
+    const espiao = criarAdminEspiao(LOGO_DA_ORGANIZACAO, false);
+    vi.mocked(createAdminClient).mockReturnValue(espiao.client as never);
+
+    const { DELETE } = await import("./route");
+    const res = await DELETE(
+      new NextRequest("http://localhost/api/v1/marca/logo?escopo=organizacao", { method: "DELETE" }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(espiao.rpcChamadas).toHaveLength(0);
+    expect(espiao.removeChamadas).toHaveLength(0);
+  });
+
+  it("o logo da INSTALAÇÃO continua com o dono do servidor, módulo desligado ou não", async () => {
+    vi.mocked(loadAuthUser).mockResolvedValue(usuarioDonoDoServidor());
+    const espiao = criarAdminEspiao(null, false);
+    vi.mocked(createAdminClient).mockReturnValue(espiao.client as never);
+
+    const form = new FormData();
+    form.set("escopo", "instalacao");
+    form.set("file", arquivoPng());
+
+    const { POST } = await import("./route");
+    const res = await POST(
+      new NextRequest("http://localhost/api/v1/marca/logo", { method: "POST", body: form }),
+    );
+
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(espiao.fromChamadas).toContain("platform_branding");
   });
 });

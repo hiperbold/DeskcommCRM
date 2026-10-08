@@ -675,6 +675,13 @@ const MODULOS_NA_TELA: ReadonlyArray<{ modulo: ModuloOpcional; id: string; rotul
     descricao:
       "Ligado, cada empresa pode montar roteiros de perguntas que a IA conduz durante a conversa (nome, CPF, interesse…), e as respostas aparecem na ficha do cliente. Desligado, a tela, o menu e o roteiro no atendimento da IA somem.",
   },
+  {
+    modulo: "marca_por_organizacao",
+    id: "modulo-marca-por-organizacao",
+    rotulo: "Marca própria de cada empresa",
+    descricao:
+      "Ligado, o administrador de cada empresa pode trocar o nome, a cor e o logo que a empresa dele mostra dentro do sistema (Configurações, Marca). Desligado, o sistema mostra sempre a marca da instalação: a tela some, a gravação é recusada e o que cada empresa já tinha salvo não é aplicado (continua guardado e volta se você religar).",
+  },
 ];
 
 export function FormularioDeModulos({ ligados }: { ligados: readonly ModuloOpcional[] }) {

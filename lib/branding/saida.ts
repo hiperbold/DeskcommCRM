@@ -46,6 +46,7 @@
 import { DEFAULT_APP_NAME } from "@/lib/branding";
 import { env } from "@/lib/env";
 import { valorDaInstalacao } from "@/lib/instalacao/config";
+import { moduloLigado } from "@/lib/instalacao/modulos";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -184,10 +185,15 @@ async function settingsDaOrganizacao(organizationId: string): Promise<unknown> {
 export async function marcaDaSaida(organizationId: string | null): Promise<MarcaDeSaida> {
   try {
     const linha = await marcaDaInstalacao();
+    // D-178: com a personalização por organização desligada, o e-mail e o PDF
+    // também saem com a marca da instalação, e a organização nem é consultada.
+    const comMarcaDaOrganizacao =
+      organizationId !== null &&
+      (await moduloLigado(createAdminClient(), "marca_por_organizacao"));
     const marca =
-      organizationId === null
-        ? resolverMarca([camadaDaInstalacao(linha), camadaDoAmbiente(env)], REGUA_DO_PRODUTO)
-        : resolverMarcaDaOrganizacao(await settingsDaOrganizacao(organizationId), linha, env);
+      organizationId !== null && comMarcaDaOrganizacao
+        ? resolverMarcaDaOrganizacao(await settingsDaOrganizacao(organizationId), linha, env, true)
+        : resolverMarca([camadaDaInstalacao(linha), camadaDoAmbiente(env)], REGUA_DO_PRODUTO);
 
     // `claro`, sempre — ver o cabeçalho. `derivada` é `null` quando a semente
     // não pinta (cor acromática, papel só de identidade, hex recusado): aí o

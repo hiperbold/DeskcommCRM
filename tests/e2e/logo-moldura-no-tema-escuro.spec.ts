@@ -76,6 +76,7 @@ import * as zlib from "node:zlib";
 
 import { test, expect, type Page, type Locator } from "./helpers/test";
 
+import { desligarModuloNoE2e, ligarModuloNoE2e } from "./helpers/modulo-da-instalacao";
 import { generateTotp, msUntilNextTotpWindow } from "./utils/totp";
 
 const CREDS_PATH = path.join(process.cwd(), ".e2e-creds.json");
@@ -410,6 +411,13 @@ test.describe("a moldura do logo no tema escuro", () => {
   // de teste). Ver o comentário longo em `marca-logo.spec.ts`.
   test.setTimeout(120_000);
 
+  // D-178: a prévia da tela `/app/settings/marca` só existe com o módulo
+  // `marca_por_organizacao` ligado (nasce desligado). Liga aqui, devolve no
+  // `afterAll` depois da limpeza que ainda abre essa tela.
+  test.beforeAll(async () => {
+    await ligarModuloNoE2e("marca_por_organizacao", creds.users.dono!.id);
+  });
+
   const secret = (): string => {
     const s = creds.dono_totp?.secret;
     expect(s, "sem `dono_totp` no .e2e-creds.json — rode seed-e2e-credentials.ts").toBeTruthy();
@@ -685,6 +693,7 @@ test.describe("a moldura do logo no tema escuro", () => {
       await removerLogoSeHouver(pagina, "/admin/marca", "instalacao");
     } finally {
       await contexto.close();
+      await desligarModuloNoE2e("marca_por_organizacao");
     }
   });
 });

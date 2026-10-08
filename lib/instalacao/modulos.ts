@@ -39,7 +39,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { logger } from "@/lib/logger";
 
-export const MODULOS_OPCIONAIS = ["banco_externo", "fluxos_atendimento"] as const;
+export const MODULOS_OPCIONAIS = [
+  "banco_externo",
+  "fluxos_atendimento",
+  "marca_por_organizacao",
+] as const;
 export type ModuloOpcional = (typeof MODULOS_OPCIONAIS)[number];
 
 /** A linha de cada módulo em `platform_config`. O formato é o da CHECK da 0341. */
@@ -49,6 +53,11 @@ export const CHAVE_DO_MODULO: Record<ModuloOpcional, string> = {
   // a conduzir um roteiro de perguntas no turno — quem não liga não carrega o
   // caminho novo (`lib/agent-engine/agent/roteiro-no-turno.ts`).
   fluxos_atendimento: "MODULO_FLUXOS_DE_ATENDIMENTO",
+  // D-178: o CRM mostra sempre a marca da instalação (HiperCRM, na Hiperbold). Com
+  // esta chave ligada, o admin de cada empresa volta a trocar nome, cor e logo
+  // dela em Configurações → Marca. Desligada, a tela, a gravação e o efeito do que
+  // já estava gravado somem juntos: o dado fica no banco, só não é aplicado.
+  marca_por_organizacao: "MODULO_MARCA_POR_ORGANIZACAO",
 };
 
 const LIGADO = "ligado";

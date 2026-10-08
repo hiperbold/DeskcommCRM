@@ -29,6 +29,12 @@ import { REGUA_DO_PRODUTO } from "@/lib/branding/regua-do-produto";
 let respostaDaOrganizacao: { data: unknown; error: unknown } = { data: null, error: null };
 /** Quando ligado, `createAdminClient()` explode — a simulação do banco fora. */
 let clienteExplode = false;
+/**
+ * O módulo `marca_por_organizacao` da instalação (D-178), lido de `platform_config`
+ * pelo código real. Ligado por padrão: a maioria destes casos mede a camada da
+ * organização; o bloco "módulo desligado" liga a variável para o outro lado.
+ */
+let moduloDaMarcaLigado = true;
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => {
@@ -38,6 +44,12 @@ vi.mock("@/lib/supabase/admin", () => ({
         select: () => ({
           eq: () => ({
             maybeSingle: async () => respostaDaOrganizacao,
+          }),
+          in: async () => ({
+            data: moduloDaMarcaLigado
+              ? [{ chave: "MODULO_MARCA_POR_ORGANIZACAO", valor: "ligado" }]
+              : [],
+            error: null,
           }),
         }),
       }),
@@ -74,6 +86,7 @@ async function carregar() {
 beforeEach(() => {
   respostaDaOrganizacao = { data: null, error: null };
   clienteExplode = false;
+  moduloDaMarcaLigado = true;
   linhaDaInstalacao = null;
   // A marca do OPERADOR nao pode decidir o resultado destes testes: eles
   // afirmam o piso DO PRODUTO. O mock acima cobre `marcaDaInstalacao`, mas
@@ -160,6 +173,23 @@ describe("marcaDaSaida — as duas classes", () => {
 
     const marca = await marcaDaSaida("11111111-1111-4111-8111-111111111111");
     expect(marca.nome).toBe("Vendas Turbo");
+  });
+});
+
+describe("marcaDaSaida com o módulo marca_por_organizacao DESLIGADO (D-178)", () => {
+  it("a marca gravada pela organização não sai no e-mail: vale a da instalação", async () => {
+    const { marcaDaSaida } = await carregar();
+    moduloDaMarcaLigado = false;
+    linhaDaInstalacao = { app_name: "Vendas Turbo", accent_hex: "#2563eb" };
+    respostaDaOrganizacao = {
+      data: { settings: { branding: { app_name: "Clínica Bem Viver", accent_hex: "#b3261e" } } },
+      error: null,
+    };
+
+    const marca = await marcaDaSaida("11111111-1111-4111-8111-111111111111");
+    expect(marca.nome).toBe("Vendas Turbo");
+    expect(marca.origens.nome).toBe("banco");
+    expect(marca.origens.cor).toBe("banco");
   });
 });
 
