@@ -244,7 +244,7 @@ export function AssinarPlanoPassoAPasso({
   ) : null;
 
   const tituloDoPasso = (texto: string) => (
-    <h3 ref={tituloRef} tabIndex={-1} className="text-base font-semibold outline-none" data-testid="titulo-do-passo">
+    <h3 ref={tituloRef} tabIndex={-1} className="text-base font-semibold outline-hidden" data-testid="titulo-do-passo">
       {texto}
     </h3>
   );
