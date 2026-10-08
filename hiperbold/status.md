@@ -90,7 +90,7 @@ Branch `feat/planos-assinatura`, criada de `fix/debitos-pequenos-2026-09-22` (co
 
 O que o módulo faz hoje:
 
-- Catálogo com os planos Pro (R$ 199), Max (R$ 399) e Escale (R$ 599), mais o Ilimitado. Todas as organizações estão no Ilimitado. Os três planos têm 3 milhões de tokens de IA por mês (decisão do Filipe em 23/09).
+- Catálogo com os planos Pro (R$ 199), Max (R$ 399) e Scale (R$ 599), mais o Ilimitado. Todas as organizações estão no Ilimitado. Os três planos têm 3 milhões de tokens de IA por mês (decisão do Filipe em 23/09).
 - O admin da plataforma troca o plano de uma organização e dá ajuste de limite na aba "Plano" do painel.
 - O CRM conta o uso de cada item (funis, etapas por funil, leads abertos, membros, conexões, integrações webhook) e avisa na Central quando passa do teto.
 - Carteira de tokens de IA: toda chamada paga pela chave da Hiperbold debita da carteira da organização (plano, depois adicional, depois pacote avulso), com livro-caixa que ninguém consegue alterar; avisos a 50, 80 e 100% do mês; o admin credita pacote, contrata adicional e faz ajuste; painel de margem (receita em reais contra custo em dólares, sem converter câmbio); o cliente vê saldo, estimativa de respostas e extrato na tela "Plano e uso".

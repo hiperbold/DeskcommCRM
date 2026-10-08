@@ -29,7 +29,7 @@ Parte do plano `hiperbold/planos/2026-09-22-planos-e-assinatura.md` (seção 11)
 | ilimitado | Ilimitado | não | 0 | 7 | null | null | null | null | null | null | null |
 | pro | Pro | não | 19900 | 7 | 5 | 10 | 5000 | 3 | 3 | 3 | 1000000 |
 | max | Max | não | 39900 | 7 | 10 | 15 | 50000 | 15 | 10 | 10 | 1000000 |
-| escale | Escale | não | 59900 | 7 | 25 | 20 | 100000 | 30 | 20 | 20 | 1000000 |
+| escale | Scale | não | 59900 | 7 | 25 | 20 | 100000 | 30 | 20 | 20 | 1000000 |
 
 Todos `version = 1`, `active = true`. Semeadura idempotente (`on conflict (code, version) do nothing`): o baseline roda de novo a cada atualização de produção e **não pode sobrescrever** um preço mudado depois.
 

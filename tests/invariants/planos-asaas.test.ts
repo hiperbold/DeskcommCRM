@@ -433,7 +433,7 @@ describe("0909 Tarefa 3: fn_billing_criar_pedido, as seis recusas da decisão 18
     expect(erro).toContain("billing_plano_fora_de_venda");
   });
 
-  it("billing_preco_nao_definido quando o ciclo é yearly e o plano está sem preço anual (a 0941 grava o anual de Pro, Max e Escale, então o teste anula na transação)", () => {
+  it("billing_preco_nao_definido quando o ciclo é yearly e o plano está sem preço anual (a 0941 grava o anual de Pro, Max e Scale, então o teste anula na transação)", () => {
     const erro = erroSob(
       "service_role",
       `begin;

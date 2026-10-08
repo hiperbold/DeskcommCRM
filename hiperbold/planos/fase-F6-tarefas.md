@@ -13,7 +13,7 @@ Modelos de referência: canvas https://claude.ai/artifact/5dXN2LREhJNpTpmEm3QiE2
 5. **"03 · Funil e agenda"**: da opção A (quadro de funil em quatro colunas com cartões e etiquetas).
 6. **"04 · Campanhas e resultados"**: da opção B (texto à esquerda, gráfico de linhas de leads e vendas e os três números à direita).
 7. **"Feito para" e "Não é para"**: da opção B (listas numeradas).
-8. **Tabela de valores**: da opção A (três cartões Pro, Max e Escale, com o selo "Mais escolhido" no Max).
+8. **Tabela de valores**: da opção A (três cartões Pro, Max e Scale, com o selo "Mais escolhido" no Max).
 9. **FAQ e CTA final**: da opção A (perguntas que abrem ao clicar; cartão azul "Seu WhatsApp já recebe os clientes...").
 10. **Rodapé**: da opção A.
 

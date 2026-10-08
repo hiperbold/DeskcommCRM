@@ -74,7 +74,7 @@ describe("0941: setup", () => {
 });
 
 describe("0941: os preços decididos em 29/09/2026 estão na versão ativa", () => {
-  it("semestral e anual de Pro, Max e Escale, em centavos", () => {
+  it("semestral e anual de Pro, Max e Scale, em centavos", () => {
     const linhas = sql(`select code || '|' || price_semiannual_cents || '|' || price_yearly_cents from public.billing_plans where active and code in ('pro','max','escale') order by price_monthly_cents;`).split("\n");
     expect(linhas).toEqual(["pro|104900|189900", "max|214900|379900", "escale|319900|574900"]);
   });

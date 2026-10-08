@@ -114,7 +114,7 @@ Estas são as funções essenciais. Limitar qualquer uma delas transforma uma ve
 
 ### Os três planos
 
-| Item | Pro | Max | Escale |
+| Item | Pro | Max | Scale |
 |---|---|---|---|
 | Preço mensal | R$ 199 | R$ 399 | R$ 599 |
 | Funis (pipelines) | 5 | 10 | 25 |
@@ -391,7 +391,7 @@ Enquanto o gateway não existe, o cliente compra pacote adicional falando com vo
 
 ### Respondidas pelo Filipe em 23/09/2026
 
-- **Preço mensal**: Pro R$ 199, Max R$ 399, Escale R$ 599 (pergunta 1, falta o anual).
+- **Preço mensal**: Pro R$ 199, Max R$ 399, Scale R$ 599 (pergunta 1, falta o anual).
 - **O que fica em cada plano**: todos os recursos nos três, diferença só de quantidade (pergunta 2, resolvida).
 - **Unidade de venda da IA**: tokens, 3 milhões por mês em cada plano (pergunta 8, resolvida; o número subiu de 1 para 3 milhões na N1).
 
@@ -409,7 +409,7 @@ Enquanto o gateway não existe, o cliente compra pacote adicional falando com vo
 
 ### Respondidas pelo Filipe em 29/09/2026 (artefato de perguntas)
 
-- **N8 e pergunta 1, o anual:** além do mensal, **semestral com 10% de desconto e anual com 20%**, cobrados no valor total do período, com possibilidade de parcelar no cartão. Preço sempre arredondado **para baixo** até o final 49 ou 99 mais próximo. Pela regra: Pro R$ 1.049 no semestral e R$ 1.899 no anual; Max R$ 2.149 e R$ 3.799; Escale R$ 3.199 e R$ 5.749 (conta: mensal × meses × desconto, depois o arredondamento). **Em aberto:** no Asaas o parcelado é venda parcelada, não assinatura, então o semestral e o anual parcelados não renovam sozinhos, e o dinheiro entra parcela a parcela, mês a mês; receber tudo de uma vez exige antecipação, que tem taxa e estava fora do escopo (seção 8). Falta o Filipe dizer: máximo de parcelas, quem paga a taxa do parcelamento, se liga a antecipação, e como renova no fim do período.
+- **N8 e pergunta 1, o anual:** além do mensal, **semestral com 10% de desconto e anual com 20%**, cobrados no valor total do período, com possibilidade de parcelar no cartão. Preço sempre arredondado **para baixo** até o final 49 ou 99 mais próximo. Pela regra: Pro R$ 1.049 no semestral e R$ 1.899 no anual; Max R$ 2.149 e R$ 3.799; Scale R$ 3.199 e R$ 5.749 (conta: mensal × meses × desconto, depois o arredondamento). **Em aberto:** no Asaas o parcelado é venda parcelada, não assinatura, então o semestral e o anual parcelados não renovam sozinhos, e o dinheiro entra parcela a parcela, mês a mês; receber tudo de uma vez exige antecipação, que tem taxa e estava fora do escopo (seção 8). Falta o Filipe dizer: máximo de parcelas, quem paga a taxa do parcelamento, se liga a antecipação, e como renova no fim do período.
 - **Pergunta 10, remarcação:** cobrar **o dobro do custo** do token (custo de 1 por milhão vira 2 por milhão). O cliente vê só o valor cobrado, nunca o custo.
 - **N9, pacote adicional:** seguir a recomendação: medir o custo real por atendimento e trazer duas ou três opções de pacote, com tamanho e preço, já com a remarcação de 2 vezes.
 

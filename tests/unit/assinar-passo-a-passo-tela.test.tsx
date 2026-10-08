@@ -45,7 +45,7 @@ const MAX: PlanoParaVenda = {
 };
 const ESCALE: PlanoParaVenda = {
   code: "escale",
-  name: "Escale",
+  name: "Scale",
   version: 1,
   forSale: true,
   priceMonthlyCents: 79900,
@@ -100,7 +100,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("passo 1: o plano", () => {
-  it("mostra Pro, Max e Escale lado a lado, cada um com o preço mensal e o botão Escolher", () => {
+  it("mostra Pro, Max e Scale lado a lado, cada um com o preço mensal e o botão Escolher", () => {
     tela();
 
     for (const [code, preco] of [["pro", "199,00"], ["max", "399,00"], ["escale", "799,00"]] as const) {
@@ -324,7 +324,7 @@ describe("passo 4: o resumo", () => {
     fireEvent.click(screen.getByTestId("escolher-escale"));
     continuar();
     continuar();
-    expect(screen.getByTestId("resumo-plano")).toHaveTextContent("Escale");
+    expect(screen.getByTestId("resumo-plano")).toHaveTextContent("Scale");
   });
 });
 

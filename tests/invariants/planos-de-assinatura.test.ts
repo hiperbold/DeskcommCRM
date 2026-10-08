@@ -504,7 +504,7 @@ describe("8. a semeadura rodada duas vezes não duplica nem sobrescreve preço a
           'funis', 10, 'etapas_por_funil', 15, 'leads', 50000, 'membros', 15,
           'conexoes', 10, 'integracoes_webhook', 10, 'tokens_ia_mes', 3000000
         )),
-        ('escale', 1, true, 'Escale', false, 59900, null, 7, jsonb_build_object(
+        ('escale', 1, true, 'Scale', false, 59900, null, 7, jsonb_build_object(
           'funis', 25, 'etapas_por_funil', 20, 'leads', 100000, 'membros', 30,
           'conexoes', 20, 'integracoes_webhook', 20, 'tokens_ia_mes', 3000000
         ))

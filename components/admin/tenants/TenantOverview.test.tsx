@@ -182,8 +182,8 @@ function linhaPlano(plano: { name: string; leituraFalhou: boolean }): HTMLElemen
 
 describe("TenantOverview, Plano vem do contrato, não de settings.plan", () => {
   it("mostra o nome do plano do contrato, e não organization.settings.plan", () => {
-    const badge = linhaPlano({ name: "Escale", leituraFalhou: false });
-    expect(badge).toHaveTextContent("Escale");
+    const badge = linhaPlano({ name: "Scale", leituraFalhou: false });
+    expect(badge).toHaveTextContent("Scale");
     // ORG.settings.plan é "pro": se a tela ainda lesse dali, o texto seria "pro".
     expect(badge.textContent).not.toContain("pro");
   });

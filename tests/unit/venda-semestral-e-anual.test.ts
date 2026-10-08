@@ -377,8 +377,8 @@ describe("resumoDoCiclo: total do período e economia, calculados só dos preço
     ["Pro", PRO, "yearly", 189900, 48900, 20],
     ["Max", MAX, "semiannual", 214900, 24500, 10],
     ["Max", MAX, "yearly", 379900, 98900, 20],
-    ["Escale", ESCALE, "semiannual", 319900, 39500, 10],
-    ["Escale", ESCALE, "yearly", 574900, 143900, 20],
+    ["Scale", ESCALE, "semiannual", 319900, 39500, 10],
+    ["Scale", ESCALE, "yearly", 574900, 143900, 20],
   ] as const)("%s %s: total %i, economia %i, %i%%", (_nome, plano, ciclo, total, economia, percentual) => {
     const r = resumoDoCiclo(plano, ciclo);
     expect(r).not.toBeNull();
