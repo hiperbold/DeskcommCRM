@@ -157,7 +157,7 @@ export async function lerEstadoDoNumero(input: {
   token: string;
 }): Promise<EstadoDoNumero> {
   const campos = "status,code_verification_status,display_phone_number,verified_name,quality_rating";
-  const r = await chamarGraph(`${graphBaseUrl()}/${input.phoneNumberId}?fields=${campos}`, input.token, {
+  const r = await chamarGraph(`${graphBaseUrl()}/${encodeURIComponent(input.phoneNumberId)}?fields=${campos}`, input.token, {
     method: "GET",
   });
   if ("rede" in r) return { ok: false, motivo: `rede indisponível: ${r.rede}` };
@@ -193,7 +193,7 @@ export async function registrarNumero(input: {
   if (!pinDeRegistroValido(input.pin)) {
     return { ok: false, codigo: "pin_invalido", motivo: "O PIN precisa ter exatamente seis dígitos." };
   }
-  const r = await chamarGraph(`${graphBaseUrl()}/${input.phoneNumberId}/register`, input.token, {
+  const r = await chamarGraph(`${graphBaseUrl()}/${encodeURIComponent(input.phoneNumberId)}/register`, input.token, {
     method: "POST",
     corpo: { messaging_product: "whatsapp", pin: input.pin },
   });

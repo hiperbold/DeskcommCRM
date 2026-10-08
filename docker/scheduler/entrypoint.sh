@@ -190,6 +190,11 @@ CRONS="
 # pagar, e a diferença entre nascer às 5h ou às 17h não muda nada para quem paga.
 # Barato: uma consulta por instalação, e quem não tem molde nenhum sai na hora.
 50 5 * * *|60|api/v1/cron/recurring-entries
+# O RECIFRADOR DAS CREDENCIAIS DE IA (D-168, parte 2). Uma vez ao dia, 06:30 UTC, em lote pequeno: leva a
+# chave de provedor gravada no formato antigo para o formato preso à organização e à linha. Idempotente:
+# sem nada no formato antigo vira uma varredura curta. Só depois de a resposta dizer restantes 0 e falhas 0
+# é que se liga AI_CRED_RECUSAR_LEGADO (ver o cabeçalho da rota).
+30 6 * * *|120|api/v1/cron/recifrar-credenciais-de-ia
 "
 
 # CRONTAB_PATH é ponto de injeção do teste (tests/shell/scheduler-entrypoint.test.sh).

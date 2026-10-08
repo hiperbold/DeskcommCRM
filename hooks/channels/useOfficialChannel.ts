@@ -146,6 +146,8 @@ export function useRegistrarNumeroOficial() {
   return useMutation({
     mutationFn: async (input: { pin?: string }) =>
       apiClient.post<{ data: ResultadoDoRegistroDoNumero }>("/api/v1/channels/official/registrar", input),
+    // A resposta carrega o PIN gerado: a mutação não pode ficar retida no cache (padrão: 5 minutos).
+    gcTime: 0,
     onError: showApiError,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["official-channel"] });

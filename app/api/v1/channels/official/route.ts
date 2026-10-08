@@ -48,8 +48,9 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const conectarSchema = z.object({
-  phone_number_id: z.string().min(5),
-  waba_id: z.string().min(5),
+  // Os ids da Meta são numéricos e viram caminho da Graph API: só dígitos (D-174).
+  phone_number_id: z.string().regex(/^[0-9]{5,30}$/),
+  waba_id: z.string().regex(/^[0-9]{5,30}$/),
   token: z.string().min(20),
 });
 

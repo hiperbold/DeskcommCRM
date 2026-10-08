@@ -15,6 +15,7 @@
 import { audit } from "@/lib/audit";
 import { bufToBytea, encryptKey } from "@/lib/crypto/aes_gcm";
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { aadDoTrunk } from "@/lib/voip/senha-do-trunk";
 
 export function nomeDoEndpoint(organizationId: string): string {
   return `org-${organizationId}-trunk-endpoint`;
@@ -67,7 +68,8 @@ export async function guardarTrunk(p: PedidoDeGuardarTrunk): Promise<ResultadoDe
   if (p.password) {
     let encrypted;
     try {
-      encrypted = encryptKey(p.password);
+      // D-168: a senha vai presa à organização (dado adicional), com a versão da chave no envelope.
+      encrypted = encryptKey(p.password, { aad: aadDoTrunk(p.orgId) });
     } catch (err) {
       return { ok: false, motivo: "cifragem", detalhe: err instanceof Error ? err.message : undefined };
     }

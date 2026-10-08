@@ -87,6 +87,17 @@ function doAmbiente(chave: string): string | null {
   return typeof bruto === "string" ? bruto : null;
 }
 
+/**
+ * O dado adicional da cifra de um segredo da configuração (D-168, parte 2): prende o envelope à CHAVE
+ * (`platform_config:<chave>`). Antes o envelope era cifrado sem dado adicional com a mesma `AI_CRED_AES_KEY`
+ * das credenciais de IA, e a cifra de uma chave copiada para outra abria. A leitura segue aceitando o
+ * formato antigo (iv de 12 bytes ignora o contexto); a linha antiga vira nova quando a chave é salva de novo
+ * pela tela.
+ */
+export function aadDaConfiguracao(chave: string): string {
+  return `platform_config:${chave}`;
+}
+
 function aviso(chave: string, o_que: string, erro: unknown) {
   // Logger estruturado do projeto: nunca o valor, só a chave e o motivo.
   console.warn(
@@ -107,11 +118,14 @@ function aviso(chave: string, o_que: string, erro: unknown) {
 function abrirEnvelope(linha: LinhaCrua): string | null {
   if (!linha.ciphertext || !linha.iv || !linha.tag) return null;
   try {
-    return decryptKey({
-      ciphertext: byteaToBuffer(linha.ciphertext),
-      iv: byteaToBuffer(linha.iv),
-      tag: byteaToBuffer(linha.tag),
-    });
+    return decryptKey(
+      {
+        ciphertext: byteaToBuffer(linha.ciphertext),
+        iv: byteaToBuffer(linha.iv),
+        tag: byteaToBuffer(linha.tag),
+      },
+      { aad: aadDaConfiguracao(linha.chave) },
+    );
   } catch (erro) {
     aviso(linha.chave, "o segredo guardado não abriu", erro);
     return null;
@@ -205,7 +219,7 @@ export async function gravarPelaTela(
 
   if (opcoes.ehSegredo) {
     try {
-      const envelope = encryptKey(valor);
+      const envelope = encryptKey(valor, { aad: aadDaConfiguracao(chave) });
       linha.ciphertext = bufToBytea(envelope.ciphertext);
       linha.iv = bufToBytea(envelope.iv);
       linha.tag = bufToBytea(envelope.tag);

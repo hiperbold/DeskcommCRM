@@ -14,6 +14,10 @@
  * Só registra número `PENDING` (lido na Meta agora). Número `CONNECTED` não é registrado de novo: com
  * PIN diferente do cadastrado a Meta recusa, e sem ele a chamada só gastaria o limite de tentativas.
  *
+ * Em representação (suporte com acesso total) o PIN NÃO é gerado: 403. Só o admin real da organização o
+ * conhece; o suporte registra com o PIN que o cliente informar. Um registro por sessão de canal por vez
+ * (advisory lock de sessão, `trava-de-registro.ts`): o segundo pedido leva 409 sem falar com a Meta.
+ *
  * A Meta recusar o registro NÃO é erro de requisição: 200 com `registrado: false` e o motivo traduzido.
  */
 import { randomUUID } from "node:crypto";
@@ -29,6 +33,8 @@ import {
   lerEstadoDoNumero,
   registrarNumero,
 } from "@/lib/channels/meta/registro-do-numero";
+import { comTravaDeRegistro } from "@/lib/channels/meta/trava-de-registro";
+import { getSkillsPool } from "@/lib/ai/skills/db";
 import { requireSupportWrite } from "@/lib/impersonate/support";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -57,11 +63,50 @@ export async function POST(req: NextRequest): Promise<Response> {
     });
   }
 
+  // Representação (suporte com acesso total): o PIN gerado seria mostrado a quem não é da empresa e só o
+  // admin real da organização deve conhecê-lo. O suporte registra com o PIN que o cliente informar.
+  if (authz.user.support && parsed.data.pin === undefined) {
+    return fail(
+      "forbidden",
+      "Em acompanhamento do suporte o PIN não é gerado. Informe o PIN que o cliente já usa, ou peça ao administrador da empresa para registrar o número.",
+      403,
+      { requestId, headers: NO_STORE },
+    );
+  }
+
   const cred = await credenciaisDoCanalOficialVivo(createAdminClient(), authz.org.orgId);
   if (!cred.ok) {
     return fail("invalid_request", cred.erro, 422, { requestId, headers: NO_STORE });
   }
 
+  // Um registro por sessão de canal por vez: o segundo pedido (duplo clique, duas abas) leva 409 ANTES de
+  // falar com a Meta. A trava cobre da leitura do estado até o fim do registro.
+  let travado;
+  try {
+    travado = await comTravaDeRegistro(getSkillsPool(), cred.sessionId, () =>
+      registrarComTrava(cred, parsed.data.pin, authz, requestId),
+    );
+  } catch {
+    return fail("upstream_unavailable", "Não foi possível iniciar o registro agora. Tente de novo em instantes.", 503, {
+      requestId,
+      headers: NO_STORE,
+    });
+  }
+  if (travado.ocupado) {
+    return fail("state_conflict", "Já há um registro deste número em andamento. Aguarde alguns segundos.", 409, {
+      requestId,
+      headers: NO_STORE,
+    });
+  }
+  return travado.valor;
+}
+
+async function registrarComTrava(
+  cred: Extract<Awaited<ReturnType<typeof credenciaisDoCanalOficialVivo>>, { ok: true }>,
+  pinInformado: string | undefined,
+  authz: { user: { id: string }; org: { orgId: string } },
+  requestId: string,
+): Promise<Response> {
   const estado = await lerEstadoDoNumero({ phoneNumberId: cred.phoneNumberId, token: cred.token });
   if (!estado.ok) {
     return ok(
@@ -73,8 +118,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     return fail("state_conflict", "number_not_pending", 409, { requestId, headers: NO_STORE });
   }
 
-  const pinGerado = parsed.data.pin === undefined;
-  const pin = parsed.data.pin ?? gerarPinDeRegistro();
+  const pinGerado = pinInformado === undefined;
+  const pin = pinInformado ?? gerarPinDeRegistro();
   const r = await registrarNumero({ phoneNumberId: cred.phoneNumberId, token: cred.token, pin });
 
   if (!r.ok) {

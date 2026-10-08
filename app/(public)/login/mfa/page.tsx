@@ -19,14 +19,26 @@ export default async function MfaChallengePage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: factorsData } = await supabase.auth.mfa.listFactors();
-  const hasVerified = !!factorsData?.totp?.some((f) => f.status === "verified");
-  if (!hasVerified) redirect("/app");
-
   const idioma = await idiomaDoVisitante(
     (user.user_metadata?.locale as string | undefined) ?? null,
   );
   const t = (texto: string) => traduzir(texto, idioma);
+
+  const { data: factorsData, error: factorsError } = await supabase.auth.mfa.listFactors();
+  if (factorsError) {
+    // Não redireciona para /app: se a pessoa tem fator e está em aal1, o layout a devolveria para cá, e a
+    // falha momentânea viraria um vaivém entre as duas telas. Mostra o erro e deixa tentar de novo.
+    return (
+      <div className="space-y-4 text-center" data-testid="mfa-erro-ao-listar">
+        <h1 className="text-2xl font-semibold tracking-tight">{t("Verificação em duas etapas")}</h1>
+        <p className="text-sm text-muted-foreground">
+          {t("Não foi possível carregar a verificação em duas etapas agora. Atualize a página para tentar de novo.")}
+        </p>
+      </div>
+    );
+  }
+  const hasVerified = !!factorsData?.totp?.some((f) => f.status === "verified");
+  if (!hasVerified) redirect("/app");
 
   return (
     <div className="space-y-6">

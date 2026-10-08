@@ -23,30 +23,260 @@
 -- tabelas billing_* não têm escrita para `authenticated` e as funções billing_* só executam pelo
 -- servidor. As demais tabelas de dado de cliente seguem adiadas (decisão do D-092 no DEBITO).
 --
--- Reaplicável com o app no ar: um DO só, cada política só é criada se não existir (sem drop policy,
--- que deixaria a tabela sem a trava no meio), lock_timeout curto para desistir em vez de ficar na
--- fila. Sem função nova (a ponte é da 0918): nada a ver com a VARREDURA anon.
+-- Reaplicável com o app no ar: um DO por tabela (a 0950 troca o DO único daqui pelo mesmo desenho: cada
+-- tabela é uma transação curta, e uma tabela movimentada que não solta a trava a tempo faz desistir só aquela,
+-- sem segurar as outras junto). Cada política só é criada se não existir (sem drop policy, que deixaria a
+-- tabela sem a trava no meio), lock_timeout curto para desistir em vez de ficar na fila. Sem função nova (a
+-- ponte é da 0918): nada a ver com a VARREDURA anon.
 
-do $mfa_na_escrita_ampliada$
+do $mfa_ai_provider_credentials$
 declare
- t text;
  cmd text;
  nome text;
  definicao text;
 begin
  perform set_config('lock_timeout','3s',true);
- foreach t in array array['ai_provider_credentials','ai_purpose_bindings','calendar_connections','channel_sessions','external_db_connections','lgpd_requests','organizations','team_invites','tenant_integrations','user_recovery_codes','voip_trunk_settings','webhook_sources'] loop
-  foreach cmd in array array['insert','update','delete'] loop
-   nome := t || '_mfa_' || cmd;
-   if not exists (select 1 from pg_policy where polname = nome and polrelid = ('public.' || t)::regclass) then
-    definicao := case cmd
-     when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
-     when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
-     else 'using ((select public.fn_session_mfa_proven_rls()))'
-    end;
-    execute format('create policy %I on public.%I as restrictive for %s to authenticated %s', nome, t, cmd, definicao);
-   end if;
-  end loop;
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'ai_provider_credentials_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.ai_provider_credentials'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.ai_provider_credentials as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
  end loop;
 end
-$mfa_na_escrita_ampliada$;
+$mfa_ai_provider_credentials$;
+
+do $mfa_ai_purpose_bindings$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'ai_purpose_bindings_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.ai_purpose_bindings'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.ai_purpose_bindings as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_ai_purpose_bindings$;
+
+do $mfa_calendar_connections$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'calendar_connections_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.calendar_connections'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.calendar_connections as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_calendar_connections$;
+
+do $mfa_channel_sessions$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'channel_sessions_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.channel_sessions'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.channel_sessions as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_channel_sessions$;
+
+do $mfa_external_db_connections$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'external_db_connections_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.external_db_connections'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.external_db_connections as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_external_db_connections$;
+
+do $mfa_lgpd_requests$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'lgpd_requests_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.lgpd_requests'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.lgpd_requests as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_lgpd_requests$;
+
+do $mfa_organizations$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'organizations_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.organizations'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.organizations as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_organizations$;
+
+do $mfa_team_invites$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'team_invites_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.team_invites'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.team_invites as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_team_invites$;
+
+do $mfa_tenant_integrations$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'tenant_integrations_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.tenant_integrations'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.tenant_integrations as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_tenant_integrations$;
+
+do $mfa_user_recovery_codes$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'user_recovery_codes_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.user_recovery_codes'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.user_recovery_codes as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_user_recovery_codes$;
+
+do $mfa_voip_trunk_settings$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'voip_trunk_settings_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.voip_trunk_settings'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.voip_trunk_settings as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_voip_trunk_settings$;
+
+do $mfa_webhook_sources$
+declare
+ cmd text;
+ nome text;
+ definicao text;
+begin
+ perform set_config('lock_timeout','3s',true);
+ foreach cmd in array array['insert','update','delete'] loop
+  nome := 'webhook_sources_mfa_' || cmd;
+  if not exists (select 1 from pg_policy where polname = nome and polrelid = 'public.webhook_sources'::regclass) then
+   definicao := case cmd
+    when 'insert' then 'with check ((select public.fn_session_mfa_proven_rls()))'
+    when 'update' then 'using ((select public.fn_session_mfa_proven_rls())) with check ((select public.fn_session_mfa_proven_rls()))'
+    else 'using ((select public.fn_session_mfa_proven_rls()))'
+   end;
+   execute format('create policy %I on public.webhook_sources as restrictive for %s to authenticated %s', nome, cmd, definicao);
+  end if;
+ end loop;
+end
+$mfa_webhook_sources$;

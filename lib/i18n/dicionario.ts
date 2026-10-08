@@ -5889,6 +5889,26 @@ export const DICIONARIO: Traducoes = {
     es: "Tendrás que iniciar sesión de nuevo en cada uno de ellos.",
   },
   "Verificação em duas etapas": { es: "Verificación en dos pasos" },
+  "Não foi possível carregar a verificação em duas etapas agora. Atualize a página para tentar de novo.": {
+    es: "No fue posible cargar la verificación en dos pasos ahora. Actualiza la página para intentarlo de nuevo.",
+  },
+  "Número registrado na Meta.": { es: "Número registrado en Meta." },
+  "Número na Meta": { es: "Número en Meta" },
+  "verificação": { es: "verificación" },
+  "Não consegui ler o estado do número agora.": { es: "No pude leer el estado del número ahora." },
+  "Este número foi verificado, mas ainda não foi registrado na API oficial: enquanto estiver PENDING, a Meta não deixa enviar mensagens. O registro usa um PIN de seis dígitos (verificação em duas etapas do número).": {
+    es: "Este número fue verificado, pero aún no fue registrado en la API oficial: mientras esté PENDING, Meta no permite enviar mensajes. El registro usa un PIN de seis dígitos (verificación en dos pasos del número).",
+  },
+  "PIN de seis dígitos (opcional)": { es: "PIN de seis dígitos (opcional)" },
+  "Se o número já teve verificação em duas etapas, informe o PIN que você definiu. Em branco, o CRM gera um e mostra uma única vez.": {
+    es: "Si el número ya tuvo verificación en dos pasos, informa el PIN que definiste. En blanco, el CRM genera uno y lo muestra una sola vez.",
+  },
+  "Registrar número": { es: "Registrar número" },
+  "Guarde este PIN agora. Ele não será mostrado de novo.": { es: "Guarda este PIN ahora. No se mostrará de nuevo." },
+  "Já guardei": { es: "Ya lo guardé" },
+  "A Meta pede este PIN se o número for registrado de novo. Se perder, redefina-o no WhatsApp Manager.": {
+    es: "Meta pide este PIN si el número se registra de nuevo. Si lo pierdes, redefínelo en WhatsApp Manager.",
+  },
   "Além da senha, o sistema pede um código de 6 dígitos que só existe no seu celular. É a proteção que segura uma senha vazada.": {
     es: "Además de la contraseña, el sistema pide un código de 6 dígitos que solo existe en tu celular. Es la protección que frena una contraseña filtrada.",
   },

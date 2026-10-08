@@ -38,6 +38,8 @@ export function NumeroOficialCard() {
   async function enviar() {
     setErro(null);
     const r = await registrar.mutateAsync(pinInformado ? { pin: pinInformado } : {});
+    // O PIN já está em `r`: solta a mutação (com gcTime 0 ela sai do cache), para a resposta não ficar retida.
+    registrar.reset();
     if (r.data.registrado) {
       setPinInformado("");
       setPinGerado(r.data.pin);

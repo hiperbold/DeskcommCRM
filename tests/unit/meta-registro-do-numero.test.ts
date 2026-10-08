@@ -26,6 +26,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("o id do número vai CODIFICADO no caminho da Graph (achado 3)", () => {
+  // Um id que quebraria o caminho se fosse colado cru: sobe um nível e troca o recurso.
+  const MALICIOSO = "111/../../me/accounts?x=1#";
+
+  it("⭐ leitura do estado: o caminho tem o id escapado, nunca a barra nem o `..` soltos", async () => {
+    fetchMock.mockResolvedValue(resposta(200, { status: "PENDING" }));
+    await lerEstadoDoNumero({ phoneNumberId: MALICIOSO, token: "TOKEN" });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain(`/${encodeURIComponent(MALICIOSO)}?fields=`);
+    expect(url).not.toContain("/../");
+    expect(url).not.toContain("me/accounts");
+  });
+
+  it("⭐ registro: o caminho tem o id escapado e continua terminando em /register", async () => {
+    fetchMock.mockResolvedValue(resposta(200, { success: true }));
+    await registrarNumero({ phoneNumberId: MALICIOSO, token: "TOKEN", pin: "123456" });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toMatch(new RegExp(`/${encodeURIComponent(MALICIOSO).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/register$`));
+    expect(url).not.toContain("/../");
+  });
+
+  it("id só de dígitos (o caso de sempre) fica igual", async () => {
+    fetchMock.mockResolvedValue(resposta(200, { status: "CONNECTED" }));
+    await lerEstadoDoNumero({ phoneNumberId: "111222333444555", token: "TOKEN" });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toMatch(/\/111222333444555\?fields=/);
+  });
+});
+
 describe("PIN de registro", () => {
   it("o PIN gerado tem seis dígitos, sempre (inclusive com zeros à esquerda)", () => {
     for (let i = 0; i < 200; i++) expect(gerarPinDeRegistro()).toMatch(/^\d{6}$/);

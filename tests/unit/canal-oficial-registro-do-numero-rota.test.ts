@@ -9,6 +9,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const estado = {
   papelOk: true,
+  /** Acompanhamento do suporte com acesso total (representação): o portão de papel entrega `user.support`. */
+  suporte: null as null | { access_mode: "full" },
+  /** O advisory lock da sessão de canal está livre? */
+  travaLivre: true,
   sessao: { id: "s1", meta_phone_number_id: "111", meta_waba_id: "222", meta_token_encrypted: "CIFRADO" } as
     | null
     | Record<string, string>,
@@ -22,13 +26,29 @@ vi.mock("@/lib/impersonate/support", () => ({ requireSupportWrite: async () => n
 vi.mock("@/lib/auth/require-role", () => ({
   requireRole: async () =>
     estado.papelOk
-      ? { ok: true, user: { id: "u1" }, org: { orgId: "o1", role: "admin" } }
+      ? { ok: true, user: { id: "u1", support: estado.suporte }, org: { orgId: "o1", role: "admin" } }
       : {
           ok: false,
           response: new Response(JSON.stringify({ error: { code: "forbidden_role" } }), { status: 403 }),
         },
 }));
 vi.mock("@/lib/audit", () => ({ audit: (...a: unknown[]) => audit(...a) }));
+const trava = { pegou: 0, soltou: 0 };
+vi.mock("@/lib/ai/skills/db", () => ({
+  getSkillsPool: () => ({
+    connect: async () => ({
+      query: async (sql: string) => {
+        if (/pg_try_advisory_lock/.test(sql)) {
+          if (estado.travaLivre) trava.pegou += 1;
+          return { rows: [{ locked: estado.travaLivre }] };
+        }
+        if (/pg_advisory_unlock/.test(sql)) trava.soltou += 1;
+        return { rows: [] };
+      },
+      release: () => undefined,
+    }),
+  }),
+}));
 vi.mock("@/lib/logger", () => ({
   logger: {
     info: (...a: unknown[]) => logs.push(JSON.stringify(a)),
@@ -64,6 +84,10 @@ const post = (corpo: unknown) =>
 
 beforeEach(() => {
   estado.papelOk = true;
+  estado.suporte = null;
+  estado.travaLivre = true;
+  trava.pegou = 0;
+  trava.soltou = 0;
   estado.sessao = { id: "s1", meta_phone_number_id: "111", meta_waba_id: "222", meta_token_encrypted: "CIFRADO" };
   estado.token = "TOKEN-EM-CLARO";
   audit.mockReset();
@@ -190,5 +214,79 @@ describe("POST /api/v1/channels/official/registrar", () => {
     const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
     expect((await POST(post({}))).status).toBe(422);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/v1/channels/official/registrar: representação do suporte (achado 4)", () => {
+  it("⭐ suporte com acesso total NÃO gera PIN: 403 e nada vai para a Meta", async () => {
+    estado.suporte = { access_mode: "full" };
+    const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
+    const res = await POST(post({}));
+    expect(res.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  it("⭐ suporte pode registrar com o PIN que o cliente informou, e o PIN não volta", async () => {
+    estado.suporte = { access_mode: "full" };
+    fetchMock
+      .mockResolvedValueOnce(resposta(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(resposta(200, { success: true }));
+    const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
+    const res = await POST(post({ pin: "246810" }));
+    const texto = await res.text();
+    expect(JSON.parse(texto).data).toMatchObject({ registrado: true, pinGerado: false, pin: null });
+    expect(texto).not.toContain("246810");
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(String(init.body)).pin).toBe("246810");
+  });
+
+  it("o admin real da organização (sem acompanhamento) continua gerando o PIN", async () => {
+    fetchMock
+      .mockResolvedValueOnce(resposta(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(resposta(200, { success: true }));
+    const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
+    const corpo = await (await POST(post({}))).json();
+    expect(corpo.data).toMatchObject({ registrado: true, pinGerado: true });
+  });
+});
+
+describe("POST /api/v1/channels/official/registrar: registro concorrente (achado 6)", () => {
+  it("⭐ com outro registro da mesma sessão em andamento: 409 e a Meta NÃO é chamada", async () => {
+    estado.travaLivre = false;
+    const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
+    const res = await POST(post({}));
+    expect(res.status).toBe(409);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(res.headers.get("cache-control")).toMatch(/no-store/);
+  });
+
+  it("⭐ o registro que pegou a trava a solta no fim (sucesso, recusa da Meta ou número já conectado)", async () => {
+    const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
+
+    fetchMock
+      .mockResolvedValueOnce(resposta(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(resposta(200, { success: true }));
+    await POST(post({}));
+
+    fetchMock
+      .mockResolvedValueOnce(resposta(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(resposta(400, { error: { code: 133005, message: "x" } }));
+    await POST(post({ pin: "246810" }));
+
+    fetchMock.mockResolvedValueOnce(resposta(200, { status: "CONNECTED" }));
+    await POST(post({}));
+
+    expect(trava.pegou).toBe(3);
+    expect(trava.soltou).toBe(3);
+  });
+
+  it("a trava só é tomada depois do papel e da credencial: quem não é admin nem encosta nela", async () => {
+    estado.papelOk = false;
+    const { POST } = await import("@/app/api/v1/channels/official/registrar/route");
+    await POST(post({}));
+    expect(trava.pegou).toBe(0);
   });
 });
