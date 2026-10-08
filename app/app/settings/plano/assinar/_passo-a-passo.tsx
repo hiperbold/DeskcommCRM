@@ -307,6 +307,15 @@ export function AssinarPlanoPassoAPasso({
                         {t("Ciclos disponíveis")}:{" "}
                         {ciclosDoPlano.map((c) => rotuloDoCiclo[c]).join(", ")}
                       </p>
+                      <a
+                        href="/#planos"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid={`ver-incluso-${p.code}`}
+                        className="inline-block text-xs font-medium text-primary underline-offset-4 hover:underline"
+                      >
+                        {t("Ver tudo incluso do plano")}
+                      </a>
                     </div>
                     <Button
                       data-testid={`escolher-${p.code}`}

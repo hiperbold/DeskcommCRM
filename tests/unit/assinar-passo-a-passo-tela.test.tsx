@@ -130,6 +130,16 @@ describe("passo 1: o plano", () => {
     tela({ planoAtualCode: null });
     expect(screen.queryByText("Plano atual")).toBeNull();
   });
+
+  it("cada cartão leva a 'Ver tudo incluso do plano', na seção de planos da página inicial, em nova aba", () => {
+    tela({ planoAtualCode: null });
+    for (const code of ["pro", "max", "escale"]) {
+      const link = within(screen.getByTestId(`plano-${code}`)).getByRole("link", { name: "Ver tudo incluso do plano" });
+      expect(link).toHaveAttribute("href", "/#planos");
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link.getAttribute("rel")).toContain("noopener");
+    }
+  });
 });
 
 describe("o indicador de passos e o foco", () => {

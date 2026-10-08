@@ -13353,6 +13353,7 @@ export const DICIONARIO: Traducoes = {
   "Escolher": { es: "Elegir" },
   "Plano atual": { es: "Plan actual" },
   "Ciclos disponíveis": { es: "Ciclos disponibles" },
+  "Ver tudo incluso do plano": { es: "Ver todo lo que incluye el plan" },
   "Alterar": { es: "Cambiar" },
   "À vista": { es: "Al contado" },
   "Os dados do cartão são informados na fatura do Asaas, nunca neste sistema.": { es: "Los datos de la tarjeta se ingresan en la factura de Asaas, nunca en este sistema." },
