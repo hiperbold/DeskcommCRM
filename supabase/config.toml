@@ -72,11 +72,11 @@ enable_confirmations = true
 # Templates apontam para /auth/confirm (fluxo token_hash do @supabase/ssr).
 # Self-host GoTrue: ver docs/deploy-selfhost (GOTRUE_MAILER_TEMPLATES_*).
 [auth.email.template.confirmation]
-subject = "Confirme seu e-mail — DeskcommCRM"
+subject = "Confirme seu e-mail no HiperCRM"
 content_path = "./supabase/templates/confirmation.html"
 
 [auth.email.template.recovery]
-subject = "Redefinir senha — DeskcommCRM"
+subject = "Redefina sua senha do HiperCRM"
 content_path = "./supabase/templates/recovery.html"
 
 [auth.mfa]

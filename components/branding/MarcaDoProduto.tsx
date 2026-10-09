@@ -1,22 +1,22 @@
-import { LOGOTIPO, SIMBOLO } from "@/lib/branding/desenho";
+import { CORES_DA_MARCA, LOGOTIPO, SIMBOLO } from "@/lib/branding/desenho";
 import { cn } from "@/lib/utils";
 
 /**
- * A marca do PRODUTO desenhada em SVG inline — o que a tela mostra quando
- * ninguém configurou marca própria (`marcaEhADoProduto`, em `lib/branding.ts`).
+ * A marca do PRODUTO (HiperCRM) — o que a tela mostra quando ninguém configurou
+ * marca própria (`marcaEhADoProduto`, em `lib/branding.ts`).
  *
- * Inline, e não `<img src="/algo.svg">`, por três motivos:
- *  - as cores seguem o TEMA: sálvia mais clara e nome em creme no escuro, como
- *    a régua do produto já define — um arquivo estático teria uma cor só;
- *  - nada em `public/`: um `.svg` fixo ali seria servido na instalação de um
- *    revendedor que configurou a marca dele (ver `lib/branding/desenho.ts`);
+ * O símbolo é SVG inline. O logotipo é um arquivo de `public/site/_hipercrm/`,
+ * um por tema, aplicado como imagem de fundo de um `<span role="img">` e NÃO como
+ * `<img>`, por dois motivos:
  *  - a barra lateral já usa `<img>` para o logo CONFIGURADO, e o e2e
  *    `marca-logo.spec.ts` mede "barra sem `<img>`" como "sem logo do
- *    revendedor". Um `<img>` do produto ali faria a spec medir a coisa errada.
+ *    revendedor". Um `<img>` do produto ali faria a spec medir a coisa errada;
+ *  - a troca de tema é por CSS (`dark:`), sem JavaScript e sem piscar o logo
+ *    claro antes de hidratar.
  *
  * O texto alternativo é o `nome` que a tela já resolveu — nunca uma string
  * fixa, para que a catraca de marca (`tests/unit/branding.test.ts`) continue
- * contando ZERO ocorrências fora de `lib/branding.ts`.
+ * sem ocorrência fora de `lib/branding.ts`.
  */
 
 type Props = {
@@ -26,19 +26,11 @@ type Props = {
   readonly decorativo?: boolean;
 };
 
-const SIMBOLO_CLARO_ESCURO = "fill-[#506d48] dark:fill-[#82a077]";
-const NOME_CLARO_ESCURO = "fill-[#1c1a16] dark:fill-[#f5f4ef]";
-const SUFIXO_CLARO_ESCURO = "fill-[#5d594f] dark:fill-[#8e8b7f]";
-
-// As classes acima repetem os hexes de `CORES_DA_MARCA` porque o Tailwind só
-// gera utilitário para valor LITERAL no fonte. Quem impede os dois de divergirem
-// é `tests/unit/marca-do-produto.test.tsx`, que compara as classes à paleta —
-// e não uma asserção em runtime: um throw aqui derrubaria a casca inteira.
-export const CLASSES_DE_COR = {
-  simbolo: SIMBOLO_CLARO_ESCURO,
-  nome: NOME_CLARO_ESCURO,
-  sufixo: SUFIXO_CLARO_ESCURO,
-} as const;
+// O Tailwind só gera utilitário para valor LITERAL no fonte, então as URLs dos
+// dois arquivos aparecem escritas abaixo. Quem impede as classes de divergirem
+// de `LOGOTIPO` é `tests/unit/marca-do-produto.test.tsx`.
+export const CLASSES_DO_LOGOTIPO =
+  "bg-[url(/site/_hipercrm/logo-hipercrm.svg)] dark:bg-[url(/site/_hipercrm/logo-hipercrm-escuro.svg)]";
 
 function acessibilidade(nome: string, decorativo: boolean) {
   return decorativo
@@ -54,36 +46,23 @@ export function SimboloDoProduto({ nome, className, decorativo = false }: Props)
       className={cn("shrink-0", className)}
       {...acessibilidade(nome, decorativo)}
     >
-      <g className={SIMBOLO_CLARO_ESCURO} transform={SIMBOLO.transform}>
-        <path d={SIMBOLO.d} />
-        <rect {...SIMBOLO.modulo} />
-      </g>
+      <rect {...SIMBOLO.ladrilho} fill={CORES_DA_MARCA.ladrilho} />
+      <path d={SIMBOLO.d} fill={CORES_DA_MARCA.marca} />
     </svg>
   );
 }
 
-/** Símbolo + nome — para a barra aberta e a fachada de entrada. */
+/** O logotipo completo — para a barra aberta e a fachada de entrada. */
 export function LogotipoDoProduto({ nome, className, decorativo = false }: Props) {
   return (
-    <svg
-      viewBox={LOGOTIPO.viewBox}
-      className={cn("shrink-0", className)}
+    <span
+      className={cn(
+        "inline-block max-w-full shrink-0 bg-contain bg-left bg-no-repeat",
+        CLASSES_DO_LOGOTIPO,
+        className,
+      )}
+      style={{ aspectRatio: LOGOTIPO.proporcao }}
       {...acessibilidade(nome, decorativo)}
-    >
-      <g className={SIMBOLO_CLARO_ESCURO} transform={LOGOTIPO.simbolo.transform}>
-        <path d={LOGOTIPO.simbolo.d} />
-        <rect {...LOGOTIPO.simbolo.modulo} />
-      </g>
-      <g className={NOME_CLARO_ESCURO}>
-        {LOGOTIPO.nome.map((g) => (
-          <path key={g.transform} transform={g.transform} d={g.d} />
-        ))}
-      </g>
-      <g className={SUFIXO_CLARO_ESCURO}>
-        {LOGOTIPO.sufixo.map((g) => (
-          <path key={g.transform} transform={g.transform} d={g.d} />
-        ))}
-      </g>
-    </svg>
+    />
   );
 }

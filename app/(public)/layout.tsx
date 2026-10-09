@@ -26,7 +26,7 @@ import { IdiomaProvider } from "@/lib/i18n/IdiomaProvider";
  * corrigi-los.
  *
  * Sem logo configurado E com o nome padrão, a fachada mostra o logotipo do
- * PRODUTO (`components/branding/MarcaDoProduto.tsx`) — inline, sem `<img>`,
+ * PRODUTO (`components/branding/MarcaDoProduto.tsx`) — sem `<img>`,
  * para que `tests/e2e/marca-logo.spec.ts` continue medindo "a fachada está sem
  * `<img>`" como "sem logo do revendedor".
  *
@@ -106,7 +106,7 @@ export default async function PublicLayout({ children }: { children: React.React
             </div>
           ) : marcaEhADoProduto({ name: marca.nome, logoUrl: null }) ? (
             <div className="flex justify-center">
-              <LogotipoDoProduto nome={marca.nome} className="h-12 w-auto" />
+              <LogotipoDoProduto nome={marca.nome} className="h-8 w-auto" />
             </div>
           ) : null}
           {children}

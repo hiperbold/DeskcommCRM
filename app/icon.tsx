@@ -3,7 +3,7 @@ import { ImageResponse } from "next/og";
 import { marcaEhADoProduto } from "@/lib/branding";
 import { CORES_DA_MARCA, SIMBOLO } from "@/lib/branding/desenho";
 import { letraDoIcone } from "@/lib/branding/icone";
-import { marcaDaSaida, NEUTROS_DE_SAIDA } from "@/lib/branding/saida";
+import { marcaDaSaida } from "@/lib/branding/saida";
 
 /**
  * O ícone da aba, DESENHADO em runtime com a marca da instalação.
@@ -37,13 +37,13 @@ import { marcaDaSaida, NEUTROS_DE_SAIDA } from "@/lib/branding/saida";
  *
  * ─── O símbolo do produto, quando a marca é a do produto ────────────────────
  *
- * Sem nome nem logo configurados (`marcaEhADoProduto`), o ladrilho é o símbolo
- * de `lib/branding/desenho.ts` sobre o creme da régua — o mesmo desenho que a
- * barra lateral e a fachada mostram, para a aba e a tela contarem a mesma
- * marca. O satori aceita `<svg>` inline (medido: 1.135 bytes de PNG válido com
- * o símbolo, em 2026-09-08), então continua sem rede e sem arquivo em `public/`.
- * Quem configurou um nome próprio segue com cor + inicial: o símbolo soletra
- * "D", e um "D" na aba de quem se chama "Acme" seria a nossa marca vazando.
+ * Sem nome nem logo configurados (`marcaEhADoProduto`), o ícone é o símbolo de
+ * `lib/branding/desenho.ts` (ladrilho azul com a marca em branco, como o
+ * `public/site/favicon.svg`) — o mesmo desenho que a barra lateral e a fachada
+ * mostram, para a aba e a tela contarem a mesma marca. O satori aceita `<svg>`
+ * inline, então continua sem rede e sem ler arquivo de `public/`.
+ * Quem configurou um nome próprio segue com cor + inicial: o ladrilho azul na
+ * aba de quem se chama "Acme" seria a nossa marca vazando.
  *
  * ─── `force-dynamic` não é zelo ─────────────────────────────────────────────
  *
@@ -79,26 +79,13 @@ export default async function Icon() {
   const marca = await marcaDaSaida(null);
 
   if (marcaEhADoProduto({ name: marca.nome, logoUrl: marca.logoUrl })) {
-    // 78% da aresta: o D ocupa ~75% do próprio viewBox, então sobra o mesmo
-    // respiro que a letra tem no ramo de baixo.
-    const lado = Math.round(size.width * 0.78);
+    // O ladrilho azul do símbolo já é o fundo do ícone: o svg ocupa tudo.
     return new ImageResponse(
       (
-        <div
-          style={{
-            width: "100%",
-            height: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: NEUTROS_DE_SAIDA.fundo,
-          }}
-        >
-          <svg viewBox={SIMBOLO.viewBox} width={lado} height={lado}>
-            <g fill={CORES_DA_MARCA.claro.simbolo} transform={SIMBOLO.transform}>
-              <path d={SIMBOLO.d} />
-              <rect {...SIMBOLO.modulo} />
-            </g>
+        <div style={{ width: "100%", height: "100%", display: "flex" }}>
+          <svg viewBox={SIMBOLO.viewBox} width={size.width} height={size.height}>
+            <rect {...SIMBOLO.ladrilho} fill={CORES_DA_MARCA.ladrilho} />
+            <path d={SIMBOLO.d} fill={CORES_DA_MARCA.marca} />
           </svg>
         </div>
       ),
