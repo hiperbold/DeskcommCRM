@@ -21,7 +21,10 @@
  * reprova quem adicionar `edita` sem trocar o call site.
  */
 
-import { CHAVES_DE_CANAL_DA_INSTALACAO } from "@/lib/channels/chaves-da-instalacao";
+import {
+  CHAVES_DE_CANAL_DA_INSTALACAO,
+  CHAVES_DE_CANAL_EDITAVEIS_DA_INSTALACAO,
+} from "@/lib/channels/chaves-da-instalacao";
 
 export type GrupoDaInstalacao =
   | "email"
@@ -81,6 +84,17 @@ export interface ChaveDaInstalacao {
   readonly motivo?: MotivoDeDiagnostico;
   /** O que a pessoa faz para trocar, quando não dá pela tela. */
   readonly comoTrocar?: string;
+  /**
+   * Confere o valor ANTES de gravar: devolve a frase de recusa, ou `null` quando
+   * serve (pode ser assíncrono). Só chave `edita` precisa dele (a ação de salvar chama).
+   */
+  readonly validar?: (valor: string) => string | null | Promise<string | null>;
+  /** Gravar exige o segundo fator PROVADO nesta sessão (aal2), além da natureza da chave. */
+  readonly exigeSegundoFator?: boolean;
+  /** Chaves guardadas que perdem o valor (voltam ao arquivo de instalação) quando esta muda. */
+  readonly apagaAoMudar?: readonly string[];
+  /** Como comparar o valor novo com o atual para saber se mudou. */
+  readonly normalizar?: (valor: string) => string;
 }
 
 /**
@@ -114,8 +128,23 @@ const DE_CANAL: readonly ChaveDaInstalacao[] = CHAVES_DE_CANAL_DA_INSTALACAO.map
   comoTrocar: c.comoTrocar,
 }));
 
+/** As de canal que a tela edita (servidor de QR Code): mesmo motivo, mesmo caminho. */
+const DE_CANAL_EDITAVEIS: readonly ChaveDaInstalacao[] = CHAVES_DE_CANAL_EDITAVEIS_DA_INSTALACAO.map((c) => ({
+  chave: c.chave,
+  rotulo: c.rotulo,
+  explicacao: c.explicacao,
+  grupo: "whatsapp" as const,
+  natureza: c.natureza,
+  controle: "edita" as const,
+  ...(c.validar ? { validar: c.validar } : {}),
+  ...(c.exigeSegundoFator ? { exigeSegundoFator: true } : {}),
+  ...(c.apagaAoMudar ? { apagaAoMudar: c.apagaAoMudar } : {}),
+  ...(c.normalizar ? { normalizar: c.normalizar } : {}),
+}));
+
 export const CATALOGO_DA_INSTALACAO: readonly ChaveDaInstalacao[] = [
   ...DE_CANAL,
+  ...DE_CANAL_EDITAVEIS,
   {
     chave: "RESEND_API_KEY",
     rotulo: "Chave do serviço de e-mail",

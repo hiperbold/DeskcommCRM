@@ -30,7 +30,7 @@ import { z } from "zod";
 import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { audit } from "@/lib/audit";
 import { requireRole } from "@/lib/auth/require-role";
-import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
+import { mensagemDaRecusaDoPlano, mensagemDoLimiteDeConexoes } from "@/lib/billing/planos/limite-de-conexoes";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { canalGraphParceiroLigado, GRAPH_PARTNER_LABEL } from "@/lib/channels/graph-parceiro/credentials";
@@ -124,18 +124,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // sessão já ativa não dispara o gatilho do banco. `podeCriar` é só o AVISO
   // adiantado, para não pagar a chamada ao provedor à toa; quem trava de
   // verdade continua sendo o gatilho no INSERT/UPDATE abaixo.
-  // `bloqueioValeParaOrganizacao` é o portão: sem ele, no modo `avisar` de hoje
-  // (o único em produção) a pré-checagem recusaria uma conexão que o modo
-  // atual deixaria passar.
-  if (
-    (!existenteAntes || existenteAntes.archivedAt) &&
-    (await bloqueioValeParaOrganizacao(admin, orgId))
-  ) {
+  // D-188 (migration 0954): Conexões bloqueia sempre, qualquer que seja o modo, então não há portão de modo.
+  if (!existenteAntes || existenteAntes.archivedAt) {
     const veredito = await podeCriar(admin, orgId, "conexoes");
     if (!veredito.pode && veredito.motivo === "teto_atingido") {
       return fail(
         "plano_limite_atingido",
-        t("O plano desta organização chegou ao limite de conexões. Fale com o suporte para ampliar."),
+        await mensagemDoLimiteDeConexoes(admin, orgId, authz.user.idioma),
         STATUS_RECUSA_DO_PLANO,
         { requestId },
       );
@@ -185,7 +180,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // PT402 quando duas conexões correm juntas e passam pelo aviso. Rede de
     // segurança, nunca 500 para um teto de plano.
     const recusa = recusaDoPlano(errorRaw);
-    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    if (recusa) {
+      const mensagem = await mensagemDaRecusaDoPlano(recusa, admin, orgId, authz.user.idioma);
+      return fail("plano_limite_atingido", mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    }
     return falhaInterna("internal_error", error, { requestId });
   }
 

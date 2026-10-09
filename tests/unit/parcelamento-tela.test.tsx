@@ -34,6 +34,7 @@ const PRO: PlanoParaVenda = {
   priceMonthlyCents: 19900,
   priceSemiannualCents: 104900,
   priceYearlyCents: 189900,
+  conexoes: 3,
 };
 
 const OPCOES = {

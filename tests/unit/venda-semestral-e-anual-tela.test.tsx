@@ -34,6 +34,7 @@ const PRO: PlanoParaVenda = {
   priceMonthlyCents: 19900,
   priceSemiannualCents: 104900,
   priceYearlyCents: 189900,
+  conexoes: 3,
 };
 
 const SO_MENSAL_E_ANUAL: PlanoParaVenda = {
@@ -44,6 +45,7 @@ const SO_MENSAL_E_ANUAL: PlanoParaVenda = {
   priceMonthlyCents: 39900,
   priceSemiannualCents: null,
   priceYearlyCents: 379900,
+  conexoes: 3,
 };
 
 function tela(planos: PlanoParaVenda[], locale = "pt-BR") {

@@ -348,6 +348,12 @@ const schema = z.object({
   RESEND_API_KEY: z.string().optional().default(""),
   RESEND_FROM_EMAIL: z.string().optional().default(""),
 
+  // Conectar WhatsApp por QR Code: servidor de instâncias (https) e o token de
+  // administrador dele. Opcionais: sem os dois a opção não aparece. Lidos pelo
+  // resolvedor da instalação (banco primeiro, este env como piso).
+  UAZAPI_SERVIDOR_URL: z.string().optional().default(""),
+  UAZAPI_ADMIN_TOKEN: z.string().optional().default(""),
+
   /**
    * SMTP — o SEGUNDO transporte de e-mail, ao lado da Resend, nunca no lugar
    * dela. Quem já roda com Resend não mexe em nada; quem instala numa VPS e não

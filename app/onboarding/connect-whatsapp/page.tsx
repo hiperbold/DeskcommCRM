@@ -2,6 +2,7 @@ import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { redirect } from "next/navigation";
 import { fontesDoAppDaMeta } from "@/lib/channels/meta/app";
 import { metaPodeReceber } from "@/lib/channels/meta/webhook";
+import { pareamentoQrDisponivel } from "@/lib/channels/pareamento-qr";
 import { nomeCurtoDaSessao } from "@/lib/channels/nome-da-sessao";
 import { ConnectWhatsappClient } from "./_client";
 import { traduzir } from "@/lib/i18n/dicionario";
@@ -13,6 +14,7 @@ export default async function ConnectWhatsappPage() {
   const activeOrg = await resolveActiveOrg(user);
   if (!activeOrg) redirect("/login");
   const idioma = user.idioma;
+  const pareamentoQr = await pareamentoQrDisponivel();
 
   // Receber pelo canal oficial exige DOIS segredos, não um — a regra e o porquê
   // moram em `lib/channels/meta/webhook.ts`, ao lado de quem os consome. Agora os
@@ -30,7 +32,9 @@ export default async function ConnectWhatsappPage() {
         <h2 className="text-2xl font-semibold tracking-tight">{traduzir("Dê um telefone a ele", idioma)}</h2>
         <p className="text-sm text-muted-foreground">
           {traduzir(
-            "É por este número que ele vai atender seus clientes. Tenha em mãos o endereço do seu servidor de WhatsApp e o token da instância.",
+            pareamentoQr
+              ? "É por este número que ele vai atender seus clientes. Leia um QR Code com o celular do número, ou, se ele já está pareado numa instância sua, tenha em mãos o endereço do servidor e o token."
+              : "É por este número que ele vai atender seus clientes. Tenha em mãos o endereço do seu servidor de WhatsApp e o token da instância.",
             idioma,
           )}
         </p>
@@ -41,6 +45,7 @@ export default async function ConnectWhatsappPage() {
       <ConnectWhatsappClient
         sessionName={nomeCurtoDaSessao(activeOrg.orgId)}
         oficialPodeReceber={oficialPodeReceber}
+        pareamentoQr={pareamentoQr}
       />
     </div>
   );

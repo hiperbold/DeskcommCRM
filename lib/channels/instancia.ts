@@ -17,7 +17,9 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { mensagemDaRecusaDoPlano } from "@/lib/billing/planos/limite-de-conexoes";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
+import type { Idioma } from "@/lib/i18n/idiomas";
 import { decryptWebhookSecret, encryptWebhookSecret } from "@/lib/webhooks/secrets";
 
 import {
@@ -25,6 +27,7 @@ import {
   UAZAPI_METADATA_WEBHOOK_ID,
   acharConexaoUazapi,
   arquivarConexaoUazapi,
+  enderecoNaoAlcancavel,
   gravarWebhookDaConexao,
   listarConexoesUazapi,
   registrarWebhookUazapi,
@@ -33,6 +36,7 @@ import {
   validarInstanciaUazapi,
   type ConexaoUazapi,
 } from "./uazapi/conexao";
+import { apagarInstanciaNoServidor } from "./uazapi/pareamento";
 
 /** Como o canal se chama para o usuário. */
 export const INSTANCE_CHANNEL_LABEL = UAZAPI_CHANNEL_LABEL;
@@ -55,26 +59,6 @@ export type ResultadoDaConexao =
     }
   | { ok: false; status: 402 | 422 | 500; reason: string };
 
-/**
- * Endereço que o servidor da instância não alcança. Registrar webhook para ele
- * não é erro de API — o servidor aceita — e por isso mesmo é pior: a tela diria
- * "ligado" para uma volta que nunca chega.
- */
-function enderecoNaoAlcancavel(url: string): boolean {
-  try {
-    const host = new URL(url).hostname;
-    return (
-      host === "localhost" ||
-      host === "0.0.0.0" ||
-      host.startsWith("127.") ||
-      host.endsWith(".invalid") ||
-      host.endsWith(".local")
-    );
-  } catch {
-    return true;
-  }
-}
-
 export async function conectarPorInstancia(
   admin: SupabaseClient,
   input: {
@@ -85,6 +69,8 @@ export async function conectarPorInstancia(
     nome?: string | null;
     /** Monta a URL pública de entrega a partir do token de caminho da conexão. */
     urlDoWebhook: (pathToken: string) => string;
+    /** Idioma de quem pediu, só para a frase de recusa do plano. */
+    idioma?: Idioma;
   },
 ): Promise<ResultadoDaConexao> {
   const token = input.token.trim();
@@ -119,7 +105,10 @@ export async function conectarPorInstancia(
   if (salvo.error || !salvo.id) {
     // Fase F3, decisão 3: PT402 pelo `code`, nunca pelo texto do Postgres.
     const recusa = recusaDoPlano(salvo.errorRaw);
-    if (recusa) return { ok: false, status: STATUS_RECUSA_DO_PLANO, reason: recusa.mensagem };
+    if (recusa) {
+      const reason = await mensagemDaRecusaDoPlano(recusa, admin, input.organizationId, input.idioma);
+      return { ok: false, status: STATUS_RECUSA_DO_PLANO, reason };
+    }
     return { ok: false, status: 500, reason: salvo.error ?? "a conexão não foi gravada" };
   }
 
@@ -153,7 +142,14 @@ export async function conectarPorInstancia(
 }
 
 export type ResultadoDaRemocao =
-  | { ok: true; webhookRemovido: boolean }
+  | {
+      ok: true;
+      webhookRemovido: boolean;
+      /** A instância foi criada pelo CRM e apagada no servidor. `false` nas conectadas por servidor e token do cliente. */
+      instanciaApagada: boolean;
+      /** Era do CRM (QR Code) mas o servidor não confirmou a exclusão: a tela avisa. */
+      instanciaRestou: boolean;
+    }
   | { ok: false; status: 404 | 500; reason: string };
 
 /**
@@ -161,6 +157,11 @@ export type ResultadoDaRemocao =
  *
  * Arquivar mesmo quando o servidor não responde: o operador pediu para parar, e
  * uma entrega que ainda chegue cai no filtro de canal arquivado da rota.
+ *
+ * A instância que o CRM CRIOU (pareamento por QR Code, coluna `criada_pelo_crm`, que só o servidor grava)
+ * é apagada também no servidor: ela é do CRM, e deixá-la lá seria um WhatsApp pago
+ * sem dono. A conectada por servidor e token do cliente continua só perdendo o
+ * nosso webhook: a instância é dele.
  */
 export async function removerConexaoPorInstancia(
   admin: SupabaseClient,
@@ -171,15 +172,23 @@ export async function removerConexaoPorInstancia(
   if (!linha) return { ok: false, status: 404, reason: "conexão não encontrada" };
 
   let webhookRemovido = false;
+  let instanciaApagada = false;
+  const criadaPeloCrm = linha.criada_pelo_crm === true;
   const webhookId = linha.metadata?.[UAZAPI_METADATA_WEBHOOK_ID];
-  if (typeof webhookId === "string" && webhookId && linha.uazapi_base_url && linha.token_encrypted) {
+  if (linha.uazapi_base_url && linha.token_encrypted) {
     const token = await decryptWebhookSecret(admin, linha.token_encrypted as string);
     if (token) {
-      webhookRemovido = await removerWebhookUazapi({ baseUrl: linha.uazapi_base_url, token, webhookId });
+      if (criadaPeloCrm) {
+        // Apagar a instância leva o webhook junto: não há o que tirar antes.
+        instanciaApagada = await apagarInstanciaNoServidor({ baseUrl: linha.uazapi_base_url, token });
+        webhookRemovido = instanciaApagada;
+      } else if (typeof webhookId === "string" && webhookId) {
+        webhookRemovido = await removerWebhookUazapi({ baseUrl: linha.uazapi_base_url, token, webhookId });
+      }
     }
   }
 
   const erro = await arquivarConexaoUazapi(admin, organizationId, id);
   if (erro) return { ok: false, status: 500, reason: erro };
-  return { ok: true, webhookRemovido };
+  return { ok: true, webhookRemovido, instanciaApagada, instanciaRestou: criadaPeloCrm && !instanciaApagada };
 }

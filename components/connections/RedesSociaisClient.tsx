@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { apiClient } from "@/lib/api/client";
 import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { useT } from "@/hooks/i18n/useT";
+import { AvisoDeLimiteDeConexoes } from "./AvisoDeLimiteDeConexoes";
 import { ChannelAiAccess } from "./ChannelAiAccess";
 
 type Account = {
@@ -262,7 +263,7 @@ export function RedesSociaisClient({
                       </Button>
                     )}
                   {!account.channel && bloqueio?.desabilitado && (
-                    <p className="w-full text-xs text-destructive">{bloqueio.motivo}</p>
+                    <AvisoDeLimiteDeConexoes motivo={bloqueio.motivo} className="w-full text-xs text-destructive" />
                   )}
                   {account.channel && (
                     <Button asChild variant="outline">

@@ -97,6 +97,10 @@ CRONS="
 * * * * *|45|api/v1/cron/processar-eventos-asaas
 */5 * * * *|60|api/v1/cron/webhook-log-retention
 */5 * * * *|45|api/v1/cron/channel-health
+# O PAREAMENTO POR QR CODE que ficou pela metade (cliente leu o QR e fechou a aba, ou desistiu): conclui o que
+# conectou e apaga no servidor o que não conectou em 30 minutos, liberando a vaga do plano. A cada 5 minutos,
+# varredura curta (sem pendência é uma consulta ao banco). Sem o recurso configurado, a rodada não acha nada.
+*/5 * * * *|60|api/v1/cron/pareamento-qr-limpeza
 */10 * * * *|60|api/v1/cron/contact-avatars
 */10 * * * *|60|api/v1/cron/agenda-google-refresh
 */15 * * * *|90|api/v1/cron/agenda-google-sync

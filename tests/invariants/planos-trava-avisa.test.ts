@@ -1039,7 +1039,7 @@ describe("19. Aviso gerado pelos gatilhos de user_organizations, team_invites e 
     expect(avisosDe(ORG_AVISO_CONVITE), "convite pendente acima do teto avisa").toBe(1);
   });
 
-  it("conectar um canal acima do teto (channel_sessions) avisa", () => {
+  it("conectar um canal acima do teto (channel_sessions) é RECUSADO, sem aviso (D-188: Conexões bloqueia em qualquer modo)", () => {
     comoServico(`
       insert into public.organizations (id, slug, legal_name, display_name)
         values ('${ORG_AVISO_CONEXAO}', 'trava-aviso-conexao', 'Trava Aviso Conexao LTDA', 'Trava Aviso Conexao')
@@ -1052,11 +1052,15 @@ describe("19. Aviso gerado pelos gatilhos de user_organizations, team_invites e 
     `);
     expect(avisosDe(ORG_AVISO_CONEXAO), "controle: a primeira conexão não avisa").toBe(0);
 
-    comoServico(`
-      insert into public.channel_sessions (organization_id, waha_session_name, webhook_secret_encrypted)
-        values ('${ORG_AVISO_CONEXAO}', 'aviso-conexao-2', '\\x00'::bytea);
-    `);
-    expect(avisosDe(ORG_AVISO_CONEXAO), "a segunda conexão, acima do teto, avisa").toBe(1);
+    // Migration 0954: o item `conexoes` bloqueia mesmo com o modo `avisar`, então a segunda é recusada (PT402)
+    // e, por isso, nem chega a gerar o aviso do teto.
+    expect(() =>
+      comoServico(`
+        insert into public.channel_sessions (organization_id, waha_session_name, webhook_secret_encrypted)
+          values ('${ORG_AVISO_CONEXAO}', 'aviso-conexao-2', '\\x00'::bytea);
+      `),
+    ).toThrow();
+    expect(avisosDe(ORG_AVISO_CONEXAO), "a segunda conexão foi recusada: nada de aviso").toBe(0);
   });
 });
 

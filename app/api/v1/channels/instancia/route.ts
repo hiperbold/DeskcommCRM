@@ -25,7 +25,7 @@ import {
   listarConexoesPorInstancia,
   removerConexaoPorInstancia,
 } from "@/lib/channels/instancia";
-import { env } from "@/lib/env";
+import { urlDoWebhookDeCanal } from "@/lib/channels/url-do-webhook";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { ipDoCliente } from "@/lib/http/ip-do-cliente";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -40,17 +40,6 @@ const conectarSchema = z.object({
 });
 
 const idSchema = z.string().uuid();
-
-/**
- * Endereço público desta instalação, pela mesma regra da conexão por parceiro:
- * `env.*` em runtime (a imagem genérica nasce com um placeholder de build), e o
- * host da requisição só como último recurso.
- */
-function baseDoCrm(req: NextRequest): string {
-  const configurada = env.NEXT_PUBLIC_APP_URL;
-  const usavel = configurada && !configurada.includes("placeholder.invalid") ? configurada : null;
-  return (usavel ?? req.headers.get("origin") ?? `${req.nextUrl.protocol}//${req.nextUrl.host}`).replace(/\/+$/, "");
-}
 
 function contextoDaRequisicao(req: NextRequest) {
   // D-036: o primeiro salto do `x-forwarded-for` é forjável pelo cliente;
@@ -99,13 +88,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return fail("invalid_request", t("servidor e token são obrigatórios"), 422, { requestId });
   }
 
-  const base = baseDoCrm(req);
+  // O endereço de volta vem SÓ da configuração da instalação: o `Origin` e o host da requisição são
+  // escolhidos por quem chama, e o endereço registrado é para onde o servidor passa a entregar as
+  // mensagens do cliente. Sem ele a conexão não é gravada (a volta nunca chegaria).
+  const urlDoWebhook = urlDoWebhookDeCanal();
+  if (!urlDoWebhook) {
+    return fail(
+      "invalid_request",
+      t("O endereço público do CRM não está configurado. Peça a quem instalou para definir o endereço do domínio e tente de novo."),
+      422,
+      { requestId },
+    );
+  }
+
   const r = await conectarPorInstancia(createAdminClient(), {
     organizationId: orgId,
     servidor: parsed.data.servidor,
     token: parsed.data.token,
     nome: parsed.data.nome ?? null,
-    urlDoWebhook: (pathToken) => `${base}/api/v1/webhooks/channel/${pathToken}`,
+    urlDoWebhook,
+    idioma: authz.user.idioma,
   });
   if (!r.ok) {
     // Fase F3, decisão 9: código próprio para a recusa do plano — a tela
@@ -170,8 +172,21 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
     resourceId: conexaoId,
     requestId,
     ...contextoDaRequisicao(req),
-    metadata: { via: "instancia", webhook_removido: r.webhookRemovido },
+    metadata: {
+      via: "instancia",
+      webhook_removido: r.webhookRemovido,
+      instancia_apagada: r.instanciaApagada,
+      instancia_restou: r.instanciaRestou,
+    },
   });
 
-  return ok({ removida: true, webhook_removido: r.webhookRemovido }, { requestId });
+  return ok(
+    {
+      removida: true,
+      webhook_removido: r.webhookRemovido,
+      instancia_apagada: r.instanciaApagada,
+      instancia_restou: r.instanciaRestou,
+    },
+    { requestId },
+  );
 }

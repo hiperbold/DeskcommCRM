@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
+import { mensagemDaRecusaDoPlano } from "@/lib/billing/planos/limite-de-conexoes";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { ARCHIVED_AT, queryTolerantToMissingArchived } from "@/lib/channels/archived";
 import { CHANNEL_PROVIDER_META } from "@/lib/channels/capabilities";
@@ -333,7 +334,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // e o UPDATE de `reactivateChannelSession`) — as duas contam contra o teto
     // de conexões. PT402 pelo `code`, nunca pelo texto do Postgres.
     const recusa = recusaDoPlano(error);
-    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    if (recusa) {
+      const mensagem = await mensagemDaRecusaDoPlano(recusa, admin, orgId, authz.user.idioma);
+      return fail("plano_limite_atingido", mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    }
     return falhaInterna("internal_error", error ?? "channel_session_write_failed", {
       requestId,
     });

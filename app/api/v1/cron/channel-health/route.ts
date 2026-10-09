@@ -53,6 +53,7 @@ import {
   type ChannelSessionRef,
 } from "@/lib/channels";
 import { sincronizarSaudeDaConexao } from "@/lib/channels/health";
+import { pareamentoQrPendente } from "@/lib/channels/pareamento-qr";
 import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { autorizaCron } from "@/lib/auth/cron-auth";
@@ -69,6 +70,7 @@ type LinhaDeSessao = ChannelSessionRef & {
   display_name: string | null;
   phone_number: string | null;
   archived_at: string | null;
+  pareamento_qr_estado: string | null;
 };
 
 async function handle(req: NextRequest): Promise<Response> {
@@ -86,7 +88,7 @@ async function handle(req: NextRequest): Promise<Response> {
   const { data, error } = await admin
     .from("channel_sessions")
     .select(
-      `id, organization_id, status, display_name, phone_number, archived_at, ${CHANNEL_SESSION_REF_COLUMNS}`,
+      `id, organization_id, status, display_name, phone_number, archived_at, pareamento_qr_estado, ${CHANNEL_SESSION_REF_COLUMNS}`,
     )
     .is("archived_at", null)
     .limit(LIMITE);
@@ -111,6 +113,14 @@ async function handle(req: NextRequest): Promise<Response> {
     // ele segue para o `getAdapter` abaixo, que lança, e o `catch` da iteração
     // deixa o rastro.
     if (canalConhecidoSemMensagem(s.provider)) {
+      ignoradas++;
+      continue;
+    }
+
+    // Pareamento por QR ainda não lido: o servidor responde "conectando", que o vigia
+    // leria como número caído (aviso crítico e e-mail por um QR que o cliente está
+    // lendo agora). A limpeza própria (`pareamento-qr-limpeza`) cuida desta linha.
+    if (pareamentoQrPendente(s)) {
       ignoradas++;
       continue;
     }

@@ -9,6 +9,7 @@ import { skipWhatsapp, markWhatsappConfigured } from "@/app/actions/onboarding/s
 import { CanalInstanciaClient } from "@/components/connections/CanalInstanciaClient";
 import { CanalOficialClient } from "@/components/connections/CanalOficialClient";
 import { CanalParceiroClient } from "@/components/connections/CanalParceiroClient";
+import { PareamentoQrClient } from "@/components/connections/PareamentoQrClient";
 
 interface Props {
   /** Só rotula o passo no estado do wizard; nenhum transporte depende dele. */
@@ -20,6 +21,8 @@ interface Props {
    * isso é ANTES de a pessoa buscar três credenciais no painel, não depois.
    */
   oficialPodeReceber: boolean;
+  /** A instalação tem o servidor de WhatsApp configurado: ler um QR Code vira a primeira escolha. */
+  pareamentoQr?: boolean;
 }
 
 /**
@@ -48,7 +51,7 @@ interface Props {
  * A forma que entrou no lugar é a mesma da tela de Conexões — instância própria
  * —, e ela não grava linha nenhuma antes de o servidor e o token responderem.
  */
-type Forma = "instancia" | "oficial" | "parceiro";
+type Forma = "qr" | "instancia" | "oficial" | "parceiro";
 
 /**
  * Um cartão de escolha — a MESMA forma que o resto do produto já usa
@@ -175,7 +178,7 @@ function isRedirectError(err: unknown): boolean {
   );
 }
 
-export function ConnectWhatsappClient({ sessionName, oficialPodeReceber }: Props) {
+export function ConnectWhatsappClient({ sessionName, oficialPodeReceber, pareamentoQr = false }: Props) {
   const t = useT();
   const [forma, setForma] = useState<Forma | null>(null);
 
@@ -190,6 +193,15 @@ export function ConnectWhatsappClient({ sessionName, oficialPodeReceber }: Props
             )}
           </p>
           <div className="grid gap-2">
+            {pareamentoQr && (
+              <Escolha
+                valor="qr"
+                atual={forma}
+                titulo={t("Conectar WhatsApp (QR Code)")}
+                corpo={t("O CRM cria a conexão para você. Basta ler um QR Code com o celular do número.")}
+                onEscolher={setForma}
+              />
+            )}
             <Escolha
               valor="instancia"
               atual={forma}
@@ -240,7 +252,9 @@ export function ConnectWhatsappClient({ sessionName, oficialPodeReceber }: Props
       {/* Os mesmos componentes da tela de Conexões, inteiros. Reescrevê-los
           aqui criaria uma segunda cópia de um formulário que valida credencial
           contra o outro lado ANTES de gravar — e duas cópias divergem. */}
-      {forma === "instancia" ? (
+      {forma === "qr" ? (
+        <PareamentoQrClient />
+      ) : forma === "instancia" ? (
         <CanalInstanciaClient />
       ) : forma === "oficial" ? (
         <CanalOficialClient />

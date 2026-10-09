@@ -236,6 +236,10 @@ export const AUDIT_ACTIONS = [
   // rodada de cron vazia.
   "prospecting.approach_sent",
   "channel.pairing_code_requested",
+  // O cliente começou a conectar o WhatsApp lendo o QR Code dentro do CRM: o CRM
+  // criou a instância no servidor. O desfecho vem em `channel.connected` (leu) ou
+  // `channel.archived` (cancelou ou expirou), sempre com `via: "qr"`.
+  "channel.qr_pairing_started",
   "channel.social_configured",
   "channel.ai_access_updated",
   "channel.reconnected",

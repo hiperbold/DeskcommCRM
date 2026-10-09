@@ -11,6 +11,7 @@ import { apiClient } from "@/lib/api/client";
 import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useT } from "@/hooks/i18n/useT";
+import { AvisoDeLimiteDeConexoes } from "./AvisoDeLimiteDeConexoes";
 import { ChannelAiAccess } from "./ChannelAiAccess";
 import { ParaIntegrar } from "./ParaIntegrar";
 
@@ -211,7 +212,7 @@ export function CanalParceiroClient({
               {salvando ? t("Verificando…") : conectado ? t("Reconectar") : t("Conectar")}
             </Button>
             {!conectado && bloqueio?.desabilitado ? (
-              <p className="mt-1.5 text-xs text-destructive">{bloqueio.motivo}</p>
+              <AvisoDeLimiteDeConexoes motivo={bloqueio.motivo} />
             ) : (
               <p className="mt-1.5 text-xs text-muted-foreground">
                 {t("A credencial é testada contra o provedor antes de ser gravada.")}

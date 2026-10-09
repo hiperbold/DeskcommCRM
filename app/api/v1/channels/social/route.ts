@@ -128,7 +128,7 @@ export async function POST(req: Request) {
       await configureSocialIntegration(db, auth.org.orgId, body.api_key, body.profile_id);
       result = { configured: true };
     } else if (body.action === "inbox") {
-      result = await connectSocialInbox(db, auth.org.orgId, body.account_id, publicBase());
+      result = await connectSocialInbox(db, auth.org.orgId, body.account_id, publicBase(), auth.user.idioma);
     } else {
       const config = await readSocialIntegration(db, auth.org.orgId);
       if (!config) throw new SocialError("Configure a integração primeiro.", 422);

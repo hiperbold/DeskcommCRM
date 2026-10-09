@@ -4,8 +4,15 @@ import { revalidatePath } from "next/cache";
 
 import { audit } from "@/lib/audit";
 import { requirePlatformAdminFull } from "@/lib/auth/portao-de-escrita";
+import { sessionAal } from "@/lib/auth/server";
 import { acharChave } from "@/lib/instalacao/catalogo";
-import { estadoParaTela, gravarPelaTela, voltarAoAmbiente, type EstadoParaTela } from "@/lib/instalacao/config";
+import {
+  estadoParaTela,
+  gravarPelaTela,
+  valorDaInstalacao,
+  voltarAoAmbiente,
+  type EstadoParaTela,
+} from "@/lib/instalacao/config";
 
 /**
  * `ok: true` carrega o ESTADO NOVO da chave, relido depois da escrita.
@@ -20,7 +27,12 @@ import { estadoParaTela, gravarPelaTela, voltarAoAmbiente, type EstadoParaTela }
  * determinístico por construção; o refresh continua, só que ninguém depende dele.
  */
 export type ResultadoDaGravacao =
-  | { ok: true; estado: EstadoParaTela }
+  | {
+      ok: true;
+      estado: EstadoParaTela;
+      /** Algo além do que foi pedido aconteceu e a pessoa precisa saber (ex.: outra chave foi limpa). */
+      aviso?: string;
+    }
   | { ok: false; erro: string };
 
 /**
@@ -70,6 +82,48 @@ export async function salvarConfiguracaoDaInstalacao(
     return { ok: false, erro: "Escreva um valor, ou use “Voltar ao padrão” para limpar." };
   }
 
+  // Segredo do WhatsApp (ex.: o token de administrador do servidor de QR Code): quem o
+  // grava passa a poder criar e apagar WhatsApp pago de toda empresa da instalação. O mesmo
+  // vale para o endereço desse servidor (`exigeSegundoFator`): quem o troca decide para onde
+  // o token de administrador viaja.
+  // `requirePlatformAdminFull` só barra a sessão em dívida com o segundo fator; aqui se
+  // exige o segundo fator PROVADO nesta sessão (aal2), também de quem ainda não cadastrou
+  // um (aí precisa ativar a verificação em duas etapas antes).
+  if (doCatalogo.exigeSegundoFator || (doCatalogo.natureza === "segredo" && doCatalogo.grupo === "whatsapp")) {
+    if ((await sessionAal()) !== "aal2") {
+      return {
+        ok: false,
+        erro: doCatalogo.natureza === "segredo"
+          ? "Para gravar esta senha é preciso ter a verificação em duas etapas ativa e confirmada nesta sessão. Entre de novo informando o código de 6 dígitos."
+          : "Para trocar este endereço é preciso ter a verificação em duas etapas ativa e confirmada nesta sessão. Entre de novo informando o código de 6 dígitos.",
+      };
+    }
+  }
+
+  // Conferência própria da chave (ex.: endereço de servidor só com https e fora da rede
+  // interna). A frase vem do catálogo, escrita para a pessoa: nunca o valor digitado.
+  const recusa = (await doCatalogo.validar?.(limpo)) ?? null;
+  if (recusa) return { ok: false, erro: recusa };
+
+  // Trocar o endereço de que um segredo depende apaga o segredo guardado (volta ao arquivo de
+  // instalação), ANTES de gravar o endereço novo: se a limpeza falhar nada é gravado, e se a
+  // gravação falhar depois o pior é digitar o segredo de novo. Mesmo endereço escrito de outro
+  // jeito (maiúsculas, porta padrão, barra no fim) não é troca.
+  const limpas: string[] = [];
+  if (doCatalogo.apagaAoMudar && doCatalogo.apagaAoMudar.length > 0) {
+    const normalizar = doCatalogo.normalizar ?? ((v: string) => v.trim());
+    const atual = (await valorDaInstalacao(chave)).valor;
+    if (atual === null || normalizar(atual) !== normalizar(limpo)) {
+      for (const dependente of doCatalogo.apagaAoMudar) {
+        const apagou = await voltarAoAmbiente(dependente);
+        if (!apagou.ok) {
+          return { ok: false, erro: "Não consegui salvar agora. Tente de novo em instantes." };
+        }
+        limpas.push(dependente);
+      }
+    }
+  }
+
   const r = await gravarPelaTela(chave, limpo, {
     ehSegredo: doCatalogo.natureza === "segredo",
     ator: user.id,
@@ -101,11 +155,18 @@ export async function salvarConfiguracaoDaInstalacao(
       // lá sem revelá-la — mesma decisão de `ai_provider_credentials`.
       last4: doCatalogo.natureza === "segredo" ? limpo.slice(-4) : undefined,
       natureza: doCatalogo.natureza,
+      ...(limpas.length > 0 ? { limpou_ao_mudar: limpas } : {}),
     },
   });
 
   revalidatePath("/admin/configuracao");
-  return { ok: true, estado: await estadoParaTela(chave, doCatalogo.natureza === "segredo") };
+  return {
+    ok: true,
+    estado: await estadoParaTela(chave, doCatalogo.natureza === "segredo"),
+    ...(limpas.length > 0
+      ? { aviso: "O endereço mudou, então a senha de administrador guardada foi apagada. Digite-a de novo." }
+      : {}),
+  };
 }
 
 /**

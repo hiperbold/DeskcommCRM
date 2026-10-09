@@ -3,8 +3,9 @@ import { redirect } from "next/navigation";
 
 import { requireAuth, resolveActiveOrg } from "@/lib/auth/server";
 import { ROLE_RANK } from "@/lib/auth/types";
-import { bloqueioDoBotao, estadoDoBloqueio } from "@/lib/billing/planos/estado-do-bloqueio";
+import { bloqueioDoBotaoDeConexoes } from "@/lib/billing/planos/limite-de-conexoes";
 import { ConexoesShell } from "@/components/connections/ConexoesShell";
+import { pareamentoQrDisponivel } from "@/lib/channels/pareamento-qr";
 import { canalGraphParceiroLigado, GRAPH_PARTNER_LABEL } from "@/lib/channels/graph-parceiro/credentials";
 import { traduzir } from "@/lib/i18n/dicionario";
 import { logger } from "@/lib/logger";
@@ -28,13 +29,11 @@ export default async function ConnectionsPage() {
   );
   const wacallsConfigured = Boolean(process.env.WACALLS_API_BASE_URL);
 
-  // Fase F3, tarefa 9: os quatro canais que criam `channel_sessions`
-  // (instância, oficial, parceiro, redes sociais) usam o MESMO item da
-  // matriz de plano ("conexoes"), então um só `estadoDoBloqueio` serve a
-  // todos — cada componente decide sozinho se o botão que ele mostra é uma
-  // conexão NOVA (ver comentário de cada um).
-  const estado = await estadoDoBloqueio(createAdminClient(), activeOrg.orgId, {}, logger);
-  const bloqueio = bloqueioDoBotao(estado, "conexoes");
+  // D-188: os canais que criam `channel_sessions` (instância, QR Code, oficial, parceiro, redes sociais)
+  // usam o MESMO item da matriz de plano, "Conexões", somado entre todos, e ele bloqueia em qualquer modo de
+  // `billing_settings`. Um só cálculo serve a todos; cada componente decide sozinho se o botão que ele
+  // mostra é uma conexão NOVA.
+  const bloqueio = await bloqueioDoBotaoDeConexoes(createAdminClient(), activeOrg.orgId, idioma, logger);
 
   return (
     <div className="flex h-full flex-col gap-6 p-6">
@@ -55,6 +54,8 @@ export default async function ConnectionsPage() {
         // O mesmo piso de `PUT /api/v1/ai/pacing` (`manager`): abaixo disso a ficha
         // abre só para ler, em vez de oferecer um Salvar que a rota recusaria.
         podeEditarProtecao={ROLE_RANK[activeOrg.role] >= ROLE_RANK.manager}
+        // Só aparece com o servidor e o token de administrador configurados na instalação.
+        pareamentoQr={await pareamentoQrDisponivel()}
       />
     </div>
   );

@@ -25,7 +25,7 @@ import { fail, ok, falhaInterna } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
 import { podeCriar } from "@/lib/billing/planos/pode-criar";
-import { bloqueioValeParaOrganizacao } from "@/lib/billing/planos/bloqueio-vale";
+import { mensagemDaRecusaDoPlano, mensagemDoLimiteDeConexoes } from "@/lib/billing/planos/limite-de-conexoes";
 import {
   PARTNER_CHANNEL_LABEL,
   findPartnerSession,
@@ -123,17 +123,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // pena barrar aqui. `podeCriar` é só um AVISO adiantado: quem trava de
   // verdade continua sendo o gatilho no INSERT/UPDATE abaixo.
   //
-  // Correção do defeito achado na sessão principal: `podeCriar` só responde
-  // "cabe ou não cabe", sem saber se o bloqueio VALE para a organização. No
-  // modo `avisar` de hoje (o único em produção) o bloqueio nunca vale, e
-  // chamar `podeCriar` sem perguntar antes recusava uma conexão que o modo
-  // atual deixaria passar. `bloqueioValeParaOrganizacao` é o portão.
-  if ((!existenteAntes || existenteAntes.archivedAt) && (await bloqueioValeParaOrganizacao(admin, orgId))) {
+  // D-188 (migration 0954): Conexões bloqueia sempre, qualquer que seja o modo, então não há portão de modo:
+  // o item `conexoes` é conferido direto.
+  if (!existenteAntes || existenteAntes.archivedAt) {
     const veredito = await podeCriar(admin, orgId, "conexoes");
     if (!veredito.pode && veredito.motivo === "teto_atingido") {
       return fail(
         "plano_limite_atingido",
-        "O plano desta organização chegou ao limite de conexões. Fale com o suporte para ampliar.",
+        await mensagemDoLimiteDeConexoes(admin, orgId, authz.user.idioma),
         STATUS_RECUSA_DO_PLANO,
         { requestId },
       );
@@ -184,7 +181,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // trava de verdade é o gatilho do banco, e é este erro que carrega o
     // PT402 quando duas conexões correm juntas e passam pelo aviso.
     const recusa = recusaDoPlano(errorRaw);
-    if (recusa) return fail("plano_limite_atingido", recusa.mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    if (recusa) {
+      const mensagem = await mensagemDaRecusaDoPlano(recusa, admin, orgId, authz.user.idioma);
+      return fail("plano_limite_atingido", mensagem, STATUS_RECUSA_DO_PLANO, { requestId });
+    }
     return falhaInterna("internal_error", error, { requestId });
   }
 

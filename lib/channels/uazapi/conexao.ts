@@ -45,6 +45,46 @@ export const UAZAPI_EVENTOS_DO_WEBHOOK = ["messages", "messages_update", "connec
 /** Chave em `channel_sessions.metadata` com o id do NOSSO webhook no servidor. */
 export const UAZAPI_METADATA_WEBHOOK_ID = "uazapi_webhook_id";
 
+/**
+ * O estado do pareamento por QR Code (pendente, concluído), se a instância foi
+ * CRIADA pelo CRM e quando começou moram em COLUNAS de `channel_sessions`
+ * (`pareamento_qr_estado`, `criada_pelo_crm`, `pareamento_qr_iniciado_em`,
+ * migration 0953) que só o servidor grava. Nunca no `metadata`: o admin da
+ * organização o edita pelo PostgREST, e o que decide apagar instância ou usar o
+ * token de administrador não pode depender do que ele escreveu.
+ */
+
+/**
+ * O pareamento por QR Code ainda não foi lido: a linha existe (para o limite do
+ * plano valer) mas NÃO é uma conexão, e fica fora da lista de Conexões e do vigia
+ * de saúde, que a trataria como número caído.
+ */
+export function pareamentoPendente(
+  linha: { pareamento_qr_estado?: string | null } | null | undefined,
+): boolean {
+  return linha?.pareamento_qr_estado === "pendente";
+}
+
+/**
+ * Endereço que o servidor da instância não alcança. Registrar webhook para ele
+ * não é erro de API — o servidor aceita — e por isso mesmo é pior: a tela diria
+ * "ligado" para uma volta que nunca chega.
+ */
+export function enderecoNaoAlcancavel(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return (
+      host === "localhost" ||
+      host === "0.0.0.0" ||
+      host.startsWith("127.") ||
+      host.endsWith(".invalid") ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return true;
+  }
+}
+
 const PRAZO_MS = 20_000;
 
 type Json = Record<string, unknown> | null;
@@ -249,10 +289,13 @@ interface LinhaDaConexao {
   webhook_path_token: string | null;
   metadata: Record<string, unknown> | null;
   archived_at?: string | null;
+  /** Colunas só do servidor (migration 0953). */
+  pareamento_qr_estado?: string | null;
+  criada_pelo_crm?: boolean | null;
 }
 
 const COLUNAS =
-  "id, display_name, phone_number, status, uazapi_base_url, uazapi_instance_id, webhook_path_token, metadata";
+  "id, display_name, phone_number, status, uazapi_base_url, uazapi_instance_id, webhook_path_token, metadata, pareamento_qr_estado, criada_pelo_crm";
 
 function hostDe(url: string | null): string | null {
   if (!url) return null;
@@ -289,7 +332,11 @@ export async function listarConexoesUazapi(admin: SupabaseClient, organizationId
     () => base(),
   );
   if (error) throw new Error(`uazapi_listar_conexoes_falhou: ${error.message ?? ""}`.trim());
-  return ((data ?? []) as unknown as LinhaDaConexao[]).map(paraConexao);
+  // Pareamento por QR ainda não concluído não é conexão: a linha só existe para o
+  // limite do plano valer, e mostrá-la aqui ofereceria "Remover" a um fantasma.
+  return ((data ?? []) as unknown as LinhaDaConexao[])
+    .filter((l) => !pareamentoPendente(l))
+    .map(paraConexao);
 }
 
 /**

@@ -12,9 +12,11 @@ import { apiClient } from "@/lib/api/client";
 import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { usePacingKnobs } from "@/hooks/channels/usePacingKnobs";
 import { useT } from "@/hooks/i18n/useT";
+import { AvisoDeLimiteDeConexoes } from "./AvisoDeLimiteDeConexoes";
 import { ShieldCheck } from "@/lib/ui/icons";
 import { AntiBanSheet } from "./AntiBanSheet";
 import { ChannelAiAccess } from "./ChannelAiAccess";
+import { PareamentoQrClient } from "./PareamentoQrClient";
 
 /**
  * Conectar números por INSTÂNCIA de uma API não oficial.
@@ -68,9 +70,28 @@ function rotuloDoStatus(status: string | null, t: (s: string) => string): string
   }
 }
 
+/**
+ * Com o pareamento por QR Code disponível, o formulário de servidor e token deixa
+ * de ser o caminho principal e vira opção avançada (dobrada). Sem ele, a tela é
+ * a de sempre: o formulário aparece direto.
+ */
+function Avancado({ ativo, children }: { ativo: boolean; children: React.ReactNode }) {
+  const t = useT();
+  if (!ativo) return <>{children}</>;
+  return (
+    <details className="rounded-lg border p-3" data-testid="canal-instancia-avancado">
+      <summary className="cursor-pointer text-sm font-medium">
+        {t("Avançado: conectar uma instância que já está pareada")}
+      </summary>
+      <div className="mt-3 flex flex-col gap-4">{children}</div>
+    </details>
+  );
+}
+
 export function CanalInstanciaClient({
   bloqueio,
   podeEditarProtecao,
+  pareamentoQr = false,
 }: {
   /**
    * Fase F3, tarefa 9: quando o bloqueio do plano vale e "conexões" está no
@@ -89,6 +110,12 @@ export function CanalInstanciaClient({
    * `manager`): a tela nunca calcula papel sozinha nem libera mais que a rota.
    */
   podeEditarProtecao?: boolean;
+  /**
+   * A instalação tem o servidor de WhatsApp configurado: a opção principal passa a
+   * ser ler um QR Code (o CRM cria a conexão). Decidido no servidor da página;
+   * `false`/ausente mantém a tela como sempre foi.
+   */
+  pareamentoQr?: boolean;
 } = {}) {
   const t = useT();
   const qc = useQueryClient();
@@ -153,8 +180,14 @@ export function CanalInstanciaClient({
     }
     setConfirmandoRemocao(null);
     try {
-      await apiClient.delete(`/api/v1/channels/instancia?id=${encodeURIComponent(id)}`);
-      toast.success(t("Conexão removida."));
+      const r = await apiClient.delete<{ data?: { instancia_restou?: boolean } }>(
+        `/api/v1/channels/instancia?id=${encodeURIComponent(id)}`,
+      );
+      if (r?.data?.instancia_restou) {
+        toast.warning(t("Conexão removida, mas o WhatsApp não foi apagado no servidor. Avise quem cuida do servidor."));
+      } else {
+        toast.success(t("Conexão removida."));
+      }
       await carregar();
       void qc.invalidateQueries({ queryKey: ["pacing-knobs"] });
     } catch (e) {
@@ -170,74 +203,77 @@ export function CanalInstanciaClient({
 
   return (
     <div className="flex flex-col gap-4" data-testid="canal-instancia-root">
-      <Card className="flex flex-col gap-4 p-4">
-        <div>
-          <h3 className="text-sm font-semibold">
-            {t("Conectar por")} {rotulo}
-          </h3>
-          <p className="text-xs text-muted-foreground">
-            {t(
-              "Um número de WhatsApp pareado numa instância do seu servidor. As mensagens entram e saem pelo CRM, e a entrega é ligada automaticamente.",
-            )}
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="instancia-servidor">{t("Servidor")}</Label>
-            <Input
-              id="instancia-servidor"
-              value={servidor}
-              onChange={(e) => setServidor(e.target.value)}
-              placeholder="https://seu-servidor.exemplo.com"
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="instancia-token">{t("Token da instância")}</Label>
-            <Input
-              id="instancia-token"
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder={t("cole o token")}
-              autoComplete="off"
-            />
+      {pareamentoQr && <PareamentoQrClient bloqueio={bloqueio} aoConectar={() => void carregar()} />}
+      <Avancado ativo={pareamentoQr}>
+        <Card className="flex flex-col gap-4 p-4">
+          <div>
+            <h3 className="text-sm font-semibold">
+              {t("Conectar por")} {rotulo}
+            </h3>
             <p className="text-xs text-muted-foreground">
-              {t("Guardado cifrado. Depois de gravar ele não é mostrado de novo.")}
+              {t(
+                "Um número de WhatsApp pareado numa instância do seu servidor. As mensagens entram e saem pelo CRM, e a entrega é ligada automaticamente.",
+              )}
             </p>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="instancia-nome">{t("Apelido (opcional)")}</Label>
-            <Input
-              id="instancia-nome"
-              value={nome}
-              onChange={(e) => setNome(e.target.value)}
-              placeholder={t("ex.: Comercial")}
-              autoComplete="off"
-            />
-          </div>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="instancia-servidor">{t("Servidor")}</Label>
+              <Input
+                id="instancia-servidor"
+                value={servidor}
+                onChange={(e) => setServidor(e.target.value)}
+                placeholder="https://seu-servidor.exemplo.com"
+                autoComplete="off"
+              />
+            </div>
 
-          <div>
-            <Button
-              onClick={conectar}
-              disabled={salvando || !servidor || !token || bloqueio?.desabilitado}
-              title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
-            >
-              {salvando ? t("Verificando…") : t("Conectar")}
-            </Button>
-            {bloqueio?.desabilitado ? (
-              <p className="mt-1.5 text-xs text-destructive">{bloqueio.motivo}</p>
-            ) : (
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                {t("O servidor e o token são testados antes de gravar.")}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="instancia-token">{t("Token da instância")}</Label>
+              <Input
+                id="instancia-token"
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder={t("cole o token")}
+                autoComplete="off"
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("Guardado cifrado. Depois de gravar ele não é mostrado de novo.")}
               </p>
-            )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="instancia-nome">{t("Apelido (opcional)")}</Label>
+              <Input
+                id="instancia-nome"
+                value={nome}
+                onChange={(e) => setNome(e.target.value)}
+                placeholder={t("ex.: Comercial")}
+                autoComplete="off"
+              />
+            </div>
+
+            <div>
+              <Button
+                onClick={conectar}
+                disabled={salvando || !servidor || !token || bloqueio?.desabilitado}
+                title={bloqueio?.desabilitado ? bloqueio.motivo ?? undefined : undefined}
+              >
+                {salvando ? t("Verificando…") : t("Conectar")}
+              </Button>
+              {bloqueio?.desabilitado ? (
+                <AvisoDeLimiteDeConexoes motivo={bloqueio.motivo} />
+              ) : (
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  {t("O servidor e o token são testados antes de gravar.")}
+                </p>
+              )}
+            </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      </Avancado>
 
       {aviso && (
         <Card className="flex flex-col gap-2 border-warning/40 bg-warning-bg p-4">

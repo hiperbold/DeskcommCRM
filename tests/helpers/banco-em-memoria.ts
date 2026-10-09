@@ -46,7 +46,7 @@ class Consulta implements PromiseLike<ResultadoDoBanco> {
 
   constructor(
     private readonly tabela: Linha[],
-    private readonly aoEscrever?: (modo: string, linhas: Linha[]) => { message: string; code?: string } | null,
+    private readonly aoEscrever?: (modo: string, linhas: Linha[], patch?: Linha | null) => { message: string; code?: string } | null,
   ) {}
 
   select(_colunas?: string, _opts?: { count?: string; head?: boolean }): this {
@@ -87,6 +87,20 @@ class Consulta implements PromiseLike<ResultadoDoBanco> {
     this.filtros.push((l) => {
       const v = valorDa(l, coluna);
       return v !== null && v !== undefined && (v as string | number) > (valor as string | number);
+    });
+    return this;
+  }
+  lt(coluna: string, valor: unknown): this {
+    this.filtros.push((l) => {
+      const v = valorDa(l, coluna);
+      return v !== null && v !== undefined && (v as string | number) < (valor as string | number);
+    });
+    return this;
+  }
+  gte(coluna: string, valor: unknown): this {
+    this.filtros.push((l) => {
+      const v = valorDa(l, coluna);
+      return v !== null && v !== undefined && (v as string | number) >= (valor as string | number);
     });
     return this;
   }
@@ -144,7 +158,7 @@ class Consulta implements PromiseLike<ResultadoDoBanco> {
     if (this.limite !== null) linhas = linhas.slice(0, this.limite);
 
     if (this.modo === "update") {
-      const erro = this.aoEscrever?.("update", linhas) ?? null;
+      const erro = this.aoEscrever?.("update", linhas, this.patch) ?? null;
       if (erro) return { data: null, error: erro };
       for (const l of linhas) Object.assign(l, this.patch);
       return this.formata(this.retorna ? linhas : []);
@@ -187,7 +201,10 @@ export interface OpcoesDoBanco {
   /** Resposta de cada RPC; devolver `{ error }` simula falha. */
   rpc?: Record<string, (args: Record<string, unknown>) => { data?: unknown; error?: { message: string } | null }>;
   /** Gancho de escrita por tabela: devolver erro faz a escrita falhar sem mudar nada. */
-  aoEscrever?: Record<string, (modo: string, linhas: Linha[]) => { message: string; code?: string } | null>;
+  aoEscrever?: Record<
+    string,
+    (modo: string, linhas: Linha[], patch?: Linha | null) => { message: string; code?: string } | null
+  >;
 }
 
 export function criarBancoEmMemoria(

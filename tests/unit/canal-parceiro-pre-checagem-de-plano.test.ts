@@ -1,19 +1,9 @@
 /**
- * Defeito achado na sessão principal (F3): `POST /api/v1/channels/partner`
- * chamava `podeCriar` direto, sem perguntar antes se o bloqueio VALE para a
- * organização. No modo `avisar` de hoje (o único em produção) o bloqueio
- * nunca vale, e a pré-checagem recusava uma conexão que o modo atual deixa
- * passar.
- *
- * Prova, contra o Route Handler REAL (auth, `lib/channels/connect` e
- * `podeCriar` mockados; `bloqueioValeParaOrganizacao` REAL, com o client
- * admin dublado): os três casos a seguir.
- *
- *  1. bloqueio NÃO vale (modo != 'bloquear'): `podeCriar` nem é chamado, a
- *     conexão segue;
- *  2. bloqueio VALE e `podeCriar` diz `teto_atingido`: 402 `plano_limite_atingido`;
- *  3. leitura de `billing_settings` falha: fail-open, mesmo efeito do caso 1,
- *     nunca um 500 nem uma recusa por acidente.
+ * D-188 (migration 0954): o limite de Conexões do plano bloqueia em qualquer `billing_settings.modo`, então a
+ * pré-checagem de `POST /api/v1/channels/partner` deixou de ter o portão de modo/carência que existia na F3: ela pergunta direto
+ * "cabe mais uma?" (`podeCriar`, mockado) e, quando não cabe, devolve 402 `plano_limite_atingido` com a frase
+ * "Sua conta atingiu o limite de {n} conexões do plano {plano}..." montada com o plano real (lido do dublê do
+ * client admin, sem mock do nosso código). Route Handler REAL; auth, provedor e gravação dublados.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
@@ -51,39 +41,48 @@ import { POST } from "@/app/api/v1/channels/partner/route";
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const ORG_ID = "22222222-2222-4222-8222-222222222222";
 
-/** Client admin dublado, só responde o que `bloqueioValeParaOrganizacao` lê. */
-function adminStub(opts: {
-  modo: string | null;
-  bloqueioAPartirDe?: string | null;
-  falhaSettings?: boolean;
-}) {
+/**
+ * Client admin dublado. D-188: a pré-checagem de Conexões NÃO lê `billing_settings` nem a carência (bloqueia em
+ * qualquer modo); só lê o plano (nome e limite) para montar a frase de recusa.
+ */
+function adminStub(opts: { limiteConexoes?: number | null; planoNome?: string } = {}) {
+  const lerTabela = vi.fn((tabela: string) => {
+    if (tabela === "billing_settings") throw new Error("a pré-checagem de Conexões não pode ler o modo");
+    if (tabela === "billing_contracts") {
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: {
+                status: "ativa",
+                cycle: "monthly",
+                billing_plans: { code: "pro", name: opts.planoNome ?? "Pro", version: 1 },
+              },
+              error: null,
+            }),
+          }),
+        }),
+      };
+    }
+    throw new Error(`tabela inesperada no dublê: ${tabela}`);
+  });
   return {
-    from: (tabela: string) => {
-      if (tabela === "billing_settings") {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () =>
-                opts.falhaSettings
-                  ? { data: null, error: { message: "conexão recusada" } }
-                  : { data: { modo: opts.modo }, error: null },
-            }),
-          }),
-        };
-      }
-      if (tabela === "billing_contracts") {
-        return {
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () => ({
-                data: { bloqueio_a_partir_de: opts.bloqueioAPartirDe ?? null },
-                error: null,
-              }),
-            }),
-          }),
-        };
-      }
-      throw new Error(`tabela inesperada no dublê: ${tabela}`);
+    lerTabela,
+    from: lerTabela,
+    rpc: async (nome: string) => {
+      if (nome !== "fn_billing_limites_efetivos") throw new Error(`rpc inesperada: ${nome}`);
+      return {
+        data: {
+          funis: 5,
+          etapas_por_funil: 10,
+          leads: 5000,
+          membros: 3,
+          conexoes: opts.limiteConexoes === undefined ? 3 : opts.limiteConexoes,
+          integracoes_webhook: 3,
+          tokens_ia_mes: 3_000_000,
+        },
+        error: null,
+      };
     },
   };
 }
@@ -127,20 +126,10 @@ beforeEach(() => {
   vi.mocked(savePartnerSession).mockResolvedValue({ error: null, errorRaw: null } as never);
 });
 
-describe("POST /api/v1/channels/partner: pré-checagem de plano (F3)", () => {
-  it("bloqueio NÃO vale (modo avisar): podeCriar nem é chamado, conexão segue", async () => {
-    vi.mocked(createAdminClient).mockReturnValue(adminStub({ modo: "avisar" }) as never);
-
-    const res = await POST(pedido());
-
-    expect(vi.mocked(podeCriar)).not.toHaveBeenCalled();
-    expect(res.status).toBe(200);
-  });
-
-  it("bloqueio VALE (modo bloquear, carência vencida) e o teto foi atingido: 402 plano_limite_atingido", async () => {
-    vi.mocked(createAdminClient).mockReturnValue(
-      adminStub({ modo: "bloquear", bloqueioAPartirDe: "2020-01-01T00:00:00.000Z" }) as never,
-    );
+describe("POST /api/v1/channels/partner: pré-checagem de Conexões (D-188, bloqueia em qualquer modo)", () => {
+  it("o teto foi atingido: 402 plano_limite_atingido com o limite e o plano, SEM ler o modo", async () => {
+    const admin = adminStub({ limiteConexoes: 3, planoNome: "Pro" });
+    vi.mocked(createAdminClient).mockReturnValue(admin as never);
     vi.mocked(podeCriar).mockResolvedValue({
       pode: false,
       motivo: "teto_atingido",
@@ -153,21 +142,32 @@ describe("POST /api/v1/channels/partner: pré-checagem de plano (F3)", () => {
 
     expect(vi.mocked(podeCriar)).toHaveBeenCalledWith(expect.anything(), ORG_ID, "conexoes");
     expect(res.status).toBe(402);
-    const corpo = (await res.json()) as { error?: { code?: string } };
+    const corpo = (await res.json()) as { error?: { code?: string; message?: string } };
     expect(corpo.error?.code).toBe("plano_limite_atingido");
+    expect(corpo.error?.message).toBe(
+      "Sua conta atingiu o limite de 3 conexões do plano Pro. Remova uma conexão ou mude de plano.",
+    );
     expect(vi.mocked(validatePartnerCredentials)).not.toHaveBeenCalled();
+    expect(admin.lerTabela).not.toHaveBeenCalledWith("billing_settings");
   });
 
-  it("bloqueio VALE mas ainda cabe no teto: segue normal", async () => {
-    vi.mocked(createAdminClient).mockReturnValue(
-      adminStub({ modo: "bloquear", bloqueioAPartirDe: "2020-01-01T00:00:00.000Z" }) as never,
-    );
+  it("ainda cabe no teto: segue normal", async () => {
+    vi.mocked(createAdminClient).mockReturnValue(adminStub() as never);
+    vi.mocked(podeCriar).mockResolvedValue({ pode: true, motivo: "ok", atual: 1, teto: 3, leituraFalhou: false });
+
+    const res = await POST(pedido());
+
+    expect(res.status).toBe(200);
+  });
+
+  it("leitura do teto falhou: fail-open, nunca 500 nem recusa por acidente", async () => {
+    vi.mocked(createAdminClient).mockReturnValue(adminStub() as never);
     vi.mocked(podeCriar).mockResolvedValue({
       pode: true,
-      motivo: "ok",
-      atual: 1,
-      teto: 3,
-      leituraFalhou: false,
+      motivo: "leitura_falhou",
+      atual: null,
+      teto: null,
+      leituraFalhou: true,
     });
 
     const res = await POST(pedido());
@@ -175,20 +175,9 @@ describe("POST /api/v1/channels/partner: pré-checagem de plano (F3)", () => {
     expect(res.status).toBe(200);
   });
 
-  it("bloqueio VALE mas a carência ainda não venceu (data no futuro): podeCriar nem é chamado", async () => {
-    const futuro = new Date(Date.now() + 86_400_000).toISOString();
-    vi.mocked(createAdminClient).mockReturnValue(
-      adminStub({ modo: "bloquear", bloqueioAPartirDe: futuro }) as never,
-    );
-
-    const res = await POST(pedido());
-
-    expect(vi.mocked(podeCriar)).not.toHaveBeenCalled();
-    expect(res.status).toBe(200);
-  });
-
-  it("leitura de billing_settings falha: fail-open, nunca 500 nem recusa por acidente", async () => {
-    vi.mocked(createAdminClient).mockReturnValue(adminStub({ modo: "bloquear", falhaSettings: true }) as never);
+  it("conexão que já está ativa (só editar a credencial) não conta contra o teto: podeCriar nem é chamado", async () => {
+    vi.mocked(createAdminClient).mockReturnValue(adminStub() as never);
+    vi.mocked(findPartnerSession).mockResolvedValue({ id: "sess-1", archivedAt: null } as never);
 
     const res = await POST(pedido());
 

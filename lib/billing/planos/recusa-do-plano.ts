@@ -53,8 +53,9 @@ const MENSAGEM_POR_ITEM: Record<ItemRecusadoPeloPlano, string> = {
   funis: "O plano desta organização chegou ao limite de funis. Fale com o suporte para ampliar.",
   etapas_por_funil:
     "O plano desta organização chegou ao limite de etapas por funil. Fale com o suporte para ampliar.",
-  conexoes:
-    "O plano desta organização chegou ao limite de conexões. Fale com o suporte para ampliar.",
+  // D-188: Conexões bloqueia sempre e vale para todos os canais; a frase com o limite e o plano reais vem de
+  // `mensagemDaRecusaDoPlano` (limite-de-conexoes.ts). Esta é a versão sem número, para quem não tem o cliente.
+  conexoes: "Sua conta atingiu o limite de conexões do plano. Remova uma conexão ou mude de plano.",
   integracoes_webhook:
     "O plano desta organização chegou ao limite de integrações de webhook. Fale com o suporte para ampliar.",
   membros: "O plano desta organização chegou ao limite de membros. Fale com o suporte para ampliar.",

@@ -16,6 +16,7 @@ import {
 import type { BloqueioDoBotao } from "@/lib/billing/planos/estado-do-bloqueio";
 import { copyToClipboard } from "@/lib/clipboard";
 import { useT } from "@/hooks/i18n/useT";
+import { AvisoDeLimiteDeConexoes } from "./AvisoDeLimiteDeConexoes";
 import { ChannelAiAccess } from "./ChannelAiAccess";
 import { NumeroOficialCard } from "./NumeroOficialCard";
 import { ParaIntegrar } from "./ParaIntegrar";
@@ -307,7 +308,7 @@ export function CanalOficialClient({
             {conectar.isPending ? t("Validando com a Meta…") : t("Validar e conectar")}
           </Button>
           {!estado?.connected && bloqueio?.desabilitado && (
-            <p className="text-xs text-destructive">{bloqueio.motivo}</p>
+            <AvisoDeLimiteDeConexoes motivo={bloqueio.motivo} className="text-xs text-destructive" />
           )}
         </form>
       </Card>

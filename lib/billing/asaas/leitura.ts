@@ -117,6 +117,8 @@ export interface PlanoParaVenda {
   priceSemiannualCents: number | null;
   /** `null` até alguém definir (N8/N9, restrição fixa 3 da fase). */
   priceYearlyCents: number | null;
+  /** Limite de Conexões do plano (todos os canais somados). `null` = sem limite. Para o cartão de escolha do plano. */
+  conexoes: number | null;
 }
 
 export interface ResultadoPlanosParaVenda {
@@ -132,6 +134,7 @@ interface LinhaDoPlanoCru {
   price_monthly_cents: number;
   price_semiannual_cents: number | null;
   price_yearly_cents: number | null;
+  limits: { conexoes?: number | null } | null;
 }
 
 /** Todo plano ATIVO (a versão em vigor de cada `code`), com `for_sale` e preço. Nunca lança. */
@@ -142,7 +145,7 @@ export async function planosParaVenda(
   try {
     const { data, error } = await admin
       .from("billing_plans")
-      .select("code, name, version, for_sale, price_monthly_cents, price_semiannual_cents, price_yearly_cents")
+      .select("code, name, version, for_sale, price_monthly_cents, price_semiannual_cents, price_yearly_cents, limits")
       .eq("active", true)
       .order("price_monthly_cents", { ascending: true });
 
@@ -158,6 +161,7 @@ export async function planosParaVenda(
         priceMonthlyCents: l.price_monthly_cents,
         priceSemiannualCents: l.price_semiannual_cents,
         priceYearlyCents: l.price_yearly_cents,
+        conexoes: typeof l.limits?.conexoes === "number" ? l.limits.conexoes : null,
       })),
       leituraFalhou: false,
     };

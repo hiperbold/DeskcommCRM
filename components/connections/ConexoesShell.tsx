@@ -45,6 +45,7 @@ export function ConexoesShell({
   bloqueio,
   graphParceiro = null,
   podeEditarProtecao,
+  pareamentoQr = false,
 }: {
   /** Sem uso na Hiperbold (sem canal por QR); mantido para a página do autor não mudar. */
   wahaConfigured: boolean;
@@ -67,6 +68,11 @@ export function ConexoesShell({
    * lê, `undefined` não oferece. Calculado no servidor pelo piso da rota.
    */
   podeEditarProtecao?: boolean;
+  /**
+   * A instalação tem o servidor de WhatsApp configurado: a aba da instância passa a
+   * oferecer, em primeiro lugar, conectar lendo um QR Code. Calculado no servidor.
+   */
+  pareamentoQr?: boolean;
 }) {
   const t = useT();
   const router = useRouter();
@@ -132,7 +138,11 @@ export function ConexoesShell({
       </TabsList>
 
       <TabsContent value="instancia" className="mt-0">
-        <CanalInstanciaClient bloqueio={bloqueio} podeEditarProtecao={podeEditarProtecao} />
+        <CanalInstanciaClient
+          bloqueio={bloqueio}
+          podeEditarProtecao={podeEditarProtecao}
+          pareamentoQr={pareamentoQr}
+        />
       </TabsContent>
 
       <TabsContent value="telefonia" className="mt-0">

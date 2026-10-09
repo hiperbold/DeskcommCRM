@@ -27,6 +27,7 @@ import { ok, fail, falhaInterna } from "@/lib/api/wrappers";
 import { loadAuthUser, mfaEmDivida, resolveActiveOrg } from "@/lib/auth/server";
 import { requireRole } from "@/lib/auth/require-role";
 import { CHANNEL_PROVIDER_WAHA } from "@/lib/channels/capabilities";
+import { removerConexaoPorInstancia } from "@/lib/channels/instancia";
 import { resolverSaudeDaConexaoRemovida } from "@/lib/channels/health";
 import { desfazerWebhookDoNumero } from "@/lib/channels/meta/webhook-override";
 import { numeroObservadoDaSessao } from "@/lib/channels/numero-observado";
@@ -109,6 +110,16 @@ async function loadDeletionImpact(
   channelSessionId: string,
 ): Promise<ChannelDeletionImpact> {
   const admin = createAdminClient();
+  // Linha cuja instância o CRM CRIOU (pareamento por QR Code): nunca sai como linha apagada. O banco recusa
+  // o DELETE de quem não é o servidor (migration 0953), e a remoção é do servidor, depois de apagar a
+  // instância. Lida aqui, no mesmo lugar que decide o desfecho, para o diálogo e a rota concordarem.
+  const { data: dona } = await admin
+    .from("channel_sessions")
+    .select("criada_pelo_crm")
+    .eq("organization_id", orgId)
+    .eq("id", channelSessionId)
+    .maybeSingle();
+  const criadaPeloCrm = (dona as { criada_pelo_crm?: boolean | null } | null)?.criada_pelo_crm === true;
   // `select("*")` com `head` não devolve linha nenhuma — só o contador. Pedir uma
   // coluna concreta quebraria em `channel_knobs`, cuja chave é (org, sessão): ela
   // não tem `id`.
@@ -147,7 +158,7 @@ async function loadDeletionImpact(
     Object.values(history).every((n) => n === 0) &&
     Object.values(configuration).every((n) => n === 0);
 
-  return { outcome: nada ? "delete" : "archive", history, configuration };
+  return { outcome: nada && !criadaPeloCrm ? "delete" : "archive", history, configuration };
 }
 
 export async function GET(
@@ -325,7 +336,7 @@ export async function DELETE(
   const { data: session } = await supabase
     .from("channel_sessions")
     .select(
-      "id, provider, waha_session_name, display_name, phone_number, meta_phone_number_id, meta_token_encrypted",
+      "id, provider, waha_session_name, display_name, phone_number, meta_phone_number_id, meta_token_encrypted, criada_pelo_crm",
     )
     .eq("organization_id", activeOrg.orgId)
     .eq("id", id)
@@ -333,7 +344,12 @@ export async function DELETE(
   if (!session) return fail("not_found", t("Canal não encontrado."), 404, { requestId });
 
   const impact = await loadDeletionImpact(activeOrg.orgId, id);
-  const arquivar = impact.outcome === "archive";
+  // A instância que o CRM criou (pareamento por QR Code) conta no teto de instâncias e custa no servidor:
+  // a remoção apaga a instância LÁ e arquiva a linha pelo servidor. Nunca pelo cliente do usuário, que o
+  // banco barra (gatilho da migration 0953), e nunca como DELETE da linha.
+  const criadaPeloCrm = session.criada_pelo_crm === true;
+  const arquivar = criadaPeloCrm || impact.outcome === "archive";
+  let instanciaDoCrm: { apagada: boolean; restou: boolean } | null = null;
 
   const now = new Date().toISOString();
   const patch: Record<string, unknown> = {
@@ -449,7 +465,20 @@ export async function DELETE(
     patch.webhook_path_token = randomUUID().replace(/-/g, "");
   }
 
-  if (arquivar) {
+  if (criadaPeloCrm) {
+    const removida = await removerConexaoPorInstancia(createAdminClient(), activeOrg.orgId, id);
+    if (!removida.ok) {
+      return removida.status === 404
+        ? fail("not_found", t("Canal não encontrado."), 404, { requestId })
+        : fail(
+            "internal_error",
+            t("Não foi possível remover a conexão agora. Tente de novo."),
+            500,
+            { requestId },
+          );
+    }
+    instanciaDoCrm = { apagada: removida.instanciaApagada, restou: removida.instanciaRestou };
+  } else if (arquivar) {
     const { error: archErr } = await supabase
       .from("channel_sessions")
       .update(patch)
@@ -507,10 +536,23 @@ export async function DELETE(
       provider: session.provider,
       avisos_fechados: avisosFechados,
       webhook_override: webhookOverride,
+      ...(instanciaDoCrm
+        ? { instancia_apagada: instanciaDoCrm.apagada, instancia_restou: instanciaDoCrm.restou }
+        : {}),
       ...impact.history,
       ...impact.configuration,
     },
   });
 
-  return ok({ id, archived: arquivar, impact }, { requestId });
+  return ok(
+    {
+      id,
+      archived: arquivar,
+      impact,
+      ...(instanciaDoCrm
+        ? { instancia_apagada: instanciaDoCrm.apagada, instancia_restou: instanciaDoCrm.restou }
+        : {}),
+    },
+    { requestId },
+  );
 }

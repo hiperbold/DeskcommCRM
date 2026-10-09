@@ -100,6 +100,7 @@ export function CampoEditavel({ linha, idioma }: { linha: LinhaDaInstalacao; idi
         setValor("");
         setEstado(r.estado);
         toast.success(t("Pronto, já está valendo."));
+        if (r.aviso) toast.warning(r.aviso);
       } else {
         toast.error(r.erro);
       }

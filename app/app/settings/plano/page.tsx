@@ -512,7 +512,7 @@ function BannerDoBloqueio({
 
   return (
     <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-200">
-      {t("Nesta fase nenhum limite bloqueia.")}
+      {t("Nesta fase só o limite de Conexões bloqueia. Os demais itens apenas avisam.")}
     </div>
   );
 }
@@ -565,6 +565,12 @@ function LinhaDeUso({
       {linha.chave === "etapas_por_funil" && (
         <p className="text-xs text-muted-foreground">
           {t("O número é do funil com mais etapas ativas.")}
+        </p>
+      )}
+
+      {linha.chave === "conexoes" && (
+        <p className="text-xs text-muted-foreground">
+          {t("WhatsApp, Instagram e Messenger somados")}. {t("Este limite bloqueia novas conexões ao ser atingido.")}
         </p>
       )}
     </div>

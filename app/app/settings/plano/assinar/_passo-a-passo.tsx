@@ -307,6 +307,12 @@ export function AssinarPlanoPassoAPasso({
                         {t("Ciclos disponíveis")}:{" "}
                         {ciclosDoPlano.map((c) => rotuloDoCiclo[c]).join(", ")}
                       </p>
+                      <p className="text-xs text-muted-foreground" data-testid={`conexoes-${p.code}`}>
+                        <span className="font-medium text-foreground">
+                          {p.conexoes === null ? t("Conexões ilimitadas") : `${p.conexoes} ${t("Conexões")}`}
+                        </span>{" "}
+                        ({t("WhatsApp, Instagram e Messenger somados")})
+                      </p>
                       <a
                         href="/#planos"
                         target="_blank"

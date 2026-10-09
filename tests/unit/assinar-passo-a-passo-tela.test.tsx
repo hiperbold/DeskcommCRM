@@ -33,6 +33,7 @@ const PRO: PlanoParaVenda = {
   priceMonthlyCents: 19900,
   priceSemiannualCents: 104900,
   priceYearlyCents: 189900,
+  conexoes: 3,
 };
 const MAX: PlanoParaVenda = {
   code: "max",
@@ -42,6 +43,7 @@ const MAX: PlanoParaVenda = {
   priceMonthlyCents: 39900,
   priceSemiannualCents: null,
   priceYearlyCents: 379900,
+  conexoes: 3,
 };
 const ESCALE: PlanoParaVenda = {
   code: "escale",
@@ -51,6 +53,7 @@ const ESCALE: PlanoParaVenda = {
   priceMonthlyCents: 79900,
   priceSemiannualCents: 429900,
   priceYearlyCents: 799900,
+  conexoes: 3,
 };
 
 const OPCOES = {
