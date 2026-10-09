@@ -79,6 +79,9 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     criarCliente: vi.fn(async () => {
       throw new Error("criarCliente não deveria ser chamado pela conciliação");
     }),
+    atualizarCliente: vi.fn(async () => {
+      throw new Error("atualizarCliente não deveria ser chamado pela conciliação");
+    }),
     criarAssinatura: vi.fn(async () => {
       throw new Error("criarAssinatura não deveria ser chamado pela conciliação");
     }),

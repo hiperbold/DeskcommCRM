@@ -25,6 +25,8 @@ export const clienteAsaasSchema = z
     cpfCnpj: z.string().optional(),
     email: z.string().nullable().optional(),
     externalReference: z.string().nullable().optional(),
+    /** D-087: `true` = o Asaas não manda e-mail/SMS de cobrança ao pagador (os do CRM é que valem). */
+    notificationDisabled: z.boolean().optional(),
     deleted: z.boolean().optional(),
   })
   .passthrough();
@@ -37,8 +39,16 @@ export const criarClienteRequestSchema = z.object({
   phone: z.string().optional(),
   mobilePhone: z.string().optional(),
   externalReference: z.string().min(1).max(200).optional(),
+  /** D-087: `true` desliga as notificações de cobrança do Asaas (docs.asaas.com, `POST /v3/customers`). */
+  notificationDisabled: z.boolean().optional(),
 });
 export type CriarClienteRequest = z.infer<typeof criarClienteRequestSchema>;
+
+/** D-087: `PUT /v3/customers/{id}` só com o que este app muda (docs.asaas.com, "Atualizar cliente existente"). */
+export const atualizarClienteRequestSchema = z.object({
+  notificationDisabled: z.boolean(),
+});
+export type AtualizarClienteRequest = z.infer<typeof atualizarClienteRequestSchema>;
 
 // ─── Assinatura (subscription) ───────────────────────────────────────────
 

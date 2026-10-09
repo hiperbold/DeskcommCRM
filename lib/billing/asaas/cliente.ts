@@ -17,7 +17,7 @@ import "server-only";
  * - `redirect: "error"`: o `fetch` do Node reenviaria o header `access_token`
  *   para outro domínio num redirecionamento 3xx, e a chave vazaria para quem
  *   quer que controle o Location. Preferimos falhar a esse risco.
- * - `AbortSignal.timeout`: 20s em `GET`, 60s em `POST`/`DELETE` (o manual,
+ * - `AbortSignal.timeout`: 20s em `GET`, 60s em `POST`/`PUT`/`DELETE` (o manual,
  *   seção 10 item 5, pede pelo menos 60s no fluxo de cartão).
  * - Só `GET` repete sozinho, em 429/5xx, até duas vezes, respeitando
  *   `RateLimit-Reset` com um teto de poucos segundos; acima do teto vira
@@ -42,6 +42,7 @@ import { z } from "zod";
 import type { ConfigAsaas } from "./config";
 import {
   type AssinaturaAsaas,
+  type AtualizarClienteRequest,
   type CobrancaAsaas,
   type ClienteAsaas,
   type CriarAssinaturaRequest,
@@ -51,6 +52,7 @@ import {
   type ParcelamentoAsaas,
   type QrPixAsaas,
   assinaturaAsaasSchema,
+  atualizarClienteRequestSchema,
   clienteAsaasSchema,
   cobrancaAsaasSchema,
   criarAssinaturaRequestSchema,
@@ -111,7 +113,7 @@ export interface Removido {
   removido: true;
 }
 
-type Metodo = "GET" | "POST" | "DELETE";
+type Metodo = "GET" | "POST" | "PUT" | "DELETE";
 
 interface OpcoesChamada {
   metodo: Metodo;
@@ -170,7 +172,8 @@ async function chamar(deps: DepsClienteAsaas, opcoes: OpcoesChamada): Promise<un
     "Content-Type": "application/json",
     "User-Agent": "HiperCRM/1.0",
   };
-  const isPost = opcoes.metodo === "POST";
+  // PUT escreve como o POST: mesmo teto de tempo, nunca repete, falha vira `inconclusivo`.
+  const isPost = opcoes.metodo === "POST" || opcoes.metodo === "PUT";
   const teto = opcoes.metodo === "GET" ? TETO_GET_MS : TETO_POST_MS;
   // Só GET repete; POST/DELETE têm uma única tentativa (decisão 13).
   const maxTentativas = opcoes.metodo === "GET" ? MAX_RETENTATIVAS_GET + 1 : 1;
@@ -268,6 +271,8 @@ function ehRemovido(err: unknown): boolean {
 export interface ClienteAsaasHttp {
   buscarClientePorReferencia(externalReference: string): Promise<ClienteAsaas | null>;
   criarCliente(dados: CriarClienteRequest): Promise<ClienteAsaas>;
+  /** D-087: `PUT /customers/{id}`; hoje só liga/desliga `notificationDisabled`. Não repete sozinho. */
+  atualizarCliente(id: string, dados: AtualizarClienteRequest): Promise<ClienteAsaas>;
   criarAssinatura(dados: CriarAssinaturaRequest): Promise<AssinaturaAsaas>;
   buscarAssinatura(id: string): Promise<AssinaturaAsaas | Removido>;
   listarCobrancasDaAssinatura(id: string): Promise<CobrancaAsaas[]>;
@@ -309,6 +314,15 @@ export function criarClienteAsaas(deps: DepsClienteAsaas): ClienteAsaasHttp {
     async criarCliente(dados) {
       const corpo = criarClienteRequestSchema.parse(dados);
       return chamarComSchema(deps, { metodo: "POST", caminho: "/customers", corpo }, clienteAsaasSchema);
+    },
+
+    async atualizarCliente(id, dados) {
+      const corpo = atualizarClienteRequestSchema.parse(dados);
+      return chamarComSchema(
+        deps,
+        { metodo: "PUT", caminho: `/customers/${encodeURIComponent(id)}`, corpo },
+        clienteAsaasSchema,
+      );
     },
 
     async criarAssinatura(dados) {

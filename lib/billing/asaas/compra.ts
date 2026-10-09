@@ -740,6 +740,20 @@ function tratarErroAsaasComoFalhaDeCliente(deps: DepsCompra, err: unknown): Resu
   return { ok: false, mensagem: MENSAGEM_GENERICA, motivoInterno: `cliente_asaas_${tipoErro}` };
 }
 
+/**
+ * D-087: desliga as notificações do Asaas num cliente que o CRM só reaproveitou. Melhor esforço:
+ * uma falha aqui não pode derrubar a compra (o pagador duplicado de e-mail é incômodo, a venda
+ * perdida é pior); o script `hiperbold/scripts/asaas-desligar-notificacoes.mts` fecha o que sobrar.
+ */
+async function desligarNotificacoesDoAsaas(deps: DepsCompra, asaasCustomerId: string): Promise<void> {
+  try {
+    await deps.asaas.atualizarCliente(asaasCustomerId, { notificationDisabled: true });
+  } catch (err) {
+    const tipoErro = err instanceof ErroAsaasException ? err.erro.tipo : "desconhecido";
+    deps.logger.warn("asaas_compra_desligar_notificacoes_falhou", { tipoErro });
+  }
+}
+
 async function resolverAsaasCustomerId(
   deps: DepsCompra,
   org: string,
@@ -759,6 +773,9 @@ async function resolverAsaasCustomerId(
     const existente = await deps.asaas.buscarClientePorReferencia(referencia);
     if (existente) {
       asaasCustomerId = existente.id;
+      // D-087: a leitura que já fizemos diz se as notificações do Asaas estão ligadas; só então
+      // se gasta um PUT (uma vez por cliente, porque o vínculo logo abaixo impede voltar aqui).
+      if (existente.notificationDisabled !== true) await desligarNotificacoesDoAsaas(deps, existente.id);
     } else {
       if (!pagador) {
         return { ok: false, mensagem: MENSAGEM_PAGADOR_OBRIGATORIO, motivoInterno: "pagador_ausente" };
@@ -772,6 +789,8 @@ async function resolverAsaasCustomerId(
         email: pagador.email,
         mobilePhone: pagador.celular,
         externalReference: referencia,
+        // D-087: os e-mails/SMS de cobrança são do CRM (fila conta-e-cobranca); o Asaas fica calado.
+        notificationDisabled: true,
       });
       asaasCustomerId = criado.id;
     }

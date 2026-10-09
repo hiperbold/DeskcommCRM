@@ -454,3 +454,41 @@ describe("cliente Asaas: cobrança parcelada (D-177)", () => {
     expect(chamadas[0]!.url).toContain("limit=100");
   });
 });
+
+describe("cliente Asaas: notificationDisabled (D-087)", () => {
+  it("criarCliente manda notificationDisabled: true no corpo do POST /customers", async () => {
+    const { deps, chamadas } = montarDeps([
+      respostaJson(200, { id: "cus_123", notificationDisabled: true, externalReference: "HC:org:abc" }),
+    ]);
+    const cliente = criarClienteAsaas(deps);
+    const criado = await cliente.criarCliente({
+      name: "Cliente Teste",
+      cpfCnpj: CPF_DE_TESTE,
+      externalReference: "HC:org:abc",
+      notificationDisabled: true,
+    });
+    expect(chamadas[0]!.init.method).toBe("POST");
+    expect(chamadas[0]!.url).toBe("https://api-sandbox.asaas.com/v3/customers");
+    expect(JSON.parse(String(chamadas[0]!.init.body)).notificationDisabled).toBe(true);
+    expect(criado.notificationDisabled).toBe(true);
+  });
+
+  it("atualizarCliente faz PUT /customers/{id} só com notificationDisabled e não repete em 429", async () => {
+    const { deps, chamadas } = montarDeps([respostaJson(429, {}, { "RateLimit-Reset": "1" })]);
+    const cliente = criarClienteAsaas(deps);
+    await expect(cliente.atualizarCliente("cus_123", { notificationDisabled: true })).rejects.toMatchObject({
+      erro: { tipo: "limite" },
+    });
+    expect(chamadas).toHaveLength(1);
+    expect(chamadas[0]!.init.method).toBe("PUT");
+    expect(chamadas[0]!.url).toBe("https://api-sandbox.asaas.com/v3/customers/cus_123");
+    expect(JSON.parse(String(chamadas[0]!.init.body))).toEqual({ notificationDisabled: true });
+  });
+
+  it("atualizarCliente devolve o cliente já com o campo confirmado", async () => {
+    const { deps } = montarDeps([respostaJson(200, { id: "cus_123", notificationDisabled: true })]);
+    const cliente = criarClienteAsaas(deps);
+    const atualizado = await cliente.atualizarCliente("cus_123", { notificationDisabled: true });
+    expect(atualizado).toMatchObject({ id: "cus_123", notificationDisabled: true });
+  });
+});

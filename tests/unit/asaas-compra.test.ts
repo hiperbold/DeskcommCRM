@@ -116,6 +116,7 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
   return {
     buscarClientePorReferencia: vi.fn(async () => null),
     criarCliente: vi.fn(async () => clienteFake({ id: "cus_novo123" })),
+    atualizarCliente: vi.fn(async (id: string) => clienteFake({ id, notificationDisabled: true })),
     criarAssinatura: vi.fn(async () => assinaturaFake()),
     buscarAssinatura: vi.fn(async () => {
       throw new Error("buscarAssinatura não deveria ser chamado por compra.ts");
@@ -478,6 +479,89 @@ describe("iniciarCompra: cliente Asaas (decisão 16)", () => {
     expect(db.vincularClienteAsaas).toHaveBeenCalledWith("org-1", "sandbox", "cus_por_referencia");
     const chamada = (asaas.criarAssinatura as ReturnType<typeof vi.fn>).mock.calls[0]![0];
     expect(chamada.customer).toBe("cus_por_referencia");
+  });
+
+  it("D-087: cliente novo nasce com notificationDisabled: true (o Asaas não manda e-mail de cobrança)", async () => {
+    const { db } = dbFalso(pedidoBase());
+    const asaas = asaasFalso();
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+
+    const dados = (asaas.criarCliente as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(dados.notificationDisabled).toBe(true);
+    expect(dados.externalReference).toBe("HC:org:org-1");
+    // Criado já calado: nenhum PUT depois.
+    expect(asaas.atualizarCliente).not.toHaveBeenCalled();
+  });
+
+  it("D-087: cliente reaproveitado por externalReference com notificações ligadas é atualizado UMA vez", async () => {
+    const { db } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      buscarClientePorReferencia: vi.fn(async () => clienteFake({ id: "cus_por_referencia", notificationDisabled: false })),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(asaas.atualizarCliente).toHaveBeenCalledTimes(1);
+    expect(asaas.atualizarCliente).toHaveBeenCalledWith("cus_por_referencia", { notificationDisabled: true });
+    expect(asaas.criarCliente).not.toHaveBeenCalled();
+  });
+
+  it("D-087: cliente reaproveitado sem o campo na resposta também é atualizado (campo ausente = ligado)", async () => {
+    const { db } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      buscarClientePorReferencia: vi.fn(async () => clienteFake({ id: "cus_por_referencia" })),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(asaas.atualizarCliente).toHaveBeenCalledTimes(1);
+  });
+
+  it("D-087: cliente reaproveitado que já está desligado NÃO chama o update", async () => {
+    const { db } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      buscarClientePorReferencia: vi.fn(async () => clienteFake({ id: "cus_por_referencia", notificationDisabled: true })),
+    });
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(asaas.atualizarCliente).not.toHaveBeenCalled();
+    expect(db.vincularClienteAsaas).toHaveBeenCalledWith("org-1", "sandbox", "cus_por_referencia");
+  });
+
+  it("D-087: vínculo local existente não gasta nenhuma chamada extra (nem GET nem PUT)", async () => {
+    const { db } = dbFalso(pedidoBase(), { vinculo: "cus_vinculado123" });
+    const asaas = asaasFalso();
+    const { deps } = montarDeps(db, asaas);
+
+    await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(asaas.atualizarCliente).not.toHaveBeenCalled();
+    expect(asaas.buscarClientePorReferencia).not.toHaveBeenCalled();
+  });
+
+  it("D-087: se o update falha, a compra segue (o script de manutenção fecha o que sobrar) e o log não leva dado pessoal", async () => {
+    const { db } = dbFalso(pedidoBase());
+    const asaas = asaasFalso({
+      buscarClientePorReferencia: vi.fn(async () => clienteFake({ id: "cus_por_referencia" })),
+      atualizarCliente: vi.fn(async () => {
+        throw erroIndisponivel(503, true);
+      }),
+    });
+    const { deps, linhas } = montarDeps(db, asaas);
+
+    const resultado = await iniciarCompra(deps, ENTRADA_BASE);
+
+    expect(resultado.tipo).toBe("redirecionar");
+    expect(asaas.criarAssinatura).toHaveBeenCalled();
+    const aviso = linhas.find((l) => l.msg === "asaas_compra_desligar_notificacoes_falhou");
+    expect(aviso?.ctx).toEqual({ tipoErro: "indisponivel" });
+    expect(JSON.stringify(linhas)).not.toContain(CPF_VALIDO);
   });
 
   it("CPF inválido é recusado sem nenhuma chamada ao Asaas", async () => {

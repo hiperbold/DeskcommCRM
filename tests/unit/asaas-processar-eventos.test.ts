@@ -61,6 +61,9 @@ function asaasFalso(overrides: Partial<ClienteAsaasHttp> = {}): ClienteAsaasHttp
     criarCliente: vi.fn(async () => {
       throw new Error("criarCliente não deveria ser chamado pelo processador");
     }),
+    atualizarCliente: vi.fn(async () => {
+      throw new Error("atualizarCliente não deveria ser chamado pelo processador");
+    }),
     criarAssinatura: vi.fn(async () => {
       throw new Error("criarAssinatura não deveria ser chamado pelo processador");
     }),
