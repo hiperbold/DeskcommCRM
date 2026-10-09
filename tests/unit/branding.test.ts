@@ -301,13 +301,7 @@ const MARCA_CONGELADA: Record<string, EntradaDeMarca> = {
   },
 
   // ─── DIVIDA — vazamento real. Cada linha declara a fase que a apaga. ───
-  "lib/email/templates/ai-budget-alarm.tsx": {
-    categoria: "DIVIDA",
-    fase: 7,
-    motivo:
-      "template sem caminho de produção: sem rota em app/api/v1/cron/, sem linha no docker/scheduler/entrypoint.sh e, desde a limpeza do teto de orçamento (0159), sem chamador NENHUM — o único era workers/ai-budget-checker.cron.ts, que foi apagado por nunca ter tido agendador. Marcar isto não muda nada que um usuário veja, e a única 'prova' possível seria invocar a função à mão — o que prova a função, não o produto. Sai quando o alarme ganhar cron de verdade (ou quando o template for apagado junto)",
-    marcas: ["deskcommcrm"],
-  },
+  // (vazia: a última, `ai-budget-alarm`, foi apagada junto com o template.)
 
   // ─── DEV — fixture de teste; não embarca. ───
   "lib/agent-engine/agent/draft-reply.test.ts": {
@@ -604,7 +598,7 @@ describe("catraca de marca hardcoded", () => {
     expect(ruins, `entrada sem categoria válida ou sem justificativa escrita:\n  ${ruins.join("\n  ")}`).toEqual([]);
   });
 
-  it("a Fase 4 fechou: sobra uma dívida, e ela declara por que sobrou", () => {
+  it("não sobra nenhuma dívida de marca", () => {
     // As três regras acima forçam a lista a ENCOLHER, mas nada impedia que ela
     // voltasse a CRESCER: uma `DIVIDA` nova entra sem ninguém notar, porque
     // acrescentar linha à allowlist é o caminho de menor resistência de quem
@@ -615,10 +609,9 @@ describe("catraca de marca hardcoded", () => {
       .map(([arquivo]) => arquivo);
     expect(
       dividas,
-      "a Fase 4 zerou as dívidas de marca, exceto o alarme de orçamento de IA " +
-        "(que não tem caminho de produção). Dívida nova aqui precisa de decisão, " +
+      "as dívidas de marca estão zeradas. Dívida nova aqui precisa de decisão, " +
         "não de mais uma linha na lista.",
-    ).toEqual(["lib/email/templates/ai-budget-alarm.tsx"]);
+    ).toEqual([]);
   });
 
   it("toda DIVIDA nomeia a fase que a resolve, e só DIVIDA tem fase", () => {

@@ -99,7 +99,7 @@ export interface SaudeObservada {
 export function avisoDaConexao(saude: SaudeObservada, apelido: string): AvisoDeConexao | null {
   if (!saude.reachable) {
     // "Não deu para perguntar" tem DOIS motivos que pedem ações opostas, e
-    // tratá-los igual foi o defeito medido: numa VPS real a chave do WAHA foi
+    // tratá-los igual foi o defeito medido: numa VPS real a chave do servidor de WhatsApp foi
     // trocada por uma segunda cópia do repo, TUDO parou, e por três dias a
     // Central mostrou apenas um `warn` dizendo "não foi possível verificar" —
     // a frase que se usa para descrever um soluço de rede. O dono só descobriu
@@ -114,7 +114,7 @@ export function avisoDaConexao(saude: SaudeObservada, apelido: string): AvisoDeC
         severity: "critical",
         title: `Conexão "${apelido}": o servidor de WhatsApp recusou a chave de acesso`,
         body:
-          "Escanear o QR não resolve: a chave que o CRM usa para falar com o servidor de WhatsApp não confere com a que o servidor espera. Enquanto isso durar, nenhuma mensagem entra nem sai por NENHUMA conexão. Quem cuida do servidor precisa conferir a WAHA_API_KEY do .env e recriar o contêiner do WhatsApp.",
+          "Escanear o QR não resolve: a chave que o CRM usa para falar com o servidor de WhatsApp não confere com a que o servidor espera. Enquanto isso durar, nenhuma mensagem entra nem sai por NENHUMA conexão. Quem cuida do servidor precisa conferir a chave de acesso configurada no CRM e a que o servidor de WhatsApp espera, e reiniciar o que foi alterado.",
         episodio: "CREDENCIAL_RECUSADA",
       };
     }

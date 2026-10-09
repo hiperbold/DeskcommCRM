@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const enviados: { to: string | string[]; subject: string; text?: string }[] = [];
 let respostaDoEnvio: { ok: boolean; error?: string } = { ok: true };
 
-vi.mock("@/lib/email/resend", () => ({
+vi.mock("@/lib/email/roteador", () => ({
   sendEmail: vi.fn(async (args: { to: string | string[]; subject: string; text?: string }) => {
     enviados.push(args);
     return respostaDoEnvio;
@@ -204,7 +204,7 @@ describe("o envio não pode derrubar o vigia", () => {
   it("falha de e-mail não interrompe a sincronização da saúde", async () => {
     // O vigia roda de 5 em 5 minutos para TODAS as sessões de TODOS os tenants:
     // uma exceção aqui deixaria as conexões seguintes sem vigia nenhuma.
-    const { sendEmail } = await import("@/lib/email/resend");
+    const { sendEmail } = await import("@/lib/email/roteador");
     vi.mocked(sendEmail).mockRejectedValueOnce(new Error("rede caiu"));
 
     expect(

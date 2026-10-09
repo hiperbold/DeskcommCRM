@@ -29,7 +29,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { marcaDaSaida } from "@/lib/branding/saida";
-import { sendEmail } from "@/lib/email/resend";
+import { sendEmail } from "@/lib/email/roteador";
 import { buildConexaoCaidaEmail, buildConexaoVoltouEmail } from "@/lib/email/templates/conexao-caida";
 import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";

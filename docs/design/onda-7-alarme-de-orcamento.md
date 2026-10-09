@@ -1,5 +1,7 @@
 # Onda 7 — Alarme de orçamento de IA: medição, risco e desenho da ligação
 
+> **Atualização (2026-10-08).** O template `lib/email/templates/ai-budget-alarm` citado abaixo foi apagado, por não ter chamador. O aviso de consumo de IA por e-mail é o IA-02, em `lib/email/templates/tokens-de-ia-acabando.ts`. O texto abaixo é o registro histórico da medição.
+
 > **Régua desta medição.** Worktree `/Users/rafaelmelgaco/DeskcommCRM-marca`,
 > branch `feat/marca-o-que-faltou`, SHA `8c7a8dc6`, working tree limpo no início
 > da sessão. Tudo abaixo é leitura estática de código (grep/read).

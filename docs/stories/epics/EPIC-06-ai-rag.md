@@ -974,7 +974,7 @@ Trigger Postgres `trg_ai_invocations_budget` after insert em `ai_invocations` fa
 - `app/api/v1/ai/budget/route.ts` — GET status + PATCH config (monthly_limit_cents, action_at_100pct, alarm_threshold_pct)
 - `hooks/useAiBudget.ts` — query + realtime subscribe
 - `components/ai/BudgetCard.tsx` — card com gauge + edit modal
-- `lib/email/templates/ai-budget-alarm.tsx` — react-email template
+- ~~`lib/email/templates/ai-budget-alarm.tsx`~~ — apagado (sem chamador). O aviso de consumo por e-mail é o IA-02, em `lib/email/templates/tokens-de-ia-acabando.ts`
 
 #### Files to modify
 

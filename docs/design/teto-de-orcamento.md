@@ -981,6 +981,7 @@ independentes; se reprovar mais, há acoplamento que precisa ser entendido antes
   commit** que o CHECK.
 - `tests/unit/kind-check-migration-x-baseline.test.ts` — exige que a lista de kinds da
   migration e a do baseline sejam iguais valor a valor.
+- (Atualização: o template `ai-budget-alarm` foi apagado e a dívida D1 encerrada; o aviso de consumo por e-mail é o IA-02, em `lib/email/templates/tokens-de-ia-acabando.ts`.)
 - `tests/unit/branding.test.ts:296` — a dívida D1 (template `ai-budget-alarm` na allowlist de
   marca) **NÃO muda**: este plano não constrói e-mail nem cron de alarme, então a condição de
   saída escrita em `docs/architecture/marca-propria.architecture.json:205` ("sai quando o

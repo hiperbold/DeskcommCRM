@@ -192,9 +192,8 @@ Central e razão `orcamento_de_ia`. Volta ao automático **uma a uma**, pelo bot
 desfaz as que já aconteceram.
 
 **Não implementado, declarado:** `platform_max_per_tenant` (teto de plataforma para o
-super-admin) não existe. Alarme por e-mail não existe — `lib/email/templates/ai-budget-alarm.tsx`
-está sem chamador desde que o cron morto foi apagado (dívida D1 em `tests/unit/branding.test.ts`).
-O aviso hoje é a Central, não o e-mail.
+super-admin) não existe. O aviso de consumo por e-mail é o IA-02 (`lib/email/templates/tokens-de-ia-acabando.ts`);
+o template antigo `ai-budget-alarm` foi apagado por não ter chamador. Além do e-mail, há a Central.
 
 **ACs.** Organização recém-instalada tem `enforcement_mode='off'` e a IA nunca para por gasto.
 `off → bloquear` num único PATCH → 422. Armar sem `confirmar_imediato` → a parada não vale
