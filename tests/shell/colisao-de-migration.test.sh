@@ -73,6 +73,9 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 #   3. identidade por ambiente, não por `git config` (NENHUM teste aqui mede o autor).
 unset $(git rev-parse --local-env-vars)
 export GIT_CEILING_DIRECTORIES="$TMP"
+# O número do PR do próprio CI (GITHUB_REF=refs/pull/N/merge) não entra: os cenários montam PRs
+# falsos (#7, #8) e o gate tiraria da conta o que tivesse o mesmo número do PR real que roda a suíte.
+unset GITHUB_REF GITHUB_HEAD_REF GITHUB_BASE_REF
 export GIT_AUTHOR_NAME="Teste" GIT_AUTHOR_EMAIL="teste@exemplo.invalid"
 export GIT_COMMITTER_NAME="Teste" GIT_COMMITTER_EMAIL="teste@exemplo.invalid"
 
