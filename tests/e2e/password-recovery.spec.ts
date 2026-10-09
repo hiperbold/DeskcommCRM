@@ -77,7 +77,7 @@ test("recuperar senha: forgot → e-mail → nova senha → login com a nova", a
   await expect(page.getByText("Verifique seu e-mail")).toBeVisible();
 
   // 3. Abre o e-mail real e segue o link de recovery
-  const html = await waitForEmail(email, "Redefinir senha");
+  const html = await waitForEmail(email, "Redefina sua senha");
   const link = extractAuthConfirmLink(html, baseURL!);
   await page.goto(link);
   await expect(page).toHaveURL(/\/login\/reset/);

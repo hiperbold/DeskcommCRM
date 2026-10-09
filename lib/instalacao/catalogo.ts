@@ -98,6 +98,22 @@ export interface ChaveDaInstalacao {
 }
 
 /**
+ * A chave como a TELA a recebe: o catálogo sem as funções (`validar`, `normalizar`).
+ *
+ * O catálogo é passado do servidor (a página) para componentes de cliente, e o
+ * React recusa função na fronteira ("Functions cannot be passed directly to
+ * Client Components"). A conferência do valor mora na ação de servidor, que
+ * resolve a chave pelo catálogo inteiro; a tela só precisa dos dados.
+ */
+export type DefinicaoParaATela = Omit<ChaveDaInstalacao, "validar" | "normalizar">;
+
+/** Tira da definição o que não atravessa para o cliente. */
+export function definicaoParaATela(d: ChaveDaInstalacao): DefinicaoParaATela {
+  const { validar: _validar, normalizar: _normalizar, ...dados } = d;
+  return dados;
+}
+
+/**
  * ── A PRIMEIRA LEVA EDITÁVEL ────────────────────────────────────────────────
  *
  * E-mail e contatos, e a escolha não é arbitrária: a doutrina de QA do projeto

@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { loadAuthUser } from "@/lib/auth/server";
 import {
   CATALOGO_DA_INSTALACAO,
-  type ChaveDaInstalacao,
+  definicaoParaATela,
+  type DefinicaoParaATela,
   type GrupoDaInstalacao,
 } from "@/lib/instalacao/catalogo";
 import { estadoParaTela, type EstadoParaTela } from "@/lib/instalacao/config";
@@ -54,7 +55,7 @@ const ORDEM: readonly {
 ];
 
 export interface LinhaDaTela {
-  readonly definicao: ChaveDaInstalacao;
+  readonly definicao: DefinicaoParaATela;
   readonly estado: EstadoParaTela;
 }
 
@@ -79,7 +80,7 @@ export default async function Page() {
 
   const linhas: LinhaDaTela[] = await Promise.all(
     daTela.map(async (definicao) => ({
-      definicao,
+      definicao: definicaoParaATela(definicao),
       estado: await estadoParaTela(definicao.chave, definicao.natureza === "segredo"),
     })),
   );

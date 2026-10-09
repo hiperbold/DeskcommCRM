@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { loadAuthUser } from "@/lib/auth/server";
 import { getSmtpConfig } from "@/lib/email/config";
 import { transporteEmVigor } from "@/lib/email/roteador";
-import { CATALOGO_DA_INSTALACAO } from "@/lib/instalacao/catalogo";
+import { CATALOGO_DA_INSTALACAO, definicaoParaATela } from "@/lib/instalacao/catalogo";
 import { estadoParaTela } from "@/lib/instalacao/config";
 import { normalizarIdioma } from "@/lib/i18n/idiomas";
 
@@ -64,7 +64,7 @@ export default async function Page() {
    */
   const doServicoExterno = await Promise.all(
     CATALOGO_DA_INSTALACAO.filter((d) => d.telaDona === "email").map(async (definicao) => ({
-      definicao,
+      definicao: definicaoParaATela(definicao),
       estado: await estadoParaTela(definicao.chave, definicao.natureza === "segredo"),
     })),
   );

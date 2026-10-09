@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { traduzir } from "@/lib/i18n/dicionario";
 import type { Idioma } from "@/lib/i18n/idiomas";
-import type { ChaveDaInstalacao } from "@/lib/instalacao/catalogo";
+import type { DefinicaoParaATela } from "@/lib/instalacao/catalogo";
 import type { EstadoParaTela } from "@/lib/instalacao/config";
 
 /**
@@ -32,7 +32,7 @@ import type { EstadoParaTela } from "@/lib/instalacao/config";
  * nunca pelo que a tela mandar. Ver `app/actions/admin/salvarConfiguracaoDaInstalacao.ts`.
  */
 export interface LinhaDaInstalacao {
-  readonly definicao: ChaveDaInstalacao;
+  readonly definicao: DefinicaoParaATela;
   readonly estado: EstadoParaTela;
 }
 

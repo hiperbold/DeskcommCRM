@@ -66,6 +66,7 @@ import { metadataInicialDoCanal } from "@/lib/ai/elegibilidade/pre-go-live";
 import { fetchParaDestinoDaOrganizacao } from "@/lib/automation/destinos-internos-autorizados";
 import { mensagemDaRecusaDoPlano, mensagemDoLimiteDeConexoes } from "@/lib/billing/planos/limite-de-conexoes";
 import { recusaDoPlano, STATUS_RECUSA_DO_PLANO } from "@/lib/billing/planos/recusa-do-plano";
+import { nomeDoCanal } from "@/lib/channels/estado";
 import type { Idioma } from "@/lib/i18n/idiomas";
 import { valorDaInstalacao } from "@/lib/instalacao/config";
 import { logger } from "@/lib/logger";
@@ -940,7 +941,7 @@ function jaConcluido(linha: LinhaDoPareamento): PareamentoConcluido {
     estado: "conectado",
     conexao: {
       id: linha.id,
-      displayName: linha.display_name ?? "WhatsApp",
+      displayName: nomeDoCanal(linha),
       phoneNumber: linha.phone_number,
       status: linha.status ?? "WORKING",
     },
@@ -1157,7 +1158,7 @@ async function concluir(
   urlDoWebhook: ((pathToken: string) => string) | null,
   cfg: ConfiguracaoDoPareamento | null,
 ): Promise<PareamentoConcluido | FalhaDoPareamento> {
-  const nome = lida.perfil ?? linha.display_name ?? "WhatsApp";
+  const nome = lida.perfil ?? nomeDoCanal({ display_name: linha.display_name, phone_number: lida.telefone });
   // Atualização CONDICIONAL: só muda a linha que ainda é pendente e não foi arquivada, e devolve o que
   // mudou. Duas chamadas ao mesmo tempo (duas abas, ou a aba e a limpeza) leem a mesma linha pendente;
   // só a que de fato a muda liga a volta (webhook) e vai para a auditoria. A outra recebe o resultado.
